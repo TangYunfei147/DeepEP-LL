@@ -1,0 +1,35 @@
+def measure(invoke, args, operation, profile_dir, progress=None):
+    """Production kernel profiler + separate warmed full-API samples."""
+    import time
+    import torch
+    import torch.distributed as dist
+    kernel_result = measure_kernel(invoke, args, operation, profile_dir, progress)
+    for _ in range(args.warmup):
+        completion_boundary(args)
+        output = invoke()
+        output[-1].current_stream_wait()
+        torch.npu.synchronize()
+        del output
+    raw = []
+    for _ in range(args.num_iters):
+        completion_boundary(args)  # outside the timed interval
+        start = time.perf_counter_ns()
+        output = invoke()
+        output[-1].current_stream_wait()
+        torch.npu.synchronize()
+        raw.append((time.perf_counter_ns() - start) / 1000)
+        del output  # disposal outside interval; API-internal allocation included
+    gathered = [None] * dist.get_world_size()
+    dist.all_gather_object(gathered, raw)
+    if any(len(samples) != args.num_iters for samples in gathered):
+        raise ValueError("Incomplete API sample set")
+    rank_max = [max(samples[i] for samples in gathered) for i in range(args.num_iters)]
+    api = {"measurement": "host_call_to_output_consumable_us",
+           "timing": "invoke + returned event wait + device synchronize; input preparation and test barrier excluded",
+           "regime": "warmed, after correctness checks; not cold initialization",
+           "ranks": [{"rank": rank, "api_us": samples, **sample_stats(samples)}
+                     for rank, samples in enumerate(gathered)],
+           "rank_max_us": rank_max, "rank_max_stats": sample_stats(rank_max)}
+    (Path(profile_dir) / "api_samples.json").write_text(json.dumps(api))
+    kernel_result["full_api"] = api
+    return kernel_result
