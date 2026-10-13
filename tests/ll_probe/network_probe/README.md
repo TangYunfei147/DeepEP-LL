@@ -30,24 +30,21 @@ ElasticBuffer 默认的兼容选项，不自动回退。
 
 ## 目标机步骤（由用户执行）
 
-所有机器 clone 同一分支/提交及子模块，均位于授权根目录内：
+所有机器 clone 同一分支/提交及子模块，位于各自允许写入的目录内，绝对路径可以不同：
 
 ```bash
 git clone --branch experiments/ll-four-layer-probes --recurse-submodules \
-  https://github.com/TangYunfei147/DeepEP-LL.git /home/tyf/Q4_remote_test/DeepEP-LL
-cd /home/tyf/Q4_remote_test/DeepEP-LL
+  https://github.com/TangYunfei147/DeepEP-LL.git DeepEP-LL
+cd DeepEP-LL
 ```
 
 后续更新使用 `git pull --ff-only` 和 `git submodule update --init --recursive`。
 在每台机器编辑相同 `config.yaml`。已有仓库直接切到交付分支，不覆盖已有工作。
-使用已有 CANN 9.3.0 环境和锁定版本 SHMEM 库（不安装系统依赖）：
+先按[统一SDK与路径流程](../PATHS.md)准备仓内依赖并加载本机CANN环境，再编译探针：
 
 ```bash
-export PROBE_ROOT=/home/tyf/Q4_remote_test
-export CANN_ENV="$PROBE_ROOT/env_1009/cann-9.3.0/set_env.sh" # 按本机现有环境调整
-# 若尚无探针 SHMEM 库，先按 tests/ll_probe/USER_RUN.md 构建锁定库。
-# build_shmem_probe.sh 使用上述默认环境路径；环境不同请按指南设置构建环境。
-export SHMEM_LIB_DIR="$PROBE_ROOT/DeepEP-LL/tests/ll_probe/build/shmem/lib"
+# 工程内默认保存结果与日志，无需设置PROBE_ROOT。
+# SHMEM固定使用third-party/shmem/install/shmem/lib，不接受外部库覆盖。
 bash tests/ll_probe/network_probe/build.sh
 python3 tests/ll_probe/network_probe/run.py --config tests/ll_probe/network_probe/config.yaml --peer 19 --plan
 ```
@@ -57,10 +54,10 @@ python3 tests/ll_probe/network_probe/run.py --config tests/ll_probe/network_prob
 ```bash
 # 第一台（YAML 索引0）；下面的输出目录必须尚不存在
 bash tests/ll_probe/network_probe/run.sh --node-index 0 --peer 19 --target-run \
-  --output "$PROBE_ROOT/results/network-case1-node0"
+  --output results/network-case1-node0
 # 第二台（YAML 索引1），在第二台的终端执行
 bash tests/ll_probe/network_probe/run.sh --node-index 1 --peer 19 --target-run \
-  --output "$PROBE_ROOT/results/network-case1-node1"
+  --output results/network-case1-node1
 ```
 
 所有节点应在 timeout 内启动。开放第一项 IP 的指定 bootstrap TCP 端口，数据面网络须事先具备。
@@ -74,13 +71,13 @@ SHMEM 日志默认 INFO；`processes.json` 可关联本次各 rank 的日志 PID
 收集各节点 report.json 后检查完整性（数据不提交 Git）：
 
 ```bash
-python3 tests/ll_probe/network_probe/merge.py /path/to/node0/report.json /path/to/node1/report.json
+python3 tests/ll_probe/network_probe/merge.py results/network-case1-node0/report.json results/network-case1-node1/report.json
 ```
 
 成功要求所有节点/所有rank正常退出、UDMA查询成功、双向MTE接收正确；单节点 local_success
 不代表整个多机任务成功。每个 route 记录实际 layer；公开 layer0 通常为同域 MESH、layer1 为
 CLOS，应同时看 `$PROBE_ROOT/.logs/shmem` 中本次进程的 `Build UDMA channel from resolved route`
-日志及 `actualNetLayer/netType/netInstanceId/planeId/localEidIndex/remoteEidIndex`。
+日志及 `actualNetLayer/netType/netInstanceId/planeId/localEidIndex/remoteEidIndex`。默认日志位于工程`.logs/shmem`。
 报告不推断物理跳数、不把 UDMA QP 建链当作该 QP 已发送数据。
 
 ## A5_241 验证专用
@@ -88,7 +85,7 @@ CLOS，应同时看 `$PROBE_ROOT/.logs/shmem` 中本次进程的 `Build UDMA cha
 仅本机两个真实rank，禁止扩展设备。生成单IP YAML 放在 PROBE_ROOT 内，再运行：
 
 ```bash
-bash tests/ll_probe/network_probe/run.sh --config /home/tyf/Q4_remote_test/local-network.yaml \
+bash tests/ll_probe/network_probe/run.sh --config tests/ll_probe/network_probe/local-network.yaml \
   --validation --devices-per-host 2 --peer 1
 ```
 

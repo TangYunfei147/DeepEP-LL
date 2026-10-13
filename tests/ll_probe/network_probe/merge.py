@@ -2,10 +2,13 @@
 import argparse
 import json
 from pathlib import Path
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from paths import project_path, results_dir, runtime_environment, workspace_root
 
 
 def merge(paths):
-    reports=[json.loads(Path(p).read_text()) for p in paths]
+    reports=[json.loads(project_path(p).read_text()) for p in paths]
     if not reports: raise ValueError('No reports')
     ref=reports[0]['job']
     seen=set(); boots=set(); records=[]

@@ -2,6 +2,7 @@
 import argparse
 import json
 from pathlib import Path
+from paths import project_path
 
 def merge(sender,receiver,allow_same_host=False):
     for report in [sender,receiver]:
@@ -26,9 +27,9 @@ def merge(sender,receiver,allow_same_host=False):
 
 def main():
     p=argparse.ArgumentParser()
-    p.add_argument('rank0_summary',type=Path)
-    p.add_argument('rank1_summary',type=Path)
-    p.add_argument('--output',type=Path,required=True)
+    p.add_argument('rank0_summary',type=project_path)
+    p.add_argument('rank1_summary',type=project_path)
+    p.add_argument('--output',type=project_path,required=True)
     p.add_argument('--allow-same-host',action='store_true')
     args=p.parse_args()
     result=merge(json.loads(args.rank0_summary.read_text()),json.loads(args.rank1_summary.read_text()),args.allow_same_host)

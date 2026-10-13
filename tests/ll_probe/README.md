@@ -11,26 +11,30 @@
 ## 首次获取和构建
 
 ```bash
-mkdir -p /home/tyf/Q4_remote_test
-cd /home/tyf/Q4_remote_test
+# 在本机允许写入的目录中执行；工程目录名可以更改
 git clone --branch experiments/ll-four-layer-probes https://github.com/TangYunfei147/DeepEP-LL.git DeepEP-LL
 cd DeepEP-LL
-git submodule update --init third-party/shmem
-mkdir -p /home/tyf/Q4_remote_test/.tmp /home/tyf/Q4_remote_test/.cache /home/tyf/Q4_remote_test/project_control/results
-cd tests/ll_probe
-bash build_shmem_probe.sh
-cd four_layers
-python3 prepare_snapshot.py
-bash build.sh
-python3 verify_adapter.py
-python3 plan_matrix.py > /home/tyf/Q4_remote_test/project_control/results/domain-matrix.json
+git submodule update --init --recursive --depth 1
+# 先加载本机现有CANN；也可设置CANN_ENV为其set_env.sh的工程相对路径
+source scripts/project_env.sh
+unset SHMEM_ROOT CATLASS_ROOT
+python scripts/build_shmem.py
+export DEEPEP_NPU_ARCH=Ascend950
+export LD_LIBRARY_PATH="$PWD/third-party/shmem/install/shmem/lib:${LD_LIBRARY_PATH:-}"
+python -m pip install -r requirements-build.txt
+python -m pip install -v --force-reinstall --no-build-isolation --no-deps .
+bash tests/ll_probe/build_probe.sh
+bash tests/ll_probe/build_shmem_driver.sh
+bash tests/ll_probe/four_layers/build.sh
+bash tests/ll_probe/build_profile_bridge.sh
+python3 tests/ll_probe/four_layers/verify_adapter.py
 ```
 
-前置环境：授权根目录内env_1009/cann-9.3.0，以及匹配仓库的框架/原生LL依赖。SHMEM的JSON依赖由构建脚本通过Git获取。具体设备启动见[四层运行指南](four_layers/USER_RUN.md)，早期双卡实验及依赖说明见[原指南](USER_RUN.md)。已有clone使用git fetch和切换本分支，勿覆盖现有目录。
+路径规则见[PATHS.md](PATHS.md)。CANN使用当前机器已加载的环境；SHMEM/CATLASS等子仓只留在本工程third-party内，SHMEM统一由scripts/build_shmem.py构建。已有合法SDK可用--if-needed复用，不自动覆盖。具体设备启动见[四层运行指南](four_layers/USER_RUN.md)，早期双卡实验见[原指南](USER_RUN.md)。已有clone使用Git更新，勿覆盖现有目录。
 
 ## 注意事项与验证边界
 
-- 所有写入限/home/tyf/Q4_remote_test；必须显式设置SHMEM、Ascend日志和缓存路径。A5_241只使用物理卡0、1，仅验证正确性和可运行性；目标机实际实验由用户执行。
+- 默认写入工程目录；A5验证仍遵守其授权写入边界；必须显式设置SHMEM、Ascend日志和缓存路径。A5_241只使用物理卡0、1，仅验证正确性和可运行性；目标机实际实验由用户执行。
 - 通信微基准域2/4/8/16/32；完整原生LL在此集合只支持16/32。双卡退化场景不证明N方竞争、跨主机可达性或目标带宽。
 - 本地元数据实验仅提取dispatch sender路由准备，不包含跨rank计数、packet tail和receiver元数据。四层耗时不能直接相加或相减推导纯通信成本。
 - 迁入前空载、tiling、元数据以及四种通信场景的双卡子集通过。完整LL仅CPU合约/适配器检查，目标设备运行待用户执行。

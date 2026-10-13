@@ -3,6 +3,7 @@ import argparse
 import json
 import math
 from pathlib import Path
+from paths import project_path
 
 from profile_common import describe
 
@@ -20,6 +21,8 @@ def analyze(paths):
         if rank in by_rank:
             raise ValueError('Duplicate rank')
         current = {k: report[k] for k in fields}
+        # Output locations differ across machines; they are provenance, not workload identity.
+        current['configuration'] = {k: v for k, v in report['configuration'].items() if k != 'output_dir'}
         current['source_sha256'] = report.get('source_sha256')
         if identity is not None and current != identity:
             raise ValueError('Mixed configurations or source revisions')
@@ -75,8 +78,8 @@ def analyze(paths):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('reports', nargs='+', type=Path)
-    parser.add_argument('--output', required=True, type=Path)
+    parser.add_argument('reports', nargs='+', type=project_path)
+    parser.add_argument('--output', required=True, type=project_path)
     parser.add_argument('--peak-gbps', type=float)
     parser.add_argument('--peak-description')
     args = parser.parse_args()

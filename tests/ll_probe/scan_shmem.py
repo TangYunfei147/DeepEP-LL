@@ -10,7 +10,8 @@ import subprocess
 import time
 import socket
 
-ROOT=Path('/home/tyf/Q4_remote_test')
+from paths import workspace_root, project_path, runtime_environment, results_dir
+ROOT = workspace_root()
 
 def main():
     p=argparse.ArgumentParser()
@@ -28,7 +29,7 @@ def main():
     p.add_argument('--peak-gbps',type=float)
     p.add_argument('--validation-only',action='store_true')
     p.add_argument('--execute',action='store_true')
-    p.add_argument('--output',type=Path)
+    p.add_argument('--output',type=project_path)
     args=p.parse_args()
     if args.local and args.rank is not None: p.error('--local and --rank are mutually exclusive')
     if not args.local and args.rank is None: p.error('Specify --local or --rank')
@@ -51,6 +52,7 @@ def main():
     if args.output is None: p.error('--execute requires fresh --output')
     output=args.output.resolve()
     if not output.is_relative_to(ROOT) or output==ROOT: p.error('Output outside authorized root')
+    runtime_environment()
     output.mkdir(parents=True,exist_ok=False)
     binary=Path(__file__).resolve().parent/'build/shmem_probe'
     plan['binary_sha256']=hashlib.sha256(binary.read_bytes()).hexdigest()

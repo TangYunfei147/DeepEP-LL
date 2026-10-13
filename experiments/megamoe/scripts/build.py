@@ -37,13 +37,9 @@ def build(root=ROOT, *, rebuild_shmem=False):
     for tool in ("git", "bash", "cmake", env.get("CXX", "c++")):
         if not shutil.which(tool):
             raise RuntimeError(f"Required build tool not found: {tool}")
+    # Project deployment uses the pinned in-repository dependencies exclusively.
     for name in ("SHMEM_ROOT", "CATLASS_ROOT"):
-        if name in env:
-            if not env[name] or not Path(env[name]).is_dir():
-                raise ValueError(f"{name} must be an existing dependency directory")
-            env[name] = str(Path(env[name]).resolve())
-    if rebuild_shmem and "SHMEM_ROOT" in env:
-        raise ValueError("--rebuild-shmem only rebuilds the bundled SDK; unset SHMEM_ROOT first")
+        env.pop(name, None)
 
     # Git 的 HTTPS helper 使用系统库，避免加载 Python/CANN 环境中的 OpenSSL 等动态库。
     git_env = dict(env)
@@ -61,7 +57,7 @@ def build(root=ROOT, *, rebuild_shmem=False):
     def submodule(name, revision):
         source = root / "third-party" / name
         if not (source / ".git").exists():
-            run(["git", "submodule", "update", "--init", "--recursive", "--", f"third-party/{name}"])
+            run(["git", "submodule", "update", "--init", "--recursive", "--depth", "1", "--", f"third-party/{name}"])
 
         # 不对已初始化子模块自动 checkout，避免覆盖用户修改或隐藏版本漂移。
         def git(*args):

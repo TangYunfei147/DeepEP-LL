@@ -29,6 +29,10 @@ compile_commands.json
 *.whl
 
 # Machine-local configuration and reports
+/.tmp/
+/.cache/
+/.logs/
+/results/
 /github-auth/
 /.github-auth/
 .env

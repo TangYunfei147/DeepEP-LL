@@ -66,13 +66,15 @@
 | [four_layers/run.sh](four_layers/run.sh) | 设置SDK、日志、可见卡并执行传入命令；具体kernel由所传Host/脚本决定 |
 | [four_layers/validate.py](four_layers/validate.py) | `metadata_probe` + `comm_probe`；对应metadata/comm源码，使用Event诊断入口 |
 | [validate_profile.py](validate_profile.py) | 调用`profile_probe.py`的metadata、empty、tiling、comm、peer、shmem校验项，覆盖上表探针 |
-| [four_layers/plan_matrix.py](four_layers/plan_matrix.py) | CPU生成通信域/场景/字节矩阵，不启动kernel |
+| [profile_probe.py](profile_probe.py) `--plan` | CPU检查指定通信域/场景/字节配置，不启动kernel |
 | [four_layers/verify_adapter.py](four_layers/verify_adapter.py) | CPU mock检查API计时边界和通信图，不执行真实LL |
 | [test_profile_contract.py](test_profile_contract.py) | CPU mock检查10/100/50时序、task匹配和统计窗口，不启动kernel |
 | [analyze_profile.py](analyze_profile.py) | 汇总命名task报告与全rank校验；不启动kernel |
 | [four_layers/analyze_comm.py](four_layers/analyze_comm.py) | 汇总comm Host的Event诊断CSV；不是profiler task统计 |
 | [merge_shmem_results.py](merge_shmem_results.py) | 合并旧SHMEM双rank结果，不启动kernel |
 | [analyze_ll_overhead.py](analyze_ll_overhead.py)、[verify_analysis.py](verify_analysis.py) | 完整LL原始样本拟合及CPU校验，不启动kernel；截距不是空kernel实测耗时 |
+| [network_probe/run.py](network_probe/run.py) | 编译复用生产Session，查询0与指定peer的UDMA已选网络层；[probe.cpp](network_probe/probe.cpp)与[copy.cpp](network_probe/copy.cpp)另做双向MTE小包校验，不测性能、不推断MTE物理选路 |
+| [paths.py](paths.py)、[project_env.sh](../../scripts/project_env.sh)、[project_paths.py](../../scripts/project_paths.py) | 工程相对路径、CANN环境、仓内SDK、日志和缓存配置，见[PATHS.md](PATHS.md) |
 
 ## 修改后的最小检查
 

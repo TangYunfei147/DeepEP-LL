@@ -4,9 +4,12 @@ from pathlib import Path
 import subprocess
 from merge_shmem_results import merge
 
-ROOT=Path('/home/tyf/Q4_remote_test/project_control')
-base=ROOT/'results/shmem-separate-launch-001'
-base.mkdir(exist_ok=False)
+from paths import workspace_root, project_path, runtime_environment, results_dir
+ROOT = workspace_root()
+import tempfile
+runtime_environment()
+base=Path(tempfile.mkdtemp(prefix='shmem-separate-launch-',dir=results_dir()))
+
 here=Path(__file__).resolve().parent
 children=[]
 streams=[]

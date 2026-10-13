@@ -30,10 +30,18 @@ def environment(torch, torch_npu, package):
     package_dir = Path(package.__file__).resolve().parent
     native = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in package_dir.glob("_C*.so")}
     stack = {}
-    ascend = Path(os.environ.get("ASCEND_HOME_PATH", "/usr/local/Ascend/latest"))
+    repo = Path(__file__).resolve().parents[4]
+    def configured_root(name):
+        value = os.environ.get(name)
+        if not value:
+            return None
+        path = Path(value).expanduser()
+        return (path if path.is_absolute() else repo / path).resolve()
+    ascend = configured_root("ASCEND_HOME_PATH")
+    driver = configured_root("ASCEND_DRIVER_PATH")
     for label, paths in {
-        "cann": [ascend / "version.cfg", ascend / "version.info", ascend / "compiler/version.info"],
-        "driver": [Path("/usr/local/Ascend/driver/version.info")],
+        "cann": [ascend / "version.cfg", ascend / "version.info", ascend / "compiler/version.info"] if ascend else [],
+        "driver": [driver / "version.info"] if driver else [],
     }.items():
         stack[label] = next((p.read_text(errors="replace") for p in paths if p.is_file()), None)
     build_info = package_dir / "_build_info.json"

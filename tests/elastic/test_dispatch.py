@@ -4,7 +4,7 @@
 
 CPU: python -m pytest tests/elastic/test_dispatch.py -q
 NPU: python tests/elastic/test_dispatch.py --ep-size 2 --nproc-per-node 2 \
-     --output /tmp/dispatch-check-001
+     --output results/dispatch-check-001
 """
 
 import argparse
@@ -435,6 +435,10 @@ def _add_launch_args(parser):
 
 
 def _launch(args, worker):
+    paths = runpy.run_path(str(Path(__file__).resolve().parents[2] / "scripts/project_paths.py"))
+    if getattr(args, "output", None) is not None:
+        args.output = paths["project_path"](args.output)
+    paths["runtime_environment"]()
     # torchrun may still supply process identities, but no process group is created.
     launched = [name in os.environ for name in ("RANK", "WORLD_SIZE", "LOCAL_RANK")]
     if any(launched) and not all(launched):

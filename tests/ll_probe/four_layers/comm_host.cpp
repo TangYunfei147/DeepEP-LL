@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -43,8 +44,17 @@ int main(int argc,char** argv) {
         attr.option_attr.shm_init_timeout=60;attr.option_attr.shm_create_timeout=60;attr.option_attr.control_operation_timeout=60;
         std::fprintf(stderr,"READY_SHMEM rank=%llu device context created\n",(unsigned long long)rank);std::fflush(stderr);
         if(rank==0){const char* ready=std::getenv("FOUR_READY_FILE");if(ready){
-            if(std::string(ready).find("/home/tyf/Q4_remote_test/")!=0)throw std::runtime_error("ready file outside workspace");
-            FILE* file=std::fopen(ready,"w");if(!file)throw std::runtime_error("ready file failed");std::fputs("ready\n",file);std::fclose(file);
+            const char* project=std::getenv("DEEPEP_PROJECT_ROOT");
+            const char* workspace=std::getenv("PROBE_ROOT");
+            if(!project)throw std::runtime_error("use run.sh to configure the project root");
+            namespace fs=std::filesystem;
+            const auto base=fs::weakly_canonical(fs::path(project));
+            const auto root=fs::weakly_canonical(workspace?fs::path(workspace):base);
+            const auto requested=fs::path(ready);
+            const auto path=fs::weakly_canonical(requested.is_absolute()?requested:base/requested);
+            const auto relative=path.lexically_relative(root);
+            if(relative.empty()||relative=="."||*relative.begin()=="..")throw std::runtime_error("ready file outside workspace");
+            FILE* file=std::fopen(path.c_str(),"w");if(!file)throw std::runtime_error("ready file failed");std::fputs("ready\n",file);std::fclose(file);
         }}
         CK(aclshmemx_init_attr(ACLSHMEMX_INIT_WITH_DEFAULT,&attr));
         const uint64_t capacity=world*bytes+32;

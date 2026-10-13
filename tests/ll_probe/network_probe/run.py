@@ -5,6 +5,9 @@ import ipaddress
 import json
 import os
 from pathlib import Path
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from paths import project_path, results_dir, runtime_environment, workspace_root
 import signal
 import socket
 import subprocess
@@ -17,7 +20,7 @@ REPO = HERE.parents[2]
 
 def hosts(path):
     result = []
-    for line in Path(path).read_text().splitlines():
+    for line in project_path(path).read_text().splitlines():
         line = line.split('#', 1)[0].strip()
         if not line:
             continue
@@ -37,16 +40,17 @@ def identity():
     files = [*HERE.glob('*.cpp'), *HERE.glob('*.py'), *HERE.glob('*.sh'),
              REPO / 'csrc/runtime/session.cpp', REPO / 'csrc/runtime/session.hpp',
              REPO / 'csrc/runtime/udma_peer_masks.hpp', REPO / 'csrc/kernels/common.hpp',
-             REPO / 'csrc/kernels/udma_layout.hpp']
+             REPO / 'csrc/kernels/udma_layout.hpp', REPO / 'scripts/project_paths.py',
+             REPO / 'scripts/project_env.sh', REPO / 'tests/ll_probe/paths.py']
     return {'revision': subprocess.check_output(['git', '-C', str(REPO), 'rev-parse', 'HEAD'], text=True).strip(),
             'shmem_revision': subprocess.check_output(['git','-C',str(REPO/'third-party/shmem'),'rev-parse','HEAD'],text=True).strip(),
             'source_sha256': {str(p.relative_to(REPO)): hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(files)}}
 
 
 def library_identity():
-    libdir=Path(os.environ.get('SHMEM_LIB_DIR',str(REPO/'tests/ll_probe/build/shmem/lib'))).resolve()
+    libdir=project_path('third-party/shmem/install/shmem/lib')
     library=libdir/'libshmem.so'
-    cache=libdir.parent/'CMakeCache.txt'
+    cache=REPO/'third-party/shmem/build/CMakeCache.txt'
     flags=[line for line in cache.read_text().splitlines() if line.startswith(('ACLSHMEM_MULTI_LINK_SUPPORT:',
            'ACLSHMEM_RELAY_SUPPORT:','ENABLE_CANN_BUILD:','SOC_TYPE:'))] if cache.exists() else []
     return {'path':str(library),'sha256':hashlib.sha256(library.read_bytes()).hexdigest(),'cmake_flags':flags}
@@ -89,7 +93,7 @@ def main():
     parser.add_argument('--validation', action='store_true')
     parser.add_argument('--no-huge-pages', action='store_true', help='Explicit departure from ElasticBuffer default')
     parser.add_argument('--plan', action='store_true', help='CPU only, starts no ranks')
-    parser.add_argument('--output', type=Path)
+    parser.add_argument('--output', type=project_path)
     parser.add_argument('--write-build-manifest', action='store_true')
     args = parser.parse_args()
     if args.write_build_manifest:
@@ -101,8 +105,7 @@ def main():
         print(json.dumps(job, indent=2)); return
     if not args.validation and not args.target_run:
         raise ValueError('Use --target-run on target machines; A5 validation uses --validation --devices-per-host 2')
-    root = Path(os.environ.get('PROBE_ROOT','/home/tyf/Q4_remote_test')).resolve()
-    REPO.relative_to(root)
+    root = runtime_environment()
     output = (args.output or root/'results'/f'network-{time.time_ns()}-node{args.node_index}').resolve()
     output.relative_to(root)
     output.mkdir(parents=True, exist_ok=False)

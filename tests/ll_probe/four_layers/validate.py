@@ -3,6 +3,9 @@ import csv
 import json
 import math
 from pathlib import Path
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from paths import project_path, results_dir, runtime_environment, workspace_root
 import subprocess
 import time
 import os
@@ -12,7 +15,8 @@ parser.add_argument('--comm-only',action='store_true',help='Run one communicatio
 args=parser.parse_args()
 HERE=Path(__file__).resolve().parent
 import tempfile
-OUT=Path(tempfile.mkdtemp(prefix='four-layers-',dir='/home/tyf/Q4_remote_test/project_control/results'))
+runtime_environment()
+OUT=Path(tempfile.mkdtemp(prefix='four-layers-',dir=results_dir()))
 print(str(OUT),flush=True)
 if not args.comm_only:
     subprocess.run(['bash',str(HERE/'run.sh'),str(HERE/'build/metadata_probe')],check=True,

@@ -36,6 +36,7 @@ def bootstrap_gate(rank, world, host, port):
 
 
 def worker(local_rank, args):
+    runpy.run_path(str(Path(__file__).resolve().parents[2] / "scripts/project_paths.py"))["runtime_environment"]()
     import numpy as np
 
     rank, world = helper["_worker_identity"](local_rank, args)
@@ -464,7 +465,7 @@ def worker(local_rank, args):
         log(f"FAILED rank={rank} generation={generation}; traceback follows")
         traceback.print_exc()
         # Preserve only this worker's SHMEM logs, before scheduler cleanup.
-        for path in Path("/root/shmem/log").glob(f"aclshmem_{os.getpid()}_*.log"):
+        for path in Path(os.environ["SHMEM_LOG_PATH"]).glob(f"aclshmem_{os.getpid()}_*.log"):
             try:
                 args.output.mkdir(parents=True, exist_ok=True)
                 (args.output / f"rank-{rank}-{path.name}").write_bytes(path.read_bytes())

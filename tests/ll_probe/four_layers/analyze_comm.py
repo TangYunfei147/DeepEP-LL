@@ -4,6 +4,9 @@ import csv
 import json
 import math
 from pathlib import Path
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from paths import project_path, results_dir, runtime_environment, workspace_root
 import statistics
 
 def stats(values):
@@ -53,7 +56,7 @@ def analyze(paths):
     return result
 
 def main():
-    p=argparse.ArgumentParser();p.add_argument('csv',nargs='+',type=Path);p.add_argument('--output',type=Path,required=True)
+    p=argparse.ArgumentParser();p.add_argument('csv',nargs='+',type=project_path);p.add_argument('--output',type=project_path,required=True)
     p.add_argument('--peak-gbps',type=float);p.add_argument('--peak-description')
     args=p.parse_args();result=analyze(args.csv)
     if args.peak_gbps is not None:

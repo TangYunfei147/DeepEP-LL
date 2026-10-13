@@ -8,14 +8,14 @@
 
 ## 1. 独立发送量带宽实验（同机两卡）
 
-按README通过Git clone分支到目标机 /home/tyf/Q4_remote_test/DeepEP-LL，并在同一个授权根目录准备匹配的 CANN 9.3.0。build_probe.sh、run_scan.sh 当前使用 env_1009/cann-9.3.0；若布局不同，修改这两处 SDK/source 路径，保持文件、缓存与输出位于授权根目录。
+先按[路径及SDK流程](PATHS.md)准备仓内依赖，加载本机已有CANN环境。以下命令均从工程根执行，不要求目标机与验证机目录相同。
 
 先编译、再跑接收端正确性验证：
 
 ```bash
-cd /home/tyf/Q4_remote_test/DeepEP-LL/tests/ll_probe
-bash build_probe.sh
-bash run_peer_validation.sh
+# 从工程根目录执行
+bash tests/ll_probe/build_probe.sh
+bash tests/ll_probe/run_peer_validation.sh
 ```
 
 通过判据是 PASS、receiver checks before/after、normal cleanup 与退出码 0。当前设备对固定为 0→1；这是同进程 IPC 映射的同机 P2P 实验，不覆盖跨节点或多 peer 拓扑。不支持的 peer 路径会失败，不自动降级本卡拷贝。
@@ -23,12 +23,12 @@ bash run_peer_validation.sh
 先查看扫描计划，再由用户执行目标机测量：
 
 ```bash
-bash run_scan.sh > build/target-plan.json
-bash run_scan.sh --execute \
+bash tests/ll_probe/run_scan.sh > results/target-plan.json
+bash tests/ll_probe/run_scan.sh --execute \
   --bytes 32 128 512 2048 8192 32768 131072 524288 2097152 8388608 33554432 67108864 \
   --cores 1 8 32 --lanes 1 4 --chunk 4096 --modes 0 1 2 3 \
   --warmup 10 --samples 50 \
-  --output /home/tyf/Q4_remote_test/project_control/results/target-peer-001
+  --output results/target-peer-001
 ```
 
 输出目录必须全新。默认扫描 288 个配置，各配置重新初始化进程；初始化与接收端校验不在采样区间。先用少量配置试跑，再执行全扫描。确认对应方向/互联的十进制 GB/s 参考峰值后，追加 --peak-gbps 数值，summary 中 attainment=有效GB/s/参考峰值；比例不裁剪。
@@ -39,17 +39,17 @@ event_us 是 ACL event 包围的 stream 区间，包含事件/调度影响，不
 
 ## 2. 跨主机两 rank 实验
 
-两节点均使用相同授权工作目录布局、CANN 和 SHMEM 锁定提交，执行如下构建（生成实验专用库，不安装到系统）：
+两节点使用相同源码、CANN 和 SHMEM 锁定提交，工程绝对路径可以不同。依赖统一留在各自工程的 third-party 内：
 
 ```bash
-git -C /home/tyf/Q4_remote_test/DeepEP-LL submodule update --init third-party/shmem
-cd /home/tyf/Q4_remote_test/DeepEP-LL/tests/ll_probe
-bash build_probe.sh
-bash build_shmem_probe.sh
-bash build_shmem_driver.sh
+git submodule update --init --recursive --depth 1
+# 从工程根目录执行
+bash tests/ll_probe/build_probe.sh
+bash tests/ll_probe/build_shmem_probe.sh
+bash tests/ll_probe/build_shmem_driver.sh
 ```
 
-build_shmem_probe.sh 使用 DeepEP-LL/third-party/shmem 的锁定提交 4dd80e2129da42bd773982c2bb3758af1ed0bba8，目录内构建产物为 build/shmem/lib；构建开关 ENABLE_CANN_BUILD=ON 启用可用的 Fabric 映射接口。两个节点使用相同编译产物；合并检查要求 executable SHA256 相同。初始化使用 SHMEM 默认 TCP bootstrap，TCP 端口只用于建立作业，数据面是 SHMEM MTE 对称地址映射。
+build_shmem_probe.sh 仅调用 scripts/build_shmem.py --if-needed，SDK固定为 third-party/shmem/install/shmem；不另建实验依赖目录。TCP bootstrap用于建域，数据面为MTE映射；构建身份随结果记录。
 
 目标互联必须允许该映射上的 MTE 直接访问。仅有 RoCE/RDMA put 能力的链路不能自动等价为 LL 的 DataCopy(peer GM, UB)；若初始化/映射/发送失败，保留日志回传，不切换成别的传输后继续标为 LL MTE 带宽。
 
@@ -60,24 +60,24 @@ build_shmem_probe.sh 使用 DeepEP-LL/third-party/shmem 的锁定提交 4dd80e21
 ENDPOINT=tcp://RANK0_IP:19731
 
 # 节点0
-bash run_shmem_scan.sh --rank 0 --device 0 --endpoint "$ENDPOINT" \
+bash tests/ll_probe/run_shmem_scan.sh --rank 0 --device 0 --endpoint "$ENDPOINT" \
   --execute --validation-only --bytes 32 15392 --cores 8 --lanes 4 --modes 2 3 \
-  --output /home/tyf/Q4_remote_test/project_control/results/target-cross-check-rank0
+  --output results/target-cross-check-rank0
 
 # 节点1，在另一终端执行
-bash run_shmem_scan.sh --rank 1 --device 0 --endpoint "$ENDPOINT" \
+bash tests/ll_probe/run_shmem_scan.sh --rank 1 --device 0 --endpoint "$ENDPOINT" \
   --execute --validation-only --bytes 32 15392 --cores 8 --lanes 4 --modes 2 3 \
-  --output /home/tyf/Q4_remote_test/project_control/results/target-cross-check-rank1
+  --output results/target-cross-check-rank1
 ```
 
 两节点都通过后，执行发送量扫描；下面命令在两节点分别运行，设置 RANK=0/1，其余配置与顺序一致。每轮每配置依次创建 SHMEM 作业，不要同时启动另外一轮占用同一 endpoint 的扫描。对端等待初始化超时为30秒，父进程每case总超时120秒，请在30秒内启动双方。
 
 ```bash
-bash run_shmem_scan.sh --rank "$RANK" --device 0 --endpoint "$ENDPOINT" --execute \
+bash tests/ll_probe/run_shmem_scan.sh --rank "$RANK" --device 0 --endpoint "$ENDPOINT" --execute \
   --bytes 32 128 512 2048 8192 32768 131072 524288 2097152 8388608 33554432 67108864 \
   --cores 1 8 32 --lanes 1 4 --chunk 4096 --modes 0 1 2 3 \
   --warmup 10 --samples 50 \
-  --output "/home/tyf/Q4_remote_test/project_control/results/target-cross-rank${RANK}-001"
+  --output "results/target-cross-rank${RANK}-001"
 ```
 
 需要带宽达成率时，在两节点命令中都追加相同 --peak-gbps 数值。rank0 保存发送侧 Event 与 Host 原始样本；rank1 是接收方，不能用它的空 CSV 宣称采样缺失。每个节点的 summary status=local-ranks-passed 只证明本节点正常退出，必须再合并两方证据。
@@ -85,10 +85,10 @@ bash run_shmem_scan.sh --rank "$RANK" --device 0 --endpoint "$ENDPOINT" --execut
 将 rank1 的完整结果目录复制到 rank0 授权工作目录下（不要覆盖已有目录），执行：
 
 ```bash
-python3 merge_shmem_results.py \
-  /home/tyf/Q4_remote_test/project_control/results/target-cross-rank0-001/summary.json \
-  /home/tyf/Q4_remote_test/project_control/results/target-cross-rank1-001/summary.json \
-  --output /home/tyf/Q4_remote_test/project_control/results/target-cross-merged-001.json
+python3 tests/ll_probe/merge_shmem_results.py \
+  results/target-cross-rank0-001/summary.json \
+  results/target-cross-rank1-001/summary.json \
+  --output results/target-cross-merged-001.json
 ```
 
 合并要求两主机 hostname 不同、rank分别为0/1、配置/样本数/endpoint/二进制一致、双方接收检查及正常退出成立。最终 status=passed 才表示该双rank实验通过。--allow-same-host 只用于启动器验证，输出会标记为same-host验证，不用于目标跨主机报告。一个双rank实验只能刻画该方向的一对链路；反向测试可互换两节点rank身份并使用新目录和endpoint。
@@ -104,7 +104,7 @@ A5_241 可运行 --local 进行两个本机独立进程验证；本机通过不�
 先执行 CPU 计划检查：
 
 ```bash
-cd /home/tyf/Q4_remote_test/DeepEP-LL
+cd .
 python3 tests/elastic/test_ep_low_latency.py --plan \
   --num-processes 8 --num-nodes 2 \
   --num-tokens 1 2 4 8 16 32 64 96 128 256 --num-max-tokens-per-rank 256 \
@@ -121,7 +121,7 @@ python3 tests/elastic/test_ep_low_latency.py \
   --num-tokens 1 2 4 8 16 32 64 96 128 256 --num-max-tokens-per-rank 256 \
   --hidden 7168 --num-topk 6 --num-experts 256 --dtype bf16 --do-cpu-sync 0 \
   --num-bytes 8589934592 \
-  --output-dir /home/tyf/Q4_remote_test/project_control/results/target-ll-001
+  --output-dir results/target-ll-001
 ```
 
 固定 M=256 避免 B 与容量布局同时变化；不使用 --skip-check。确认全部 rank 正常退出，summary status=completed、各 case correctness=passed、backend=ll。保存全部 rank 原始样本与日志，不能只凭摘要存在判定成功。
@@ -129,9 +129,9 @@ python3 tests/elastic/test_ep_low_latency.py \
 对实际生成的 summary.json 进行拟合：
 
 ```bash
-python3 /home/tyf/Q4_remote_test/DeepEP-LL/tests/ll_probe/analyze_ll_overhead.py \
+python3 tests/ll_probe/analyze_ll_overhead.py \
   /实际运行目录/summary.json --b-min 1 --b-max 32 \
-  --output /home/tyf/Q4_remote_test/project_control/results/ll-fit-small.json
+  --output results/ll-fit-small.json
 ```
 
 拟合使用原始 profiler 样本重算每 rank 均值，再取最大值；与现有 ST 口径一致。按 H/K/E/dtype/M/route/EP 分组，t(B)=alpha+beta×B。alpha 是经验截距估计，不是零 token LL 的实测固定成本。检查残差和不同拟合区间，负截距或低 R²须保留并解释；不能以此单独认定固定成本大小。若需要精确定位，后续加入 LL 阶段插桩，由未插桩生产路径作基线。

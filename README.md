@@ -77,14 +77,19 @@ DeepEP/
 
 ### 安装 SHMEM 依赖
 
-按照[构建指南](docs/build.md)准备 SHMEM SDK，加载 CANN 与 SHMEM 环境：
+本分支统一使用仓内子模块和仓内SDK，先加载本机已有CANN环境，再从工程根执行：
 
 ```bash
-source /path/to/ascend-toolkit/set_env.sh
-export SHMEM_ROOT=/path/to/shmem-sdk
-source "$SHMEM_ROOT/set_env.sh"
-export LD_LIBRARY_PATH="$SHMEM_ROOT/lib:${LD_LIBRARY_PATH:-}"
+git submodule update --init --recursive --depth 1
+unset SHMEM_ROOT CATLASS_ROOT
+python scripts/build_shmem.py
+export DEEPEP_NPU_ARCH=Ascend950
+export LD_LIBRARY_PATH="$PWD/third-party/shmem/install/shmem/lib:${LD_LIBRARY_PATH:-}"
+python -m pip install -r requirements-build.txt
+python -m pip install -v --force-reinstall --no-build-isolation --no-deps .
 ```
+
+路径、日志缓存和CANN环境配置见[路径与SDK约定](tests/ll_probe/PATHS.md)。禁止将子仓依赖移到工程外，探针不另建SHMEM库。
 
 ### 开发
 

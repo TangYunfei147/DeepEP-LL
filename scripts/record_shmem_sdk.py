@@ -11,6 +11,8 @@ import argparse
 import hashlib
 import json
 from pathlib import Path
+import runpy
+project_path = runpy.run_path(str(Path(__file__).with_name('project_paths.py')))['project_path']
 
 
 def record(sdk, revision, *, build_info=None):
@@ -67,7 +69,7 @@ def check(sdk):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--sdk", required=True)
+    parser.add_argument("--sdk", type=project_path, required=True)
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--revision", help="SDK provider's source revision attestation")
     mode.add_argument("--check", action="store_true", help="verify an existing SDK identity without modifying it")

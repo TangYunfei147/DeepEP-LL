@@ -119,7 +119,7 @@ def test_build_isolates_git_libraries_and_preserves_framework_environment(tmp_pa
         check_environment(command, env)
         assert check
         if command[0] == "git":
-            assert command[1:6] == ["submodule", "update", "--init", "--recursive", "--"]
+            assert command[1:8] == ["submodule", "update", "--init", "--recursive", "--depth", "1", "--"]
             clones.append(command[-1])
         elif command[1:4] == ["-m", "pip", "install"]:
             # Stop before package installation or compilation; only dependency preparation is exercised.

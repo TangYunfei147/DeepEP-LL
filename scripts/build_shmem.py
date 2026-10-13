@@ -15,12 +15,18 @@ import subprocess
 import tempfile
 
 from record_shmem_sdk import record
+import runpy
+_paths = runpy.run_path(str(Path(__file__).with_name('project_paths.py')))
+runtime_environment, project_path = _paths['runtime_environment'], _paths['project_path']
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
 def cann_version(expected):
     cann = os.environ.get("ASCEND_HOME_PATH")
+    if cann:
+        cann = str(project_path(cann))
+        os.environ['ASCEND_HOME_PATH'] = cann
     if not cann or not (Path(cann) / "compiler/version.info").is_file():
         raise RuntimeError("Source the CANN set_env.sh first (ASCEND_HOME_PATH is missing or invalid)")
     version = dict(
@@ -51,6 +57,7 @@ def source_patches(source):
 
 
 def prepare(root=ROOT, *, rebuild=False, if_needed=False, allow_local_changes=False):
+    runtime_environment()
     if platform.system() != "Linux":
         raise RuntimeError("SHMEM compilation requires Linux and the pinned CANN SDK")
     root = Path(root).resolve()

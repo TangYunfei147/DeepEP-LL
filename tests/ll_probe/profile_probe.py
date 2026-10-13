@@ -17,13 +17,14 @@ import traceback
 from profile_common import Capture, read_named_tasks, WARMUP, CAPTURE_STEPS, PROFILE_STEPS, DELAY_SHAPE
 
 HERE = Path(__file__).resolve().parent
-ROOT = Path('/home/tyf/Q4_remote_test')
+from paths import workspace_root, project_path, runtime_environment, results_dir
+ROOT = workspace_root()
 
 
 def parser():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--kind', choices=('comm', 'metadata', 'peer', 'shmem'), required=True)
-    p.add_argument('--output-dir', type=Path, required=True, help='Fresh run directory shared by ranks')
+    p.add_argument('--output-dir', type=project_path, required=True, help='Fresh run directory shared by ranks')
     p.add_argument('--endpoint', help='SHMEM endpoint, separate from torchrun MASTER_PORT')
     p.add_argument('--bytes', type=int, default=15392)
     p.add_argument('--cores', type=int, default=8)
@@ -53,7 +54,8 @@ def plan(args, environ):
     visible = environ.get('ASCEND_RT_VISIBLE_DEVICES', '0,1').split(',')
     if not 0 <= rank < world or not 0 <= device < len(visible):
         raise ValueError('Rank/device outside declared world or visible devices')
-    if args.output_dir.resolve() != ROOT and ROOT not in args.output_dir.resolve().parents:
+    args.output_dir = project_path(args.output_dir)
+    if args.output_dir == ROOT or ROOT not in args.output_dir.parents:
         raise ValueError('Output must be below authorized root')
     if not 1 <= args.samples <= 10000 or not 0 <= args.warmup <= 10000 or not 0 <= args.tail <= args.samples:
         raise ValueError('Invalid warmup/capture/tail counts; set --tail explicitly for short validation')
@@ -102,6 +104,7 @@ def main(argv=None):
     if args.plan:
         print(json.dumps(identity, indent=2))
         return
+    runtime_environment()
     rank, world, device = (identity[key] for key in ('rank', 'world', 'device'))
     out = args.output_dir.resolve()/f'rank_{rank}'
     out.mkdir(parents=True, exist_ok=False)

@@ -16,13 +16,13 @@
 
 ## 构建新探针入口
 
-先按README通过Git获取分支，准备同版本CANN、SHMEM。所有文件保持在授权根目录：
+先按[路径及SDK流程](PATHS.md)通过Git获取分支、初始化仓内依赖，并加载本机CANN环境。所有命令从工程根执行：
 
 ```bash
-cd /home/tyf/Q4_remote_test/DeepEP-LL/tests/ll_probe
-mkdir -p /home/tyf/Q4_remote_test/project_control/results
-bash build_shmem_probe.sh
-bash build_profile_bridge.sh
+# 从工程根目录执行
+mkdir -p results
+bash tests/ll_probe/build_shmem_probe.sh
+bash tests/ll_probe/build_profile_bridge.sh
 ```
 
 本入口需要现有torch/torch_npu；分布式采样需要HCCL可用。无需安装额外报告包。单机/跨主机数据面仍是SHMEM MTE可寻址映射；不可达时报告失败，不自动改传输协议。
@@ -32,16 +32,16 @@ bash build_profile_bridge.sh
 以下为同机双卡示例；正式采样默认10/100/50和参考Exp尺寸：
 
 ```bash
-cd /home/tyf/Q4_remote_test/DeepEP-LL/tests/ll_probe
+# 从工程根目录执行
 export PROBE_VISIBLE_DEVICES=0,1
-bash four_layers/run.sh python3 -m torch.distributed.run \
-  --standalone --nproc_per_node=2 ../profile_probe.py \
+bash tests/ll_probe/four_layers/run.sh python3 -m torch.distributed.run \
+  --standalone --nproc_per_node=2 tests/ll_probe/profile_probe.py \
   --kind comm --scenario 4 --layer 3 --bytes 15392 --cores 8 --lanes 4 \
   --endpoint tcp://127.0.0.1:19761 \
-  --output-dir /home/tyf/Q4_remote_test/project_control/results/profile-comm-001
+  --output-dir results/profile-comm-001
 ```
 
-使用新输出目录。`--layer 0/1/3`分别为空kernel、tiling读取、传输。`--scenario 1/2/3/4`分别为1对1、N对1、1对N、N对N，`--bytes`为每条通信边字节数。参照four_layers/plan_matrix.py扫描2/4/8/16/32域、场景和发送量。其元数据的layers字段使用0/1/3内部编号，不是四层的序号。
+使用新输出目录。`--layer 0/1/3`分别为空kernel、tiling读取、传输。`--scenario 1/2/3/4`分别为1对1、N对1、1对N、N对N，`--bytes`为每条通信边字节数。用profile_probe.py的--plan逐项检查2/4/8/16/32域、场景和发送量。layer使用0/1/3内部编号，不是四层的序号。
 
 只有用户目标机可以扩展PROBE_VISIBLE_DEVICES。同机域4/8等用对应数量可见卡和`--nproc_per_node`；跨主机每台运行相同命令，将`--standalone`替换为：
 
@@ -55,9 +55,9 @@ SHMEM的`--endpoint tcp://首节点可达地址:另一端口`必须所有rank一
 ## 第二层：dispatch本地路由准备
 
 ```bash
-bash four_layers/run.sh python3 ../profile_probe.py --kind metadata \
+bash tests/ll_probe/four_layers/run.sh python3 tests/ll_probe/profile_probe.py --kind metadata \
   --batch 32 --hidden 7168 --top-k 6 --experts 256 --partitions 16 \
-  --output-dir /home/tyf/Q4_remote_test/project_control/results/profile-metadata-001
+  --output-dir results/profile-metadata-001
 ```
 
 仍只有device0执行，不创建16个设备rank。正确性版本先验证q/掩码/权重；正式计时仅提取`four_metadata`，不混入`four_metadata_check`。阶段范围及checksum观测开销见four_layers/USER_RUN.md。
@@ -75,10 +75,10 @@ bash four_layers/run.sh python3 ../profile_probe.py --kind metadata \
 ## 汇总与回传
 
 ```bash
-cd /home/tyf/Q4_remote_test/DeepEP-LL/tests/ll_probe
-python3 analyze_profile.py \
-  /home/tyf/Q4_remote_test/project_control/results/profile-comm-001/rank_*/report.json \
-  --output /home/tyf/Q4_remote_test/project_control/results/profile-comm-001/summary.json
+# 从工程根目录执行
+python3 tests/ll_probe/analyze_profile.py \
+  results/profile-comm-001/rank_*/report.json \
+  --output results/profile-comm-001/summary.json
 ```
 
 必须收齐全部rank的报告及相邻native.log，不混配置。脚本重新验证原始条数、tail、rank集合、源码/二进制身份和校验记录，通信单task报告计算全作业字节/逐轮rank最大task区间。可选`--peak-gbps`和`--peak-description`输入与拓扑和方向一致的参考峰值，否则只报告有效带宽。不同task类型不强行算一个带宽。

@@ -6,7 +6,8 @@ import subprocess
 import tempfile
 
 HERE = Path(__file__).resolve().parent
-ROOT = Path('/home/tyf/Q4_remote_test')
+from paths import workspace_root, project_path, runtime_environment, results_dir
+ROOT = workspace_root()
 CASES = {
     'metadata': ['--kind', 'metadata'],
     'empty': ['--kind', 'comm', '--layer', '0'],
@@ -21,7 +22,8 @@ def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--cases', choices=tuple(CASES), nargs='+', default=list(CASES))
     args = p.parse_args()
-    out = Path(tempfile.mkdtemp(prefix='reference-profile-', dir=ROOT/'project_control/results'))
+    runtime_environment()
+    out = Path(tempfile.mkdtemp(prefix='reference-profile-', dir=results_dir()))
     env = dict(os.environ)
     env.update(PROBE_VISIBLE_DEVICES='0,1', CUDA_VISIBLE_DEVICES='0,1',
                ASCEND_RT_VISIBLE_DEVICES='0,1', ASCEND_VISIBLE_DEVICES='0,1')

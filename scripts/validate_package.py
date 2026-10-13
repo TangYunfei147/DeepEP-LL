@@ -4,7 +4,7 @@
 
 No packages are installed into the caller's environment. --system-site-packages
 explicitly reuses a provisioned framework/SDK Python environment, not a claim
-of complete dependency isolation. CANN/SHMEM remain external system SDKs.
+of complete dependency isolation. CANN is pre-provisioned; SHMEM is the in-repository SDK.
 """
 
 import argparse
@@ -12,6 +12,8 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import runpy
+project_path = runpy.run_path(str(Path(__file__).with_name('project_paths.py')))['project_path']
 import shutil
 import signal
 import subprocess
@@ -154,7 +156,7 @@ def resolve_component_paths(env, source):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--output", type=Path, required=True, help="New, dedicated artifact directory")
+    parser.add_argument("--output", type=project_path, required=True, help="New, dedicated artifact directory")
     parser.add_argument("--system-site-packages", action="store_true")
     parser.add_argument(
         "--wheelhouse",
@@ -181,8 +183,8 @@ def main():
     output.mkdir(parents=True, exist_ok=False)
     env = dict(os.environ, PYTHONNOUSERSITE="1", PYTHONUNBUFFERED="1")
     # sdist 不包含子模块源码；两次构建必须使用原 checkout 的同一份依赖。
-    env.setdefault("SHMEM_ROOT", str(source / "third-party/shmem/install/shmem"))
-    env.setdefault("CATLASS_ROOT", str(source / "third-party/catlass"))
+    env["SHMEM_ROOT"] = str(source / "third-party/shmem/install/shmem")
+    env["CATLASS_ROOT"] = str(source / "third-party/catlass")
     env.pop("PYTHONPATH", None)
     env["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] = "1"
     resolve_component_paths(env, source)
@@ -341,6 +343,9 @@ def main():
         run([python, "-I", "-c", probe_beta], output, env, 120)
     # Copy tests, not the Python package: sys.path cannot select checkout code.
     shutil.copytree(source / "tests", output / "tests", ignore=shutil.ignore_patterns("__pycache__"))
+    (output / "scripts").mkdir(exist_ok=True)
+    for name in ("project_paths.py", "project_env.sh"):
+        shutil.copy2(source / "scripts" / name, output / "scripts" / name)
     shutil.copytree(
         source / "benchmarks",
         output / "benchmarks",

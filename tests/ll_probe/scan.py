@@ -8,7 +8,8 @@ from pathlib import Path
 import statistics
 import subprocess
 
-ROOT = Path('/home/tyf/Q4_remote_test')
+from paths import workspace_root, project_path, runtime_environment, results_dir
+ROOT = workspace_root()
 
 def main():
     p = argparse.ArgumentParser()
@@ -22,7 +23,7 @@ def main():
     p.add_argument('--peak-gbps', type=float, help='Matched one-way reference peak in decimal GB/s')
     p.add_argument('--execute', action='store_true', help='User-run target-machine measurement')
     p.add_argument('--validation-only', action='store_true', help='Execute receiver checks, collect zero timing samples')
-    p.add_argument('--output', type=Path)
+    p.add_argument('--output', type=project_path)
     args = p.parse_args()
     if any(b <= 0 or b % 32 or b > 64 << 20 for b in args.bytes): p.error('bytes must be aligned and <=64MiB')
     if any(c < 1 or c > 32 for c in args.cores): p.error('cores must be 1..32')
@@ -42,6 +43,7 @@ def main():
     if args.output is None: p.error('--execute requires fresh --output under authorized root')
     output = args.output.resolve()
     if not output.is_relative_to(ROOT) or output == ROOT: p.error('output outside authorized root')
+    runtime_environment()
     output.mkdir(parents=True, exist_ok=False)
     binary = Path(__file__).resolve().parent / 'build/peer_probe'
     plan['binary_sha256'] = hashlib.sha256(binary.read_bytes()).hexdigest()

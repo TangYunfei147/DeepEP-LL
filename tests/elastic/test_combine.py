@@ -2,7 +2,7 @@
 
 """Installed-wheel Combine precision test; payload Dispatch is explicitly opt-in.
 
-NPU: python tests/elastic/test_combine.py --ep-size 2 --nproc-per-node 2 --output /tmp/combine-check
+NPU: python tests/elastic/test_combine.py --ep-size 2 --nproc-per-node 2 --output results/combine-check
 """
 
 import copy

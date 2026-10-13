@@ -28,6 +28,7 @@ for _parent in Path(__file__).resolve().parents:
         sys.path.insert(0, str(_parent / "tests/ll_probe"))
         break
 from profile_common import run_profiled, read_named_tasks
+from paths import project_path, runtime_environment
 
 __test__ = False
 
@@ -87,9 +88,9 @@ def make_parser():
         description=__doc__,
         epilog="Matrix axes accept space-separated values: --num-tokens 8 16 --dtype bf16 fp8 --do-cpu-sync 0 1",
     )
-    parser.add_argument("--config", help="JSON settings and Cartesian matrix")
+    parser.add_argument("--config", type=lambda p: str(project_path(p)), help="JSON settings and Cartesian matrix")
     parser.add_argument("--plan", action="store_true", help="Print the case matrix without importing Torch")
-    parser.add_argument("--output-dir", default="benchmark-runs", help="Parent for a unique run directory and traces")
+    parser.add_argument("--output-dir", type=lambda p: str(project_path(p)), default="benchmark-runs", help="Parent for a unique run directory and traces")
     parser.add_argument("--perf-tail", type=int, default=50, help="Statistics use last N samples; default: min(50, num_iters); 0 uses all")
     parser.add_argument("--num-processes", type=int, default=8, help="Local spawned processes, as in DeepEP")
     parser.add_argument("--num-nodes", type=int, default=1)
@@ -147,7 +148,7 @@ def make_parser():
     parser.add_argument("--num-iters", type=int, default=100)
     parser.add_argument("--dispatch-only", action="store_true")
     parser.add_argument("--repeat-combine", type=int, default=2)
-    parser.add_argument("--output", help="New rank-0 JSON result file (will not overwrite)")
+    parser.add_argument("--output", type=lambda p: str(project_path(p)), help="New rank-0 JSON result file (will not overwrite)")
     return parser
 
 
@@ -242,7 +243,7 @@ def write_reports(directory, report):
 def parse_args(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     probe = argparse.ArgumentParser(add_help=False)
-    probe.add_argument("--config")
+    probe.add_argument("--config", type=lambda p: str(project_path(p)))
     config_path = probe.parse_known_args(argv)[0].config
     configured = []
     if config_path:
@@ -962,6 +963,7 @@ def main(argv=None):
         ]
         print(json.dumps({"world_size": world, "case_count": len(cases), "cases": cases}, indent=2))
         return
+    runtime_environment()
     configure_endpoints(args, os.environ)
     if local is not None:
         worker(local, args)

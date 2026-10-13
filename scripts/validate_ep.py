@@ -11,6 +11,8 @@ import argparse
 import json
 import os
 from pathlib import Path
+import runpy
+project_path = runpy.run_path(str(Path(__file__).with_name('project_paths.py')))['project_path']
 import re
 import shutil
 import signal
@@ -131,7 +133,7 @@ def main(argv=None):
     parser.add_argument("--devices", default=os.environ.get("ASCEND_RT_VISIBLE_DEVICES"))
     parser.add_argument("--case", choices=("all", *CASE_NAMES), default="all")
     parser.add_argument(
-        "--output", type=Path, required=True, help="New dedicated directory for staged tests and results"
+        "--output", type=project_path, required=True, help="New dedicated directory for staged tests and results"
     )
     parser.add_argument("--timeout", type=int, default=600, help="Seconds per torchrun job, including initialization")
     args = parser.parse_args(argv)
@@ -153,6 +155,9 @@ def main(argv=None):
         parser.error("output must be outside, and must not contain, the source tree")
     output.mkdir(parents=True, exist_ok=False)
     shutil.copytree(source / "tests", output / "tests", ignore=shutil.ignore_patterns("__pycache__"))
+    (output / "scripts").mkdir(exist_ok=True)
+    for name in ("project_paths.py", "project_env.sh"):
+        shutil.copy2(source / "scripts" / name, output / "scripts" / name)
     env = dict(os.environ, ASCEND_RT_VISIBLE_DEVICES=devices, PYTHONNOUSERSITE="1", PYTHONUNBUFFERED="1")
     env.pop("PYTHONPATH", None)
     env.setdefault("OMP_NUM_THREADS", "1")

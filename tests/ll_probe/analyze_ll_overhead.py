@@ -3,6 +3,7 @@ import argparse
 import json
 import math
 from pathlib import Path
+from paths import project_path
 import statistics
 
 def fit(points):
@@ -81,10 +82,10 @@ def analyze(report, bmin, bmax):
 
 def main():
     p=argparse.ArgumentParser()
-    p.add_argument('summary',type=Path)
+    p.add_argument('summary',type=project_path)
     p.add_argument('--b-min',type=int,default=1)
     p.add_argument('--b-max',type=int,default=32)
-    p.add_argument('--output',type=Path,required=True)
+    p.add_argument('--output',type=project_path,required=True)
     args=p.parse_args()
     reports=analyze(json.loads(args.summary.read_text()),args.b_min,args.b_max)
     if not reports: raise ValueError('No matching LL samples')

@@ -4,8 +4,7 @@ import json
 from pathlib import Path
 import shutil
 
-ROOT=Path('/home/tyf/Q4_remote_test')
-SOURCE=ROOT/'DeepEP-LL'
+SOURCE=Path(__file__).resolve().parents[3]
 HERE=Path(__file__).resolve().parent
 snapshot=HERE/'snapshot'
 snapshot.mkdir(exist_ok=True)
@@ -62,6 +61,6 @@ st=st.replace('def measure(invoke, args, operation, profile_dir, progress=None):
 adapter=(HERE/'api_adapter.txt').read_text()
 st=st.replace('\ndef main(argv=None):','\n'+adapter+'\n\ndef main(argv=None):')
 # Keep tests.utils and deep_ep imports resolved against the real repository.
-st=st.replace('__test__ = False',f'sys.path.insert(0, {str(SOURCE)!r})\n__test__ = False')
-st=st.replace('str(Path(__file__).with_name("test_dispatch.py"))',repr(str(SOURCE/'tests/elastic/test_dispatch.py')))
+st=st.replace('__test__ = False','sys.path.insert(0, str(Path(__file__).resolve().parents[4]))\n__test__ = False')
+st=st.replace('str(Path(__file__).with_name("test_dispatch.py"))','str(Path(__file__).resolve().parents[4] / \"tests/elastic/test_dispatch.py\")')
 (snapshot/'test_ll_four_layers.py').write_text(st)
