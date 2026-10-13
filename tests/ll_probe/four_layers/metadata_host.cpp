@@ -1,4 +1,5 @@
 #include <acl/acl.h>
+#include "snapshot/kernels/dispatch/low_latency/common/ep_memory_server_dedup_protocol.h"
 #include "snapshot/kernels/dispatch/low_latency/common/comm_args.h"
 #include "snapshot/kernels/dispatch/low_latency/common/ep_memory_server_dedup_tiling.h"
 #include "snapshot/kernels/dispatch/low_latency/common/ep_memory_server_dedup_data_layout.h"
@@ -17,7 +18,7 @@ int main(int argc,char** argv){try{
     uint32_t H=argc==8?value(2):4096,K=argc==8?value(3):6,E=argc==8?value(4):256,
        partitions=argc==8?value(5):16,warmup=argc==8?value(6):0,samples=argc==8?value(7):2;
     std::vector<uint32_t> batches=argc==8?std::vector<uint32_t>{value(1)}:std::vector<uint32_t>{4,32,96};
-    if(!H||!K||K>32||K>E||E>1024||partitions<16||partitions>256||partitions%8||!E||E%partitions||warmup>10000||samples>10000)
+    if(!H||!K||K>32||K>E||E>1024||partitions<16||partitions>256||partitions%DispatchDedup::kEpServerDedupRanksPerServer||!E||E%partitions||warmup>10000||samples>10000)
         throw std::runtime_error("unsupported metadata shape");
     CK(PROBE_ACL_INIT());CK(aclrtSetDevice(0));aclrtStream stream;CK(aclrtCreateStream(&stream));
     std::puts("B,H,K,E,logical_partitions,sample,event_us");
@@ -25,10 +26,10 @@ int main(int argc,char** argv){try{
         if(!B||B>256)throw std::runtime_error("B must be 1..256");
         const auto layout=DispatchDedup::DispatchServerDedupDataLayout(B,H,K,E,false);
         auto align=[](uint32_t n,uint32_t a){return (n+a-1)/a*a;};
-        uint32_t count=(B+31)/32,groups=partitions/8-1;groups=groups<K/2?groups:K/2;
+        uint32_t count=(B+31)/32,groups=partitions/DispatchDedup::kEpServerDedupRanksPerServer-1;groups=groups<K/2?groups:K/2;
         uint64_t used=2*layout.packedPayloadBytes+align(B*K*4,256)+3*align(B*K*4,32)+
           2*align(count*K*4,32)+align(count*4,32)+align(count*K*16,32)+
-          (align(partitions/8*4,32)>64?align(partitions/8*4,32):64)+(groups?align(groups*4,32):0);
+          (align(partitions/DispatchDedup::kEpServerDedupRanksPerServer*4,32)>64?align(partitions/DispatchDedup::kEpServerDedupRanksPerServer*4,32):64)+(groups?align(groups*4,32):0);
         if(used+layout.tokenStride>190*1024||layout.blockCount>255)throw std::runtime_error("sender UB budget exceeded");
         // Logical expert partition for local metadata only; no SHMEM instance
         // or 16-rank communication is created. Exactly device0 executes.
@@ -55,14 +56,14 @@ int main(int argc,char** argv){try{
             CK(aclrtMemcpy(masks.data(),B*4,m,B*4,ACL_MEMCPY_DEVICE_TO_HOST));
             CK(aclrtMemcpy(outWeights.data(),B*K*4,s,B*K*4,ACL_MEMCPY_DEVICE_TO_HOST));
             for(uint32_t t=0;t<B;++t){
-                uint32_t mask=0;std::vector<std::vector<uint32_t>> remote(partitions/8);
-                for(uint32_t k=0;k<K;++k){auto server=ids[t*K+k]/(E/partitions*8);if(server)remote[server].push_back(k);else mask|=1U<<k;}
+                uint32_t mask=0;std::vector<std::vector<uint32_t>> remote(partitions/DispatchDedup::kEpServerDedupRanksPerServer);
+                for(uint32_t k=0;k<K;++k){auto server=ids[t*K+k]/(E/partitions*DispatchDedup::kEpServerDedupRanksPerServer);if(server)remote[server].push_back(k);else mask|=1U<<k;}
                 for(auto& group:remote)if(!group.empty())mask|=1U<<group[0];
                 if(masks[t]!=mask)throw std::runtime_error("source mask mismatch");
                 for(uint32_t k=0;k<K;++k){
                     uint32_t expected=0xffffffffU;
                     if(mask&(1U<<k)){expected=0;for(uint32_t p=0;p<t*K+k;++p)expected+=ids[p]==ids[t*K+k];
-                        auto server=ids[t*K+k]/(E/partitions*8);
+                        auto server=ids[t*K+k]/(E/partitions*DispatchDedup::kEpServerDedupRanksPerServer);
                         float weight=server&&remote[server].size()>=2&&k==remote[server][0]?1.f:weights[t*K+k];
                         if(outWeights[t*K+k]!=weight)throw std::runtime_error("source weight mismatch");}
                     if(q[t*K+k]!=expected)throw std::runtime_error("expert q mismatch B="+std::to_string(B)+" t="+std::to_string(t)+" k="+std::to_string(k)+" actual="+std::to_string(q[t*K+k])+" expected="+std::to_string(expected));

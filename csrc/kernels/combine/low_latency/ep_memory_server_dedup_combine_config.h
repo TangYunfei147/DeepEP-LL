@@ -5,6 +5,7 @@
 #define COMBINE_DEDUP_EP_MEMORY_SERVER_DEDUP_COMBINE_CONFIG_H
 
 #include <cstdint>
+#include "../../dispatch/low_latency/common/ep_memory_server_dedup_protocol.h"
 
 // Independent of Dispatch. Rebuild Host and kernel together on all ranks.
 #ifndef COMBINE_DEDUP_EP_SERVER_DEDUP_COMBINE_SEND_CORE_NUM
@@ -12,6 +13,8 @@
 #endif
 
 namespace CombineDedup {
+// Each receive core owns a 512-byte ready row, one 32-byte flag per peer.
+static_assert(DispatchDedup::kEpServerDedupRanksPerServer * 32U == 512U, "LL ready-row capacity");
 constexpr uint32_t kEpServerDedupCombineSendCoreNum = COMBINE_DEDUP_EP_SERVER_DEDUP_COMBINE_SEND_CORE_NUM;
 static_assert(kEpServerDedupCombineSendCoreNum >= 16U && kEpServerDedupCombineSendCoreNum <= 56U &&
                   kEpServerDedupCombineSendCoreNum % 4U == 0U,

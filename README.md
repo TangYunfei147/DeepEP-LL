@@ -294,7 +294,7 @@ Tensor 布局、事件同步及 Buffer 生命周期见 [API 文档](docs/api.md)
 
 ---
 
-同一个 EP 组使用共享的 SHMEM 初始化 endpoint，并配置 rank 与设备的映射。当前实现按连续 8 rank 划分逻辑 Server 进行去重；逻辑 Server 不一定与物理主机一一对应。
+同一个 EP 组使用共享的 SHMEM 初始化 endpoint，并配置 rank 与设备的映射。HT路径按连续8 rank划分逻辑Server。此分支的LL路径按每物理主机16个连续rank划分组，单机EP16与多机扩展见[LL16指南](tests/ll_probe/LL16.md)。
 
 ## 实验性分支
 

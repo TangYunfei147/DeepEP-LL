@@ -177,7 +177,7 @@ inline bool DispatchDedupPacketUbFits(const EpMemoryServerDedupLayout& layout, i
     const uint64_t reserved =
         b < kEpServerDedupAllCoreCountBsThreshold ? align((num_experts + cores - 1) / cores, 8) * 32 : 0;
     const uint64_t tokens = (b + 31) / 32;
-    const uint64_t groups = std::min<uint64_t>(world_size / 8 - 1, k / 2);
+    const uint64_t groups = std::min<uint64_t>(world_size / kEpServerDedupRanksPerServer - 1, k / 2);
     const bool needQuantize = layout.inputMode == EpServerDedupInputMode::Quantize16;
     const uint64_t inputBytes = needQuantize ? layout.data.quantCount * 2U : layout.data.packedPayloadBytes;
     // Prequantized scales occupy the two full payload input buffers (no alias to quantBuf).
@@ -189,7 +189,7 @@ inline bool DispatchDedupPacketUbFits(const EpMemoryServerDedupLayout& layout, i
                             align(b * k * 4, 256) + 2 * scratchBytes + qBytes + 2 * align(tokens * k * 4, 32) +
                             align(tokens * 4, 32) + align(tokens * k * 16, 32) + 64 + align(groups * 4, 32) +
                             layout.data.tokenStride;
-    const uint64_t serverStateExtra = std::max<uint64_t>(64U, align(world_size / 8U * 4U, 32U)) - 64U;
+    const uint64_t serverStateExtra = std::max<uint64_t>(64U, align(world_size / kEpServerDedupRanksPerServer * 4U, 32U)) - 64U;
     const uint64_t receiver = align(num_experts * 4, 32) + 2 * align(((layout.capacityRows + 31) / 32) * 4, 32) +
                               16 * layout.data.blockCount * 32 + 256 +
                               16 * align((layout.data.blockCount + 7) / 8, 32) * 4 + 256 + 16 * 36 +

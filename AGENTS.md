@@ -9,3 +9,5 @@
 - SDK依赖统一使用仓内子模块：`git submodule update --init --recursive --depth 1`，`unset SHMEM_ROOT CATLASS_ROOT`，`python scripts/build_shmem.py`，设置`DEEPEP_NPU_ARCH=Ascend950`，将`third-party/shmem/install/shmem/lib`加入`LD_LIBRARY_PATH`，再依次安装`requirements-build.txt`并执行`python -m pip install -v --force-reinstall --no-build-isolation --no-deps .`。子仓及构建产物不得放在工程外或另建探针SDK树；不通过外部SHMEM/CATLASS覆盖该流程。
 
 操作说明见 [tests/ll_probe/PATHS.md](tests/ll_probe/PATHS.md)。
+
+- 本分支生产LL固定每物理主机16个连续rank，单机EP16是一个组，跨机按每机16卡扩展。共享HT的8路UDMA QP归属不是LL分组，不可机械替换。修改LL分组须同时核对dispatch分类、Host UB预算、combine ready通知/等待、metadata参考及启动合约，运行步骤见tests/ll_probe/LL16.md。

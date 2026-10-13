@@ -18,9 +18,9 @@ spec.loader.exec_module(st)
 
 def test_launch_identities():
     args = st.make_parser().parse_args(["--num-nodes", "2", "--node-rank", "1"])
-    assert st.launch_config(args, {}) == (16, 8, None)
-    assert st.launch_config(args, {"WORLD_SIZE": "4", "RANK": "2"}) == (32, 16, None)
-    assert st.launch_config(args, {"WORLD_SIZE": "16", "RANK": "9", "LOCAL_RANK": "1"}) == (16, 9, 1)
+    assert st.launch_config(args, {}) == (32, 16, None)
+    assert st.launch_config(args, {"WORLD_SIZE": "4", "RANK": "2"}) == (64, 32, None)
+    assert st.launch_config(args, {"WORLD_SIZE": "16", "RANK": "9", "LOCAL_RANK": "9"}) == (16, 9, 9)
     with pytest.raises(ValueError, match="torchrun"):
         st.launch_config(args, {"LOCAL_RANK": "0"})
 
@@ -276,3 +276,18 @@ def test_delay_defaults_honor_json_and_explicit_overrides(tmp_path):
     assert (args.delay_exp_before, args.delay_exp_after) == (1, 7)
     with pytest.raises(ValueError, match="Reference profiler requires"):
         st.validate_args(args, 16)
+
+
+def test_ll16_default_and_reject_old_host_mapping():
+    assert st.launch_config(st.make_parser().parse_args([]), {}) == (16, 0, None)
+    with pytest.raises(ValueError, match="16 processes"):
+        st.launch_config(st.make_parser().parse_args(["--num-processes", "8", "--num-nodes", "2"]), {})
+    for env in [
+        {"WORLD_SIZE": "16", "RANK": "9", "LOCAL_RANK": "1"},
+        {"WORLD_SIZE": "16", "RANK": "0", "LOCAL_RANK": "0", "LOCAL_WORLD_SIZE": "8"},
+        {"WORLD_SIZE": "8", "RANK": "0", "LOCAL_RANK": "0"},
+    ]:
+        with pytest.raises(ValueError, match="16 ranks"):
+            st.launch_config(st.make_parser().parse_args([]), env)
+    assert st.launch_config(st.make_parser().parse_args([]),
+        {"WORLD_SIZE": "32", "RANK": "31", "LOCAL_RANK": "15", "LOCAL_WORLD_SIZE": "16"}) == (32, 31, 15)

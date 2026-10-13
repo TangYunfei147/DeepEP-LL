@@ -92,7 +92,7 @@ def make_parser():
     parser.add_argument("--plan", action="store_true", help="Print the case matrix without importing Torch")
     parser.add_argument("--output-dir", type=lambda p: str(project_path(p)), default="benchmark-runs", help="Parent for a unique run directory and traces")
     parser.add_argument("--perf-tail", type=int, default=50, help="Statistics use last N samples; default: min(50, num_iters); 0 uses all")
-    parser.add_argument("--num-processes", type=int, default=8, help="Local spawned processes, as in DeepEP")
+    parser.add_argument("--num-processes", type=int, default=16, help="LL requires 16 local processes per host")
     parser.add_argument("--num-nodes", type=int, default=1)
     parser.add_argument("--node-rank", type=int, default=0)
     parser.add_argument("--master-addr", default=None)
@@ -313,13 +313,14 @@ def launch_config(args, environ):
         if not all(key in environ for key in ("RANK", "WORLD_SIZE")):
             raise ValueError("torchrun requires RANK, WORLD_SIZE and LOCAL_RANK")
         world, rank, local = (int(environ[key]) for key in ("WORLD_SIZE", "RANK", "LOCAL_RANK"))
-        if not 0 <= rank < world or local < 0:
-            raise ValueError("Invalid torchrun process identity")
+        if (not 0 <= rank < world or world % 16 or not 0 <= local < 16
+                or rank % 16 != local or int(environ.get("LOCAL_WORLD_SIZE", "16")) != 16):
+            raise ValueError("LL torchrun requires contiguous groups of 16 ranks per host")
         return world, rank, local
     nodes = int(environ.get("WORLD_SIZE", args.num_nodes))
     node = int(environ.get("RANK", args.node_rank))
-    if nodes < 1 or args.num_processes < 1 or not 0 <= node < nodes:
-        raise ValueError("Invalid node count, node rank or local process count")
+    if nodes < 1 or args.num_processes != 16 or not 0 <= node < nodes:
+        raise ValueError("LL requires 16 processes per host and a valid node count/rank")
     return nodes * args.num_processes, node * args.num_processes, None
 
 
@@ -807,6 +808,8 @@ def worker(local_rank, args):
     from deep_ep._native import require_native
 
     native = require_native("LL ST")
+    if getattr(native, "low_latency_ranks_per_host", None) != 16:
+        raise RuntimeError("Rebuild/install the current LL wheel: this launcher requires 16 ranks per host")
     if not callable(getattr(native, "dispatch_low_latency", None)):
         raise RuntimeError("Installed wheel has no LL native entry; rebuild and install the migrated package")
     validate_native_cases(native, cases, world)
@@ -836,6 +839,7 @@ def worker(local_rank, args):
             if rank == 0:
                 manifest = {
                     "world_size": world,
+                    "ranks_per_host": 16,
                     "case_count": len(cases),
                     "routes": modes,
                     "cases": [
@@ -906,6 +910,7 @@ def worker(local_rank, args):
             report = {
                 "status": "completed",
                 "world_size": world,
+                "ranks_per_host": 16,
                 "case_count": len(cases),
                 "result_count": len(results),
                 "config": vars(args),
@@ -961,7 +966,7 @@ def main(argv=None):
         cases = [
             {"case_id": i, **case_config(case, validate_args(case, world))} for i, case in enumerate(matrix_cases(args))
         ]
-        print(json.dumps({"world_size": world, "case_count": len(cases), "cases": cases}, indent=2))
+        print(json.dumps({"world_size": world, "ranks_per_host": 16, "case_count": len(cases), "cases": cases}, indent=2))
         return
     runtime_environment()
     configure_endpoints(args, os.environ)

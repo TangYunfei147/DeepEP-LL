@@ -106,12 +106,12 @@ A5_241 可运行 --local 进行两个本机独立进程验证；本机通过不�
 ```bash
 cd .
 python3 tests/elastic/test_ep_low_latency.py --plan \
-  --num-processes 8 --num-nodes 2 \
+  --num-processes 16 --num-nodes 1 \
   --num-tokens 1 2 4 8 16 32 64 96 128 256 --num-max-tokens-per-rank 256 \
   --hidden 7168 --num-topk 6 --num-experts 256 --dtype bf16 --do-cpu-sync 0
 ```
 
-目标环境每个节点配置正确的可见卡、MASTER_ADDR、独立 MASTER_PORT 与 SHMEM endpoint；不要在 A5_241 使用 8 卡。目标节点数×本机进程数必须对应受支持的 EP，所有 rank 使用相同源码/二进制/参数。按仓库 tests/README.md 加载 CANN/SHMEM 环境。各节点运行同一命令，仅 NODE_RANK 不同：
+目标环境每个节点配置正确的可见卡、MASTER_ADDR、独立 MASTER_PORT 与 SHMEM endpoint；A5_241始终只用卡0/1。生产LL每节点固定16进程，`LOCAL_RANKS=16`；具体启动与超时验收见[LL16.md](LL16.md)。目标节点数×本机进程数必须对应受支持的 EP，所有 rank 使用相同源码/二进制/参数。按仓库 tests/README.md 加载 CANN/SHMEM 环境。各节点运行同一命令，仅 NODE_RANK 不同：
 
 ```bash
 python3 tests/elastic/test_ep_low_latency.py \

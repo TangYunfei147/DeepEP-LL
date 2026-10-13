@@ -1,5 +1,7 @@
 # LL四层测试：Git交付入口
 
+生产LL每机16卡分组、同步协议和目标机验收见[LL16.md](LL16.md)。
+
 新增：[LL建域与网络层诊断](network_probe/README.md)，支持YAML多机配置、UDMA已选层查询和MTE双向正确性检查。
 
 源码定位见[脚本与kernel对应表](KERNEL_MAP.md)，包含Host入口、设备函数名、生产LL内部阶段及快照修改规则。

@@ -135,28 +135,33 @@ Host join 和冷初始化均在 dispatch Event 区间之外，因此 kernel Even
 
 ## LL 正确性与性能
 
+本分支统一每机16卡，运行入口及带超时验收见[LL16指南](ll_probe/LL16.md)。
+
 LL 要求 EP16/32/64/128、`0 < B ≤ M ≤ 256`、固定 8 GiB 工作区。默认 `M=B`；BS32/96/256 均可进入 LL，其他 shape 与选项仍须通过检查。先在无设备环境检查矩阵：
 
 ```bash
 python tests/elastic/test_ep_low_latency.py --plan \
-  --num-processes 8 --num-nodes 2 --num-tokens 32 96 256 \
+  --num-processes 16 --num-nodes 1 --num-tokens 32 96 256 \
   --hidden 7168 --num-topk 6 --num-experts 256 --dtype bf16
 ```
 
-LL ST 与上述 HT 脚本的初始化方式不同：它默认创建 HCCL 测试进程组并传给 Buffer，使用 `--do-cpu-sync 0 1` 分别检查容量布局和精确行数布局。下面是两台主机各 8 卡的运行示例，在两台分别设置 `NODE_RANK=0/1`，并配置首台可达 IP：
+LL ST 与上述 HT 脚本的初始化方式不同：它默认创建 HCCL 测试进程组并传给 Buffer，使用 `--do-cpu-sync 0 1` 分别检查容量布局和精确行数布局。下面是两台主机各16卡（EP32）的运行示例，在两台分别设置 `NODE_RANK=0/1`，并配置首台可达 IP：
 
 ```bash
-export ASCEND_RT_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
+source scripts/project_env.sh
+export PROBE_VISIBLE_DEVICES=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15
+export CUDA_VISIBLE_DEVICES="$PROBE_VISIBLE_DEVICES" ASCEND_RT_VISIBLE_DEVICES="$PROBE_VISIBLE_DEVICES"
+export ASCEND_VISIBLE_DEVICES="$PROBE_VISIBLE_DEVICES"
 export MASTER_PORT=19090
 export DEEPEP_SHMEM_ENDPOINT="tcp://${MASTER_ADDR}:19091"
 
 python tests/elastic/test_ep_low_latency.py \
-  --num-processes 8 --num-nodes 2 --node-rank "$NODE_RANK" \
+  --num-processes 16 --num-nodes 2 --node-rank "$NODE_RANK" \
   --master-addr "$MASTER_ADDR" --master-port "$MASTER_PORT" \
   --shmem-ip-port "$DEEPEP_SHMEM_ENDPOINT" \
   --num-tokens 32 96 256 --hidden 7168 --num-topk 6 --num-experts 256 \
   --dtype bf16 --do-cpu-sync 0 1 --num-bytes 8589934592 \
-  --output-dir /tmp/deepep-ll-runs
+  --output-dir results/deepep-ll-runs
 ```
 
 该入口支持本机 spawn 和 torchrun。测试显式 rank/world_size 方式时，在命令中加入 `--without-buffer-group`：Buffer 使用 `group=None`，LL 在两种 `do_cpu_sync` 设置下都返回容量布局；测试控制进程组仍用于协调测试和收集结果。该选项不表示整个 ST 不使用进程组。`--group-backend gloo` 可将测试进程组后端改为 Gloo，token payload 的 SHMEM/kernel 通信路径不变。各 rank 的可见设备与启动配置须一致。

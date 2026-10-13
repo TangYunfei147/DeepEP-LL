@@ -1,5 +1,7 @@
 # 测试脚本与 kernel 源码审计索引
 
+生产LL每机16卡分组、同步协议和目标机验收见[LL16.md](LL16.md)。
+
 本文件路径为 `tests/ll_probe/KERNEL_MAP.md`，以下链接均指向仓库内源码。先确定测量入口，再沿 Host 包装追到设备函数；`*_do` 是 Host 启动包装，不是 profiler 的设备 task 名。运行命令见 [PROFILING.md](PROFILING.md)。
 
 ## 正式采样入口与设备函数

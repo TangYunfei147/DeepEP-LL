@@ -289,7 +289,7 @@ Tensor layouts, event synchronization, and buffer lifecycle are described in the
 
 ---
 
-Each EP group uses a shared SHMEM initialization endpoint and an explicit rank-to-device mapping. The current implementation groups consecutive sets of eight ranks into logical servers for server-level deduplication; a logical server need not match a physical host.
+Each EP group uses a shared SHMEM initialization endpoint and an explicit rank-to-device mapping. The HT path retains its eight-rank logical groups. This branch groups LL ranks by physical host, with 16 consecutive ranks per host; see the [LL16 guide](tests/ll_probe/LL16.md) for single-host EP16 and multi-host deployment.
 
 ## Experimental branches
 

@@ -68,6 +68,8 @@ bash tests/ll_probe/four_layers/run.sh python3 tests/ll_probe/profile_probe.py -
 
 ## 第四层：完整dispatch/combine
 
+本分支统一为每机16卡，单机EP16默认启动，跨机EP32使用两台各16卡。先按[LL16指南](LL16.md)重建生产wheel并运行带超时的正确性检查，再执行下述性能协议。旧每机8卡启动配置会被拒绝。
+
 `tests/elastic/test_ep_low_latency.py`已采用公共协议；`four_layers/prepare_snapshot.py`生成的完整API快照继承同一协议。继续使用原LL启动参数，在本任务通信域集合中仅运行实际EP16/32。默认`--warmup 10 --num-iters 100 --perf-tail 50`；`--delay-rows/--delay-cols`显式控制Exp尺寸。
 
 旧参数`--delay-exp-before/after`仅接受1/0；旧的首调用后1000次Exp方案会报错，不再静默执行。Gloo控制组可用于诊断，会标记非参考HCCL口径；性能比较应使用相同后端和扰动设置。完整LL仍需要匹配的已安装wheel及原生依赖，A5双卡无法完成其设备验收。

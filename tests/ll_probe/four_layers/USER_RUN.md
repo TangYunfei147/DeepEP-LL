@@ -84,11 +84,11 @@ python3 tests/ll_probe/four_layers/analyze_comm.py results/rank*/samples.csv \
 
 ```bash
 bash tests/ll_probe/four_layers/run.sh python3 tests/ll_probe/four_layers/snapshot/test_ll_four_layers.py --plan \
-  --num-processes 8 --num-nodes 2 --num-tokens 1 2 4 8 16 32 \
+  --num-processes 16 --num-nodes 1 --num-tokens 1 2 4 8 16 32 \
   --num-max-tokens-per-rank 256 --hidden 7168 --num-topk 6 --num-experts 256
 ```
 
-真实运行时去掉--plan并提供原指南中的node-rank/master/shmem参数及授权目录内output-dir。原生LL仍要求EP16/32/64/128，因此本项目这组通信域中完整LL仅执行EP16/32，EP2/4/8标记unsupported，不降级HT或伪造world_size。目标已有的wheel必须与源码/依赖匹配。PROBE_VISIBLE_DEVICES设置本节点实际使用设备，LOCAL_RANKS=每节点rank数，与NNODES乘积分别为16或32；不在A5执行这些原生LL任务。
+真实运行时去掉--plan并提供原指南中的node-rank/master/shmem参数及授权目录内output-dir。原生LL仍要求EP16/32/64/128，因此本项目这组通信域中完整LL仅执行EP16/32，EP2/4/8标记unsupported，不降级HT或伪造world_size。目标已有的wheel必须与源码/依赖匹配。PROBE_VISIBLE_DEVICES设置本节点实际使用设备，LOCAL_RANKS=16（每节点固定16个rank），与NNODES乘积分别为16或32；不在A5执行这些原生LL任务。
 
 每个dispatch/combine结果保留原profiler kernel_us，另外保存full_api：单独无profiler采样，计时从invoke之前到返回event等待+device同步完成，包含API内部开销，排除输入准备、专家计算、测试barrier、返回输出销毁。保存每rank原始样本与逐轮rankMAX、mean/p50/p95/p99。此模式是正确性检查之后的稳态复用，不包含Buffer构造/冷启动。
 

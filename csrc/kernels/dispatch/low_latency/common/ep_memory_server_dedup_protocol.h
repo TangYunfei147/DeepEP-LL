@@ -8,7 +8,8 @@
 #include <cstdint>
 
 namespace DispatchDedup {
-constexpr uint32_t kEpServerDedupRanksPerServer = 8U;
+// One LL group is one physical host; ranks must be contiguous within each host.
+constexpr uint32_t kEpServerDedupRanksPerServer = 16U;
 constexpr uint32_t kEpServerDedupAlignmentBytes = 32U;
 constexpr uint32_t kEpServerDedupMaxTopK = 32U;
 

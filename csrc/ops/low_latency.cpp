@@ -74,6 +74,7 @@ uint8_t dtype_code(const std::string& dtype)
 
 void bind_low_latency(py::module_& module)
 {
+    module.attr("low_latency_ranks_per_host") = DispatchDedup::kEpServerDedupRanksPerServer;
     module.def("low_latency_layout", [](int p, int b, int h, int k, int e, const std::string& dtype) {
         // A rejected shape is a Host-only capability result, not a launch failure.
         dtype_code(dtype);
@@ -96,8 +97,8 @@ void bind_low_latency(py::module_& module)
         DispatchDedup::CommArgs args{};
         args.rank = session.rank();
         args.rankSize = session.world();
-        args.localRank = session.rank() % 8;
-        args.localRankSize = 8;
+        args.localRank = session.rank() % DispatchDedup::kEpServerDedupRanksPerServer;
+        args.localRankSize = DispatchDedup::kEpServerDedupRanksPerServer;
         args.peerMemBytes = session.capacity();
         args.fftsVal = shmemx_get_ffts_config();
         for (int peer = 0; peer < session.world(); ++peer) {

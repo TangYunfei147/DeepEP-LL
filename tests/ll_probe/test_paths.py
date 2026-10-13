@@ -21,7 +21,7 @@ class PortablePaths(unittest.TestCase):
         self.root = Path(self.temp.name) / 'renamed project with spaces'
         self.cwd = Path(self.temp.name) / 'unrelated caller'
         self.cwd.mkdir()
-        files = ['scripts/project_paths.py', 'scripts/project_env.sh', 'tests/ll_probe/paths.py',
+        files = ['tests/ll_probe/run_ll16.sh', 'tests/elastic/test_ep_low_latency.py', 'scripts/project_paths.py', 'scripts/project_env.sh', 'tests/ll_probe/paths.py',
                  'tests/ll_probe/profile_probe.py', 'tests/ll_probe/profile_common.py',
                  'tests/ll_probe/network_probe/run.py', 'tests/ll_probe/network_probe/defaults.py',
                  'tests/ll_probe/network_probe/config.yaml']
@@ -36,6 +36,14 @@ class PortablePaths(unittest.TestCase):
 
     def run_python(self, *args):
         return subprocess.check_output([sys.executable,*map(str,args)],cwd=self.cwd,env=self.env,text=True)
+
+    def test_ll16_launcher_from_renamed_checkout(self):
+        result = json.loads(subprocess.check_output(
+            ['bash', str(self.root/'tests/ll_probe/run_ll16.sh'), '--plan', '--num-tokens', '1', '33'],
+            cwd=self.cwd, env=self.env, text=True))
+        self.assertEqual(result['world_size'], 16)
+        self.assertEqual(result['ranks_per_host'], 16)
+        self.assertEqual(result['case_count'], 2)
 
     def test_network_yaml_uses_checkout_not_cwd(self):
         result=json.loads(self.run_python(self.root/'tests/ll_probe/network_probe/run.py',
