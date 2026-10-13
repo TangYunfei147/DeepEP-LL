@@ -674,6 +674,7 @@ def run_case(buffer, args, rank, world, m, mode):
         )
 
     import hashlib
+
     mapped = {line.split()[-1] for line in Path("/proc/self/maps").read_text().splitlines() if len(line.split()) >= 6}
     classes = [
         [p for p in mapped if "/deep_ep/_C." in p and p.endswith(".so")],
@@ -702,13 +703,19 @@ def run_case(buffer, args, rank, world, m, mode):
     if not args.skip_check:
         agree_check(lambda: verify_dispatch(recv, handle, entries, args, world, m), args, rank)
     if args.dispatch_only:
-        result = {"case_id": args.case_id, "route": mode,
-                  "correctness": "skipped" if args.skip_check else "passed",
-                  "backend": "ll", "config": case_config(args, m),
-                  "tested_operations": ["dispatch"]}
+        result = {
+            "case_id": args.case_id,
+            "route": mode,
+            "correctness": "skipped" if args.skip_check else "passed",
+            "backend": "ll",
+            "config": case_config(args, m),
+            "tested_operations": ["dispatch"],
+        }
         if not args.skip_perf_test:
             profile = Path(args.run_directory) / f"case_{args.case_id:05d}" / mode
-            result["dispatch"] = measure(dispatch, args, "dispatch", profile / "dispatch" / f"rank_{rank:03d}", progress)
+            result["dispatch"] = measure(
+                dispatch, args, "dispatch", profile / "dispatch" / f"rank_{rank:03d}", progress
+            )
         if rank == 0:
             print(json.dumps(result, ensure_ascii=False), flush=True)
         completion_boundary(args)
