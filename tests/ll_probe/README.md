@@ -1,5 +1,7 @@
 # LL四层测试：Git交付入口
 
+新增：[LL建域与网络层诊断](network_probe/README.md)，支持YAML多机配置、UDMA已选层查询和MTE双向正确性检查。
+
 源码定位见[脚本与kernel对应表](KERNEL_MAP.md)，包含Host入口、设备函数名、生产LL内部阶段及快照修改规则。
 
 **性能采样已统一参考协议，正式测试请使用[统一profiler入口](PROFILING.md)。默认预热10次、采集100次、按kernel/task统计最后50条；下文旧Event命令用于诊断和正确性检查。**
