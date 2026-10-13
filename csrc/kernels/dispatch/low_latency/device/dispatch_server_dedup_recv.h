@@ -5,6 +5,7 @@
 #define DISPATCH_SERVER_DEDUP_RECV_H
 
 #include "kernel_operator.h"
+#include "../common/dispatch_ll_debug.h"
 #include "adv_api/reduce/sum.h"
 #include "../common/ep_memory_server_dedup_protocol.h"
 #include "../../../common/ep_packet_receive_layout.h"
@@ -57,7 +58,9 @@ public:
 
         // Caller has completed count-stage writes before this Reset. The GM
         // prefix belongs to this receive core; old count UB is no longer used.
+        LL_DLOG(LL_DISPATCH_DEBUG_RECV, args_->rank, GetBlockIdx(), "RECV_RESET_BEGIN", windowOffset_, 0, 0, 0);
         pipe_->Reset();
+        LL_DLOG(LL_DISPATCH_DEBUG_RECV, args_->rank, GetBlockIdx(), "RECV_RESET_DONE", 0, 0, 0, 0);
         const uint32_t prefixBytes = uint32_t(DispatchDedupAlign(uint64_t(experts_) * 4U, 32U));
         pipe_->InitBuffer(prefixBuf_, prefixBytes);
         GlobalTensor<int32_t> prefixGlobal;
@@ -72,6 +75,8 @@ public:
         // 2. 按前缀定义的接收输出行均分任务，建立稳定槽位表和可压缩的 pending 表。
         // j 始终标识固定输出行/槽位；pending 下标只表示尚未消费的任务位置。
         tasks_.Build(prefix, uint32_t(args_->rank), uint32_t(args_->rankSize), experts_, bs_, receiver_, pipe_);
+
+        LL_DLOG(LL_DISPATCH_DEBUG_RECV, args_->rank, GetBlockIdx(), "RECV_TASKS", tasks_.Begin(), tasks_.Count(), data_.tokenStride, windowOffset_);
 
         // 空任务核没有拥有的接收槽，完成打点后直接返回，无需参与 packet 轮询。
         if (tasks_.Count() == 0U) {
@@ -108,6 +113,9 @@ public:
         // 4. issued/consumed 是跨批累计的加载/消费序号，二者之差限制在 lane 深度内。
         // 它们按相同顺序推进，保证 consumed % lanes_ 对应之前预取的同一个 packet。
         uint32_t scan = 0U, issued = 0U, consumed = 0U;
+#if LL_DISPATCH_DEBUG_RECV
+        uint32_t debugPolls = 0, debugLogs = 0;
+#endif
         while (tasks_.PendingCount() != 0U) {
             // Include all empty scans in one wait interval. Recording every
             // retry perturbs the polling loop and can exhaust the trace buffer.
@@ -120,7 +128,20 @@ public:
                 if (scan >= tasks_.PendingCount()) scan = 0U;
                 const uint32_t remaining = tasks_.PendingCount() - scan;
                 count = remaining < kProbeBatch ? remaining : kProbeBatch;
+#if LL_DISPATCH_DEBUG_RECV
+                const bool debugEmit = LlDispatchDebugSelected(args_->rank, GetBlockIdx()) && LlDispatchDebugSample(debugPolls, debugLogs);
+                if (debugEmit) LL_DLOG(1, args_->rank, GetBlockIdx(), "RECV_PROBE_BEFORE", debugLogs, scan, count, tasks_.PendingCount());
+#endif
                 probe = Probe(scan, count);
+#if LL_DISPATCH_DEBUG_RECV
+                if (debugEmit) {
+                    LL_DLOG(1, args_->rank, GetBlockIdx(), "RECV_PROBE_AFTER", debugLogs, probe.readyMask, probe.keepFlagsMask, tasks_.PendingCount());
+                    for (uint32_t i = 0; i < count && i < LL_DISPATCH_DEBUG_ITEMS; ++i) {
+                        const uint32_t j = snapshot.GetValue(i);
+                        LL_DLOG(1, args_->rank, GetBlockIdx(), "RECV_SLOT", j, tasks_.Position(j), reinterpret_cast<uint64_t>(Slot(j)), sumBuf_.Get<float>().ReinterpretCast<uint32_t>().GetValue(i));
+                    }
+                }
+#endif
                 if (probe.readyMask == 0U) scan += count;
             } while (probe.readyMask == 0U);
 
@@ -136,14 +157,18 @@ public:
                 while (issued - consumed < depth && nextLoad != 0U) {
                     --nextLoad;
                     if ((probe.readyMask & (uint32_t(1) << nextLoad)) == 0U) continue;
+                    if (issued < LL_DISPATCH_DEBUG_PACKETS) LL_DLOG(LL_DISPATCH_DEBUG_RECV, args_->rank, GetBlockIdx(), "RECV_LOAD_BEGIN", issued, snapshot.GetValue(nextLoad), issued % lanes_, 0);
                     IssueLoad(snapshot.GetValue(nextLoad), issued % lanes_,
                               (probe.keepFlagsMask & (uint32_t(1) << nextLoad)) != 0U);
+                    if (issued < LL_DISPATCH_DEBUG_PACKETS) LL_DLOG(LL_DISPATCH_DEBUG_RECV, args_->rank, GetBlockIdx(), "RECV_LOAD_ENQUEUED", issued, 0, 0, 0);
                     ++issued;
                 }
                 // 消费包括写出展开 token、量化 scale 和路由元数据；FIRST_HOP 还执行转发。
                 // 任务移出 pending 表只表示相关写操作已下发，lane 事件另行保护实际完成。
+                if (consumed < LL_DISPATCH_DEBUG_PACKETS) LL_DLOG(LL_DISPATCH_DEBUG_RECV, args_->rank, GetBlockIdx(), "RECV_CONSUME_BEGIN", consumed, snapshot.GetValue(index), consumed % lanes_, 0);
                 ConsumeLoaded(snapshot.GetValue(index), consumed % lanes_,
                               (probe.keepFlagsMask & (uint32_t(1) << index)) != 0U);
+                if (consumed < LL_DISPATCH_DEBUG_PACKETS) LL_DLOG(LL_DISPATCH_DEBUG_RECV, args_->rank, GetBlockIdx(), "RECV_CONSUME_ENQUEUED", consumed, 0, 0, 0);
                 tasks_.RemovePending(scan + index);
                 ++consumed;
             }
@@ -151,11 +176,15 @@ public:
         // 5. pending 清空后，等待各 lane 在途写入，随后统一清除本核所有槽位的块标记。
         // 清理使用稳定任务表，不能使用已压缩为空的 pending 表；payload 本身不清零。
 
+        LL_DLOG(LL_DISPATCH_DEBUG_RECV, args_->rank, GetBlockIdx(), "RECV_DRAIN_BEGIN", consumed, lanes_, 0, 0);
         for (uint32_t lane = 0; lane < lanes_; ++lane) WaitFlag<HardEvent::MTE3_MTE2>(lane);
+        LL_DLOG(LL_DISPATCH_DEBUG_RECV, args_->rank, GetBlockIdx(), "RECV_DRAIN_DONE", consumed, lanes_, 0, 0);
         // This is the end of wait instruction submission, not a new Scalar
         // completion barrier. The existing final PIPE_ALL establishes completion.
 
+        LL_DLOG(LL_DISPATCH_DEBUG_RECV, args_->rank, GetBlockIdx(), "RECV_CLEAR_BEGIN", 0, 0, 0, 0);
         ClearFlags();
+        LL_DLOG(LL_DISPATCH_DEBUG_RECV, args_->rank, GetBlockIdx(), "RECV_CLEAR_ENQUEUED", 0, 0, 0, 0);
 
         // 最终流水屏障确保输出、relay 和标记清理完成。
         PipeBarrier<PIPE_ALL>();
@@ -220,7 +249,14 @@ private:
     // 摘要：消费已预取包，写出 token/scale 和路由元数据；FIRST_HOP 还向其余专家转发，再归还 lane。
     __aicore__ inline void ConsumeLoaded(uint32_t j, uint32_t lane, bool keepFlags)
     {
+#if LL_DISPATCH_DEBUG_RECV
+        const bool debugPacket = debugConsumed_++ < LL_DISPATCH_DEBUG_PACKETS;
+        if (debugPacket) LL_DLOG(1, args_->rank, GetBlockIdx(), "RECV_PAYLOAD_WAIT", j, lane, keepFlags, 0);
+#endif
         WaitFlag<HardEvent::MTE2_S>(lane);
+#if LL_DISPATCH_DEBUG_RECV
+        if (debugPacket) LL_DLOG(1, args_->rank, GetBlockIdx(), "RECV_PAYLOAD_READY", j, lane, keepFlags, 0);
+#endif
         auto wire = lanesBuf_.Get<uint8_t>()[lane * laneStride_];
         const uint32_t row = tasks_.Begin() + j;
         const uint32_t headerOffset = uint32_t(keepFlags ? data_.headerWireOffset : data_.headerPayloadOffset);
@@ -283,7 +319,13 @@ private:
                                        DispatchServerDedupDispatchOffset(data_, sourceRank, destinationRank,
                                                                          expertId % localExperts_, q, ranks,
                                                                          localExperts_, bs_));
+#if LL_DISPATCH_DEBUG_RECV
+                if (debugPacket && i < LL_DISPATCH_DEBUG_ITEMS) LL_DLOG(1, args_->rank, GetBlockIdx(), "RECV_RELAY_BEFORE", j, sourceRank, destinationRank, reinterpret_cast<uint64_t>(output.GetPhyAddr()));
+#endif
                 DataCopy(output, wire, uint32_t(data_.tokenStride));
+#if LL_DISPATCH_DEBUG_RECV
+                if (debugPacket && i < LL_DISPATCH_DEBUG_ITEMS) LL_DLOG(1, args_->rank, GetBlockIdx(), "RECV_RELAY_ENQUEUED", j, destinationRank, expertId, q);
+#endif
             }
         }
         SetFlag<HardEvent::MTE3_MTE2>(lane);
@@ -308,6 +350,9 @@ private:
     uint64_t windowOffset_ = 0;
     static constexpr uint32_t recvCoreNum_ = kEpServerDedupRecvCoreNum;
     uint32_t bs_ = 0U, k_ = 0U, experts_ = 0U, localExperts_ = 0U, receiver_ = 0U;
+#if LL_DISPATCH_DEBUG_RECV
+    uint32_t debugConsumed_ = 0;
+#endif
     uint32_t hiddenBytes_ = 0U, laneStride_ = 0U, lanes_ = 0U;
     EpServerDedupDataLayout data_{};
     ServerDedupReceiveTasks tasks_;
