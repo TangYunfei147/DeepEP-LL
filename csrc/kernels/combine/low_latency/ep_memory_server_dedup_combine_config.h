@@ -11,10 +11,10 @@
 namespace CombineDedup {
 // Resident capacity is shared across ranks, independently of active core count.
 constexpr uint32_t kCombineNotifyRows = DispatchDedup::kLlMaxRecvCoreNum;
-constexpr uint32_t kCombineReadyInputBytes = DispatchDedup::kEpServerDedupRanksPerServer * 32U + 256U;
+constexpr uint32_t kCombineReadyInputBytes = DispatchDedup::kLlRanksPerGroup * 32U + 256U;
 constexpr uint32_t kCombinePrepareRowBytes = DispatchDedup::kLlMaxCoreNum * 32U;
 static_assert(kCombinePrepareRowBytes * DispatchDedup::kLlNotifyCoreNum == 18432U, "prepare/ready boundary");
-static_assert(DispatchDedup::kEpServerDedupRanksPerServer * 32U == 512U, "ready row capacity");
+static_assert(DispatchDedup::kLlRanksPerGroup * 32U <= 512U, "ready row capacity");
 constexpr uint32_t kEpServerDedupCombineMaxTokenNum = 10000U;
 // M1/M2 keep all resources distinct: three row arrays, compare mask, one
 // 512-row table-2 cache, per-level detector/work/result/zero buffers and flags.

@@ -71,6 +71,11 @@ extern "C" [[bisheng::core_ratio(0, 1)]] __global__ __aicore__ void dispatch_ser
 
 // Same in-library launch mechanism as all other ascendEP kernels.
 #include "low_latency/launch.hpp"
+extern "C" DEEPEP_EXPORT uint32_t deepep_ll_ranks_per_group()
+{
+    return DispatchDedup::kLlRanksPerGroup;
+}
+
 extern "C" DEEPEP_EXPORT uint32_t deepep_ll_core_protocol_version()
 {
     return DispatchDedup::kLlCoreProtocolVersion;

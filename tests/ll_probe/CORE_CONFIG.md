@@ -1,3 +1,5 @@
+> 当前逻辑组大小与每机物理卡数已解耦，配置及分支关系见 [LL_KERNEL.md](../../LL_KERNEL.md)。本文原有每机16卡描述仅对应旧部署/专用 run_ll16.sh。
+
 # LL实际AIV核数与统一分核
 
 本分支的LL dispatch/combine不再固定启动64核。Host参考MegaMoE，调用`PlatformAscendCManager::GetInstance()->GetCoreNumAiv()`获取平台AIV数量；存在当前设备时，再通过`aclrtGetDeviceInfo(..., ACL_DEV_ATTR_VECTOR_CORE_NUM, ...)`查询运行时可用数，取两者较小值作为本次纯AIV启动数量N。

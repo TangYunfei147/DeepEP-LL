@@ -97,7 +97,9 @@ void bind_low_latency(py::module_& module)
         result["control_capacity_aiv"] = DispatchDedup::kLlMaxCoreNum;
         return result;
     });
-    module.attr("low_latency_ranks_per_host") = DispatchDedup::kEpServerDedupRanksPerServer;
+    if (deepep_ll_ranks_per_group() != DispatchDedup::kLlRanksPerGroup)
+        throw std::runtime_error("LL Host/device group size mismatch; rebuild the complete wheel");
+    module.attr("low_latency_ranks_per_group") = DispatchDedup::kLlRanksPerGroup;
     module.def("low_latency_layout", [](int p, int b, int h, int k, int e, const std::string& dtype) {
         // A rejected shape is a Host-only capability result, not a launch failure.
         dtype_code(dtype);
@@ -114,15 +116,16 @@ void bind_low_latency(py::module_& module)
     module.def("low_latency_comm_args", [](Session& session) {
         if (session.combine_only()) throw std::invalid_argument("LL requires a dense-channel Session");
         if (session.capacity() != DispatchDedup::kEpServerDedupPeerBytes ||
-            session.world() > DispatchDedup::DISPATCH_DEDUP_MAX_RANK_SIZE) {
+            session.world() > DispatchDedup::DISPATCH_DEDUP_MAX_RANK_SIZE ||
+            session.world() < 16 || session.world() % DispatchDedup::kLlRanksPerGroup != 0) {
             throw std::invalid_argument("LL requires exactly 8 GiB of symmetric workspace");
         }
         pin_session_cores(session);
         DispatchDedup::CommArgs args{};
         args.rank = session.rank();
         args.rankSize = session.world();
-        args.localRank = session.rank() % DispatchDedup::kEpServerDedupRanksPerServer;
-        args.localRankSize = DispatchDedup::kEpServerDedupRanksPerServer;
+        args.localRank = session.rank() % DispatchDedup::kLlRanksPerGroup;
+        args.localRankSize = DispatchDedup::kLlRanksPerGroup;
         args.peerMemBytes = session.capacity();
         args.fftsVal = shmemx_get_ffts_config();
         for (int peer = 0; peer < session.world(); ++peer) {

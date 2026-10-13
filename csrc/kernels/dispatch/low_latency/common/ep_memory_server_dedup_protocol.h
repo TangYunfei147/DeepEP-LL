@@ -8,8 +8,14 @@
 #include <cstdint>
 
 namespace DispatchDedup {
-// One LL group is one physical host; ranks must be contiguous within each host.
-constexpr uint32_t kEpServerDedupRanksPerServer = 16U;
+// Logical contiguous-rank routing group; independent of physical host/device count.
+// Edit this default and rebuild the complete wheel AND experimental snapshots.
+#ifndef DEEPEP_LL_RANKS_PER_GROUP
+#define DEEPEP_LL_RANKS_PER_GROUP 16
+#endif
+constexpr uint32_t kLlRanksPerGroup = DEEPEP_LL_RANKS_PER_GROUP;
+static_assert(kLlRanksPerGroup == 8U || kLlRanksPerGroup == 16U,
+              "LL logical group supports 8 or 16 ranks");
 constexpr uint32_t kEpServerDedupAlignmentBytes = 32U;
 constexpr uint32_t kEpServerDedupMaxTopK = 32U;
 

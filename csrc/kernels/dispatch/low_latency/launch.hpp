@@ -44,3 +44,4 @@ static_assert(offsetof(EpServerDedupKernelArgs, inputScales) == 120, "input pack
 extern "C" void dispatch_server_dedup_kernel_do(void* stream, const deepep::EpServerDedupKernelArgs* args);
 
 extern "C" uint32_t deepep_ll_core_protocol_version();
+extern "C" uint32_t deepep_ll_ranks_per_group();

@@ -1,3 +1,5 @@
+> 当前逻辑组大小与每机物理卡数已解耦，配置及分支关系见 [LL_KERNEL.md](../../LL_KERNEL.md)。本文原有每机16卡描述仅对应旧部署/专用 run_ll16.sh。
+
 # 测试脚本与 kernel 源码审计索引
 
 生产LL每机16卡分组、同步协议和目标机验收见[LL16.md](LL16.md)，实际AIV核数查询及分工见[CORE_CONFIG.md](CORE_CONFIG.md)，剩余固定值见[HARDCODE_AUDIT.md](HARDCODE_AUDIT.md)。

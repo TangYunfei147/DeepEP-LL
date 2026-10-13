@@ -73,8 +73,8 @@ public:
                              uint8_t(blocks_), 1U, 16U);
         }
         PipeBarrier<PIPE_V>();
-        const uint32_t servers = uint32_t(args_->rankSize) / DispatchDedup::kEpServerDedupRanksPerServer;
-        const uint32_t ownServer = uint32_t(args_->rank) / DispatchDedup::kEpServerDedupRanksPerServer;
+        const uint32_t servers = uint32_t(args_->rankSize) / DispatchDedup::kLlRanksPerGroup;
+        const uint32_t ownServer = uint32_t(args_->rank) / DispatchDedup::kLlRanksPerGroup;
         uint32_t owner = 0U, completed = 0U;
         for (uint32_t step = 1U; step <= servers; ++step) {
             const uint32_t count = SelectServer(ServerDedupHalfOrder(servers, ownServer, step - 1U), owner, step == 1U);
@@ -165,7 +165,7 @@ private:
                     return 0U;
                 }
             }
-            ServerDedupRankMask(mask, upper, ranks, int32_t(server * DispatchDedup::kEpServerDedupRanksPerServer), int32_t((server + 1U) * DispatchDedup::kEpServerDedupRanksPerServer), span);
+            ServerDedupRankMask(mask, upper, ranks, int32_t(server * DispatchDedup::kLlRanksPerGroup), int32_t((server + 1U) * DispatchDedup::kLlRanksPerGroup), span);
             And(mask.ReinterpretCast<uint16_t>(), mask.ReinterpretCast<uint16_t>(),
                 typeMask.ReinterpretCast<uint16_t>(), int32_t((span + 15U) / 16U));
             PipeBarrier<PIPE_V>();

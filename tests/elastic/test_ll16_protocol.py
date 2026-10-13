@@ -4,6 +4,7 @@ These checks exercise control-flow/addressing only, not NPU DMA ordering.
 """
 from pathlib import Path
 import subprocess
+import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -19,7 +20,8 @@ def method(text, name):
     return text[start:end].replace('__aicore__ ', '')
 
 
-def test_production_routing_and_ready_addresses(tmp_path):
+@pytest.mark.parametrize("group", [8, 16])
+def test_production_routing_and_ready_addresses(tmp_path, group):
     sender = (ROOT/'csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_send.h').read_text()
     combine = (ROOT/'csrc/kernels/combine/low_latency/combine_server_dedup_kernel.h').read_text()
     source = r'''
@@ -84,7 +86,7 @@ struct Ready {
 ''' + 'void Publish() {\n' + 'Duplicate<float>(preparePublish_, 0.0f, 64U);' + method(combine, 'CopyLocalPendingTokens').split('Duplicate<float>(preparePublish_, 0.0f, 64U);', 1)[1] + '\n' + method(combine, 'NotifyServerCard') + '\n' + method(combine, 'WaitServerReady') + r'''
 };
 int main() {
-    static_assert(kEpServerDedupRanksPerServer==16);
+    constexpr unsigned G=kLlRanksPerGroup;
     for(unsigned world: {16U,32U,64U,128U,256U}) {
         EpMemoryServerDedupLayout layout;
         assert(BuildDispatchServerDedupLayout(world,4,256,4,world*4,&layout)==0);
@@ -96,15 +98,15 @@ int main() {
             for(unsigned shift=0;shift<world;++shift) {
                 std::vector<int32_t> ids;
                 for(unsigned j=0;j<16;++j) ids.push_back(((shift+j)%world)*4+j%4);
-                std::vector<uint32_t> states(world/16),masks(16);
+                std::vector<uint32_t> states(world/G),masks(16);
                 Route route{&args,0,16,4,{ids.data()},{states.data()},{masks.data()}};
                 unsigned direct=0,groups=0;
                 route.Classify(0,direct,groups);
                 std::map<unsigned,unsigned> expected;
                 unsigned expectedDirect=0;
                 for(unsigned j=0;j<16;++j) {
-                    unsigned host=unsigned(ids[j])/4/16;
-                    if(host==rank/16) expectedDirect|=1U<<j;
+                    unsigned host=unsigned(ids[j])/4/G;
+                    if(host==rank/G) expectedDirect|=1U<<j;
                     else expected[host]|=1U<<j;
                 }
                 std::vector<unsigned> expectedGroups,actual(masks.begin(),masks.begin()+groups);
@@ -115,11 +117,11 @@ int main() {
                 std::sort(actual.begin(),actual.end());
                 std::sort(expectedGroups.begin(),expectedGroups.end());
                 assert(direct==expectedDirect && actual==expectedGroups);
-                if(world==16) assert(direct==65535 && groups==0);
+                if(world==G) assert(direct==65535 && groups==0);
             }
             std::vector<unsigned> visited;
-            for(unsigned i=0;i<world/16;++i)
-                visited.push_back(EpServerOrder::ServerDedupHalfOrder(world/16,rank/16,i));
+            for(unsigned i=0;i<world/G;++i)
+                visited.push_back(EpServerOrder::ServerDedupHalfOrder(world/G,rank/G,i));
             std::sort(visited.begin(),visited.end());
             for(unsigned i=0;i<visited.size();++i) assert(visited[i]==i);
         }
@@ -144,7 +146,7 @@ int main() {
                 for(unsigned rank=0;rank<world;++rank) {
                     Args args{rank,world};
                     for(unsigned receiver=0;receiver<receivers;++receiver) {
-                        for(unsigned peer=0;peer<16;++peer)
+                        for(unsigned peer=0;peer<G;++peer)
                             assert(memory[rank][COMBINE_DEDUP_EP_SERVER_DEDUP_COMBINE_SERVER_READY_OFFSET/4+receiver*128+peer*8]==1);
                         Ready ready{&args,receivers+receiver,&memory,total,receivers,total-8};
                         ready.WaitServerReady();
@@ -152,7 +154,7 @@ int main() {
                     for(unsigned index=0;index<memory[rank].size();++index) {
                         const unsigned readyBase=COMBINE_DEDUP_EP_SERVER_DEDUP_COMBINE_SERVER_READY_OFFSET/4;
                         const bool unused=index>=readyBase+receivers*128 && index<readyBase+kCombineNotifyRows*128;
-                        const float expected=unused && (index-readyBase)%8==0 ? 1.0f:0.0f;
+                        const float expected=unused && (index-readyBase)%128<G*8 && (index-readyBase)%8==0 ? 1.0f:0.0f;
                         assert(memory[rank][index]==expected);
                     }
                 }
@@ -166,5 +168,5 @@ int main() {
     cpp = tmp_path/'protocol.cpp'
     cpp.write_text(source)
     binary = tmp_path/'protocol'
-    subprocess.run(['g++','-std=c++17','-O2','-I',str(ROOT),str(cpp),'-o',str(binary)],check=True)
+    subprocess.run(['g++','-std=c++17','-O2',f'-DDEEPEP_LL_RANKS_PER_GROUP={group}','-I',str(ROOT),str(cpp),'-o',str(binary)],check=True)
     subprocess.run([str(binary)],check=True,timeout=30)

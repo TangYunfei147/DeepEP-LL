@@ -278,19 +278,21 @@ def test_delay_defaults_honor_json_and_explicit_overrides(tmp_path):
         st.validate_args(args, 16)
 
 
-def test_ll16_default_and_reject_old_host_mapping():
-    assert st.launch_config(st.make_parser().parse_args([]), {}) == (16, 0, None)
-    with pytest.raises(ValueError, match="16 processes"):
-        st.launch_config(st.make_parser().parse_args(["--num-processes", "8", "--num-nodes", "2"]), {})
+def test_logical_group_independent_host_mapping():
+    args = st.make_parser().parse_args([])
+    assert st.launch_config(args, {}) == (16, 0, None)
+    assert st.launch_config(st.make_parser().parse_args(["--num-processes", "8", "--num-nodes", "2"]), {}) == (16, 0, None)
+    for local_size in (2, 4, 8, 16, 32):
+        world = 32
+        env = {"WORLD_SIZE": str(world), "RANK": "31", "LOCAL_RANK": str(31 % local_size), "LOCAL_WORLD_SIZE": str(local_size)}
+        assert st.launch_config(args, env) == (32, 31, 31 % local_size)
     for env in [
         {"WORLD_SIZE": "16", "RANK": "9", "LOCAL_RANK": "1"},
-        {"WORLD_SIZE": "16", "RANK": "0", "LOCAL_RANK": "0", "LOCAL_WORLD_SIZE": "8"},
-        {"WORLD_SIZE": "8", "RANK": "0", "LOCAL_RANK": "0"},
+        {"WORLD_SIZE": "16", "RANK": "0", "LOCAL_RANK": "0", "LOCAL_WORLD_SIZE": "0"},
+        {"WORLD_SIZE": "16", "RANK": "8", "LOCAL_RANK": "0", "LOCAL_WORLD_SIZE": "3"},
     ]:
-        with pytest.raises(ValueError, match="16 ranks"):
-            st.launch_config(st.make_parser().parse_args([]), env)
-    assert st.launch_config(st.make_parser().parse_args([]),
-        {"WORLD_SIZE": "32", "RANK": "31", "LOCAL_RANK": "15", "LOCAL_WORLD_SIZE": "16"}) == (32, 31, 15)
+        with pytest.raises(ValueError, match="per-host"):
+            st.launch_config(args, env)
 
 
 def test_case_report_records_actual_core_split():

@@ -297,8 +297,8 @@ private:
     }
     __aicore__ inline uint32_t SelectDirectServer(uint32_t server)
     {
-        ServerDedupRankMask(maskUb_, tableUb_.ReinterpretCast<uint8_t>(), typeUb_, int32_t(server * DispatchDedup::kEpServerDedupRanksPerServer),
-                            int32_t((server + 1U) * DispatchDedup::kEpServerDedupRanksPerServer), uint32_t(selected_));
+        ServerDedupRankMask(maskUb_, tableUb_.ReinterpretCast<uint8_t>(), typeUb_, int32_t(server * DispatchDedup::kLlRanksPerGroup),
+                            int32_t((server + 1U) * DispatchDedup::kLlRanksPerGroup), uint32_t(selected_));
         uint64_t count = 0U;
         GatherMask(indexUb_, packedUb_, maskUb_.ReinterpretCast<uint32_t>(), true, uint32_t(selected_),
                    {1U, 1U, 0U, 0U}, count);
@@ -309,8 +309,8 @@ private:
     {
         PrepareDirectRows();
         if (selected_ == 0U) return;
-        const uint32_t servers = uint32_t(args_->rankSize) / DispatchDedup::kEpServerDedupRanksPerServer;
-        const uint32_t ownServer = uint32_t(args_->rank) / DispatchDedup::kEpServerDedupRanksPerServer;
+        const uint32_t servers = uint32_t(args_->rankSize) / DispatchDedup::kLlRanksPerGroup;
+        const uint32_t ownServer = uint32_t(args_->rank) / DispatchDedup::kLlRanksPerGroup;
         uint32_t owner = 0U, sendSequence = 0U;
         uint64_t flagMask[2] = {0xffU, 0U};
         for (uint32_t lane = 0; lane < lanes_; ++lane) {
@@ -413,13 +413,13 @@ private:
         Sync<HardEvent::V_MTE3>();
         Sync<HardEvent::S_MTE3>();
         DataCopyPad(done, prepareZero_, {1U, kCombinePrepareRowBytes, 0U, 0U, 0U});
-        // Eight notification cores each notify two peers in the 16-rank host.
-        // The same immutable UB flags feed both stores; the final drain retires them.
-        const uint32_t groupBase = uint32_t(args_->rank) / DispatchDedup::kEpServerDedupRanksPerServer *
-                                   DispatchDedup::kEpServerDedupRanksPerServer;
-        for (uint32_t local = core_ - notifyBegin_; local < DispatchDedup::kEpServerDedupRanksPerServer; local += 8U) {
+        // Eight notification cores cover all peers in the logical group.
+        // Ready rows retain 512-byte capacity, independent of active group size.
+        const uint32_t groupBase = uint32_t(args_->rank) / DispatchDedup::kLlRanksPerGroup *
+                                   DispatchDedup::kLlRanksPerGroup;
+        for (uint32_t local = core_ - notifyBegin_; local < DispatchDedup::kLlRanksPerGroup; local += 8U) {
             auto ready = Control(groupBase + local, COMBINE_DEDUP_EP_SERVER_DEDUP_COMBINE_SERVER_READY_OFFSET);
-            DataCopyPad(ready[(uint32_t(args_->rank) % DispatchDedup::kEpServerDedupRanksPerServer) * 8U], notifyUb_,
+            DataCopyPad(ready[(uint32_t(args_->rank) % DispatchDedup::kLlRanksPerGroup) * 8U], notifyUb_,
                         {uint16_t(kCombineNotifyRows), 32U, 0U, 480U, 0U});
         }
     }
@@ -427,7 +427,7 @@ private:
     {
         auto ready = Control(args_->rank, COMBINE_DEDUP_EP_SERVER_DEDUP_COMBINE_SERVER_READY_OFFSET +
                                               uint64_t(core_ - sendCores_) * 512U);
-        WaitFlags(ready, readyInput_, readyWork_, readySum_, DispatchDedup::kEpServerDedupRanksPerServer);
+        WaitFlags(ready, readyInput_, readyWork_, readySum_, DispatchDedup::kLlRanksPerGroup);
         Duplicate<float>(readyZero_, 0.0f, 128U);
         Sync<HardEvent::V_MTE3>();
         DataCopyPad(ready, readyZero_, {1U, 512U, 0U, 0U, 0U});
