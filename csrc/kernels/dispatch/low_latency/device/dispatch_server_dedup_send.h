@@ -1,6 +1,9 @@
 // Copyright (c) 2026, Lu Lu
 // Modified by ryan_li 2026
 
+// 中文审计：生产Sender与第2层元数据实验的共同源码。
+// Process负责UB/路由准备和发送调度；CalTokenSendExpertCnt计算q；SendPacket负责实际包构造与发送。
+// prepare_snapshot.py仅在实验副本中截断SendPacket并加入观测输出，生产路径不受该提取影响。
 #ifndef DISPATCH_SERVER_DEDUP_SEND_H
 #define DISPATCH_SERVER_DEDUP_SEND_H
 
@@ -29,9 +32,10 @@ public:
     __aicore__ inline void Init(const __gm__ DispatchDedup::CommArgs* args, GM_ADDR x, GM_ADDR ids, GM_ADDR weights,
                                 GM_ADDR sourceMask, GM_ADDR sourceWeights, uint32_t bs, uint32_t h, uint32_t k,
                                 uint32_t experts, TPipe* pipe, int64_t magic = 0, GM_ADDR inputScales = nullptr,
-                                bool enableDedup = true)
+                                bool enableDedup = true, uint32_t coreNum = 0U)
     {
         args_ = args;
+        sendCores_ = (coreNum == 0U ? GetBlockNum() : coreNum) / 2U;
         pipe_ = pipe;
         enableDedup_ = enableDedup;
         bs_ = bs;
@@ -39,7 +43,7 @@ public:
         k_ = k;
         localExperts_ = experts / args->rankSize;
         const uint32_t core = GetBlockIdx();
-        const uint32_t base = bs / kEpServerDedupSendCoreNum, remainder = bs % kEpServerDedupSendCoreNum;
+        const uint32_t base = bs / sendCores_, remainder = bs % sendCores_;
         count_ = base + (core < remainder ? 1U : 0U);
         start_ = core * base + (core < remainder ? core : remainder);
         data_ = DispatchServerDedupDataLayout(bs, h, k, experts, InputMode);
@@ -95,10 +99,10 @@ public:
         Allocate(weightOutBuf_, uint32_t(DispatchDedupAlign(uint64_t(count_) * k_ * 4U, 32U)));
         Allocate(maskBuf_, uint32_t(DispatchDedupAlign(uint64_t(count_) * 4U, 32U)));
         Allocate(directBuf_, uint32_t(DispatchDedupAlign(uint64_t(count_) * k_ * 16U, 32U)));
-        // One uint32 state per server, including EP256's 32 servers.
-        const uint32_t serverBytes = uint32_t(DispatchDedupAlign(uint64_t(args_->rankSize / 8U) * 4U, 32U));
+        // One uint32 state per server, including EP256's 16 host groups.
+        const uint32_t serverBytes = uint32_t(DispatchDedupAlign(uint64_t(args_->rankSize / kLlRanksPerGroup) * 4U, 32U));
         Allocate(serverBuf_, serverBytes < 64U ? 64U : serverBytes);
-        const uint32_t remoteServers = args_->rankSize / 8U - 1U;
+        const uint32_t remoteServers = args_->rankSize / kLlRanksPerGroup - 1U;
         const uint32_t maxGroups = remoteServers < k_ / 2U ? remoteServers : k_ / 2U;
         if (maxGroups != 0U) Allocate(firstHopBuf_, uint32_t(DispatchDedupAlign(maxGroups * 4U, 32U)));
 
@@ -187,15 +191,15 @@ public:
                 }
         }
 
-        // 5. 第二遍按目标 server 稳定扫描 DIRECT：128P+ 半区交替，小规模保留全环顺序。
+        // 5. 第二遍按目标 server 稳定扫描 DIRECT：256P+ 半区交替，小规模保留全环顺序。
         // 首跳和 DIRECT 共用 packets_ 序号及 lane 环；阶段之间不额外等待全部包发完。
 
         // Stable per-server scans retain the original q and token/k order.
         // Each core advances independently; the packet/lane sequence continues
         // across first hops and server boundaries without an added drain.
-        const uint32_t serverNum = args_->rankSize / 8U;
-        const uint32_t expertsPerServer = localExperts_ * 8U;
-        const uint32_t ownServer = args_->rank / 8U;
+        const uint32_t serverNum = args_->rankSize / kLlRanksPerGroup;
+        const uint32_t expertsPerServer = localExperts_ * kLlRanksPerGroup;
+        const uint32_t ownServer = args_->rank / kLlRanksPerGroup;
         for (uint32_t step = 0; step < serverNum; ++step) {
             const uint32_t server = EpServerOrder::ServerDedupDispatchDirectOrder(serverNum, ownServer, step);
             const uint32_t firstExpert = server * expertsPerServer;
@@ -216,11 +220,11 @@ public:
     {
         // Route ownership is independent of the token partition used to copy weights.
         const uint32_t total = bs_ * k_, core = GetBlockIdx();
-        const uint32_t base = total / kEpServerDedupSendCoreNum;
-        const uint32_t remainder = total % kEpServerDedupSendCoreNum;
+        const uint32_t base = total / sendCores_;
+        const uint32_t remainder = total % sendCores_;
         const uint32_t begin = core * base + (core < remainder ? core : remainder);
         const uint32_t count = base + (core < remainder ? 1U : 0U);
-        const uint32_t serverNum = args_->rankSize / 8U;
+        const uint32_t serverNum = args_->rankSize / kLlRanksPerGroup;
         if (serverNum < 16U) {
             for (uint32_t i = begin; i < begin + count; ++i) {
                 const uint32_t expert = uint32_t(routeIds_.GetValue(i));
@@ -229,9 +233,9 @@ public:
             return;
         }
         // Keep the original route ownership and q slots. Only reorder this
-        // core's sends by the same 128P+ server order used by dedup DIRECT.
-        const uint32_t expertsPerServer = localExperts_ * 8U;
-        const uint32_t ownServer = args_->rank / 8U;
+        // core's sends by the same 256P+ server order used by dedup DIRECT.
+        const uint32_t expertsPerServer = localExperts_ * kLlRanksPerGroup;
+        const uint32_t ownServer = args_->rank / kLlRanksPerGroup;
         for (uint32_t step = 0; step < serverNum; ++step) {
             const uint32_t server = EpServerOrder::ServerDedupDispatchDirectOrder(serverNum, ownServer, step);
             const uint32_t firstExpert = server * expertsPerServer;
@@ -266,9 +270,9 @@ private:
         uint32_t seen = 0, grouped = 0;
         for (uint32_t k = 0; k < k_; ++k) {
             const uint32_t expert = uint32_t(routeIds_.GetValue((start_ + token) * k_ + k));
-            const uint32_t server = expert / localExperts_ / 8U;
+            const uint32_t server = expert / localExperts_ / kLlRanksPerGroup;
             const uint32_t bit = uint32_t(1) << k, serverBit = uint32_t(1) << server;
-            if (server == uint32_t(args_->rank) / 8U) {
+            if (server == uint32_t(args_->rank) / kLlRanksPerGroup) {
                 directMask |= bit;
             } else if ((seen & serverBit) == 0U) {
                 seen |= serverBit;
@@ -419,6 +423,7 @@ private:
     TPipe* pipe_ = nullptr;
     bool enableDedup_ = false;
     TBufPool<TPosition::VECCALC, 16>* scratch_ = nullptr;
+    uint32_t sendCores_ = 0;
     uint32_t bs_ = 0, h_ = 0, k_ = 0, localExperts_ = 0, start_ = 0, count_ = 0;
     uint32_t usedBytes_ = 0, lanes_ = 0, packets_ = 0, directCount_ = 0;
     EpServerDedupDataLayout data_{};

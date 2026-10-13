@@ -11,6 +11,8 @@
 namespace DispatchDedup {
 using namespace AscendC;
 
+// 中文审计：这里包含跨rank计数交换，不属于four_metadata测得的本地路由阶段。
+// 修改计数协议需联查dispatch_server_dedup_kernel.h中的阶段顺序及Receiver使用的前缀布局。
 // Adapted from Memory's CalAndSendCntByRankAndExpert / WaitDispatch / cumsum
 // chain. Counts cover the complete original routing tensor, including relay routes.
 // 本类没有 Process()：上层依次调用 SendCnt，再由接收核执行
@@ -28,6 +30,8 @@ public:
         epRankId_ = args_->rank;
         epWorldSize_ = args_->rankSize;
         aivId_ = GetBlockIdx();
+        coreNum_ = GetBlockNum();
+        aivUsedAllToAll_ = aivUsedCumSum_ = coreNum_ / 2U;
         axisBS_ = bs;
         axisK_ = topK;
         expertIdsCnt_ = bs * topK;
@@ -35,7 +39,7 @@ public:
         moeExpertNumPerRank_ = experts / epWorldSize_;
         expertTokenNumsType_ = expertTokenNumsType;
         useAllCoreCount_ = bs < kEpServerDedupAllCoreCountBsThreshold;
-        layout_ = DispatchServerDedupCountLayout(experts);
+        layout_ = DispatchServerDedupCountLayout(experts, coreNum_);
         stateOffset_ = DispatchServerDedupWindowOffset(magic) + layout_.cntOffset;
         GM_ADDR localState = args_->peerMems[epRankId_] + stateOffset_;
         windowInstatusFp32Tensor_.SetGlobalBuffer(reinterpret_cast<__gm__ float*>(localState));
@@ -88,8 +92,8 @@ private:
     static constexpr uint32_t UB_ALIGN_DATA_COUNT = 8U;
     static constexpr uint32_t SIZE_ALIGN_256 = 256U;
     static constexpr uint32_t CNT_GM_STRIDE_BLOCKS = kEpServerDedupCountGmStride / UB_ALIGN;
-    static constexpr uint32_t aivUsedAllToAll_ = kEpServerDedupSendCoreNum;
-    static constexpr uint32_t aivUsedCumSum_ = kEpServerDedupRecvCoreNum;
+    uint32_t aivUsedAllToAll_ = 0, coreNum_ = 0;
+    uint32_t aivUsedCumSum_ = 0;
 
     template <HardEvent event>
     // 摘要：用指定硬事件同步两个流水阶段，保护临时张量的生产与消费顺序。
@@ -165,9 +169,9 @@ private:
 // 摘要：统计完整原始路由的专家计数并异步发往专家所属 rank，同时保留仍被 MTE3 使用的记录 UB。
 __aicore__ inline void ServerDedupCounts::SendCnt()
 {
-    // 1. 按专家编号而非 token 分片分工：小 BS 可由全部 64 核参与，
+    // 1. 按专家编号而非 token 分片分工：小 BS 由本次启动的全部核参与，
     // 否则只由接收核统计；每个参与核读取完整路由，但只负责自己的专家区间。
-    const uint32_t cores = useAllCoreCount_ ? kEpServerDedupCoreNum : aivUsedCumSum_;
+    const uint32_t cores = useAllCoreCount_ ? coreNum_ : aivUsedCumSum_;
     uint32_t start = 0, end = 0, count = 0;
     if (useAllCoreCount_ || aivId_ >= aivUsedAllToAll_) {
         const uint32_t core = useAllCoreCount_ ? aivId_ : aivId_ - aivUsedAllToAll_;
@@ -290,7 +294,7 @@ __aicore__ inline void ServerDedupCounts::RecvCnt()
     // Inactive receivers only consume the final prefix in CompleteCumsum.
     if (receiver >= activeCumSumCores_) return;
     SplitToCore(rscvStatusNum_, aivUsedCumSum_, receiver, startStatusIndex_, endStatusIndex_, recStatusNumPerCore_);
-    stagePool_.InitBuffer(waitStatusBuf_, Ceil(recStatusNumPerCore_ * UB_ALIGN, SIZE_ALIGN_256) * SIZE_ALIGN_256);
+    stagePool_.InitBuffer(waitStatusBuf_, Ceil(recStatusNumPerCore_ * UB_ALIGN + SIZE_ALIGN_256, SIZE_ALIGN_256) * SIZE_ALIGN_256);
     stagePool_.InitBuffer(gatherMaskOutBuf_, Ceil(rscvStatusNum_ * sizeof(int32_t), UB_ALIGN) * UB_ALIGN);
     // Vector publication/cleanup touches complete groups of eight 32B records.
     // Padding is UB-only; matrix strides and participation use actual core counts.
@@ -309,7 +313,7 @@ __aicore__ inline void ServerDedupCounts::CompleteCumsum()
     // Convert the physical AIV index to its receive-group index.
     // 前缀完成阶段：把物理 AIV 编号转成接收组编号，为本核加载完整前缀副本。
     const uint32_t receiver = aivId_ - aivUsedAllToAll_;
-    stagePool_.InitBuffer(readyBuf_, activeCumSumCores_ * UB_ALIGN);
+    stagePool_.InitBuffer(readyBuf_, Ceil(activeCumSumCores_ * UB_ALIGN + SIZE_ALIGN_256, SIZE_ALIGN_256) * SIZE_ALIGN_256);
     stagePool_.InitBuffer(cleanBuf_, activeCumSumCores_ * UB_ALIGN);
     stagePool_.InitBuffer(prefixBuf_, Ceil(rscvStatusNum_ * sizeof(int32_t), UB_ALIGN) * UB_ALIGN);
     statusFp32Tensor_ = readyBuf_.Get<float>();

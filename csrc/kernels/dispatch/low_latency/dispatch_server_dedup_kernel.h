@@ -22,11 +22,12 @@ public:
     {
         args_ = reinterpret_cast<const __gm__ DispatchDedup::CommArgs*>(commArgs);
         core_ = GetBlockIdx();
+        sendCores_ = GetBlockNum() / 2U;
         pipe_ = pipe;
         const uint32_t magic = RotateDispatchServerDedupMagic(args_, core_, pipe);
         counts_.Init(commArgs, expertIds, expertTokenNumsOut, sendCountsOut, bs, topK, experts, expertTokenNumsType,
                      magic, pipe);
-        if (core_ < kEpServerDedupSendCoreNum)
+        if (core_ < sendCores_)
             sender_.Init(args_, x, expertIds, expertScales, sourceMaskOut, expertScalesOut, bs, h, topK, experts, pipe,
                          magic, inputScales, enableDedup);
         else
@@ -34,16 +35,19 @@ public:
                            bs, h, topK, experts, pipe, magic, enableDedup);
     }
 
+    // 完整dispatch：所有核先发送计数，再按固定核分工并行执行Sender与Receiver。
+    // Sender可与接收核的计数前缀准备重叠，不能把提取阶段耗时直接相加当作完整时延。
     __aicore__ inline void Process()
     {
         counts_.SendCnt();
 
-        if (core_ < kEpServerDedupSendCoreNum) {
+        if (core_ < sendCores_) {
             sender_.Process(counts_.ScratchPool(), counts_.ReservedBytes());
 
         } else {
             counts_.RecvCnt();
             counts_.CalcCumsum();
+            // 接收目标地址依赖计数前缀；写回完成并排空后，Receiver才可重置pipe并消费GM。
             counts_.CompleteCumsum();
             // CompleteCumsum may still be writing expert counts from its UB.
             // Retire that stage before receiver resets the pipe and reloads GM.
@@ -63,7 +67,7 @@ private:
     ServerDedupReceiver<XType, WireFp8, E4M3, Prequantized> receiver_;
     const __gm__ DispatchDedup::CommArgs* args_ = nullptr;
     TPipe* pipe_ = nullptr;
-    uint32_t core_ = 0;
+    uint32_t core_ = 0, sendCores_ = 0;
 };
 }  // namespace DispatchDedup
 #endif

@@ -14,6 +14,8 @@
 namespace CombineDedup {
 using namespace AscendC;
 
+// 中文审计：M4按目标server筛选元数据、聚合贡献并回传partial结果。
+// 输出地址与MTE3完成事件交给M5继续使用；退出本类不表示所有远端消费已经完成。
 // Recv-core M4 scans type/routing metadata per destination server. Its output
 // addresses and completion events remain live through the M5 handoff.
 class ServerDedupPartial {
@@ -24,6 +26,7 @@ public:
                                 const EpCombineM45WorkspaceLayout& layout)
     {
         args_ = args;
+        recvCores_ = GetBlockNum() / 2U;
         pipe_ = pipe;
         scratch_ = scratch[layout.phaseOffset];
         tokens_ = tokens;
@@ -44,7 +47,7 @@ public:
             Trap();
             return;
         }
-        rows_ = Allocate<int32_t>(EpCombineM4TaskBytes(tokens));
+        rows_ = Allocate<int32_t>(EpCombineM4TaskBytes(tokens, recvCores_));
         scan_ = scratch_[used_];
         scanRows_ = EpCombineM4ScanRows(h, k);
         table2Ub_ = Allocate<int32_t>(EpCombineAlign(kEpServerDedupCombineM4TableRows * 12U, 32U));
@@ -70,8 +73,8 @@ public:
                              uint8_t(blocks_), 1U, 16U);
         }
         PipeBarrier<PIPE_V>();
-        const uint32_t servers = uint32_t(args_->rankSize) / 8U;
-        const uint32_t ownServer = uint32_t(args_->rank) / 8U;
+        const uint32_t servers = uint32_t(args_->rankSize) / DispatchDedup::kLlRanksPerGroup;
+        const uint32_t ownServer = uint32_t(args_->rank) / DispatchDedup::kLlRanksPerGroup;
         uint32_t owner = 0U, completed = 0U;
         for (uint32_t step = 1U; step <= servers; ++step) {
             const uint32_t count = SelectServer(ServerDedupHalfOrder(servers, ownServer, step - 1U), owner, step == 1U);
@@ -119,7 +122,7 @@ private:
     __aicore__ inline uint32_t SelectServer(uint32_t server, uint32_t& owner, bool validateRanks)
     {
         uint32_t count = 0U;
-        const uint32_t localCore = GetBlockIdx() - kEpServerDedupCombineSendCoreNum;
+        const uint32_t localCore = GetBlockIdx() - recvCores_;
         const uint32_t vectorBytes = EpCombineAlign(scanRows_ * 4U, 256U);
         const uint32_t maskBytes = EpCombineAlign((scanRows_ + 7U) / 8U, 32U);
         auto table = scan_.ReinterpretCast<int32_t>();
@@ -162,16 +165,16 @@ private:
                     return 0U;
                 }
             }
-            ServerDedupRankMask(mask, upper, ranks, int32_t(server * 8U), int32_t((server + 1U) * 8U), span);
+            ServerDedupRankMask(mask, upper, ranks, int32_t(server * DispatchDedup::kLlRanksPerGroup), int32_t((server + 1U) * DispatchDedup::kLlRanksPerGroup), span);
             And(mask.ReinterpretCast<uint16_t>(), mask.ReinterpretCast<uint16_t>(),
                 typeMask.ReinterpretCast<uint16_t>(), int32_t((span + 15U) / 16U));
             PipeBarrier<PIPE_V>();
             uint64_t selected = 0U;
             GatherMask(table, indices, mask.ReinterpretCast<uint32_t>(), true, span, {1U, 1U, 0U, 0U}, selected);
             Sync<HardEvent::V_S>();
-            const uint32_t first = ServerDedupFirstOwned(localCore, owner, kEpServerDedupCombineRecvCoreNum);
-            owner = (owner + uint32_t(selected)) % kEpServerDedupCombineRecvCoreNum;
-            for (uint32_t task = first; task < uint32_t(selected); task += kEpServerDedupCombineRecvCoreNum)
+            const uint32_t first = ServerDedupFirstOwned(localCore, owner, recvCores_);
+            owner = (owner + uint32_t(selected)) % recvCores_;
+            for (uint32_t task = first; task < uint32_t(selected); task += recvCores_)
                 rows_.SetValue(count++, table.GetValue(task));
         }
         return count;
@@ -253,6 +256,7 @@ private:
         SetFlag<HardEvent::MTE3_V>(lane);
     }
 
+    uint32_t recvCores_ = 0;
     const __gm__ DispatchDedup::CommArgs* args_ = nullptr;
     TPipe* pipe_ = nullptr;
     LocalTensor<uint8_t> scratch_, outputs_, scan_;

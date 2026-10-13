@@ -14,6 +14,8 @@
 namespace DispatchDedup {
 using namespace AscendC;
 
+// 中文审计：完整dispatch的接收、包消费和输出元数据路径；第2层提取核不调用本类。
+// 审计接收任务/包格式时继续查看dispatch_server_dedup_receive_tasks.h和receive_packet.h。
 template <class XType, bool WireFp8, bool E4M3, bool Prequantized = false>
 class ServerDedupReceiver {
     static_assert(!Prequantized || WireFp8, "prequantized input requires FP8 wire");
@@ -29,13 +31,15 @@ public:
                                 bool enableDedup = true)
     {
         args_ = args;
+        coreNum_ = GetBlockNum();
+        recvCoreNum_ = coreNum_ / 2U;
         pipe_ = pipe;
         enableDedup_ = enableDedup;
         bs_ = bs;
         k_ = k;
         experts_ = experts;
         localExperts_ = experts / uint32_t(args_->rankSize);
-        receiver_ = GetBlockIdx() - kEpServerDedupSendCoreNum;
+        receiver_ = GetBlockIdx() - recvCoreNum_;
         hiddenBytes_ = WireFp8 ? h : h * uint32_t(sizeof(XType));
         data_ = DispatchServerDedupDataLayout(bs, h, k, experts, InputMode);
         windowOffset_ = DispatchServerDedupWindowOffset(magic);
@@ -59,7 +63,7 @@ public:
         const uint32_t prefixBytes = uint32_t(DispatchDedupAlign(uint64_t(experts_) * 4U, 32U));
         pipe_->InitBuffer(prefixBuf_, prefixBytes);
         GlobalTensor<int32_t> prefixGlobal;
-        const auto counts = DispatchServerDedupCountLayout(experts_);
+        const auto counts = DispatchServerDedupCountLayout(experts_, coreNum_);
         prefixGlobal.SetGlobalBuffer(reinterpret_cast<__gm__ int32_t*>(args_->peerMems[args_->rank] + windowOffset_ +
                                                                        counts.cntOffset + counts.prefixOffset +
                                                                        uint64_t(receiver_) * counts.prefixStride));
@@ -69,7 +73,8 @@ public:
 
         // 2. 按前缀定义的接收输出行均分任务，建立稳定槽位表和可压缩的 pending 表。
         // j 始终标识固定输出行/槽位；pending 下标只表示尚未消费的任务位置。
-        tasks_.Build(prefix, uint32_t(args_->rank), uint32_t(args_->rankSize), experts_, bs_, receiver_, pipe_);
+        tasks_.Build(prefix, uint32_t(args_->rank), uint32_t(args_->rankSize), experts_, bs_, receiver_, pipe_, recvCoreNum_);
+
 
         // 空任务核没有拥有的接收槽，完成打点后直接返回，无需参与 packet 轮询。
         if (tasks_.Count() == 0U) {
@@ -304,7 +309,7 @@ private:
     TPipe* pipe_ = nullptr;
     bool enableDedup_ = false;
     uint64_t windowOffset_ = 0;
-    static constexpr uint32_t recvCoreNum_ = kEpServerDedupRecvCoreNum;
+    uint32_t recvCoreNum_ = 0, coreNum_ = 0;
     uint32_t bs_ = 0U, k_ = 0U, experts_ = 0U, localExperts_ = 0U, receiver_ = 0U;
     uint32_t hiddenBytes_ = 0U, laneStride_ = 0U, lanes_ = 0U;
     EpServerDedupDataLayout data_{};

@@ -11,6 +11,8 @@
 namespace CombineDedup {
 using namespace AscendC;
 
+// 中文审计：M5按源token及权重聚合回传结果并写yOut；非去重路径由InitDirectShared进入M6。
+// 修改输入等待、输出槽复用或clear flags时，需同时审计上层DrainSharedOutputs/DrainM6收尾。
 // M5 inherits M4 output slots and their completion events. Metadata/compute/input
 // are handed off after MTE2/Vector completion, while M4 MTE3 may still run.
 class ServerDedupSourceAggregate {
@@ -108,7 +110,7 @@ private:
         blocks_ = (h * 2U + 479U) / 480U;
         packetBytes_ = blocks_ * 512U;
         // The shared Host budget uses the largest contiguous Recv-core segment.
-        const uint32_t owned = EpCombineM5TokenCount(bs);
+        const uint32_t owned = EpCombineM5TokenCount(bs, participants);
         masks_ = Allocate<uint32_t>(EpCombineAlign(owned * 4U, 32U));
         pending_ = Allocate<uint32_t>(EpCombineAlign(owned * 4U, 32U));
         weights_ = Allocate<float>(EpCombineAlign(owned * k * 4U, 32U));

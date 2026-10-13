@@ -5,25 +5,17 @@
 #define DISPATCH_DEDUP_EP_MEMORY_SERVER_DEDUP_COUNT_LAYOUT_H
 
 #include "comm_args.h"
+#include "ll_core_config.h"
 #include "dispatch_dedup_types.h"
 
-// Count participation threshold is independent of the compile-time send/receive split.
+// Count participation threshold is independent of the runtime send/receive split.
 #ifndef DISPATCH_SERVER_DEDUP_ALL_CORE_COUNT_BS_THRESHOLD
 #define DISPATCH_SERVER_DEDUP_ALL_CORE_COUNT_BS_THRESHOLD 512U
 #endif
 #include "ep_memory_server_dedup_mode.h"
 
 namespace DispatchDedup {
-constexpr uint32_t kEpServerDedupCoreNum = 64U;
-#ifndef DISPATCH_SERVER_DEDUP_SEND_CORE_NUM
-#define DISPATCH_SERVER_DEDUP_SEND_CORE_NUM 32U
-#endif
-constexpr uint32_t kEpServerDedupSendCoreNum = DISPATCH_SERVER_DEDUP_SEND_CORE_NUM;
-static_assert(kEpServerDedupSendCoreNum >= 16U && kEpServerDedupSendCoreNum <= 48U &&
-                  kEpServerDedupSendCoreNum % 4U == 0U,
-              "DISPATCH_SERVER_DEDUP_SEND_CORE_NUM must be 16..48 in steps of 4");
-constexpr uint32_t kEpServerDedupRecvCoreNum = kEpServerDedupCoreNum - kEpServerDedupSendCoreNum;
-// BS below this threshold uses all 64 cores for Count; otherwise only receivers.
+// BS below this threshold uses all launched cores for Count; otherwise only receivers.
 constexpr uint32_t kEpServerDedupAllCoreCountBsThreshold = DISPATCH_SERVER_DEDUP_ALL_CORE_COUNT_BS_THRESHOLD;
 constexpr uint32_t kEpServerDedupMaxExperts = 1024U;
 constexpr uint32_t kEpServerDedupCountRecordBytes = 32U;
@@ -32,8 +24,8 @@ constexpr uint32_t kEpServerDedupCountUbBytes = 190U * 1024U;
 // Persistent per-AIV state lives only in window 0's prefix, never in the
 // selected ping-pong bank. Keep identical count offsets in both windows.
 constexpr uint64_t kEpServerDedupMagicStride = 512U;
-constexpr uint64_t kEpServerDedupControlPrefixBytes = kEpServerDedupCoreNum * kEpServerDedupMagicStride;
-static_assert(kEpServerDedupControlPrefixBytes == 32U * 1024U, "64 isolated magic slots");
+constexpr uint64_t kEpServerDedupControlPrefixBytes = kLlMaxCoreNum * kEpServerDedupMagicStride;
+static_assert(kEpServerDedupControlPrefixBytes == 36U * 1024U, "capacity for 72 isolated magic slots");
 static_assert(kEpServerDedupCountGmStride % kEpServerDedupCountRecordBytes == 0U &&
                   kEpServerDedupControlPrefixBytes % kEpServerDedupCountGmStride == 0U,
               "GM count slots must be aligned whole records");
@@ -63,7 +55,7 @@ struct EpServerDedupCountLayout {
     uint64_t stateBytes;
 };
 
-// Keep the core split fixed for the communicator lifetime: prefix storage is not
+// Keep each rank's core split fixed for the communicator lifetime: prefix storage is not
 // cleared and can overlap another split's control flags. All ranks must use the
 // same communicator call order and serialize its kernels
 // on one stream. Count publication (including zeros) protects two-call reuse.
@@ -72,16 +64,16 @@ DISPATCH_DEDUP_EP_DEDUP_INLINE uint64_t DispatchServerDedupWindowOffset(int64_t 
     return (uint64_t(magic) % 2U) * kEpServerDedupWindowBytes;
 }
 
-DISPATCH_DEDUP_EP_DEDUP_INLINE EpServerDedupCountLayout DispatchServerDedupCountLayout(uint32_t experts)
+DISPATCH_DEDUP_EP_DEDUP_INLINE EpServerDedupCountLayout DispatchServerDedupCountLayout(uint32_t experts, uint32_t coreNum = kLlDefaultPlanCoreNum)
 {
     EpServerDedupCountLayout layout{};
-    const uint64_t matrixBytes =
-        uint64_t(kEpServerDedupRecvCoreNum) * kEpServerDedupRecvCoreNum * kEpServerDedupCountRecordBytes;
+    const uint32_t recvCores = coreNum / 2U;
+    const uint64_t matrixBytes = uint64_t(recvCores) * recvCores * kEpServerDedupCountRecordBytes;
     layout.cntOffset = kEpServerDedupControlPrefixBytes;
     layout.cumsumOffset = uint64_t(experts) * kEpServerDedupCountGmStride;
     layout.prefixOffset = layout.cumsumOffset + matrixBytes;
     layout.prefixStride = (uint64_t(experts) * sizeof(int32_t) + 31U) / 32U * 32U;
-    layout.cumsumFlagOffset = layout.prefixOffset + kEpServerDedupRecvCoreNum * layout.prefixStride;
+    layout.cumsumFlagOffset = layout.prefixOffset + recvCores * layout.prefixStride;
     const uint64_t bytes = layout.cntOffset + layout.cumsumFlagOffset + matrixBytes;
     layout.counterOffset = (bytes + 1023U) / 1024U * 1024U;
     layout.stateBytes = layout.counterOffset + 1024U;

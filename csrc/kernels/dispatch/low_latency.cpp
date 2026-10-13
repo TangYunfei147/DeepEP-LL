@@ -13,7 +13,11 @@
 #include "low_latency/common/dispatch_dedup_types.h"
 #include "low_latency/common/ep_memory_server_dedup_tiling.h"
 
-// One production entry and one 64-core process with a compile-time send/recv split.
+// 中文审计：完整dispatch性能入口见tests/elastic/test_ep_low_latency.py。
+// 调用链：ElasticBuffer._dispatch_low_latency → csrc/ops/low_latency.cpp
+// → dispatch_server_dedup_kernel_do → 本设备入口 → DispatchMemoryServerDedupKernel。
+// profiler匹配本入口任务名；下层计数/发送/接收是同一kernel内的阶段，不是独立task。
+// One production entry and a queried pure-AIV launch with a 1:1 send/recv split.
 extern "C" [[bisheng::core_ratio(0, 1)]] __global__ __aicore__ void dispatch_server_dedup_kernel(
     GM_ADDR commArgs, GM_ADDR x, GM_ADDR expertIds, GM_ADDR expertScales, GM_ADDR expandXOut, GM_ADDR dynamicScalesOut,
     GM_ADDR expertTokenNumsOut, GM_ADDR sendCountsOut, GM_ADDR tokenTypeOut, GM_ADDR destinationIndexOut,
@@ -34,6 +38,7 @@ extern "C" [[bisheng::core_ratio(0, 1)]] __global__ __aicore__ void dispatch_ser
     const uint8_t expandXOutDtype = tiling->expandXOutDtype;
     const auto inputMode = static_cast<DispatchDedup::EpServerDedupInputMode>(tiling->inputMode);
     AscendC::TPipe pipe;
+    // 下列模板分支决定输入类型、线上FP8格式与是否已预量化；比较性能时须固定这些条件。
 #define DISPATCH_SERVER_DEDUP_RUN(XType, WireFp8, E4M3, Prequantized)                                                  \
     DispatchDedup::DispatchMemoryServerDedupKernel<XType, WireFp8, E4M3, Prequantized> kernel;                         \
     kernel.Init(commArgs, x, expertIds, expertScales, expandXOut, dynamicScalesOut, expertTokenNumsOut, sendCountsOut, \
@@ -66,10 +71,20 @@ extern "C" [[bisheng::core_ratio(0, 1)]] __global__ __aicore__ void dispatch_ser
 
 // Same in-library launch mechanism as all other ascendEP kernels.
 #include "low_latency/launch.hpp"
+extern "C" DEEPEP_EXPORT uint32_t deepep_ll_ranks_per_group()
+{
+    return DispatchDedup::kLlRanksPerGroup;
+}
+
+extern "C" DEEPEP_EXPORT uint32_t deepep_ll_core_protocol_version()
+{
+    return DispatchDedup::kLlCoreProtocolVersion;
+}
+
 extern "C" DEEPEP_EXPORT void dispatch_server_dedup_kernel_do(void* stream, const deepep::EpServerDedupKernelArgs* args)
 {
     const auto& a = *args;
-    dispatch_server_dedup_kernel<<<64, DEEPEP_KERNEL_LAUNCH_UB(0), stream>>>(
+    dispatch_server_dedup_kernel<<<a.coreNum, DEEPEP_KERNEL_LAUNCH_UB(0), stream>>>(
         a.commArgs, a.x, a.expertIds, a.expertScales, a.expandXOut, a.dynamicScalesOut, a.expertTokenNumsOut,
         a.sendCountsOut, a.tokenTypeOut, a.destinationIndexOut, a.relayReadIndexOut, a.sourceMaskOut, a.expertScalesOut,
         a.tilingData, a.reservedMagic, a.inputScales);
