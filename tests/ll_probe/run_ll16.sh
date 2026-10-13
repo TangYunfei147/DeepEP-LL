@@ -28,7 +28,7 @@ values=sys.argv[1].split(',')
 if len(values)!=16 or len(set(values))!=16 or any(not v.isdigit() for v in values):
     raise SystemExit('LL_TARGET_DEVICES must contain 16 distinct numeric device IDs')
 PY
-export CUDA_VISIBLE_DEVICES="$PROBE_VISIBLE_DEVICES" ASCEND_RT_VISIBLE_DEVICES="$PROBE_VISIBLE_DEVICES"
+export ASCEND_RT_VISIBLE_DEVICES="$PROBE_VISIBLE_DEVICES"
 export ASCEND_VISIBLE_DEVICES="$PROBE_VISIBLE_DEVICES"
 seconds=${LL_TIMEOUT_SECONDS:-1800}
 [[ "$seconds" =~ ^[1-9][0-9]*$ ]] || { echo 'Invalid LL_TIMEOUT_SECONDS' >&2; exit 2; }

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -eo pipefail
 PROBE_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
-source "$PROBE_DIR/../../scripts/project_env.sh"
+source "$PROBE_DIR/../../scripts/a5_validation_env.sh"
 require_cann
 set -u
 cd "$PROBE_DIR"

@@ -9,7 +9,7 @@
 公共实现：`scripts/project_env.sh` 和 `scripts/project_paths.py`。
 默认生成目录是工程内的 `results/`、`.tmp/`、`.cache/`、`.logs/`，全部忽略提交。
 `PROBE_ROOT` 可显式指定另一个允许写入的根目录，相对值也从工程根解析；输出必须在此根目录内。
-设备限制不因路径修改而放宽；A5验证始终仅0、1卡。
+公共环境脚本不修改设备可见性。A5专用入口`scripts/a5_validation_env.sh`及验证器固定0、1卡，SSH仍固定0、1卡。目标机由调用者显式选择设备或使用`run_ll16.sh --target-run`；不要复用A5环境脚本。通用`four_layers/run.sh`和`profile_probe.py`仅在显式设置PROBE_VISIBLE_DEVICES时应用选卡，未设置时保留运行环境。
 
 ## 外部环境
 

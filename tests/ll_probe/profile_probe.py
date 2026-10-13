@@ -51,8 +51,8 @@ def plan(args, environ):
     world = int(environ.get('WORLD_SIZE', '1'))
     rank = int(environ.get('RANK', '0'))
     device = int(environ.get('LOCAL_RANK', '0'))
-    visible = environ.get('ASCEND_RT_VISIBLE_DEVICES', '0,1').split(',')
-    if not 0 <= rank < world or not 0 <= device < len(visible):
+    visible = environ.get('PROBE_VISIBLE_DEVICES', environ.get('ASCEND_RT_VISIBLE_DEVICES', environ.get('ASCEND_VISIBLE_DEVICES')))
+    if not 0 <= rank < world or device < 0 or (visible is not None and device >= len(visible.split(','))):
         raise ValueError('Rank/device outside declared world or visible devices')
     args.output_dir = project_path(args.output_dir)
     if args.output_dir == ROOT or ROOT not in args.output_dir.parents:
@@ -97,9 +97,10 @@ def plan(args, environ):
 
 def main(argv=None):
     args = parser().parse_args(argv)
-    visible = os.environ.get('PROBE_VISIBLE_DEVICES', os.environ.get('ASCEND_RT_VISIBLE_DEVICES', '0,1'))
-    for variable in ('CUDA_VISIBLE_DEVICES', 'ASCEND_RT_VISIBLE_DEVICES', 'ASCEND_VISIBLE_DEVICES'):
-        os.environ[variable] = visible
+    visible = os.environ.get('PROBE_VISIBLE_DEVICES')
+    if visible is not None:
+        for variable in ('ASCEND_RT_VISIBLE_DEVICES', 'ASCEND_VISIBLE_DEVICES'):
+            os.environ[variable] = visible
     identity = plan(args, os.environ)
     if args.plan:
         print(json.dumps(identity, indent=2))

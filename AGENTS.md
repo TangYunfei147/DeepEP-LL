@@ -11,3 +11,5 @@
 操作说明见 [tests/ll_probe/PATHS.md](tests/ll_probe/PATHS.md)。
 
 - 本分支生产LL固定每物理主机16个连续rank，单机EP16是一个组，跨机按每机16卡扩展。共享HT的8路UDMA QP归属不是LL分组，不可机械替换。修改LL分组须同时核对dispatch分类、Host UB预算、combine ready通知/等待、metadata参考及启动合约，运行步骤见tests/ll_probe/LL16.md。
+
+- 公共project_env.sh禁止默认设置或覆盖设备可见性；A5设备0/1边界仅在SSH、a5_validation_env.sh及专用验证器执行。目标机入口显式选卡，原Python入口继承调用者ASCEND环境。

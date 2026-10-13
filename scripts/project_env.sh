@@ -34,9 +34,8 @@ if [[ -n "${ASCEND_HOME_PATH:-}" ]]; then
     export ASCEND_HOME_PATH
 fi
 _project_runtime_dirs
-export PROBE_VISIBLE_DEVICES="${PROBE_VISIBLE_DEVICES:-0,1}"
-export CUDA_VISIBLE_DEVICES="$PROBE_VISIBLE_DEVICES" ASCEND_RT_VISIBLE_DEVICES="$PROBE_VISIBLE_DEVICES"
-export ASCEND_VISIBLE_DEVICES="$PROBE_VISIBLE_DEVICES"
+# Device visibility belongs to the caller or an explicit deployment/validation
+# entry point. Shared SDK/path setup must not restrict or expand devices.
 unset SHMEM_ROOT CATLASS_ROOT
 export SHMEM_LIB_DIR="$REPO_ROOT/third-party/shmem/install/shmem/lib"
 for _project_dep in "$REPO_ROOT/third-party/shmem" "$REPO_ROOT/third-party/catlass"; do

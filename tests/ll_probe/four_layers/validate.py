@@ -15,6 +15,9 @@ parser.add_argument('--comm-only',action='store_true',help='Run one communicatio
 args=parser.parse_args()
 HERE=Path(__file__).resolve().parent
 import tempfile
+import os
+os.environ.update(PROBE_VISIBLE_DEVICES="0,1", CUDA_VISIBLE_DEVICES="0,1",
+                  ASCEND_RT_VISIBLE_DEVICES="0,1", ASCEND_VISIBLE_DEVICES="0,1")
 runtime_environment()
 OUT=Path(tempfile.mkdtemp(prefix='four-layers-',dir=results_dir()))
 print(str(OUT),flush=True)

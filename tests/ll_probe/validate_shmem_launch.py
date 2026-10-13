@@ -7,6 +7,9 @@ from merge_shmem_results import merge
 from paths import workspace_root, project_path, runtime_environment, results_dir
 ROOT = workspace_root()
 import tempfile
+import os
+os.environ.update(PROBE_VISIBLE_DEVICES="0,1", CUDA_VISIBLE_DEVICES="0,1",
+                  ASCEND_RT_VISIBLE_DEVICES="0,1", ASCEND_VISIBLE_DEVICES="0,1")
 runtime_environment()
 base=Path(tempfile.mkdtemp(prefix='shmem-separate-launch-',dir=results_dir()))
 

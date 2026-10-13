@@ -21,7 +21,7 @@ class PortablePaths(unittest.TestCase):
         self.root = Path(self.temp.name) / 'renamed project with spaces'
         self.cwd = Path(self.temp.name) / 'unrelated caller'
         self.cwd.mkdir()
-        files = ['tests/ll_probe/run_ll16.sh', 'tests/elastic/test_ep_low_latency.py', 'scripts/project_paths.py', 'scripts/project_env.sh', 'tests/ll_probe/paths.py',
+        files = ['scripts/a5_validation_env.sh', 'tests/ll_probe/run_ll16.sh', 'tests/elastic/test_ep_low_latency.py', 'scripts/project_paths.py', 'scripts/project_env.sh', 'tests/ll_probe/paths.py',
                  'tests/ll_probe/profile_probe.py', 'tests/ll_probe/profile_common.py',
                  'tests/ll_probe/network_probe/run.py', 'tests/ll_probe/network_probe/defaults.py',
                  'tests/ll_probe/network_probe/config.yaml']
@@ -44,6 +44,34 @@ class PortablePaths(unittest.TestCase):
         self.assertEqual(result['world_size'], 16)
         self.assertEqual(result['ranks_per_host'], 16)
         self.assertEqual(result['case_count'], 2)
+
+    def test_shared_environment_preserves_visibility(self):
+        keys = ('PROBE_VISIBLE_DEVICES', 'CUDA_VISIBLE_DEVICES', 'ASCEND_RT_VISIBLE_DEVICES', 'ASCEND_VISIBLE_DEVICES')
+        command = 'source "$1"; python3 -c \'import os,json; print(json.dumps({k:v for k,v in os.environ.items() if k.endswith("VISIBLE_DEVICES")}))\''
+        for values in ({}, {'ASCEND_RT_VISIBLE_DEVICES': '0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15'},
+                       {'PROBE_VISIBLE_DEVICES': '0,1', 'ASCEND_RT_VISIBLE_DEVICES': '8,9', 'CUDA_VISIBLE_DEVICES': 'unchanged'}):
+            env = dict(self.env)
+            for key in keys: env.pop(key, None)
+            env.update(values)
+            result = json.loads(subprocess.check_output(['bash', '-e', '-c', command, 'test',
+                str(self.root/'scripts/project_env.sh')], cwd=self.cwd, env=env, text=True))
+            self.assertEqual({k:result[k] for k in keys if k in result}, values)
+        result = json.loads(subprocess.check_output(['bash', '-e', '-c', command, 'test',
+            str(self.root/'scripts/a5_validation_env.sh')], cwd=self.cwd, env=env, text=True))
+        self.assertEqual({k:result[k] for k in keys}, dict.fromkeys(keys, '0,1'))
+
+    def test_profile_plan_does_not_assume_two_devices(self):
+        for key in ('PROBE_VISIBLE_DEVICES', 'CUDA_VISIBLE_DEVICES', 'ASCEND_RT_VISIBLE_DEVICES', 'ASCEND_VISIBLE_DEVICES'):
+            self.env.pop(key, None)
+        self.env.update(RANK='15', WORLD_SIZE='16', LOCAL_RANK='15')
+        result = json.loads(self.run_python(self.root/'tests/ll_probe/profile_probe.py',
+            '--kind', 'comm', '--endpoint', 'tcp://127.0.0.1:19501', '--output-dir', 'results/plan', '--plan'))
+        self.assertEqual((result['world'], result['device']), (16, 15))
+        self.env['ASCEND_RT_VISIBLE_DEVICES'] = '0,1'
+        result = subprocess.run([sys.executable, str(self.root/'tests/ll_probe/profile_probe.py'),
+            '--kind', 'comm', '--endpoint', 'tcp://127.0.0.1:19501', '--output-dir', 'results/plan', '--plan'],
+            cwd=self.cwd, env=self.env, capture_output=True)
+        self.assertNotEqual(result.returncode, 0)
 
     def test_network_yaml_uses_checkout_not_cwd(self):
         result=json.loads(self.run_python(self.root/'tests/ll_probe/network_probe/run.py',
