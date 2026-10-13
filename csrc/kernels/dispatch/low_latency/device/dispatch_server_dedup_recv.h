@@ -32,13 +32,15 @@ public:
                                 bool enableDedup = true)
     {
         args_ = args;
+        coreNum_ = GetBlockNum();
+        recvCoreNum_ = coreNum_ / 2U;
         pipe_ = pipe;
         enableDedup_ = enableDedup;
         bs_ = bs;
         k_ = k;
         experts_ = experts;
         localExperts_ = experts / uint32_t(args_->rankSize);
-        receiver_ = GetBlockIdx() - kEpServerDedupSendCoreNum;
+        receiver_ = GetBlockIdx() - recvCoreNum_;
         hiddenBytes_ = WireFp8 ? h : h * uint32_t(sizeof(XType));
         data_ = DispatchServerDedupDataLayout(bs, h, k, experts, InputMode);
         windowOffset_ = DispatchServerDedupWindowOffset(magic);
@@ -64,7 +66,7 @@ public:
         const uint32_t prefixBytes = uint32_t(DispatchDedupAlign(uint64_t(experts_) * 4U, 32U));
         pipe_->InitBuffer(prefixBuf_, prefixBytes);
         GlobalTensor<int32_t> prefixGlobal;
-        const auto counts = DispatchServerDedupCountLayout(experts_);
+        const auto counts = DispatchServerDedupCountLayout(experts_, coreNum_);
         prefixGlobal.SetGlobalBuffer(reinterpret_cast<__gm__ int32_t*>(args_->peerMems[args_->rank] + windowOffset_ +
                                                                        counts.cntOffset + counts.prefixOffset +
                                                                        uint64_t(receiver_) * counts.prefixStride));
@@ -74,7 +76,7 @@ public:
 
         // 2. 按前缀定义的接收输出行均分任务，建立稳定槽位表和可压缩的 pending 表。
         // j 始终标识固定输出行/槽位；pending 下标只表示尚未消费的任务位置。
-        tasks_.Build(prefix, uint32_t(args_->rank), uint32_t(args_->rankSize), experts_, bs_, receiver_, pipe_);
+        tasks_.Build(prefix, uint32_t(args_->rank), uint32_t(args_->rankSize), experts_, bs_, receiver_, pipe_, recvCoreNum_);
 
         LL_DLOG(LL_DISPATCH_DEBUG_RECV, args_->rank, GetBlockIdx(), "RECV_TASKS", tasks_.Begin(), tasks_.Count(), data_.tokenStride, windowOffset_);
 
@@ -348,7 +350,7 @@ private:
     TPipe* pipe_ = nullptr;
     bool enableDedup_ = false;
     uint64_t windowOffset_ = 0;
-    static constexpr uint32_t recvCoreNum_ = kEpServerDedupRecvCoreNum;
+    uint32_t recvCoreNum_ = 0, coreNum_ = 0;
     uint32_t bs_ = 0U, k_ = 0U, experts_ = 0U, localExperts_ = 0U, receiver_ = 0U;
 #if LL_DISPATCH_DEBUG_RECV
     uint32_t debugConsumed_ = 0;

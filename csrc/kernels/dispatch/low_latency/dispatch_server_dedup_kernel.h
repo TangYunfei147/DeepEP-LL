@@ -23,6 +23,7 @@ public:
     {
         args_ = reinterpret_cast<const __gm__ DispatchDedup::CommArgs*>(commArgs);
         core_ = GetBlockIdx();
+        sendCores_ = GetBlockNum() / 2U;
         pipe_ = pipe;
         LL_DLOG(LL_DISPATCH_DEBUG_STAGE, args_->rank, core_, "MAGIC_BEGIN", bs, h, topK, experts);
         const uint32_t magic = RotateDispatchServerDedupMagic(args_, core_, pipe);
@@ -30,7 +31,7 @@ public:
         counts_.Init(commArgs, expertIds, expertTokenNumsOut, sendCountsOut, bs, topK, experts, expertTokenNumsType,
                      magic, pipe);
         LL_DLOG(LL_DISPATCH_DEBUG_STAGE, args_->rank, core_, "COUNTS_INIT_DONE", magic, 0, 0, 0);
-        if (core_ < kEpServerDedupSendCoreNum)
+        if (core_ < sendCores_)
             sender_.Init(args_, x, expertIds, expertScales, sourceMaskOut, expertScalesOut, bs, h, topK, experts, pipe,
                          magic, inputScales, enableDedup);
         else
@@ -47,7 +48,7 @@ public:
         counts_.SendCnt();
         LL_DLOG(LL_DISPATCH_DEBUG_STAGE, args_->rank, core_, "COUNT_SEND_DONE", 0, 0, 0, 0);
 
-        if (core_ < kEpServerDedupSendCoreNum) {
+        if (core_ < sendCores_) {
             LL_DLOG(LL_DISPATCH_DEBUG_STAGE, args_->rank, core_, "PAYLOAD_SEND_BEGIN", 0, 0, 0, 0);
             sender_.Process(counts_.ScratchPool(), counts_.ReservedBytes());
             LL_DLOG(LL_DISPATCH_DEBUG_STAGE, args_->rank, core_, "PAYLOAD_SEND_DONE", 0, 0, 0, 0);
@@ -87,7 +88,7 @@ private:
     ServerDedupReceiver<XType, WireFp8, E4M3, Prequantized> receiver_;
     const __gm__ DispatchDedup::CommArgs* args_ = nullptr;
     TPipe* pipe_ = nullptr;
-    uint32_t core_ = 0;
+    uint32_t core_ = 0, sendCores_ = 0;
 };
 }  // namespace DispatchDedup
 #endif

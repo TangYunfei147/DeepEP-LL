@@ -51,22 +51,28 @@ enum class HardEvent { V_S, V_MTE3, S_MTE3 };
 template<class T> void Duplicate(Tensor<T> tensor,T value,unsigned count) {
     std::fill(tensor.p,tensor.p+count,value);
 }
+extern unsigned modelActiveRecv;
 struct Copy { unsigned blocks,bytes,srcStride,dstStride,reserved; };
 void DataCopyPad(Tensor<float> dst,Tensor<float> src,Copy c) {
     for(unsigned b=0;b<c.blocks;++b) {
-        if(src.p[b*(c.bytes+c.srcStride)/4]==1.0f) assert(dst.p[b*(c.bytes+c.dstStride)/4]==0.0f);
+        if(src.p[b*(c.bytes+c.srcStride)/4]==1.0f && b<modelActiveRecv) assert(dst.p[b*(c.bytes+c.dstStride)/4]==0.0f);
         std::copy_n(src.p+b*(c.bytes+c.srcStride)/4,c.bytes/4,dst.p+b*(c.bytes+c.dstStride)/4);
     }
 }
-unsigned kEpServerDedupCombineRecvCoreNum=32,kEpServerDedupCombineSendCoreNum=32;
+unsigned modelActiveRecv=32;
+using CombineDedup::kCombinePrepareRowBytes;
+using CombineDedup::kCombineNotifyRows;
 struct Ready {
     Args* args_;
     unsigned core_;
     std::vector<std::vector<float>>* gm;
+    unsigned coreNum_,sendCores_,notifyBegin_;
+    uint64_t selected_=0;
+    Tensor<float> preparePublish_{scratch+3072};
     float scratch[4096]{};
     Tensor<float> prepareInput_{scratch},prepareWork_{scratch},prepareSum_{scratch};
-    Tensor<float> prepareZero_{scratch+1024},notifyUb_{scratch+1536};
-    Tensor<float> readyInput_{scratch},readyWork_{scratch},readySum_{scratch},readyZero_{scratch+2048};
+    Tensor<float> prepareZero_{scratch+1024},notifyUb_{scratch+2048};
+    Tensor<float> readyInput_{scratch},readyWork_{scratch},readySum_{scratch},readyZero_{scratch+2560};
     template<HardEvent E> void Sync() {}
     Tensor<float> Control(unsigned rank,uint64_t offset) {
         assert(rank<gm->size() && offset<32768);
@@ -75,7 +81,7 @@ struct Ready {
     void WaitFlags(Tensor<float> mem,Tensor<float>,Tensor<float>,Tensor<float>,unsigned count) {
         for(unsigned i=0;i<count;++i) assert(mem.GetValue(i*8)==1.0f);
     }
-''' + method(combine, 'NotifyServerCard') + '\n' + method(combine, 'WaitServerReady') + r'''
+''' + 'void Publish() {\n' + 'Duplicate<float>(preparePublish_, 0.0f, 64U);' + method(combine, 'CopyLocalPendingTokens').split('Duplicate<float>(preparePublish_, 0.0f, 64U);', 1)[1] + '\n' + method(combine, 'NotifyServerCard') + '\n' + method(combine, 'WaitServerReady') + r'''
 };
 int main() {
     static_assert(kEpServerDedupRanksPerServer==16);
@@ -118,17 +124,20 @@ int main() {
             for(unsigned i=0;i<visited.size();++i) assert(visited[i]==i);
         }
         // Verify all allowed receiver counts, no missing/duplicate peer flags,
-        // and clearing across two rounds (also covers 48..55 sender ownership).
-        for(unsigned receivers=8;receivers<=48;receivers+=4) {
-            kEpServerDedupCombineRecvCoreNum=receivers;
-            kEpServerDedupCombineSendCoreNum=64-receivers;
+        // and clearing across two rounds with active sizes 16..72.
+        for(unsigned total: {16U,32U,48U,56U,60U,64U,72U}) {
+            const unsigned receivers=total/2;
+            modelActiveRecv=receivers;
             std::vector<std::vector<float>> memory(world,std::vector<float>(8192,0));
             for(unsigned round=0;round<2;++round) {
                 for(unsigned rank=0;rank<world;++rank) {
                     Args args{rank,world};
+                    for(unsigned core=0;core<total;++core) {
+                        Ready publisher{&args,core,&memory,total,receivers,total-8};
+                        publisher.Publish();
+                    }
                     for(unsigned slot=0;slot<8;++slot) {
-                        for(unsigned core=0;core<64;++core) memory[rank][slot*512+core*8]=1;
-                        Ready ready{&args,56+slot,&memory};
+                        Ready ready{&args,total-8+slot,&memory,total,receivers,total-8};
                         ready.NotifyServerCard();
                     }
                 }
@@ -136,11 +145,16 @@ int main() {
                     Args args{rank,world};
                     for(unsigned receiver=0;receiver<receivers;++receiver) {
                         for(unsigned peer=0;peer<16;++peer)
-                            assert(memory[rank][4096+receiver*128+peer*8]==1);
-                        Ready ready{&args,64-receivers+receiver,&memory};
+                            assert(memory[rank][COMBINE_DEDUP_EP_SERVER_DEDUP_COMBINE_SERVER_READY_OFFSET/4+receiver*128+peer*8]==1);
+                        Ready ready{&args,receivers+receiver,&memory,total,receivers,total-8};
                         ready.WaitServerReady();
                     }
-                    for(float value:memory[rank]) assert(value==0);
+                    for(unsigned index=0;index<memory[rank].size();++index) {
+                        const unsigned readyBase=COMBINE_DEDUP_EP_SERVER_DEDUP_COMBINE_SERVER_READY_OFFSET/4;
+                        const bool unused=index>=readyBase+receivers*128 && index<readyBase+kCombineNotifyRows*128;
+                        const float expected=unused && (index-readyBase)%8==0 ? 1.0f:0.0f;
+                        assert(memory[rank][index]==expected);
+                    }
                 }
             }
         }

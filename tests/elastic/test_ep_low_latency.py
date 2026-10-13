@@ -54,6 +54,7 @@ def matrix_cases(args):
 
 
 def case_config(args, m):
+    core = getattr(args, "ll_core_config", None)
     return {
         "B": args.num_tokens,
         "M": m,
@@ -63,6 +64,7 @@ def case_config(args, m):
         "dtype": args.dtype,
         "do_cpu_sync": bool(args.do_cpu_sync),
         "fp8_scale_dtype": args.fp8_scale_dtype,
+        **({"aiv_cores": core["active_aiv"], "send_cores": core["send_cores"], "recv_cores": core["recv_cores"]} if core else {}),
     }
 
 
@@ -124,7 +126,7 @@ def make_parser():
     )
     parser.add_argument("--route", choices=("normal",), default="normal")
     parser.add_argument("--do-handle-copy", type=int, choices=(0, 1), default=1)
-    parser.add_argument("--num-sms", type=int, default=0, help="LL only supports the default fixed schedule")
+    parser.add_argument("--num-sms", type=int, default=0, help="LL queries AIV count and uses a 1:1 split; manual overrides unsupported")
     parser.add_argument("--num-qps", type=int, default=0)
     parser.add_argument(
         "--num-bytes", type=int, default=8 << 30, help="LL requires exactly 8 GiB; no additional workspace is allocated"
@@ -812,6 +814,12 @@ def worker(local_rank, args):
         raise RuntimeError("Rebuild/install the current LL wheel: this launcher requires 16 ranks per host")
     if not callable(getattr(native, "dispatch_low_latency", None)):
         raise RuntimeError("Installed wheel has no LL native entry; rebuild and install the migrated package")
+    if getattr(native, "low_latency_core_protocol", None) != 1:
+        raise RuntimeError("Rebuild/install the LL wheel with runtime AIV core configuration")
+    core_config = dict(native.low_latency_core_config())
+    for case in cases:
+        case.ll_core_config = core_config
+    print(f"[LL cores] rank={rank} {core_config}", flush=True)
     validate_native_cases(native, cases, world)
     dist.init_process_group(
         args.group_backend,
@@ -822,6 +830,11 @@ def worker(local_rank, args):
     )
     buffer = None
     try:
+        core_configs = [None] * world
+        dist.all_gather_object(core_configs, core_config)
+        args.ll_core_configs = core_configs
+        if len({c["active_aiv"] for c in core_configs}) != 1:
+            raise ValueError("LL ST requires identical active AIV counts on all ranks")
         run_directory = [None]
 
         def reserve_directory():

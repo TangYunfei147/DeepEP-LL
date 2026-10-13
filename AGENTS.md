@@ -13,3 +13,5 @@
 - 本分支生产LL固定每物理主机16个连续rank，单机EP16是一个组，跨机按每机16卡扩展。共享HT的8路UDMA QP归属不是LL分组，不可机械替换。修改LL分组须同时核对dispatch分类、Host UB预算、combine ready通知/等待、metadata参考及启动合约，运行步骤见tests/ll_probe/LL16.md。
 
 - 公共project_env.sh禁止默认设置或覆盖设备可见性；A5设备0/1边界仅在SSH、a5_validation_env.sh及专用验证器执行。目标机入口显式选卡，原Python入口继承调用者ASCEND环境。
+
+- LL核数使用PlatformAscendCManager及当前设备AIV查询的较小值，运行时1:1收发；禁止恢复固定64核或将预留容量72当参与核数。当前支持16..72偶数，Session内固定，调试CORE=-2随实际接收起点变化；细节见tests/ll_probe/CORE_CONFIG.md。

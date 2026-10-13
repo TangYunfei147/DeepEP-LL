@@ -1,6 +1,6 @@
 # LL dispatch 卡死：分级编译宏定位
 
-本次只修改生产dispatch kernel及本篇文档，不修改Host绑定、Python入口、构建脚本、测试算法或通信协议。所有打印默认关闭。正式性能测量必须关闭全部调试宏。
+本调试功能只在生产dispatch kernel内插桩；后续实际核数适配见[CORE_CONFIG.md](CORE_CONFIG.md)。首次调试补丁只修改kernel及本篇文档，不修改Host绑定、Python入口、构建脚本、测试算法或通信协议。所有打印默认关闭。正式性能测量必须关闭全部调试宏。
 
 ## 1. 宏在哪里改，怎样重新构建
 
@@ -46,7 +46,7 @@ python3 -m pip install -v --force-reinstall --no-build-isolation --no-deps .
 | `LL_DISPATCH_DEBUG_ITEMS` | 4 | 每次采样最多打印的缺失记录/packet槽/relay成员数 |
 | `LL_DISPATCH_DEBUG_PACKETS` | 2 | 每核前N个packet的详细收发记录；不是整次kernel只允许发送N包 |
 
-细节宏可独立启用，建议同时保留STAGE=1。默认核划分为发送核0..31、接收核32..63，因此CORE=-2通常打印核0和32。**CORE=0看不到接收等待；CORE=32看不到发送核的payload阶段。** 先用默认筛选，若被选核都完成而作业仍卡住，再设CORE=-1找未完成核；之后锁定该rank/core细查。
+细节宏可独立启用，建议同时保留STAGE=1。当前按查询值N做1:1划分：发送核0..N/2-1、接收核N/2..N-1。CORE=-2打印核0和N/2；56核机器为0和28。**CORE=0看不到接收等待；CORE超出0..N-1时不会打印。** 先用默认筛选，若被选核都完成而作业仍卡住，再设CORE=-1找未完成核；之后锁定该rank/core细查。
 
 所有限额都是每次kernel调用的局部预算，不跨调用累计。达到打印上限后仍继续原来的轮询，日志停止不等于等待结束。若目标包不在前N包，增大PACKETS并缩小rank/core范围。COUNT_TX日志按本核有限的专家区间输出，不受PACKETS限制。
 
@@ -87,7 +87,7 @@ grep -n 'DISPATCH_ENTRY' csrc/kernels/dispatch/low_latency.cpp
 | `PAYLOAD_RECV_BEGIN`，无DONE | Receiver::Process | 开RECV，选接收核 |
 | `FINISH_BEGIN`，无DONE | Counts::Finish中的原有PIPE_ALL | 本核在途DMA/事件未收尾；回查该核收发日志 |
 
-`MAGIC_BEGIN`字段a/b/c/d为B/H/K/E；`MAGIC_DONE`为magic/world/0/0；`INIT_DONE.b`表示是否开启去重。发送核和接收核并行，发送核并不等待接收核完成计数前缀。只看到某个核的FINISH_DONE不能证明整张卡或整个作业完成。
+`DISPATCH_ENTRY`字段a/b/c为实际启动核数N、发送核数、接收核数；`MAGIC_BEGIN`字段a/b/c/d为B/H/K/E；`MAGIC_DONE`为magic/world/0/0；`INIT_DONE.b`表示是否开启去重。发送核和接收核并行，发送核并不等待接收核完成计数前缀。只看到某个核的FINISH_DONE不能证明整张卡或整个作业完成。
 
 ## 5. COUNTS：首次跨卡写入与缺失来源rank
 
@@ -125,7 +125,7 @@ stateOffset + (localExpert * world + sourceRank) * 512
 
 stateOffset包含本轮4GiB窗口偏移和计数区前缀。对照两端的magic、world和**相对槽位**，不要要求不同进程映射出来的虚拟地址数值相同。
 
-对于默认EP16/B32/E256，每卡16专家、64核参与计数，每核4专家：rank0/core0首次写自身，rank0/core4写rank1。接收核32..63每核等待8条记录。看到`COUNT_MISSING sourceRank=7`时，应进一步检查rank7中负责该目标全局专家的计数核；其核编号在此配置下为`(接收rank*16+localExpert)/4`。这条核编号公式仅适用于此配置与默认编译核划分。
+以下为**旧64核配置**的历史示例，当前运行须依据DISPATCH_ENTRY/COUNT_RANGE，56核示例见CORE_CONFIG。对于EP16/B32/E256，每卡16专家、64核参与计数，每核4专家：rank0/core0首次写自身，rank0/core4写rank1。接收核32..63每核等待8条记录。看到`COUNT_MISSING sourceRank=7`时，应进一步检查rank7中负责该目标全局专家的计数核；其核编号在此配置下为`(接收rank*16+localExpert)/4`。这条核编号公式仅适用于此配置与默认编译核划分。
 
 ## 6. PREFIX：本卡跨核同步
 
@@ -176,7 +176,9 @@ stateOffset包含本轮4GiB窗口偏移和计数区前缀。对照两端的magic
 本补丁没有新增跨核屏障、强制DMA完成等待或等待超时，不自动跳过缺失数据。BEFORE/DONE之间沿用原同步逻辑；ENQUEUED始终仅代表指令下发。若必须得到设备硬挂时仍能实时读取的进度缓冲，需要额外Host采集机制，不属于本次“仅kernel+文档”范围。
 
 
-## 10. 本次验证范围
+## 10. 调试功能首次引入时的验证范围
+
+以下记录对应原64核版本。当前动态核数版本的0/28打印和56核启动验证见[CORE_CONFIG.md](CORE_CONFIG.md)。
 
 - CANN 9.3.0 / dav-3510：默认关闭、全部开启、STAGE/COUNTS/PREFIX/SEND/RECV分别独立开启，共七种生产dispatch编译配置通过。
 - 默认关闭配置的完整生产wheel构建安装通过；关闭目标文件不含`[LLD]`格式，开启目标文件包含打印格式。现有LL协议及测试入口CPU回归29项通过。

@@ -291,3 +291,12 @@ def test_ll16_default_and_reject_old_host_mapping():
             st.launch_config(st.make_parser().parse_args([]), env)
     assert st.launch_config(st.make_parser().parse_args([]),
         {"WORLD_SIZE": "32", "RANK": "31", "LOCAL_RANK": "15", "LOCAL_WORLD_SIZE": "16"}) == (32, 31, 15)
+
+
+def test_case_report_records_actual_core_split():
+    args = st.make_parser().parse_args([])
+    assert 'aiv_cores' not in st.case_config(args, 16)
+    args.ll_core_config = {'active_aiv':56, 'send_cores':28, 'recv_cores':28, 'device':7}
+    config = st.case_config(args, 16)
+    assert (config['aiv_cores'], config['send_cores'], config['recv_cores']) == (56,28,28)
+    assert 'device' not in config  # Equivalent ranks share the same performance grouping key.

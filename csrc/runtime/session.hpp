@@ -41,6 +41,13 @@ public:
     {
         return use_1g_huge_pages_ ? huge_page_bytes_ : allocation_bytes_;
     }
+    uint32_t pin_low_latency_cores(uint32_t cores) {
+        check_context();
+        if (low_latency_cores_ && low_latency_cores_ != cores)
+            throw std::runtime_error("LL core count changed within a Session; recreate it");
+        low_latency_cores_ = cores;
+        return cores;
+    }
     static bool busy();
     // 仅借给可选 MegaMoE 扩展；内存仍由本 Session 独占并显式销毁。
     uintptr_t workspace_address() const;
@@ -109,6 +116,7 @@ private:
     void check_context() const;
     void allocate_huge_workspace(uint64_t bytes);
     void release_huge_workspace();
+    uint32_t low_latency_cores_ = 0;
     aclrtContext context_ = nullptr;
     void* workspace_ = nullptr;
     void* huge_page_source_ = nullptr;

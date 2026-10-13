@@ -33,9 +33,10 @@ public:
     __aicore__ inline void Init(const __gm__ DispatchDedup::CommArgs* args, GM_ADDR x, GM_ADDR ids, GM_ADDR weights,
                                 GM_ADDR sourceMask, GM_ADDR sourceWeights, uint32_t bs, uint32_t h, uint32_t k,
                                 uint32_t experts, TPipe* pipe, int64_t magic = 0, GM_ADDR inputScales = nullptr,
-                                bool enableDedup = true)
+                                bool enableDedup = true, uint32_t coreNum = 0U)
     {
         args_ = args;
+        sendCores_ = (coreNum == 0U ? GetBlockNum() : coreNum) / 2U;
         pipe_ = pipe;
         enableDedup_ = enableDedup;
         bs_ = bs;
@@ -43,7 +44,7 @@ public:
         k_ = k;
         localExperts_ = experts / args->rankSize;
         const uint32_t core = GetBlockIdx();
-        const uint32_t base = bs / kEpServerDedupSendCoreNum, remainder = bs % kEpServerDedupSendCoreNum;
+        const uint32_t base = bs / sendCores_, remainder = bs % sendCores_;
         count_ = base + (core < remainder ? 1U : 0U);
         start_ = core * base + (core < remainder ? core : remainder);
         data_ = DispatchServerDedupDataLayout(bs, h, k, experts, InputMode);
@@ -222,8 +223,8 @@ public:
     {
         // Route ownership is independent of the token partition used to copy weights.
         const uint32_t total = bs_ * k_, core = GetBlockIdx();
-        const uint32_t base = total / kEpServerDedupSendCoreNum;
-        const uint32_t remainder = total % kEpServerDedupSendCoreNum;
+        const uint32_t base = total / sendCores_;
+        const uint32_t remainder = total % sendCores_;
         const uint32_t begin = core * base + (core < remainder ? core : remainder);
         const uint32_t count = base + (core < remainder ? 1U : 0U);
         const uint32_t serverNum = args_->rankSize / kEpServerDedupRanksPerServer;
@@ -431,6 +432,7 @@ private:
     TPipe* pipe_ = nullptr;
     bool enableDedup_ = false;
     TBufPool<TPosition::VECCALC, 16>* scratch_ = nullptr;
+    uint32_t sendCores_ = 0;
     uint32_t bs_ = 0, h_ = 0, k_ = 0, localExperts_ = 0, start_ = 0, count_ = 0;
     uint32_t usedBytes_ = 0, lanes_ = 0, packets_ = 0, directCount_ = 0;
     EpServerDedupDataLayout data_{};

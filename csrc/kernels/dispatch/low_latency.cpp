@@ -17,7 +17,7 @@
 // 调用链：ElasticBuffer._dispatch_low_latency → csrc/ops/low_latency.cpp
 // → dispatch_server_dedup_kernel_do → 本设备入口 → DispatchMemoryServerDedupKernel。
 // profiler匹配本入口任务名；下层计数/发送/接收是同一kernel内的阶段，不是独立task。
-// One production entry and one 64-core process with a compile-time send/recv split.
+// One production entry and a queried pure-AIV launch with a 1:1 send/recv split.
 extern "C" [[bisheng::core_ratio(0, 1)]] __global__ __aicore__ void dispatch_server_dedup_kernel(
     GM_ADDR commArgs, GM_ADDR x, GM_ADDR expertIds, GM_ADDR expertScales, GM_ADDR expandXOut, GM_ADDR dynamicScalesOut,
     GM_ADDR expertTokenNumsOut, GM_ADDR sendCountsOut, GM_ADDR tokenTypeOut, GM_ADDR destinationIndexOut,
@@ -25,7 +25,7 @@ extern "C" [[bisheng::core_ratio(0, 1)]] __global__ __aicore__ void dispatch_ser
     int64_t reservedMagic, GM_ADDR inputScales)
 {
     LL_DLOG(LL_DISPATCH_DEBUG_STAGE, reinterpret_cast<const __gm__ DispatchDedup::CommArgs*>(commArgs)->rank,
-            AscendC::GetBlockIdx(), "DISPATCH_ENTRY", 0, 0, 0, 0);
+            AscendC::GetBlockIdx(), "DISPATCH_ENTRY", AscendC::GetBlockNum(), AscendC::GetBlockNum() / 2U, AscendC::GetBlockNum() / 2U, 0);
     util_set_ffts_config(reinterpret_cast<const __gm__ DispatchDedup::CommArgs*>(commArgs)->fftsVal);
     LL_DLOG(LL_DISPATCH_DEBUG_STAGE, reinterpret_cast<const __gm__ DispatchDedup::CommArgs*>(commArgs)->rank,
             AscendC::GetBlockIdx(), "FFTS_DONE", 0, 0, 0, 0);
@@ -75,10 +75,15 @@ extern "C" [[bisheng::core_ratio(0, 1)]] __global__ __aicore__ void dispatch_ser
 
 // Same in-library launch mechanism as all other ascendEP kernels.
 #include "low_latency/launch.hpp"
+extern "C" DEEPEP_EXPORT uint32_t deepep_ll_core_protocol_version()
+{
+    return DispatchDedup::kLlCoreProtocolVersion;
+}
+
 extern "C" DEEPEP_EXPORT void dispatch_server_dedup_kernel_do(void* stream, const deepep::EpServerDedupKernelArgs* args)
 {
     const auto& a = *args;
-    dispatch_server_dedup_kernel<<<64, DEEPEP_KERNEL_LAUNCH_UB(0), stream>>>(
+    dispatch_server_dedup_kernel<<<a.coreNum, DEEPEP_KERNEL_LAUNCH_UB(0), stream>>>(
         a.commArgs, a.x, a.expertIds, a.expertScales, a.expandXOut, a.dynamicScalesOut, a.expertTokenNumsOut,
         a.sendCountsOut, a.tokenTypeOut, a.destinationIndexOut, a.relayReadIndexOut, a.sourceMaskOut, a.expertScalesOut,
         a.tilingData, a.reservedMagic, a.inputScales);

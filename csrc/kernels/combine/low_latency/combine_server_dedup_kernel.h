@@ -28,6 +28,9 @@ public:
     {
         (void)quantMode;
         core_ = GetBlockIdx();
+        coreNum_ = GetBlockNum();
+        sendCores_ = recvCores_ = coreNum_ / 2U;
+        notifyBegin_ = coreNum_ - DispatchDedup::kLlNotifyCoreNum;
         args_ = reinterpret_cast<const __gm__ DispatchDedup::CommArgs*>(commArgs);
         enableDedup_ = enableDedup;
         h_ = h;
@@ -45,7 +48,7 @@ public:
         // Load the device-produced prefix through MTE2 rather than caching a
         // mutable GM scalar across launches. This 32B temporary becomes the
         // independent M2 prepare sum only after the scalar count is consumed.
-        pipe_.InitBuffer(arena_, core_ >= kEpServerDedupCombineSendCoreNum ? kEpServerDedupCombineRecvUbBytes
+        pipe_.InitBuffer(arena_, core_ >= sendCores_ ? kEpServerDedupCombineRecvUbBytes
                                                                            : kEpServerDedupCombineUbBytes);
         prepareSum_ = Allocate<float>(32U);
         GlobalTensor<int32_t> prefix;
@@ -63,7 +66,7 @@ public:
         }
         tokens_ = uint32_t(tokens);
         lanes_ = EpCombinePayloadLaneCount(tokens_, h_);
-        workspace_ = EpCombineM45Layout(tokens_, bs_, h_, topK_);
+        workspace_ = EpCombineM45Layout(tokens_, bs_, h_, topK_, recvCores_);
         if (lanes_ == 0U || workspace_.inputLanes == 0U) {
             Trap();
             return;
@@ -81,14 +84,14 @@ public:
         types_.SetGlobalBuffer(reinterpret_cast<__gm__ int32_t*>(tokenType));
         stage_.SetGlobalBuffer(reinterpret_cast<__gm__ uint16_t*>(args_->peerMems[args_->rank] + stageBase_));
         preparePublish_ = Allocate<float>(256U);
-        prepareInput_ = Allocate<float>(2304U);
+        prepareInput_ = Allocate<float>(kCombinePrepareRowBytes + 256U);
         prepareWork_ = Allocate<float>(512U);
-        prepareZero_ = Allocate<float>(2048U);
-        readyInput_ = Allocate<float>(512U);
+        prepareZero_ = Allocate<float>(kCombinePrepareRowBytes);
+        readyInput_ = Allocate<float>(kCombineReadyInputBytes);
         readyWork_ = Allocate<float>(256U);
         readySum_ = Allocate<float>(32U);
         readyZero_ = Allocate<float>(512U);
-        notifyUb_ = Allocate<float>(kEpServerDedupCombineRecvCoreNum * 32U);
+        notifyUb_ = Allocate<float>(kCombineNotifyRows * 32U);
         const uint32_t rowBytes = EpCombineAlign(tokens_ == 0U ? 4U : tokens_ * 4U, 256U);
         typeUb_ = Allocate<int32_t>(rowBytes);
         indexUb_ = Allocate<int32_t>(rowBytes);
@@ -105,9 +108,9 @@ public:
     __aicore__ inline void Process()
     {
         if (enableDedup_) CopyLocalPendingTokens();
-        if (core_ >= kEpServerDedupCombineSendCoreNum) {
+        if (core_ >= sendCores_) {
             if (enableDedup_) {
-                if (core_ >= 56U) {
+                if (core_ >= notifyBegin_) {
                     NotifyServerCard();
                     // Notification has been issued; do not add an MTE3 drain.
                 }
@@ -137,8 +140,8 @@ private:
         aggregate.InitDirectShared(
             arena_.Get<uint8_t>()[kEpServerDedupCombineResidentUbBytes],
             args_->peerMems[args_->rank] + window_ + COMBINE_DEDUP_EP_SERVER_DEDUP_SHARED_DATA_OFFSET, weightsAddr_,
-            outputAddr_, bs_, h_, topK_, dtype_, core_ - kEpServerDedupCombineSendCoreNum,
-            kEpServerDedupCombineRecvCoreNum, workspace_);
+            outputAddr_, bs_, h_, topK_, dtype_, core_ - sendCores_,
+            recvCores_, workspace_);
         aggregate.Process();
         aggregate.DrainM6();
     }
@@ -148,7 +151,7 @@ private:
         aggregate.Init(arena_.Get<uint8_t>()[kEpServerDedupCombineResidentUbBytes],
                        args_->peerMems[args_->rank] + window_ + COMBINE_DEDUP_EP_SERVER_DEDUP_SHARED_DATA_OFFSET,
                        masksAddr_, weightsAddr_, outputAddr_, bs_, h_, topK_, dtype_,
-                       core_ - kEpServerDedupCombineSendCoreNum, kEpServerDedupCombineRecvCoreNum, workspace_,
+                       core_ - sendCores_, recvCores_, workspace_,
                        partialTasks_, enableDedup_);
         return aggregate.Process();
     }
@@ -196,7 +199,7 @@ private:
     __aicore__ inline void CopyLocalPendingTokens()
     {
         SelectRows(3);
-        const uint32_t base = uint32_t(selected_) / 64U, extra = uint32_t(selected_) % 64U;
+        const uint32_t base = uint32_t(selected_) / coreNum_, extra = uint32_t(selected_) % coreNum_;
         const uint32_t count = base + (core_ < extra ? 1U : 0U);
         const uint32_t start = core_ * base + (core_ < extra ? core_ : extra);
         for (uint32_t lane = 0; lane < lanes_; ++lane) SetFlag<HardEvent::MTE3_MTE2>(lane);
@@ -222,7 +225,7 @@ private:
         for (uint32_t j = 0; j < 8U; ++j) preparePublish_.SetValue(j * 8U, 1.0f);
         Sync<HardEvent::S_MTE3>();
         auto done = Control(args_->rank, COMBINE_DEDUP_EP_SERVER_DEDUP_COMBINE_PREPARE_DONE_OFFSET);
-        DataCopyPad(done[core_ * 8U], preparePublish_, {8U, 32U, 0U, 2016U, 0U});
+        DataCopyPad(done[core_ * 8U], preparePublish_, {8U, 32U, 0U, kCombinePrepareRowBytes - 32U, 0U});
     }
     __aicore__ inline void CacheTableRows(uint32_t row, uint32_t start, uint32_t task, uint32_t count,
                                           uint32_t& cacheBegin, uint32_t& cacheEnd)
@@ -320,9 +323,9 @@ private:
         PipeBarrier<PIPE_V>();
         for (uint32_t step = 1U; step <= servers; ++step) {
             const uint32_t count = SelectDirectServer(ServerDedupHalfOrder(servers, ownServer, step - 1U));
-            const uint32_t first = ServerDedupFirstOwned(core_, owner, kEpServerDedupCombineSendCoreNum);
-            owner = (owner + count) % kEpServerDedupCombineSendCoreNum;
-            for (uint32_t task = first; task < count; task += kEpServerDedupCombineSendCoreNum) {
+            const uint32_t first = ServerDedupFirstOwned(core_, owner, sendCores_);
+            owner = (owner + count) % sendCores_;
+            for (uint32_t task = first; task < count; task += sendCores_) {
                 const uint32_t row = uint32_t(indexUb_.GetValue(task));
                 // Only owned rows reload a routing triple. The persistent rank
                 // and original-row arrays are untouched between server rounds.
@@ -401,29 +404,29 @@ private:
     __aicore__ inline void NotifyServerCard()
     {
         auto done = Control(args_->rank,
-                            COMBINE_DEDUP_EP_SERVER_DEDUP_COMBINE_PREPARE_DONE_OFFSET + uint64_t(core_ - 56U) * 2048U);
-        WaitFlags(done, prepareInput_, prepareWork_, prepareSum_, 64U);
-        Duplicate<float>(prepareZero_, 0.0f, 512U);
-        Duplicate<float>(notifyUb_, 0.0f, kEpServerDedupCombineRecvCoreNum * 8U);
+                            COMBINE_DEDUP_EP_SERVER_DEDUP_COMBINE_PREPARE_DONE_OFFSET + uint64_t(core_ - notifyBegin_) * kCombinePrepareRowBytes);
+        WaitFlags(done, prepareInput_, prepareWork_, prepareSum_, coreNum_);
+        Duplicate<float>(prepareZero_, 0.0f, kCombinePrepareRowBytes / 4U);
+        Duplicate<float>(notifyUb_, 0.0f, kCombineNotifyRows * 8U);
         Sync<HardEvent::V_S>();
-        for (uint32_t r = 0; r < kEpServerDedupCombineRecvCoreNum; ++r) notifyUb_.SetValue(r * 8U, 1.0f);
+        for (uint32_t r = 0; r < kCombineNotifyRows; ++r) notifyUb_.SetValue(r * 8U, 1.0f);
         Sync<HardEvent::V_MTE3>();
         Sync<HardEvent::S_MTE3>();
-        DataCopyPad(done, prepareZero_, {1U, 2048U, 0U, 0U, 0U});
+        DataCopyPad(done, prepareZero_, {1U, kCombinePrepareRowBytes, 0U, 0U, 0U});
         // Eight notification cores each notify two peers in the 16-rank host.
         // The same immutable UB flags feed both stores; the final drain retires them.
         const uint32_t groupBase = uint32_t(args_->rank) / DispatchDedup::kEpServerDedupRanksPerServer *
                                    DispatchDedup::kEpServerDedupRanksPerServer;
-        for (uint32_t local = core_ - 56U; local < DispatchDedup::kEpServerDedupRanksPerServer; local += 8U) {
+        for (uint32_t local = core_ - notifyBegin_; local < DispatchDedup::kEpServerDedupRanksPerServer; local += 8U) {
             auto ready = Control(groupBase + local, COMBINE_DEDUP_EP_SERVER_DEDUP_COMBINE_SERVER_READY_OFFSET);
             DataCopyPad(ready[(uint32_t(args_->rank) % DispatchDedup::kEpServerDedupRanksPerServer) * 8U], notifyUb_,
-                        {uint16_t(kEpServerDedupCombineRecvCoreNum), 32U, 0U, 480U, 0U});
+                        {uint16_t(kCombineNotifyRows), 32U, 0U, 480U, 0U});
         }
     }
     __aicore__ inline void WaitServerReady()
     {
         auto ready = Control(args_->rank, COMBINE_DEDUP_EP_SERVER_DEDUP_COMBINE_SERVER_READY_OFFSET +
-                                              uint64_t(core_ - kEpServerDedupCombineSendCoreNum) * 512U);
+                                              uint64_t(core_ - sendCores_) * 512U);
         WaitFlags(ready, readyInput_, readyWork_, readySum_, DispatchDedup::kEpServerDedupRanksPerServer);
         Duplicate<float>(readyZero_, 0.0f, 128U);
         Sync<HardEvent::V_MTE3>();
@@ -432,6 +435,7 @@ private:
 
     EpCombineM45WorkspaceLayout workspace_{};
     uint32_t partialTasks_ = 0U;
+    uint32_t coreNum_ = 0, sendCores_ = 0, recvCores_ = 0, notifyBegin_ = 0;
     TPipe pipe_;
     TBuf<> arena_;
     const __gm__ DispatchDedup::CommArgs* args_ = nullptr;

@@ -21,5 +21,5 @@ require_shmem_sdk
 "$BISHENG" -O2 -std=c++17 -xasc --npu-arch=dav-3510 --cce-auto-infer-kernel-type=false \
   -DPROBE_METADATA_DIAGNOSTIC=1 -I"$ASCEND_HOME_PATH/asc/include" -I"$ASCEND_HOME_PATH/include" \
   -I"$SHMEM/include" -I"$SHMEM/src" -c metadata_kernel.cpp -o build/metadata_check.o
-"$BISHENG" -O2 -std=c++17 -I"$ASCEND_HOME_PATH/include" metadata_host.cpp build/metadata_kernel.o build/metadata_check.o \
-  --cce-fatobj-link -L"$ASCEND_HOME_PATH/lib64" -lascendcl -lruntime -o build/metadata_probe
+"$BISHENG" -O2 -std=c++17 -I"$ASCEND_HOME_PATH/include" -I"$ASCEND_HOME_PATH/asc/include" metadata_host.cpp build/metadata_kernel.o build/metadata_check.o \
+  --cce-fatobj-link -L"$ASCEND_HOME_PATH/lib64" -lascendcl -lruntime -lplatform -ltiling_api -lunified_dlog -o build/metadata_probe

@@ -36,13 +36,13 @@ extern "C" [[bisheng::core_ratio(0,1)]] __global__ __aicore__ void META_KERNEL(
     // 保留路由加载、q计算、去重分类、DIRECT任务和sourceMask/sourceWeights；不含跨rank计数、
     // packet tail或receiver元数据。checksum的写回/同步也属于本提取核的观测开销。
     sender.Init(reinterpret_cast<const __gm__ DispatchDedup::CommArgs*>(args),qDiagnostic,ids,weights,masks,sourceWeights,
-        td->bs,td->h,td->topK,td->moeExpertNum,&pipe,0,nullptr,true);
+        td->bs,td->h,td->topK,td->moeExpertNum,&pipe,0,nullptr,true,GetBlockNum()*2U);
     sender.Process(scratch,0);
     PipeBarrier<PIPE_ALL>();
     SetCtrlSpr<60,60>(overflow);
 }
 extern "C" void META_LAUNCH(void* stream,GM_ADDR args,GM_ADDR ids,GM_ADDR weights,GM_ADDR qDiagnostic,
-    GM_ADDR masks,GM_ADDR sourceWeights,GM_ADDR tiling) {
-    // 固定32个AIV模拟生产Sender分片；逻辑专家分区数不是实际设备rank数。
-    META_KERNEL<<<32,nullptr,stream>>>(args,ids,weights,qDiagnostic,masks,sourceWeights,tiling);
+    GM_ADDR masks,GM_ADDR sourceWeights,GM_ADDR tiling,uint32_t sendCores) {
+    // Launch only the actual sender half; logical expert partitions are not device ranks.
+    META_KERNEL<<<sendCores,nullptr,stream>>>(args,ids,weights,qDiagnostic,masks,sourceWeights,tiling);
 }

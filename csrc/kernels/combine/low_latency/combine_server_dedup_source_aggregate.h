@@ -110,7 +110,7 @@ private:
         blocks_ = (h * 2U + 479U) / 480U;
         packetBytes_ = blocks_ * 512U;
         // The shared Host budget uses the largest contiguous Recv-core segment.
-        const uint32_t owned = EpCombineM5TokenCount(bs);
+        const uint32_t owned = EpCombineM5TokenCount(bs, participants);
         masks_ = Allocate<uint32_t>(EpCombineAlign(owned * 4U, 32U));
         pending_ = Allocate<uint32_t>(EpCombineAlign(owned * 4U, 32U));
         weights_ = Allocate<float>(EpCombineAlign(owned * k * 4U, 32U));

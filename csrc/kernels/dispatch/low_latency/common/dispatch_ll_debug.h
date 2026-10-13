@@ -49,7 +49,7 @@ __aicore__ inline bool LlDispatchDebugSelected(int rank, uint32_t core)
 {
     return (LL_DISPATCH_DEBUG_RANK < 0 || rank == LL_DISPATCH_DEBUG_RANK) &&
            (LL_DISPATCH_DEBUG_CORE == -1 ||
-            (LL_DISPATCH_DEBUG_CORE == -2 && (core == 0U || core == kEpServerDedupSendCoreNum)) ||
+            (LL_DISPATCH_DEBUG_CORE == -2 && (core == 0U || core == AscendC::GetBlockNum() / 2U)) ||
             (LL_DISPATCH_DEBUG_CORE >= 0 && core == uint32_t(LL_DISPATCH_DEBUG_CORE)));
 }
 // Bounded samples: first iteration, then every N completed polling iterations.

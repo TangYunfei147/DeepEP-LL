@@ -1,6 +1,6 @@
 # LL四层测试：Git交付入口
 
-生产LL每机16卡分组、同步协议和目标机验收见[LL16.md](LL16.md)。
+生产LL每机16卡分组、同步协议和目标机验收见[LL16.md](LL16.md)，实际AIV核数与收发分工见[CORE_CONFIG.md](CORE_CONFIG.md)。
 
 新增：[LL建域与网络层诊断](network_probe/README.md)，支持YAML多机配置、UDMA已选层查询和MTE双向正确性检查。
 

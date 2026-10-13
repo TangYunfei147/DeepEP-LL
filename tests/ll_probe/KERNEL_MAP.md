@@ -1,6 +1,6 @@
 # 测试脚本与 kernel 源码审计索引
 
-生产LL每机16卡分组、同步协议和目标机验收见[LL16.md](LL16.md)。
+生产LL每机16卡分组、同步协议和目标机验收见[LL16.md](LL16.md)，实际AIV核数查询及分工见[CORE_CONFIG.md](CORE_CONFIG.md)。
 
 本文件路径为 `tests/ll_probe/KERNEL_MAP.md`，以下链接均指向仓库内源码。先确定测量入口，再沿 Host 包装追到设备函数；`*_do` 是 Host 启动包装，不是 profiler 的设备 task 名。运行命令见 [PROFILING.md](PROFILING.md)。
 
@@ -35,7 +35,7 @@
 
 | 阶段 | 源码 | 审计重点 |
 |---|---|---|
-| dispatch总调度 | [dispatch_server_dedup_kernel.h](../../csrc/kernels/dispatch/low_latency/dispatch_server_dedup_kernel.h) | `Init/Process`；64核入口中的发送/接收分工，计数前缀与接收流水的顺序 |
+| dispatch总调度 | [dispatch_server_dedup_kernel.h](../../csrc/kernels/dispatch/low_latency/dispatch_server_dedup_kernel.h) | `Init/Process`；实际N核入口中的1:1发送/接收分工，计数前缀与接收流水的顺序 |
 | 本轮窗口状态 | [dispatch_server_dedup_magic.h](../../csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_magic.h) | `RotateDispatchServerDedupMagic`；每核本地槽、双窗口轮转；dispatch/combine共用 |
 | dispatch计数 | [dispatch_server_dedup_counts.h](../../csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_counts.h) | `SendCnt/RecvCnt/CalcCumsum/CompleteCumsum/Finish`；跨rank交换和CTRL状态约定 |
 | dispatch发送 | [dispatch_server_dedup_send.h](../../csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_send.h) | `Process/Classify/CalTokenSendExpertCnt/FillTail/SendPacket`；路由、包尾、量化及MTE发送 |

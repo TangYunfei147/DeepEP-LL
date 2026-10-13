@@ -1,4 +1,5 @@
 #include <acl/acl.h>
+#include "../../../csrc/runtime/ll_core_config.hpp"
 #include "snapshot/kernels/dispatch/low_latency/common/ep_memory_server_dedup_protocol.h"
 #include "snapshot/kernels/dispatch/low_latency/common/comm_args.h"
 #include "snapshot/kernels/dispatch/low_latency/common/ep_memory_server_dedup_tiling.h"
@@ -6,8 +7,8 @@
 #include <cstdio>
 #include <stdexcept>
 #include <vector>
-extern "C" void four_metadata_do(void*,uint8_t*,uint8_t*,uint8_t*,uint8_t*,uint8_t*,uint8_t*,uint8_t*);
-extern "C" void four_metadata_check_do(void*,uint8_t*,uint8_t*,uint8_t*,uint8_t*,uint8_t*,uint8_t*,uint8_t*);
+extern "C" void four_metadata_do(void*,uint8_t*,uint8_t*,uint8_t*,uint8_t*,uint8_t*,uint8_t*,uint8_t*,uint32_t);
+extern "C" void four_metadata_check_do(void*,uint8_t*,uint8_t*,uint8_t*,uint8_t*,uint8_t*,uint8_t*,uint8_t*,uint32_t);
 static void check(int rc,const char* label){if(rc)throw std::runtime_error(std::string(label)+":"+std::to_string(rc));}
 #define CK(call) check(call,#call)
 #include "../profile_bridge.h"
@@ -21,12 +22,14 @@ int main(int argc,char** argv){try{
     if(!H||!K||K>32||K>E||E>1024||partitions<16||partitions>256||partitions%DispatchDedup::kEpServerDedupRanksPerServer||!E||E%partitions||warmup>10000||samples>10000)
         throw std::runtime_error("unsupported metadata shape");
     CK(PROBE_ACL_INIT());CK(aclrtSetDevice(0));aclrtStream stream;CK(aclrtCreateStream(&stream));
+    const uint32_t sendCores=deepep::query_ll_core_config().active/2U;
+    std::printf("# metadata sender_cores=%u total_ll_cores=%u (one physical device)\n",sendCores,sendCores*2U);
     std::puts("B,H,K,E,logical_partitions,sample,event_us");
     for(uint32_t B:batches){
         if(!B||B>256)throw std::runtime_error("B must be 1..256");
         const auto layout=DispatchDedup::DispatchServerDedupDataLayout(B,H,K,E,false);
         auto align=[](uint32_t n,uint32_t a){return (n+a-1)/a*a;};
-        uint32_t count=(B+31)/32,groups=partitions/DispatchDedup::kEpServerDedupRanksPerServer-1;groups=groups<K/2?groups:K/2;
+        uint32_t count=(B+sendCores-1)/sendCores,groups=partitions/DispatchDedup::kEpServerDedupRanksPerServer-1;groups=groups<K/2?groups:K/2;
         uint64_t used=2*layout.packedPayloadBytes+align(B*K*4,256)+3*align(B*K*4,32)+
           2*align(count*K*4,32)+align(count*4,32)+align(count*K*16,32)+
           (align(partitions/DispatchDedup::kEpServerDedupRanksPerServer*4,32)>64?align(partitions/DispatchDedup::kEpServerDedupRanksPerServer*4,32):64)+(groups?align(groups*4,32):0);
@@ -40,7 +43,7 @@ int main(int argc,char** argv){try{
         for(uint32_t t=0;t<B;++t)for(uint32_t k=0;k<K;++k){ids[t*K+k]=(t*3+k)%E;weights[t*K+k]=0.5f+k*0.125f;}
         void *a,*i,*w,*d,*m,*s,*tiling;
         CK(aclrtMalloc(&a,sizeof(args),ACL_MEM_MALLOC_HUGE_FIRST));CK(aclrtMalloc(&i,B*K*4,ACL_MEM_MALLOC_HUGE_FIRST));
-        const uint32_t diagnosticBytes=B*K*4>1024?B*K*4:1024;
+        const uint32_t diagnosticBytes=B*K*4>sendCores*32?B*K*4:sendCores*32;
         CK(aclrtMalloc(&w,B*K*4,ACL_MEM_MALLOC_HUGE_FIRST));CK(aclrtMalloc(&d,diagnosticBytes,ACL_MEM_MALLOC_HUGE_FIRST));
         CK(aclrtMalloc(&m,B*4,ACL_MEM_MALLOC_HUGE_FIRST));CK(aclrtMalloc(&s,B*K*4,ACL_MEM_MALLOC_HUGE_FIRST));
         CK(aclrtMalloc(&tiling,sizeof(td),ACL_MEM_MALLOC_HUGE_FIRST));
@@ -50,7 +53,7 @@ int main(int argc,char** argv){try{
         CK(aclrtMemcpy(tiling,sizeof(td),&td,sizeof(td),ACL_MEMCPY_HOST_TO_DEVICE));
         for(uint32_t repeat=0;repeat<2;++repeat){
             CK(aclrtMemset(d,B*K*4,0xff,B*K*4));CK(aclrtMemset(s,B*K*4,0,B*K*4));
-            four_metadata_check_do(stream,(uint8_t*)a,(uint8_t*)i,(uint8_t*)w,(uint8_t*)d,(uint8_t*)m,(uint8_t*)s,(uint8_t*)tiling);
+            four_metadata_check_do(stream,(uint8_t*)a,(uint8_t*)i,(uint8_t*)w,(uint8_t*)d,(uint8_t*)m,(uint8_t*)s,(uint8_t*)tiling,sendCores);
             CK(aclrtSynchronizeStream(stream));
             CK(aclrtMemcpy(q.data(),B*K*4,d,B*K*4,ACL_MEMCPY_DEVICE_TO_HOST));
             CK(aclrtMemcpy(masks.data(),B*4,m,B*4,ACL_MEMCPY_DEVICE_TO_HOST));
@@ -76,13 +79,13 @@ int main(int argc,char** argv){try{
             if(repeat>=warmup)ProfilePhase(2);
             aclrtEvent begin,end;CK(aclrtCreateEventWithFlag(&begin,ACL_EVENT_TIME_LINE));CK(aclrtCreateEventWithFlag(&end,ACL_EVENT_TIME_LINE));
             CK(aclrtRecordEvent(begin,stream));
-            four_metadata_do(stream,(uint8_t*)a,(uint8_t*)i,(uint8_t*)w,(uint8_t*)d,(uint8_t*)m,(uint8_t*)s,(uint8_t*)tiling);
+            four_metadata_do(stream,(uint8_t*)a,(uint8_t*)i,(uint8_t*)w,(uint8_t*)d,(uint8_t*)m,(uint8_t*)s,(uint8_t*)tiling,sendCores);
             CK(aclrtRecordEvent(end,stream));CK(aclrtSynchronizeStream(stream));float ms;CK(aclrtEventElapsedTime(&ms,begin,end));
             if(repeat>=warmup)std::printf("%u,%u,%u,%u,%u,%u,%.9g\n",B,H,K,E,partitions,repeat-warmup,ms*1000.);
-            std::vector<uint32_t> checksums(256);
-            CK(aclrtMemcpy(checksums.data(),1024,d,1024,ACL_MEMCPY_DEVICE_TO_HOST));
-            for(uint32_t core=0;core<32;++core){
-                uint32_t count=B/32+(core<B%32),start=core*(B/32)+(core<B%32?core:B%32),expected=0;
+            std::vector<uint32_t> checksums(sendCores*8);
+            CK(aclrtMemcpy(checksums.data(),sendCores*32,d,sendCores*32,ACL_MEMCPY_DEVICE_TO_HOST));
+            for(uint32_t core=0;core<sendCores;++core){
+                uint32_t count=B/sendCores+(core<B%sendCores),start=core*(B/sendCores)+(core<B%sendCores?core:B%sendCores),expected=0;
                 for(uint32_t t=start;t<start+count;++t)for(uint32_t k=0;k<K;++k)if(masks[t]&(1U<<k))expected+=q[t*K+k];
                 if(count&&checksums[core*8]!=expected)throw std::runtime_error("timing checksum mismatch");
             }

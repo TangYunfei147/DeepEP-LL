@@ -26,6 +26,7 @@ public:
                                 const EpCombineM45WorkspaceLayout& layout)
     {
         args_ = args;
+        recvCores_ = GetBlockNum() / 2U;
         pipe_ = pipe;
         scratch_ = scratch[layout.phaseOffset];
         tokens_ = tokens;
@@ -46,7 +47,7 @@ public:
             Trap();
             return;
         }
-        rows_ = Allocate<int32_t>(EpCombineM4TaskBytes(tokens));
+        rows_ = Allocate<int32_t>(EpCombineM4TaskBytes(tokens, recvCores_));
         scan_ = scratch_[used_];
         scanRows_ = EpCombineM4ScanRows(h, k);
         table2Ub_ = Allocate<int32_t>(EpCombineAlign(kEpServerDedupCombineM4TableRows * 12U, 32U));
@@ -121,7 +122,7 @@ private:
     __aicore__ inline uint32_t SelectServer(uint32_t server, uint32_t& owner, bool validateRanks)
     {
         uint32_t count = 0U;
-        const uint32_t localCore = GetBlockIdx() - kEpServerDedupCombineSendCoreNum;
+        const uint32_t localCore = GetBlockIdx() - recvCores_;
         const uint32_t vectorBytes = EpCombineAlign(scanRows_ * 4U, 256U);
         const uint32_t maskBytes = EpCombineAlign((scanRows_ + 7U) / 8U, 32U);
         auto table = scan_.ReinterpretCast<int32_t>();
@@ -171,9 +172,9 @@ private:
             uint64_t selected = 0U;
             GatherMask(table, indices, mask.ReinterpretCast<uint32_t>(), true, span, {1U, 1U, 0U, 0U}, selected);
             Sync<HardEvent::V_S>();
-            const uint32_t first = ServerDedupFirstOwned(localCore, owner, kEpServerDedupCombineRecvCoreNum);
-            owner = (owner + uint32_t(selected)) % kEpServerDedupCombineRecvCoreNum;
-            for (uint32_t task = first; task < uint32_t(selected); task += kEpServerDedupCombineRecvCoreNum)
+            const uint32_t first = ServerDedupFirstOwned(localCore, owner, recvCores_);
+            owner = (owner + uint32_t(selected)) % recvCores_;
+            for (uint32_t task = first; task < uint32_t(selected); task += recvCores_)
                 rows_.SetValue(count++, table.GetValue(task));
         }
         return count;
@@ -255,6 +256,7 @@ private:
         SetFlag<HardEvent::MTE3_V>(lane);
     }
 
+    uint32_t recvCores_ = 0;
     const __gm__ DispatchDedup::CommArgs* args_ = nullptr;
     TPipe* pipe_ = nullptr;
     LocalTensor<uint8_t> scratch_, outputs_, scan_;

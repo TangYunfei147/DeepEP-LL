@@ -7,6 +7,7 @@
 #include <string>
 #include <vector>
 #include "runtime/session.hpp"
+#include "runtime/ll_core_config.hpp"
 #include "host/mem/shmem_host_heap.h"
 #include "host/data_plane/shmem_host_rma.h"
 #include "host/data_plane/shmem_host_p2p_sync.h"
@@ -22,6 +23,14 @@ namespace deepep {
 namespace {
 using Shape = std::vector<int64_t>;
 constexpr uint64_t kRankBaseBiasBytes = 1024U;
+uint32_t pin_session_cores(Session& session)
+{
+    session.workspace();
+    const auto config = query_ll_core_config();
+    if (config.device < 0) throw std::runtime_error("LL launch requires a current device for core verification");
+    return session.pin_low_latency_cores(config.active);
+}
+
 uint8_t* peer_buffer_base(Session& session, int peer)
 {
     if (peer < 0 || peer >= session.world()) throw std::invalid_argument("Invalid LL peer");
@@ -47,13 +56,14 @@ uint8_t* tensor(py::handle value, const Shape& shape, const char* dtype)
 }
 DispatchDedup::EpMemoryServerDedupLayout layout(int p, int b, int h, int k, int e, bool fp8)
 {
+    const uint32_t coreNum = query_ll_core_config().active;
     DispatchDedup::EpMemoryServerDedupLayout result{};
     auto mode = fp8 ? DispatchDedup::EpServerDedupInputMode::PrequantizedFp8Packs
                     : DispatchDedup::EpServerDedupInputMode::Plain16;
     if (b <= 0 || b > 65536 ||
-        DispatchDedup::BuildDispatchServerDedupLayout(p, b, h, k, e, &result, mode) !=
+        DispatchDedup::BuildDispatchServerDedupLayout(p, b, h, k, e, &result, mode, coreNum) !=
             DispatchDedup::DISPATCH_DEDUP_SUCCESS ||
-        !DispatchDedup::DispatchDedupPacketUbFits(result, b, k, e, p) || result.capacityRows > INT32_MAX) {
+        !DispatchDedup::DispatchDedupPacketUbFits(result, b, k, e, p, coreNum) || result.capacityRows > INT32_MAX) {
         throw std::invalid_argument("LL dispatch exceeds topology, shape, UB or workspace limits");
     }
     return result;
@@ -74,6 +84,19 @@ uint8_t dtype_code(const std::string& dtype)
 
 void bind_low_latency(py::module_& module)
 {
+    if (deepep_ll_core_protocol_version() != DispatchDedup::kLlCoreProtocolVersion)
+        throw std::runtime_error("LL Host/device core protocol mismatch; rebuild and reinstall the complete wheel");
+    module.attr("low_latency_core_protocol") = DispatchDedup::kLlCoreProtocolVersion;
+    module.def("low_latency_core_config", []() {
+        const auto cfg = query_ll_core_config();
+        py::dict result;
+        result["platform_aiv"] = cfg.platform; result["available_aiv"] = cfg.available;
+        result["active_aiv"] = cfg.active; result["send_cores"] = cfg.active / 2U;
+        result["recv_cores"] = cfg.active / 2U; result["device"] = cfg.device;
+        result["runtime_device_queried"] = cfg.device >= 0;
+        result["control_capacity_aiv"] = DispatchDedup::kLlMaxCoreNum;
+        return result;
+    });
     module.attr("low_latency_ranks_per_host") = DispatchDedup::kEpServerDedupRanksPerServer;
     module.def("low_latency_layout", [](int p, int b, int h, int k, int e, const std::string& dtype) {
         // A rejected shape is a Host-only capability result, not a launch failure.
@@ -94,6 +117,7 @@ void bind_low_latency(py::module_& module)
             session.world() > DispatchDedup::DISPATCH_DEDUP_MAX_RANK_SIZE) {
             throw std::invalid_argument("LL requires exactly 8 GiB of symmetric workspace");
         }
+        pin_session_cores(session);
         DispatchDedup::CommArgs args{};
         args.rank = session.rank();
         args.rankSize = session.world();
@@ -130,7 +154,7 @@ void bind_low_latency(py::module_& module)
     module.def("low_latency_combine_tiling",
                [](int p, int b, int h, int k, int e, const std::string& dtype, int num_max_tokens_per_rank) {
                    CombineDedup::Layout plan{};
-                   if ((dtype != "bfloat16" && dtype != "float16") || !CombineDedup::BuildLayout(p, b, h, k, e, plan)) {
+                   if ((dtype != "bfloat16" && dtype != "float16") || !CombineDedup::BuildLayout(p, b, h, k, e, plan, query_ll_core_config().active)) {
                        throw std::invalid_argument("LL combine exceeds dtype, topology, UB or workspace limits");
                    }
                    CombineDedup::EpServerDedupCombineTilingData data{};
@@ -154,6 +178,7 @@ void bind_low_latency(py::module_& module)
         }
         auto get = [&](const char* name, Shape shape, const char* type) { return tensor(tensors[name], shape, type); };
         deepep::EpServerDedupKernelArgs args{};
+        args.coreNum = pin_session_cores(session);
         args.commArgs = get("comm_args", {sizeof(DispatchDedup::CommArgs)}, "uint8");
         args.x = get("input", {b, h}, dtype.c_str());
         args.expertIds = get("indices", {b, k}, "int32");
@@ -189,12 +214,13 @@ void bind_low_latency(py::module_& module)
         CombineDedup::Layout plan{};
         if (!stream_address || session.capacity() != DispatchDedup::kEpServerDedupPeerBytes ||
             (dtype != "bfloat16" && dtype != "float16") ||
-            !CombineDedup::BuildLayout(session.world(), b, h, k, e, plan)) {
+            !CombineDedup::BuildLayout(session.world(), b, h, k, e, plan, query_ll_core_config().active)) {
             throw std::invalid_argument("Invalid LL combine dtype, shape, workspace or stream");
         }
         const int64_t c = plan.capacityRows;
         auto get = [&](const char* name, Shape shape, const char* type) { return tensor(tensors[name], shape, type); };
         deepep::EpServerDedupCombineKernelArgs args{};
+        args.coreNum = pin_session_cores(session);
         args.commArgs = get("comm_args", {sizeof(DispatchDedup::CommArgs)}, "uint8");
         // Python validates rows against the dispatch handle. The device selects
         // rows below the actual receive count; C_B sizes metadata, not expert storage.
