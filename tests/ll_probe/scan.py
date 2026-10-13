@@ -36,6 +36,7 @@ def main():
     plan = {'direction': '0->1', 'timing': 'ACL event interval, includes event/stream overhead; not profiler kernel task',
             'cases': cases, 'samples': 0 if args.validation_only else args.samples,
             'reference_peak_gbps': args.peak_gbps, 'scope': 'transport probe, not native LL'}
+    plan.update(measurement='legacy_acl_event_diagnostic', reference_protocol=False, profiler_entry='profile_probe.py; see PROFILING.md')
     if not args.execute:
         print(json.dumps(plan, indent=2)); return
     if args.output is None: p.error('--execute requires fresh --output under authorized root')

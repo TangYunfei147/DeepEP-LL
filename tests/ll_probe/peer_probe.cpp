@@ -22,6 +22,7 @@ static uint64_t number(const char* value) {
     if (value[end]) throw std::runtime_error("Invalid integer");
     return n;
 }
+#include "profile_bridge.h"
 int main(int argc, char** argv) {
     try {
         if (argc!=8) throw std::runtime_error("Usage: peer_probe bytes cores lanes chunk mode warmup samples");
@@ -32,7 +33,7 @@ int main(int argc, char** argv) {
             warmup>10000 || samples>10000) throw std::runtime_error("Out-of-range probe argument");
         const char* visible=std::getenv("ASCEND_RT_VISIBLE_DEVICES");
         if (!visible || std::string(visible)!="0,1") throw std::runtime_error("Require ASCEND_RT_VISIBLE_DEVICES=0,1");
-        ACL(aclInit(nullptr));
+        ACL(PROBE_ACL_INIT());
         aclrtContext contexts[2]; aclrtStream stream;
         void *src=nullptr,*dst=nullptr,*mappedDst=nullptr;
         char ipcKey[128] = {};
@@ -70,9 +71,12 @@ int main(int argc, char** argv) {
             ACL(aclrtSetCurrentContext(contexts[0]));
         };
         validate();
+        ProfilePhase(0);
         for (uint64_t i=0;i<warmup;++i) { launch(); ACL(aclrtSynchronizeStream(stream)); }
         std::puts("sample,bytes,cores,lanes,chunk,mode,event_us,host_us");
+        ProfilePhase(1);
         for (uint64_t i=0;i<samples;++i) {
+            ProfilePhase(2);
             aclrtEvent begin,end;
             ACL(aclrtCreateEventWithFlag(&begin,ACL_EVENT_TIME_LINE));
             ACL(aclrtCreateEventWithFlag(&end,ACL_EVENT_TIME_LINE));
@@ -89,12 +93,13 @@ int main(int argc, char** argv) {
                 (unsigned long long)lanes,(unsigned long long)chunk,(unsigned long long)mode,ms*1000.,hostUs);
             ACL(aclrtDestroyEvent(end)); ACL(aclrtDestroyEvent(begin));
         }
+        ProfilePhase(3);
         validate();
         ACL(aclrtDestroyStream(stream)); ACL(aclrtFree(src));
         ACL(aclrtIpcMemClose(ipcKey));
         ACL(aclrtDeviceDisablePeerAccess(1));
         ACL(aclrtSetCurrentContext(contexts[1])); ACL(aclrtFree(dst));
-        ACL(aclrtResetDevice(1)); ACL(aclrtResetDevice(0)); ACL(aclFinalize());
+        ACL(PROBE_ACL_RESET(1)); ACL(PROBE_ACL_RESET(0)); ACL(PROBE_ACL_FINALIZE());
         std::fprintf(stderr,"PASS: peer 0->1 receiver checks before/after; %llu samples; normal cleanup\n",
             (unsigned long long)samples);
         return 0;

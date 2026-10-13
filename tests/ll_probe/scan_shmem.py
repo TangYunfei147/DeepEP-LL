@@ -46,6 +46,7 @@ def main():
           'direction':'rank0->rank1','transport':'SHMEM MTE symmetric mapping',
           'endpoint':args.endpoint,'cases':cases,'samples':0 if args.validation_only else args.samples,
           'warmup':0 if args.validation_only else args.warmup,'reference_peak_gbps':args.peak_gbps}
+    plan.update(measurement='legacy_acl_event_diagnostic', reference_protocol=False, profiler_entry='profile_probe.py; see PROFILING.md')
     if not args.execute: print(json.dumps(plan,indent=2)); return
     if args.output is None: p.error('--execute requires fresh --output')
     output=args.output.resolve()

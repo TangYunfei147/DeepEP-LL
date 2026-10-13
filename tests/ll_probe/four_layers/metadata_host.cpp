@@ -9,6 +9,7 @@ extern "C" void four_metadata_do(void*,uint8_t*,uint8_t*,uint8_t*,uint8_t*,uint8
 extern "C" void four_metadata_check_do(void*,uint8_t*,uint8_t*,uint8_t*,uint8_t*,uint8_t*,uint8_t*,uint8_t*);
 static void check(int rc,const char* label){if(rc)throw std::runtime_error(std::string(label)+":"+std::to_string(rc));}
 #define CK(call) check(call,#call)
+#include "../profile_bridge.h"
 int main(int argc,char** argv){try{
     // Optional: B H K E logical_partitions warmup samples. No communication.
     if(argc!=1&&argc!=8)throw std::runtime_error("metadata_probe [B H K E partitions warmup samples]");
@@ -18,7 +19,7 @@ int main(int argc,char** argv){try{
     std::vector<uint32_t> batches=argc==8?std::vector<uint32_t>{value(1)}:std::vector<uint32_t>{4,32,96};
     if(!H||!K||K>32||K>E||E>1024||partitions<16||partitions>256||partitions%8||!E||E%partitions||warmup>10000||samples>10000)
         throw std::runtime_error("unsupported metadata shape");
-    CK(aclInit(nullptr));CK(aclrtSetDevice(0));aclrtStream stream;CK(aclrtCreateStream(&stream));
+    CK(PROBE_ACL_INIT());CK(aclrtSetDevice(0));aclrtStream stream;CK(aclrtCreateStream(&stream));
     std::puts("B,H,K,E,logical_partitions,sample,event_us");
     for(uint32_t B:batches){
         if(!B||B>256)throw std::runtime_error("B must be 1..256");
@@ -68,7 +69,10 @@ int main(int argc,char** argv){try{
                 }
             }
         }
+        ProfilePhase(0);
         for(uint32_t repeat=0;repeat<warmup+samples;++repeat){
+            if(repeat==warmup)ProfilePhase(1);
+            if(repeat>=warmup)ProfilePhase(2);
             aclrtEvent begin,end;CK(aclrtCreateEventWithFlag(&begin,ACL_EVENT_TIME_LINE));CK(aclrtCreateEventWithFlag(&end,ACL_EVENT_TIME_LINE));
             CK(aclrtRecordEvent(begin,stream));
             four_metadata_do(stream,(uint8_t*)a,(uint8_t*)i,(uint8_t*)w,(uint8_t*)d,(uint8_t*)m,(uint8_t*)s,(uint8_t*)tiling);
@@ -83,8 +87,10 @@ int main(int argc,char** argv){try{
             }
             CK(aclrtDestroyEvent(end));CK(aclrtDestroyEvent(begin));
         }
+        ProfilePhase(3);
         CK(aclrtFree(tiling));CK(aclrtFree(s));CK(aclrtFree(m));CK(aclrtFree(d));CK(aclrtFree(w));CK(aclrtFree(i));CK(aclrtFree(a));
     }
-    CK(aclrtDestroyStream(stream));CK(aclrtResetDevice(0));CK(aclFinalize());
+    CK(aclrtDestroyStream(stream));CK(PROBE_ACL_RESET(0));CK(PROBE_ACL_FINALIZE());
     std::fprintf(stderr,"PASS metadata: repeated route prefix q, dedup masks and weights; device0 only, no distributed ranks\n");
+return 0;
 }catch(const std::exception& e){std::fprintf(stderr,"FAIL %s\n",e.what());return 1;}}

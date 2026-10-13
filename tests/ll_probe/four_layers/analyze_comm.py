@@ -49,6 +49,7 @@ def analyze(paths):
     for rank,rows in ranks.items():result['per_rank'][rank]={metric:stats([float(row[metric]) for row in rows]) for metric in ['event_us','api_us','job_join_us']}
     if job_bytes:result['aggregate_wire_gbps']=job_bytes/(result['statistics']['event_us']['mean']*1000)
     result['timing_note']='Event is local stream interval; API waits local completion; job_join includes test barrier. Rank MAX is not globally timestamp-aligned makespan.'
+    result.update(measurement='legacy_acl_event_diagnostic', reference_protocol=False, profiler_entry='../profile_probe.py; see ../PROFILING.md')
     return result
 
 def main():

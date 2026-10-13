@@ -22,6 +22,13 @@ import statistics
 import sys
 from datetime import datetime, timedelta
 
+# Resolve the checked-in profiler helper from both the original and generated ST.
+for _parent in Path(__file__).resolve().parents:
+    if (_parent / "tests/ll_probe/profile_common.py").is_file():
+        sys.path.insert(0, str(_parent / "tests/ll_probe"))
+        break
+from profile_common import run_profiled, read_named_tasks
+
 __test__ = False
 
 
@@ -83,7 +90,7 @@ def make_parser():
     parser.add_argument("--config", help="JSON settings and Cartesian matrix")
     parser.add_argument("--plan", action="store_true", help="Print the case matrix without importing Torch")
     parser.add_argument("--output-dir", default="benchmark-runs", help="Parent for a unique run directory and traces")
-    parser.add_argument("--perf-tail", type=int, default=30, help="Statistics use last N samples; default: min(30, num_iters); 0 uses all")
+    parser.add_argument("--perf-tail", type=int, default=50, help="Statistics use last N samples; default: min(50, num_iters); 0 uses all")
     parser.add_argument("--num-processes", type=int, default=8, help="Local spawned processes, as in DeepEP")
     parser.add_argument("--num-nodes", type=int, default=1)
     parser.add_argument("--node-rank", type=int, default=0)
@@ -134,10 +141,10 @@ def make_parser():
     parser.add_argument("--test-first-only", action="store_true")
     parser.add_argument("--delay-rows", type=int, default=118260)
     parser.add_argument("--delay-cols", type=int, default=30720)
-    parser.add_argument("--delay-exp-before", type=int, default=None, help="Pre-kernel exp padding; default: disabled (0)")
-    parser.add_argument("--delay-exp-after", type=int, default=None, help="Exp padding after the first kernel; default: 1000")
-    parser.add_argument("--warmup", type=int, default=5)
-    parser.add_argument("--num-iters", type=int, default=50)
+    parser.add_argument("--delay-exp-before", type=int, default=None, help="Compatibility option: reference protocol requires 1 Exp before every capture")
+    parser.add_argument("--delay-exp-after", type=int, default=None, help="Compatibility option: reference protocol requires 0 post-kernel Exp")
+    parser.add_argument("--warmup", type=int, default=10)
+    parser.add_argument("--num-iters", type=int, default=100)
     parser.add_argument("--dispatch-only", action="store_true")
     parser.add_argument("--repeat-combine", type=int, default=2)
     parser.add_argument("--output", help="New rank-0 JSON result file (will not overwrite)")
@@ -145,25 +152,11 @@ def make_parser():
 
 
 def kernel_durations(root, kernel, expected):
-    """Read only the requested device kernel from torch_npu text exports."""
-    rows = []
-    for path in sorted(Path(root).rglob("kernel_details.csv")):
-        with path.open(newline="", encoding="utf-8-sig") as stream:
-            for row in csv.DictReader(stream):
-                normalized = {key.replace(" ", "").lower(): value for key, value in row.items() if key}
-                name = normalized.get("name", normalized.get("opname", ""))
-                if not re.search(r"\b" + re.escape(kernel) + r"\b", name):
-                    continue
-                value = float(normalized.get("duration(us)", normalized.get("taskduration(us)", "nan")))
-                if not math.isfinite(value) or value <= 0:
-                    raise ValueError(f"Invalid kernel duration in {path}: {value}")
-                start = normalized.get("starttime(us)")
-                rows.append((float(start) if start else None, value))
-    if len(rows) != expected:
-        raise ValueError(f"{kernel}: expected {expected} profiler records, found {len(rows)} in {root}")
-    if all(start is not None for start, _ in rows):
-        rows.sort(key=lambda row: row[0])
-    return [value for _, value in rows]
+    """Compatibility list for one exact kernel/task type; never mix task types."""
+    groups = read_named_tasks(root, kernel, expected, tail=0)
+    if len(groups) != 1:
+        raise ValueError("Multiple kernel/task types; use the per-task report, not a mixed invocation time")
+    return groups[0]["kernel_us"]
 
 
 def sample_stats(values):
@@ -216,7 +209,7 @@ def case_result_summary(result):
                 **result[operation],
                 "ranks": [
                     {key: value for key, value in row.items() if key != "kernel_us"}
-                    for row in result[operation]["ranks"]
+                    for row in result[operation].get("ranks", [])
                 ],
             }
     return summary
@@ -232,23 +225,12 @@ def write_reports(directory, report):
                 continue
             perf = result[operation]
             base = {"case_id": result["case_id"], **result["config"], "route": result["route"], "operation": operation}
-            summaries.append(
-                {
-                    **base,
-                    **{
-                        key: perf[key]
-                        for key in (
-                            "min_rank_mean_kernel_us",
-                            "median_rank_mean_kernel_us",
-                            "max_rank_mean_kernel_us",
-                            "slowest_rank",
-                        )
-                    },
-                }
-            )
-            ranks.extend(
-                {**base, **{key: value for key, value in rank.items() if key != "kernel_us"}} for rank in perf["ranks"]
-            )
+            for task in perf.get("kernel_task_reports", [perf]):
+                task_base = {**base, "kernel": task.get("kernel", ""), "task_type": task.get("task_type", "")}
+                summaries.append({**task_base, **{key: task[key] for key in (
+                    "min_rank_mean_kernel_us", "median_rank_mean_kernel_us", "max_rank_mean_kernel_us", "slowest_rank")}})
+                ranks.extend({**task_base, **{key: value for key, value in rank.items() if key != "kernel_us"}}
+                             for rank in task["ranks"])
     for filename, rows in (("summary.csv", summaries), ("ranks.csv", ranks)):
         if rows:
             with (directory / filename).open("w", newline="") as stream:
@@ -341,7 +323,7 @@ def launch_config(args, environ):
 
 
 def resolve_delay_counts(args):
-    for name, default in (("delay_exp_before", 0), ("delay_exp_after", 1000)):
+    for name, default in (("delay_exp_before", 1), ("delay_exp_after", 0)):
         if getattr(args, name) is None:
             setattr(args, name, default)
 
@@ -378,6 +360,8 @@ def validate_args(args, world):
         raise ValueError("num-bytes must be 2 MiB aligned and between 2 MiB and 32 GiB")
     if args.delay_rows <= 0 or args.delay_cols <= 0 or min(args.delay_exp_before, args.delay_exp_after) < 0:
         raise ValueError("Delay tensor dimensions must be positive and exp counts nonnegative")
+    if (args.delay_exp_before, args.delay_exp_after) != (1, 0):
+        raise ValueError("Reference profiler requires delay-exp-before=1 and delay-exp-after=0")
     if not 0 <= args.perf_tail <= args.num_iters:
         raise ValueError("Require 0 <= perf-tail <= num-iters")
     if args.output and Path(args.output).exists():
@@ -609,87 +593,47 @@ def record_case_progress(args, rank, m, mode, phase, error=None):
 
 
 def measure(invoke, args, operation, profile_dir, progress=None):
-    """Measure exported device kernel tasks; never substitute Host wall time."""
-    import torch
+    """Reference protocol: 10 warmups, 100 aligned captures, final 50 tasks."""
     import torch.distributed as dist
-    import torch_npu
 
     kernel = f"{operation}_server_dedup_kernel"
     if progress:
-        progress(f"{operation}.warmup")
-    for _ in range(args.warmup):
-        completion_boundary(args)
-        output = trace_call(args, f"{operation}.invoke", invoke)
-        trace_call(args, f"{operation}.event.wait", output[-1].current_stream_wait)
-        trace_call(args, "device.synchronize", torch.npu.synchronize)
-        del output
-    completion_boundary(args)
-    if progress:
         progress(f"{operation}.profile")
     Path(profile_dir).mkdir(parents=True, exist_ok=True)
-    with torch_npu.profiler.profile(
-        activities=[torch_npu.profiler.ProfilerActivity.CPU, torch_npu.profiler.ProfilerActivity.NPU],
-        schedule=torch_npu.profiler.schedule(wait=0, warmup=0, active=1, repeat=1, skip_first=0),
-        on_trace_ready=torch_npu.profiler.tensorboard_trace_handler(str(profile_dir)),
-        experimental_config=torch_npu.profiler._ExperimentalConfig(
-            aic_metrics=torch_npu.profiler.AiCMetrics.PipeUtilization,
-            profiler_level=torch_npu.profiler.ProfilerLevel.Level1,
-            export_type=torch_npu.profiler.ExportType.Text,
-            l2_cache=False,
-            data_simplification=False,
-        ),
-        profile_memory=True,
-        with_stack=False,
-        with_flops=False,
-        with_modules=False,
-    ):
-        # One capture, no profiler.step(), matching profile_operator's launch pattern.
-        alignment = torch.randn(128, dtype=torch.float32, device=control_device(args, torch))
-        request = trace_call(
-            args, f"{operation}.alignment.initial", dist.all_reduce, alignment, op=dist.ReduceOp.SUM, async_op=True
-        )
-        trace_call(args, f"{operation}.alignment.wait", request.wait)
-        delay = torch.zeros(args.delay_rows, args.delay_cols, dtype=torch.float32, device="npu")
-        for _ in range(args.delay_exp_before):
-            torch.exp(delay, out=delay)
-        # Capture the first call before exp padding, then align ranks once.
-        with torch.profiler.record_function(f"deepep_ll_{operation}"):
-            if operation == "combine" and args.group_backend == "gloo":
-                completion_boundary(args)
-            output = trace_call(args, f"{operation}.invoke", invoke)
-        for _ in range(args.delay_exp_after):
-            torch.exp(delay, out=delay)
-        trace_call(
-            args,
-            f"{operation}.alignment.after_exp",
-            dist.all_reduce,
-            alignment,
-            op=dist.ReduceOp.SUM,
-            async_op=False,
-        )
-        # Remaining captured calls have no per-iteration all_reduce.
-        for iteration in range(1, args.num_iters):
-            with torch.profiler.record_function(f"deepep_ll_{operation}"):
-                if operation == "combine" and args.group_backend == "gloo":
-                    # CPU collectives cannot order completion of prior NPU combine calls.
-                    completion_boundary(args)
-                output = trace_call(args, f"{operation}.invoke", invoke)
-        # Finish device work once before exporting; no per-iteration NPU sync/event wait.
-        trace_call(args, "device.synchronize", torch.npu.synchronize)
-        del output, delay, alignment
+    output = run_profiled(invoke, profile_dir, args.warmup, args.num_iters,
+                          args.delay_rows, args.delay_cols)
+    del output
     if progress:
         progress(f"{operation}.read_profile")
-    samples = []
+    groups = []
 
     def parse_profile():
-        samples.extend(kernel_durations(profile_dir, kernel, args.num_iters))
-        Path(profile_dir).mkdir(parents=True, exist_ok=True)
-        (Path(profile_dir) / "samples.json").write_text(json.dumps({"kernel": kernel, "kernel_us": samples}) + "\n")
+        groups.extend(read_named_tasks(profile_dir, kernel, args.num_iters, args.perf_tail))
+        (Path(profile_dir) / "samples.json").write_text(json.dumps({
+            "kernel": kernel, "kernel_statistics": groups,
+            **({"kernel_us": groups[0]["kernel_us"]} if len(groups) == 1 else {})}) + "\n")
 
     agree_check(parse_profile, args, dist.get_rank())
     gathered = [None] * dist.get_world_size()
-    trace_call(args, f"{operation}.samples.all_gather", dist.all_gather_object, gathered, samples)
-    return summarize_kernel(gathered, kernel, args.perf_tail)
+    trace_call(args, f"{operation}.samples.all_gather", dist.all_gather_object, gathered, groups)
+    identities = [[(g["kernel_name"], g["task_type"]) for g in rank] for rank in gathered]
+    if any(keys != identities[0] for keys in identities):
+        raise ValueError("Kernel/task identities differ across ranks")
+    by_task = [summarize_kernel([rank[i]["kernel_us"] for rank in gathered], name, args.perf_tail)
+               for i, (name, kind) in enumerate(identities[0])]
+    for report, (name, kind) in zip(by_task, identities[0]):
+        report["task_type"] = kind
+    # Preserve downstream single-task consumers without merging multiple tasks.
+    result = dict(by_task[0]) if len(by_task) == 1 else {"measurement": "separate_kernel_task_durations"}
+    result.update(kernel_task_reports=by_task, trace_reports_by_rank=gathered,
+                  capture_steps=args.num_iters, profile_steps=args.perf_tail,
+                  warmup_calls=args.warmup, delay_shape=[args.delay_rows, args.delay_cols],
+                  rank_alignment=args.group_backend,
+                  reference_defaults=(args.warmup, args.num_iters, args.perf_tail,
+                                      args.delay_rows, args.delay_cols, args.group_backend)
+                                     == (10, 100, 50, 118260, 30720, "hccl"),
+                  task_statistics_are_not_end_to_end_latency=True)
+    return result
 
 
 def run_case(buffer, args, rank, world, m, mode):

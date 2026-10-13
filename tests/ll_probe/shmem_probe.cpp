@@ -23,6 +23,7 @@ static uint64_t number(const char* s) {
     if (s[pos]) throw std::runtime_error("Invalid integer");
     return n;
 }
+#include "profile_bridge.h"
 int main(int argc,char** argv) {
     int rank=-1;
     try {
@@ -37,7 +38,7 @@ int main(int argc,char** argv) {
         if (endpoint.empty() || endpoint.size()>=ACLSHMEM_MAX_IP_PORT_LEN) throw std::runtime_error("Invalid endpoint");
         const char* visible=std::getenv("ASCEND_RT_VISIBLE_DEVICES");
         if (!visible || std::string(visible)!="0,1") throw std::runtime_error("Require ASCEND_RT_VISIBLE_DEVICES=0,1");
-        CHECK(aclInit(nullptr)); CHECK(aclrtSetDevice(int(dev)));
+        CHECK(PROBE_ACL_INIT()); CHECK(aclrtSetDevice(int(dev)));
         aclrtStream stream; CHECK(aclrtCreateStream(&stream));
         aclshmemx_init_attr_t attr{}; aclshmemx_uniqueid_t uid{};
         attr.my_pe=rank; attr.n_pes=2; attr.local_mem_size=128ULL<<20;
@@ -73,9 +74,12 @@ int main(int argc,char** argv) {
             aclshmem_barrier_all();
         };
         validate();
+        ProfilePhase(0);
         for (uint64_t i=0;i<warmup;++i) { aclshmem_barrier_all(); launch(); aclshmem_barrier_all(); }
         if (rank==0) std::puts("sample,bytes,cores,lanes,chunk,mode,event_us,host_us");
+        ProfilePhase(1);
         for (uint64_t i=0;i<samples;++i) {
+            ProfilePhase(2);
             aclrtEvent begin=nullptr,end=nullptr;
             if (rank==0) {
                 CHECK(aclrtCreateEventWithFlag(&begin,ACL_EVENT_TIME_LINE));
@@ -99,10 +103,11 @@ int main(int argc,char** argv) {
             }
             aclshmem_barrier_all();
         }
+        ProfilePhase(3);
         validate();
         CHECK(aclrtFree(src)); aclshmem_barrier_all(); aclshmem_free(target);
         CHECK(aclshmem_finalize()); CHECK(aclrtDestroyStream(stream));
-        CHECK(aclrtResetDevice(int(dev))); CHECK(aclFinalize());
+        CHECK(PROBE_ACL_RESET(int(dev))); CHECK(PROBE_ACL_FINALIZE());
         std::fprintf(stderr,"PASS: rank=%d pre/post readback, %llu samples, normal cleanup\n",rank,(unsigned long long)samples);
         return 0;
     } catch (const std::exception& e) {

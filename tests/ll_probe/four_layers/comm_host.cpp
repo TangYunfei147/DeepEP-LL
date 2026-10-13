@@ -21,6 +21,7 @@ static bool edge(uint32_t key,uint32_t s,uint32_t d) {
     return true;
 }
 static uint8_t pattern(uint32_t rank,uint64_t i) { return uint8_t((rank*31+i*13+i/257)%251); }
+#include "../profile_bridge.h"
 int main(int argc,char** argv) {
     try {
         if(argc!=12)throw std::runtime_error("rank world device endpoint bytes cores lanes scenario layer warmup samples");
@@ -33,7 +34,7 @@ int main(int argc,char** argv) {
         if(!visible)throw std::runtime_error("visible devices must be explicit");
         uint32_t visibleCount=1;for(const char* p=visible;*p;++p)visibleCount+=*p==',';
         if(device>=visibleCount)throw std::runtime_error("device outside visible ordinal range");
-        CK(aclInit(nullptr)); CK(aclrtSetDevice(int(device))); aclrtStream stream; CK(aclrtCreateStream(&stream));
+        CK(PROBE_ACL_INIT()); CK(aclrtSetDevice(int(device))); aclrtStream stream; CK(aclrtCreateStream(&stream));
         aclshmemx_init_attr_t attr{}; aclshmemx_uniqueid_t uid{};
         attr.my_pe=int(rank);attr.n_pes=int(world);
         attr.local_mem_size=((world*bytes+(16ULL<<20)+(2ULL<<20)-1)/(2ULL<<20))*(2ULL<<20);
@@ -74,10 +75,12 @@ int main(int argc,char** argv) {
             }
             aclshmem_barrier_all();
         };
-        validate();for(uint64_t i=0;i<warmup;++i){aclshmem_barrier_all();launch();CK(aclrtSynchronizeStream(stream));aclshmem_barrier_all();}
+        validate();ProfilePhase(0);for(uint64_t i=0;i<warmup;++i){aclshmem_barrier_all();launch();CK(aclrtSynchronizeStream(stream));aclshmem_barrier_all();}
         uint32_t outgoing=0;for(uint32_t p=0;p<world;++p)outgoing+=edge(uint32_t(scenario),uint32_t(rank),p);
         std::puts("sample,rank,world,scenario,layer,bytes_per_edge,rank_wire_bytes,event_us,api_us,job_join_us");
+        ProfilePhase(1);
         for(uint64_t i=0;i<samples;++i) {
+            ProfilePhase(2);
             aclrtEvent start,end;CK(aclrtCreateEventWithFlag(&start,ACL_EVENT_TIME_LINE));CK(aclrtCreateEventWithFlag(&end,ACL_EVENT_TIME_LINE));
             aclshmem_barrier_all();CK(aclrtRecordEvent(start,stream));auto begin=std::chrono::steady_clock::now();
             launch();CK(aclrtRecordEvent(end,stream));CK(aclrtSynchronizeStream(stream));auto apiEnd=std::chrono::steady_clock::now();
@@ -89,8 +92,10 @@ int main(int argc,char** argv) {
               std::chrono::duration<double,std::micro>(apiEnd-begin).count(),std::chrono::duration<double,std::micro>(joinEnd-begin).count());
             CK(aclrtDestroyEvent(end));CK(aclrtDestroyEvent(start));
         }
+        ProfilePhase(3);
         validate();CK(aclrtFree(tiling));CK(aclrtFree(peerTable));CK(aclrtFree(src));aclshmem_barrier_all();aclshmem_free(dst);
-        CK(aclshmem_finalize());CK(aclrtDestroyStream(stream));CK(aclrtResetDevice(int(device)));CK(aclFinalize());
+        CK(aclshmem_finalize());CK(aclrtDestroyStream(stream));CK(PROBE_ACL_RESET(int(device)));CK(PROBE_ACL_FINALIZE());
         std::fprintf(stderr,"PASS rank=%llu scenario=%llu layer=%llu receiver checks and normal cleanup\n",(unsigned long long)rank,(unsigned long long)scenario,(unsigned long long)layer);
-    }catch(const std::exception& e){std::fprintf(stderr,"FAIL %s\n",e.what());return 1;}
+    return 0;
+}catch(const std::exception& e){std::fprintf(stderr,"FAIL %s\n",e.what());return 1;}
 }
