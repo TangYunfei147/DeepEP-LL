@@ -68,7 +68,7 @@ bash tests/ll_probe/four_layers/run.sh python3 tests/ll_probe/profile_probe.py -
 
 ## 第四层：完整dispatch/combine
 
-本分支统一为每机16卡，单机EP16默认启动，跨机EP32使用两台各16卡。先按[LL16指南](LL16.md)重建生产wheel并运行带超时的正确性检查，再执行下述性能协议。旧每机8卡启动配置会被拒绝。
+本分支统一为每机16卡，单机EP16默认启动，跨机EP32使用两台各16卡。先按[LL16指南](LL16.md)重建生产wheel并运行带超时的正确性检查，再执行下述性能协议。旧每机8卡启动配置会被拒绝。 单机也必须显式配置MASTER_ADDR、MASTER_PORT和DEEPEP_SHMEM_ENDPOINT（或对应CLI参数）；完整环境表与旧入口迁移说明见[LL16指南](LL16.md#运行前环境每个新终端都要确认)。
 
 `tests/elastic/test_ep_low_latency.py`已采用公共协议；`four_layers/prepare_snapshot.py`生成的完整API快照继承同一协议。继续使用原LL启动参数，在本任务通信域集合中仅运行实际EP16/32。默认`--warmup 10 --num-iters 100 --perf-tail 50`；`--delay-rows/--delay-cols`显式控制Exp尺寸。
 
