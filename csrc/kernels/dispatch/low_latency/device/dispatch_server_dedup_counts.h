@@ -11,6 +11,8 @@
 namespace DispatchDedup {
 using namespace AscendC;
 
+// 中文审计：这里包含跨rank计数交换，不属于four_metadata测得的本地路由阶段。
+// 修改计数协议需联查dispatch_server_dedup_kernel.h中的阶段顺序及Receiver使用的前缀布局。
 // Adapted from Memory's CalAndSendCntByRankAndExpert / WaitDispatch / cumsum
 // chain. Counts cover the complete original routing tensor, including relay routes.
 // 本类没有 Process()：上层依次调用 SendCnt，再由接收核执行

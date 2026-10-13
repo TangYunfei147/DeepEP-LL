@@ -14,6 +14,8 @@
 namespace DispatchDedup {
 using namespace AscendC;
 
+// 中文审计：完整dispatch的接收、包消费和输出元数据路径；第2层提取核不调用本类。
+// 审计接收任务/包格式时继续查看dispatch_server_dedup_receive_tasks.h和receive_packet.h。
 template <class XType, bool WireFp8, bool E4M3, bool Prequantized = false>
 class ServerDedupReceiver {
     static_assert(!Prequantized || WireFp8, "prequantized input requires FP8 wire");

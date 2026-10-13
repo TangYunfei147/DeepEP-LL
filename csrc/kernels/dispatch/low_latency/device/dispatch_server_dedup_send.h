@@ -1,6 +1,9 @@
 // Copyright (c) 2026, Lu Lu
 // Modified by ryan_li 2026
 
+// 中文审计：生产Sender与第2层元数据实验的共同源码。
+// Process负责UB/路由准备和发送调度；CalTokenSendExpertCnt计算q；SendPacket负责实际包构造与发送。
+// prepare_snapshot.py仅在实验副本中截断SendPacket并加入观测输出，生产路径不受该提取影响。
 #ifndef DISPATCH_SERVER_DEDUP_SEND_H
 #define DISPATCH_SERVER_DEDUP_SEND_H
 

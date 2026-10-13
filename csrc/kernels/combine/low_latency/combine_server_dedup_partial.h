@@ -14,6 +14,8 @@
 namespace CombineDedup {
 using namespace AscendC;
 
+// 中文审计：M4按目标server筛选元数据、聚合贡献并回传partial结果。
+// 输出地址与MTE3完成事件交给M5继续使用；退出本类不表示所有远端消费已经完成。
 // Recv-core M4 scans type/routing metadata per destination server. Its output
 // addresses and completion events remain live through the M5 handoff.
 class ServerDedupPartial {

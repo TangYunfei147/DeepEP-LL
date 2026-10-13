@@ -1,5 +1,8 @@
 #pragma once
 #include <cstdint>
+// Host/Device共用32B参数布局；修改字段类型/顺序必须同时重编Host和kernel。
+// bytesPerEdge=单边字节，chunkBytes=每次搬运块，lanes=每核UB流水槽数；rank/world为实际通信域。
+// layer编号0/1/3是内部模式，不等于文档四层的序号；第2层使用独立metadata入口。
 struct FourLayerTiling {
     uint64_t bytesPerEdge;
     uint32_t chunkBytes;

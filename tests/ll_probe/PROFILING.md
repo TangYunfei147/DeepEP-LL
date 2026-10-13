@@ -1,5 +1,7 @@
 # 统一性能测试入口
 
+源码定位见[脚本与kernel对应表](KERNEL_MAP.md)，包含Host入口、设备函数名、生产LL内部阶段及快照修改规则。
+
 参考：[ep_test_mega_moe_T profiling.py](https://gitcode.com/candy_cloud_fly/ep_test_mega_moe_T/blob/main/core/operations/mega_moe/performance/profiling.py)，核对版本 `844f17aa428d631b2ba7d767c8063ad289e86409`，以及同仓库 `core/profiling/kernels.py`。依赖已在本仓库实现，目标机不需要复制 example.py 或参考仓库。
 
 ## 采样口径

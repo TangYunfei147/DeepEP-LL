@@ -13,6 +13,10 @@
 #include "low_latency/common/dispatch_dedup_types.h"
 #include "low_latency/common/ep_memory_server_dedup_tiling.h"
 
+// 中文审计：完整dispatch性能入口见tests/elastic/test_ep_low_latency.py。
+// 调用链：ElasticBuffer._dispatch_low_latency → csrc/ops/low_latency.cpp
+// → dispatch_server_dedup_kernel_do → 本设备入口 → DispatchMemoryServerDedupKernel。
+// profiler匹配本入口任务名；下层计数/发送/接收是同一kernel内的阶段，不是独立task。
 // One production entry and one 64-core process with a compile-time send/recv split.
 extern "C" [[bisheng::core_ratio(0, 1)]] __global__ __aicore__ void dispatch_server_dedup_kernel(
     GM_ADDR commArgs, GM_ADDR x, GM_ADDR expertIds, GM_ADDR expertScales, GM_ADDR expandXOut, GM_ADDR dynamicScalesOut,
@@ -34,6 +38,7 @@ extern "C" [[bisheng::core_ratio(0, 1)]] __global__ __aicore__ void dispatch_ser
     const uint8_t expandXOutDtype = tiling->expandXOutDtype;
     const auto inputMode = static_cast<DispatchDedup::EpServerDedupInputMode>(tiling->inputMode);
     AscendC::TPipe pipe;
+    // 下列模板分支决定输入类型、线上FP8格式与是否已预量化；比较性能时须固定这些条件。
 #define DISPATCH_SERVER_DEDUP_RUN(XType, WireFp8, E4M3, Prequantized)                                                  \
     DispatchDedup::DispatchMemoryServerDedupKernel<XType, WireFp8, E4M3, Prequantized> kernel;                         \
     kernel.Init(commArgs, x, expertIds, expertScales, expandXOut, dynamicScalesOut, expertTokenNumsOut, sendCountsOut, \

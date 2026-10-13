@@ -34,6 +34,8 @@ public:
                            bs, h, topK, experts, pipe, magic, enableDedup);
     }
 
+    // 完整dispatch：所有核先发送计数，再按固定核分工并行执行Sender与Receiver。
+    // Sender可与接收核的计数前缀准备重叠，不能把提取阶段耗时直接相加当作完整时延。
     __aicore__ inline void Process()
     {
         counts_.SendCnt();
@@ -44,6 +46,7 @@ public:
         } else {
             counts_.RecvCnt();
             counts_.CalcCumsum();
+            // 接收目标地址依赖计数前缀；写回完成并排空后，Receiver才可重置pipe并消费GM。
             counts_.CompleteCumsum();
             // CompleteCumsum may still be writing expert counts from its UB.
             // Retire that stage before receiver resets the pipe and reloads GM.

@@ -99,6 +99,9 @@ public:
         resultUb_ = Allocate<uint8_t>(lanes_ * resultStride_);
     }
 
+    // 完整combine调度：本地待归约行准备后，发送核处理DIRECT回传，接收核处理ready与归约。
+    // 去重路径执行通知→等待→partial回传(M4)→源token加权归约(M5)；非去重走直接聚合(M6)。
+    // 下列阶段属于同一个设备kernel，复用UB和完成事件，不能当作独立launch相减计时。
     __aicore__ inline void Process()
     {
         if (enableDedup_) CopyLocalPendingTokens();
@@ -363,6 +366,8 @@ private:
             WaitFlag<HardEvent::MTE3_V>(lane);
         }
     }
+    // M4→M5交接需保留尚未完成的MTE3输出槽；只等待当前要复用的输入/向量资源。
+    // 修改此处同步必须联查Partial与SourceAggregate的槽位生命周期，避免提前覆盖发送数据。
     __aicore__ inline void ReturnPartialTokens()
     {
         // M1 payload lanes are retired; complete this core's M2 publications
