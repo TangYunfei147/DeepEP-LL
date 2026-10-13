@@ -14,4 +14,4 @@
 
 - 公共project_env.sh禁止默认设置或覆盖设备可见性；A5设备0/1边界仅在SSH、a5_validation_env.sh及专用验证器执行。目标机入口显式选卡，原Python入口继承调用者ASCEND环境。
 
-- LL核数使用PlatformAscendCManager及当前设备AIV查询的较小值，运行时1:1收发；禁止恢复固定64核或将预留容量72当参与核数。当前支持16..72偶数，Session内固定，调试CORE=-2随实际接收起点变化；细节见tests/ll_probe/CORE_CONFIG.md。
+- LL核数使用PlatformAscendCManager及当前设备AIV查询的较小值，运行时1:1收发；禁止恢复固定64核或将预留容量72当参与核数。当前支持16..72偶数，Session内固定，核内分级调试宏已移除；细节见tests/ll_probe/CORE_CONFIG.md。

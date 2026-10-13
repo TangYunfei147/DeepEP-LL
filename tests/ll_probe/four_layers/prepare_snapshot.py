@@ -9,6 +9,15 @@ HERE=Path(__file__).resolve().parent
 snapshot=HERE/'snapshot'
 snapshot.mkdir(exist_ok=True)
 if snapshot.resolve()!=snapshot: raise RuntimeError('Refuse snapshot through symlink')
+# Prune removed source files only inside the owned generated kernel tree.
+# Otherwise deleted headers can survive incremental snapshot regeneration.
+kernel_snapshot = snapshot/'kernels'
+if kernel_snapshot.is_symlink(): raise RuntimeError('Refuse kernel snapshot symlink')
+if kernel_snapshot.exists():
+    for generated in kernel_snapshot.rglob('*'):
+        if generated.is_symlink(): raise RuntimeError('Refuse symlink inside generated kernel tree')
+        if generated.is_file() and not (SOURCE/'csrc/kernels'/generated.relative_to(kernel_snapshot)).exists():
+            generated.unlink()
 shutil.copytree(SOURCE/'csrc/kernels',snapshot/'kernels',dirs_exist_ok=True)
 sender=snapshot/'kernels/dispatch/low_latency/device/dispatch_server_dedup_send.h'
 original=sender.read_text()

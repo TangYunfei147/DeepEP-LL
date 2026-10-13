@@ -24,11 +24,7 @@ extern "C" [[bisheng::core_ratio(0, 1)]] __global__ __aicore__ void dispatch_ser
     GM_ADDR relayReadIndexOut, GM_ADDR sourceMaskOut, GM_ADDR expertScalesOut, GM_ADDR tilingData,
     int64_t reservedMagic, GM_ADDR inputScales)
 {
-    LL_DLOG(LL_DISPATCH_DEBUG_STAGE, reinterpret_cast<const __gm__ DispatchDedup::CommArgs*>(commArgs)->rank,
-            AscendC::GetBlockIdx(), "DISPATCH_ENTRY", AscendC::GetBlockNum(), AscendC::GetBlockNum() / 2U, AscendC::GetBlockNum() / 2U, 0);
     util_set_ffts_config(reinterpret_cast<const __gm__ DispatchDedup::CommArgs*>(commArgs)->fftsVal);
-    LL_DLOG(LL_DISPATCH_DEBUG_STAGE, reinterpret_cast<const __gm__ DispatchDedup::CommArgs*>(commArgs)->rank,
-            AscendC::GetBlockIdx(), "FFTS_DONE", 0, 0, 0, 0);
     // Host owns validation; each core reads its configuration once before work.
     const auto* tiling = reinterpret_cast<const __gm__ DispatchDedup::EpServerDedupTilingData*>(tilingData);
     const uint32_t bs = tiling->bs;

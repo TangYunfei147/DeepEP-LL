@@ -5,7 +5,6 @@
 #define DISPATCH_SERVER_DEDUP_COUNTS_H
 
 #include "kernel_operator.h"
-#include "../common/dispatch_ll_debug.h"
 #include "adv_api/reduce/sum.h"
 #include "../common/ep_memory_server_dedup_count_layout.h"
 
@@ -183,7 +182,6 @@ __aicore__ inline void ServerDedupCounts::SendCnt()
     statusCntAlign_ = count == 0U ? 0U : Ceil(Ceil(rscvStatusNum_, cores), UB_ALIGN_DATA_COUNT) * UB_ALIGN_DATA_COUNT;
     if (count != 0U) tpipe_->InitBuffer(statusBuf_, ReservedBytes());
     tpipe_->InitBufPool(stagePool_, kEpServerDedupCountUbBytes - ReservedBytes());
-    LL_DLOG(LL_DISPATCH_DEBUG_COUNTS, epRankId_, aivId_, "COUNT_RANGE", start, end, stateOffset_, epWorldSize_);
     if (count == 0U) return;
 
     // 3. 为完整 bs×topK 路由及筛选/归约临时数据分配 UB，等待 GM 路由搬入。
@@ -201,7 +199,6 @@ __aicore__ inline void ServerDedupCounts::SendCnt()
     const DataCopyPadExtParams<int32_t> pad{false, 0U, 0U, 0};
     DataCopyPad(validExpertIdsTensor_, expertIdsGMTensor_, idsCopy, pad);
     SyncFunc<HardEvent::MTE2_V>();
-    LL_DLOG(LL_DISPATCH_DEBUG_COUNTS, epRankId_, aivId_, "COUNT_IDS_DONE", expertIdsCnt_, 0, 0, 0);
 
     // 4. 规模足够时先向量筛选本核专家区间再做直方图；小输入逐专家统计。
     // 两条路径都写 ready=1 和真实 count，零计数专家也发布，避免对端永久等待。
@@ -215,9 +212,7 @@ __aicore__ inline void ServerDedupCounts::SendCnt()
 
     // 5. Scalar 填好的记录通过 MTE3 写到目标专家所属 rank。
     // 此处仅下发，不全量等待：statusBuf_ 保持不变，而筛选临时 UB 可以交给后续阶段。
-    LL_DLOG(LL_DISPATCH_DEBUG_COUNTS, epRankId_, aivId_, "COUNT_CALC_DONE", start, end, 0, 0);
     SyncFunc<HardEvent::S_MTE3>();
-    LL_DLOG(LL_DISPATCH_DEBUG_COUNTS, epRankId_, aivId_, "COUNT_PUBLISH_BEGIN", start, end, 0, 0);
     SendExpertCntRange(start, end);
     // Only statusBuf_ is still read by MTE3. Count's V_S dependencies already
     // retired the shared scratch; do not Reset either pool (A5 drains MTE3).
@@ -281,9 +276,7 @@ __aicore__ inline void ServerDedupCounts::SendExpertCntRange(uint32_t start, uin
         peer.SetGlobalBuffer(reinterpret_cast<__gm__ int32_t*>(args_->peerMems[dst] + stateOffset_ + offset));
         // DataCopy strides are GM count slots: one record per source rank.
         const DataCopyParams copy{uint16_t(count), 1U, 0U, uint16_t(epWorldSize_ * CNT_GM_STRIDE_BLOCKS - 1U)};
-        LL_DLOG(LL_DISPATCH_DEBUG_COUNTS, epRankId_, aivId_, "COUNT_TX_BEFORE", dst, expert, count, stateOffset_ + offset);
         DataCopy<int32_t>(peer, statusTensor_[(expert - start) * UB_ALIGN_DATA_COUNT], copy);
-        LL_DLOG(LL_DISPATCH_DEBUG_COUNTS, epRankId_, aivId_, "COUNT_TX_ENQUEUED", dst, expert, count, reinterpret_cast<uint64_t>(args_->peerMems[dst]));
         expert += count;
     }
 }
@@ -470,14 +463,7 @@ __aicore__ inline uint32_t ServerDedupCounts::GetCumSum(uint32_t newAivId)
     gatherSumPattern.SetValue(0, 2);
     SyncFunc<AscendC::HardEvent::S_V>();
 
-#if LL_DISPATCH_DEBUG_PREFIX
-    uint32_t debugPolls = 0, debugLogs = 0;
-#endif
     while (true) {
-#if LL_DISPATCH_DEBUG_PREFIX
-        const bool debugEmit = LlDispatchDebugSelected(epRankId_, aivId_) && LlDispatchDebugSample(debugPolls, debugLogs);
-        if (debugEmit) LL_DLOG(1, epRankId_, aivId_, "PREFIX_TOTAL_BEFORE", debugLogs, activeCumSumCores_, stateOffset_, 0);
-#endif
         DataCopy(sumLocalTensor, selfRankWinInGMTensor_[(layout_.cumsumOffset + newAivId * UB_ALIGN) / sizeof(float)],
                  sumIntriParams);
         SyncFunc<AscendC::HardEvent::MTE2_V>();
@@ -488,19 +474,6 @@ __aicore__ inline uint32_t ServerDedupCounts::GetCumSum(uint32_t newAivId)
         SyncFunc<AscendC::HardEvent::V_S>();
         cumSumFlag = static_cast<int32_t>(recvCntSumOutTensor.GetValue(0));
 
-#if LL_DISPATCH_DEBUG_PREFIX
-        if (debugEmit) {
-            LL_DLOG(1, epRankId_, aivId_, "PREFIX_TOTAL_AFTER", debugLogs, cumSumFlag, activeCumSumCores_, 0);
-            uint32_t printed = 0;
-            for (uint32_t i = 0; i < activeCumSumCores_ && printed < LL_DISPATCH_DEBUG_ITEMS; ++i) {
-                const uint32_t bits = sumLocalTensor.ReinterpretCast<uint32_t>().GetValue(i * UB_ALIGN_DATA_COUNT + 1U);
-                if (bits != 0x3f800000U) {
-                    LL_DLOG(1, epRankId_, aivId_, "PREFIX_TOTAL_MISSING", i + aivUsedAllToAll_, bits, 0, 0);
-                    ++printed;
-                }
-            }
-        }
-#endif
         if (cumSumFlag == activeCumSumCores_) {
             break;
         }
@@ -548,44 +521,17 @@ __aicore__ inline void ServerDedupCounts::WaitDispatch()
     DataCopyParams intriParams{static_cast<uint16_t>(recStatusNumPerCore_), 1,
                                static_cast<uint16_t>(CNT_GM_STRIDE_BLOCKS - 1U), 0};
     SyncFunc<AscendC::HardEvent::S_V>();
-#if LL_DISPATCH_DEBUG_COUNTS
-    uint32_t debugPolls = 0, debugLogs = 0;
-#endif
-    LL_DLOG(LL_DISPATCH_DEBUG_COUNTS, epRankId_, aivId_, "COUNT_WAIT_RANGE", startStatusIndex_, recStatusNumPerCore_, stateOffset_, epWorldSize_);
     while (sumOfFlag != compareTarget) {
-#if LL_DISPATCH_DEBUG_COUNTS
-        const bool debugEmit = LlDispatchDebugSelected(epRankId_, aivId_) && LlDispatchDebugSample(debugPolls, debugLogs);
-        if (debugEmit) LL_DLOG(1, epRankId_, aivId_, "COUNT_POLL_BEFORE", debugLogs, startStatusIndex_, recStatusNumPerCore_, stateOffset_);
-#endif
         DataCopy(statusFp32Tensor_,
                  windowInstatusFp32Tensor_[startStatusIndex_ * kEpServerDedupCountGmStride / sizeof(float)],
                  intriParams);
         SyncFunc<AscendC::HardEvent::MTE2_V>();
-#if LL_DISPATCH_DEBUG_COUNTS
-        if (debugEmit) LL_DLOG(1, epRankId_, aivId_, "COUNT_LOAD_DONE", debugLogs, 0, 0, 0);
-#endif
         ReduceSum(statusSumOutTensor, statusFp32Tensor_, gatherMaskOutTensor, mask, recStatusNumPerCore_, 1U);
         SyncFunc<AscendC::HardEvent::V_S>();
         sumOfFlag = statusSumOutTensor.GetValue(0);
-#if LL_DISPATCH_DEBUG_COUNTS
-        if (debugEmit) {
-            LL_DLOG(1, epRankId_, aivId_, "COUNT_POLL_AFTER", debugLogs, statusSumOutTensor.ReinterpretCast<uint32_t>().GetValue(0), recStatusNumPerCore_, 0);
-            uint32_t printed = 0;
-            for (uint32_t i = 0; i < recStatusNumPerCore_ && printed < LL_DISPATCH_DEBUG_ITEMS; ++i) {
-                const uint32_t bits = statusFp32Tensor_.ReinterpretCast<uint32_t>().GetValue(i * UB_ALIGN_DATA_COUNT);
-                if (bits != 0x3f800000U) {
-                    const uint32_t record = startStatusIndex_ + i;
-                    LL_DLOG(1, epRankId_, aivId_, "COUNT_MISSING", record, record % epWorldSize_, record / epWorldSize_, bits);
-                    ++printed;
-                }
-            }
-        }
-#endif
     }
 
-    LL_DLOG(LL_DISPATCH_DEBUG_COUNTS, epRankId_, aivId_, "COUNT_FLAGS_DONE", recStatusNumPerCore_, 0, 0, 0);
     GatherSumRecvCnt(gatherMaskOutTensor, gatherTmpTensor, statusSumOutTensor);
-    LL_DLOG(LL_DISPATCH_DEBUG_COUNTS, epRankId_, aivId_, "COUNT_LOCAL_SUM_DONE", 0, 0, 0, 0);
     WaitDispatchClearStatus();
 }
 
@@ -646,35 +592,13 @@ __aicore__ inline void ServerDedupCounts::WaitCumSumFlag()
     SumParams sumFlagParams{1, innerSumParams, activeCumSumCores_ * UB_ALIGN_DATA_COUNT};
     LocalTensor<float> statusSumOutTensor = scalarBuf_.Get<float>();
 
-#if LL_DISPATCH_DEBUG_PREFIX
-    uint32_t debugPolls = 0, debugLogs = 0;
-#endif
     while (true) {
-#if LL_DISPATCH_DEBUG_PREFIX
-        const bool debugEmit = LlDispatchDebugSelected(epRankId_, aivId_) && LlDispatchDebugSample(debugPolls, debugLogs);
-        if (debugEmit) LL_DLOG(1, epRankId_, aivId_, "PREFIX_FLAGS_BEFORE", debugLogs, activeCumSumCores_, stateOffset_, 0);
-#endif
         DataCopy(statusFp32Tensor_, selfRankWinInGMTensor_[cumSumFlagOffset], activeCumSumCores_ * UB_ALIGN_DATA_COUNT);
         SyncFunc<AscendC::HardEvent::MTE2_V>();
         Sum(statusSumOutTensor, statusFp32Tensor_, sumFlagParams);
         SyncFunc<AscendC::HardEvent::V_S>();
         cumSumFlag = statusSumOutTensor.ReinterpretCast<int32_t>().GetValue(0);
 
-#if LL_DISPATCH_DEBUG_PREFIX
-        if (debugEmit) {
-            LL_DLOG(1, epRankId_, aivId_, "PREFIX_FLAGS_AFTER", debugLogs, cumSumFlag, targetFlag, 0);
-            uint32_t printed = 0;
-            for (uint32_t i = 0; i < activeCumSumCores_ && printed < LL_DISPATCH_DEBUG_ITEMS; ++i) {
-                for (uint32_t word = 0; word < UB_ALIGN_DATA_COUNT && printed < LL_DISPATCH_DEBUG_ITEMS; ++word) {
-                    const uint32_t bits = statusFp32Tensor_.ReinterpretCast<uint32_t>().GetValue(i * UB_ALIGN_DATA_COUNT + word);
-                    if (bits != 1U) {
-                        LL_DLOG(1, epRankId_, aivId_, "PREFIX_FLAGS_MISSING", i + aivUsedAllToAll_, word, bits, 0);
-                        ++printed;
-                    }
-                }
-            }
-        }
-#endif
         if (cumSumFlag == targetFlag) {
             break;
         }

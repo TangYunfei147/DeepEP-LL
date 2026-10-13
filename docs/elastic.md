@@ -89,7 +89,7 @@ LL 按容量上限 M 选择传输路径：M≤32 不执行 server 级去重，32
 | 输入 | BF16/FP16 `[B,H]`，或 FP8 E4M3FN payload 与 scales 元组 |
 | 路由 | int64 `topk_idx [B,K]`；必须传入 FP32 `topk_weights [B,K]` |
 | Shape | H>0，1≤K≤32，P≤E≤1024，E 可被 P 整除；组合还须满足 Host 布局、UB 和工作区校验 |
-| 调度 | 默认固定调度，`num_compute_units=0`、`num_qps=0` |
+| 调度 | 查询实际AIV数，收发1:1；`num_compute_units=0`、`num_qps=0`，见[核心配置](../tests/ll_probe/CORE_CONFIG.md) |
 | 流与复用 | 默认流选项；不支持 cached dispatch、previous/epilogue event 或异步请求 |
 
 构造时 `hidden` 接受 0～7168（非零值按 BF16 的 16 或 FP8 的 128 对齐），`num_topk` 接受 0～16；0 表示不预绑定该维度，dispatch 仍执行实际 shape 校验。
@@ -100,10 +100,12 @@ LL 同样可以使用显式 `rank/world_size`，并设置 `num_bytes=8 << 30`，
 
 ### 去重 DIRECT 的发送顺序
 
-去重路径先按原 Token 分类顺序发送第一跳，再发送缓存的 DIRECT 包。小于 EP128 时，DIRECT 从本 server 起按全环轮转；EP128 及以上复用 Combine 的半区交替映射，各半区从本 server 的下一相对位置起轮转。EP128 的 server0 顺序为 `1,9,2,10,3,11,4,12,5,13,6,14,7,15,0,8`。
+去重路径先按原 Token 分类顺序发送第一跳，再发送缓存的 DIRECT 包。本分支每组16rank，小于EP256时，DIRECT从本组起按全环轮转；EP256及以上（16个逻辑组起）复用Combine的半区交替映射，各半区从本组的下一相对位置起轮转。EP256的server0顺序为 `1,9,2,10,3,11,4,12,5,13,6,14,7,15,0,8`。
 
-空目标跳过，同一目标 server 内保持 Token/k 顺序和原始 q。第一跳、DIRECT 及 server 切换共用连续的 packet/lane 序号，不增加同步或 MTE 排空。非去重路径仍按原始展平路由分核，不采用这项重排。
+空目标跳过，同一目标 server 内保持 Token/k 顺序和原始 q。第一跳、DIRECT 及 server 切换共用连续的 packet/lane 序号，不增加同步或 MTE 排空。非去重路径按原始展平路由分核，在16个逻辑组及以上也按相同组顺序扫描发送。
 
+
+当前combine的实际接收行数10000上限及路由值校验缺口见[固定值审计](../tests/ll_probe/HARDCODE_AUDIT.md)；Host shape检查不能保证这些数据相关条件。
 
 ### 返回与有效区域
 

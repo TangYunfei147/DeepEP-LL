@@ -8,7 +8,6 @@
 #define DISPATCH_SERVER_DEDUP_SEND_H
 
 #include "kernel_operator.h"
-#include "../common/dispatch_ll_debug.h"
 #include "dispatch_dedup_mxfp8_quant.h"
 #include "../common/ep_memory_server_dedup_data_layout.h"
 #include "../common/ep_memory_server_dedup_protocol.h"
@@ -62,7 +61,6 @@ public:
     {
         // 1. 无 token 分片的发送核直接返回；有任务的核复用 SendCnt 释放出的 scratch。
         // reservedBytes 对应仍可能被计数发送读取的 UB，不能当作可用空间覆盖。
-        LL_DLOG(LL_DISPATCH_DEBUG_SEND, args_->rank, GetBlockIdx(), "SEND_PREP_BEGIN", start_, count_, enableDedup_, reservedBytes);
         if (enableDedup_ && count_ == 0U) return;
         scratch_ = &scratch;
         TQue<QuePosition::VECIN, 1> input;
@@ -128,7 +126,6 @@ public:
             DataCopyPad(routeWeights_, weights_[uint64_t(start_) * k_], {1U, count_ * k_ * 4U, 0U, 0U, 0U},
                         {false, 0U, 0U, 0.0f});
         Sync<HardEvent::MTE2_S>();
-        LL_DLOG(LL_DISPATCH_DEBUG_SEND, args_->rank, GetBlockIdx(), "SEND_ROUTES_DONE", bs_, k_, lanes_, 0);
         // 每个 512B 块尾部的 32B 标记预置为 1；发送时 payload 和标记一起搬运。
         // 初始 MTE3_V 事件让 lane 首次可写，后续复用由上一包的发送完成事件控制。
         uint64_t flagMask[2] = {0xffU, 0U};
@@ -365,7 +362,6 @@ private:
                                       uint32_t expert, uint32_t q, uint32_t mask)
     {
         const uint32_t tokenId = token, destination = expert / localExperts_;
-        if (packets_ < LL_DISPATCH_DEBUG_PACKETS) LL_DLOG(LL_DISPATCH_DEBUG_SEND, args_->rank, GetBlockIdx(), "SEND_PACKET_BEGIN", packets_, token, expert, q);
         auto x = input.template AllocTensor<XType>();
         if constexpr (Prequantized) {
             // The full payload queue slot stages H bytes and 4P scale bytes.
@@ -395,13 +391,10 @@ private:
             Sync<HardEvent::MTE2_S>();
             payload = x.template ReinterpretCast<uint8_t>();
         }
-        if (packets_ < LL_DISPATCH_DEBUG_PACKETS) LL_DLOG(LL_DISPATCH_DEBUG_SEND, args_->rank, GetBlockIdx(), "SEND_INPUT_DONE", packets_, token, destination, mask);
         FillTail(payload, token, firstK, mask);
         Sync<HardEvent::S_V>();
         const uint32_t lane = packets_ % lanes_;
-        if (packets_ < LL_DISPATCH_DEBUG_PACKETS) LL_DLOG(LL_DISPATCH_DEBUG_SEND, args_->rank, GetBlockIdx(), "SEND_LANE_WAIT", packets_, lane, destination, 0);
         WaitFlag<HardEvent::MTE3_V>(lane);
-        if (packets_ < LL_DISPATCH_DEBUG_PACKETS) LL_DLOG(LL_DISPATCH_DEBUG_SEND, args_->rank, GetBlockIdx(), "SEND_LANE_READY", packets_, lane, destination, 0);
         auto out = outBuf_.Get<uint8_t>()[lane * data_.tokenStride];
         auto outWords = out.template ReinterpretCast<int32_t>();
         auto inWords = payload.template ReinterpretCast<int32_t>();
@@ -421,9 +414,7 @@ private:
                                       DispatchServerDedupDispatchOffset(data_, args_->rank, destination,
                                                                         expert % localExperts_, q, args_->rankSize,
                                                                         localExperts_, bs_));
-        if (packets_ < LL_DISPATCH_DEBUG_PACKETS) LL_DLOG(LL_DISPATCH_DEBUG_SEND, args_->rank, GetBlockIdx(), "SEND_DMA_BEFORE", packets_, destination, data_.tokenStride, reinterpret_cast<uint64_t>(destinationGm.GetPhyAddr()));
         DataCopy(destinationGm, out, uint32_t(data_.tokenStride));
-        if (packets_ < LL_DISPATCH_DEBUG_PACKETS) LL_DLOG(LL_DISPATCH_DEBUG_SEND, args_->rank, GetBlockIdx(), "SEND_DMA_ENQUEUED", packets_, destination, token, q);
         SetFlag<HardEvent::MTE3_V>(lane);
         ++packets_;
     }

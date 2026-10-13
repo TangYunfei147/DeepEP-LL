@@ -4,7 +4,6 @@
 #ifndef DISPATCH_SERVER_DEDUP_KERNEL_H
 #define DISPATCH_SERVER_DEDUP_KERNEL_H
 
-#include "common/dispatch_ll_debug.h"
 #include "device/dispatch_server_dedup_magic.h"
 #include "device/dispatch_server_dedup_counts.h"
 #include "device/dispatch_server_dedup_send.h"
@@ -25,58 +24,38 @@ public:
         core_ = GetBlockIdx();
         sendCores_ = GetBlockNum() / 2U;
         pipe_ = pipe;
-        LL_DLOG(LL_DISPATCH_DEBUG_STAGE, args_->rank, core_, "MAGIC_BEGIN", bs, h, topK, experts);
         const uint32_t magic = RotateDispatchServerDedupMagic(args_, core_, pipe);
-        LL_DLOG(LL_DISPATCH_DEBUG_STAGE, args_->rank, core_, "MAGIC_DONE", magic, args_->rankSize, 0, 0);
         counts_.Init(commArgs, expertIds, expertTokenNumsOut, sendCountsOut, bs, topK, experts, expertTokenNumsType,
                      magic, pipe);
-        LL_DLOG(LL_DISPATCH_DEBUG_STAGE, args_->rank, core_, "COUNTS_INIT_DONE", magic, 0, 0, 0);
         if (core_ < sendCores_)
             sender_.Init(args_, x, expertIds, expertScales, sourceMaskOut, expertScalesOut, bs, h, topK, experts, pipe,
                          magic, inputScales, enableDedup);
         else
             receiver_.Init(args_, expandXOut, dynamicScalesOut, tokenTypeOut, destinationIndexOut, relayReadIndexOut,
                            bs, h, topK, experts, pipe, magic, enableDedup);
-        LL_DLOG(LL_DISPATCH_DEBUG_STAGE, args_->rank, core_, "INIT_DONE", magic, enableDedup, 0, 0);
     }
 
     // 完整dispatch：所有核先发送计数，再按固定核分工并行执行Sender与Receiver。
     // Sender可与接收核的计数前缀准备重叠，不能把提取阶段耗时直接相加当作完整时延。
     __aicore__ inline void Process()
     {
-        LL_DLOG(LL_DISPATCH_DEBUG_STAGE, args_->rank, core_, "COUNT_SEND_BEGIN", 0, 0, 0, 0);
         counts_.SendCnt();
-        LL_DLOG(LL_DISPATCH_DEBUG_STAGE, args_->rank, core_, "COUNT_SEND_DONE", 0, 0, 0, 0);
 
         if (core_ < sendCores_) {
-            LL_DLOG(LL_DISPATCH_DEBUG_STAGE, args_->rank, core_, "PAYLOAD_SEND_BEGIN", 0, 0, 0, 0);
             sender_.Process(counts_.ScratchPool(), counts_.ReservedBytes());
-            LL_DLOG(LL_DISPATCH_DEBUG_STAGE, args_->rank, core_, "PAYLOAD_SEND_DONE", 0, 0, 0, 0);
 
         } else {
-            LL_DLOG(LL_DISPATCH_DEBUG_STAGE, args_->rank, core_, "COUNT_RECV_BEGIN", 0, 0, 0, 0);
             counts_.RecvCnt();
-            LL_DLOG(LL_DISPATCH_DEBUG_STAGE, args_->rank, core_, "COUNT_RECV_DONE", 0, 0, 0, 0);
-            LL_DLOG(LL_DISPATCH_DEBUG_STAGE, args_->rank, core_, "PREFIX_SUM_BEGIN", 0, 0, 0, 0);
             counts_.CalcCumsum();
-            LL_DLOG(LL_DISPATCH_DEBUG_STAGE, args_->rank, core_, "PREFIX_SUM_DONE", 0, 0, 0, 0);
             // 接收目标地址依赖计数前缀；写回完成并排空后，Receiver才可重置pipe并消费GM。
-            LL_DLOG(LL_DISPATCH_DEBUG_STAGE, args_->rank, core_, "PREFIX_READY_BEGIN", 0, 0, 0, 0);
             counts_.CompleteCumsum();
-            LL_DLOG(LL_DISPATCH_DEBUG_STAGE, args_->rank, core_, "PREFIX_READY_DONE", 0, 0, 0, 0);
             // CompleteCumsum may still be writing expert counts from its UB.
             // Retire that stage before receiver resets the pipe and reloads GM.
-            LL_DLOG(LL_DISPATCH_DEBUG_STAGE, args_->rank, core_, "PREFIX_DRAIN_BEGIN", 0, 0, 0, 0);
             PipeBarrier<PIPE_ALL>();
-            LL_DLOG(LL_DISPATCH_DEBUG_STAGE, args_->rank, core_, "PREFIX_DRAIN_DONE", 0, 0, 0, 0);
-            LL_DLOG(LL_DISPATCH_DEBUG_STAGE, args_->rank, core_, "PAYLOAD_RECV_BEGIN", 0, 0, 0, 0);
             receiver_.Process();
-            LL_DLOG(LL_DISPATCH_DEBUG_STAGE, args_->rank, core_, "PAYLOAD_RECV_DONE", 0, 0, 0, 0);
         }
 
-        LL_DLOG(LL_DISPATCH_DEBUG_STAGE, args_->rank, core_, "FINISH_BEGIN", 0, 0, 0, 0);
         counts_.Finish();
-        LL_DLOG(LL_DISPATCH_DEBUG_STAGE, args_->rank, core_, "FINISH_DONE", 0, 0, 0, 0);
 
         // No shared work follows local completion. Same-stream kernel completion
         // orders the next launch after all cores finish their writes and cleanup.
