@@ -35,6 +35,7 @@ def parser():
     p.add_argument('--lanes', type=int, default=4)
     p.add_argument('--chunk', type=int, default=4096)
     p.add_argument('--scenario', type=int, choices=(1, 2, 3, 4), default=1)
+    p.add_argument('--fanout', type=int, help='Scenario3 only: rank0 sends to ranks 1..N; default world-1')
     p.add_argument('--layer', type=int, choices=(0, 1, 3), default=3)
     p.add_argument('--mode', type=int, choices=(0, 1, 2, 3), default=3)
     p.add_argument('--batch', type=int, default=32)
@@ -71,11 +72,16 @@ def plan(args, environ):
         raise ValueError('metadata sampling supports actual worlds 1/2/4/8/16/32; logical partitions are independent')
     if args.kind in ('comm', 'shmem') and not args.endpoint:
         raise ValueError('SHMEM endpoint required')
+    if args.fanout is not None and (args.kind != 'comm' or args.scenario != 3):
+        raise ValueError('--fanout is only valid for comm scenario3')
     if args.kind == 'comm':
         if world not in (2, 4, 8, 16, 32):
             raise ValueError('comm supports actual worlds 2/4/8/16/32')
+        fanout = world-1 if args.fanout is None else args.fanout
+        if not 1 <= fanout < world:
+            raise ValueError('fanout must be in 1..world-1')
         argv = [rank, world, device, args.endpoint, args.bytes, args.cores,
-                args.lanes, args.scenario, args.layer, args.warmup, args.samples]
+                args.lanes, args.scenario, args.layer, args.warmup, args.samples, fanout]
         library = HERE/'communication/build/libcomm_profile.so'
         kernel = 'four_empty' if args.layer == 0 else f'four_comm_{args.scenario}'
     elif args.kind == 'metadata':
@@ -106,6 +112,8 @@ def plan(args, environ):
                   logical_partitions=args.partitions, partitions_are_device_world=False,
                   includes_cross_rank_metadata_exchange=False) if args.kind == 'metadata'
              else dict(kind=args.kind, sampling_world=world))
+    if args.kind == 'comm' and args.scenario == 3:
+        scope.update(fanout=fanout, sender_ranks=[0], receiver_ranks=list(range(1, fanout+1)))
     return dict(rank=rank, world=world, device=device,
                 measurement_scope=scope, **deployment, library=str(library), kernel=kernel,
                 argv=['profile_probe', *map(str, argv)],

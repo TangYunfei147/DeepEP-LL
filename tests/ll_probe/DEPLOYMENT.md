@@ -124,3 +124,21 @@ A5只用真实0/1两rank、小Exp：metadata、empty、tiling及Session-only net
 comm在探针加载前的HCCL `RunAicpuCommInit`/`HcclAllreduce`初始化出现AICPU异常，
 未执行被测通信kernel，不记为通过，也未重试采样。其余4/8/16/32实际运行、完整LL及目标性能
 均待用户目标机验收。默认正式采样协议没有改变。
+
+## 指定1→N的接收数量
+
+`--scenario 3 --fanout N` 仅让global rank0向rank1..N发送，要求1≤N<实际world。
+不指定时仍为world-1；其他scenario拒绝显式fanout。EP32、N=3使用：
+
+```bash
+# 两台分别执行，另一台改node-index=1，保持相同run-id
+python3 tests/ll_probe/run.py --config tests/ll_probe/configs/ep32.yaml --node-index 0 --test comm --run-id ep32-fanout3-001 --target-run -- --scenario 3 --fanout 3 --bytes 15392
+```
+
+仍启动32个rank，只有0→1、0→2、0→3三条payload边；其余rank仍参与初始化、校验和采样框架同步。
+按两机各16个连续rank编号时，这三条边都在节点0内，不是跨机数据面带宽。
+每边发送量为bytes，总payload为N×bytes，profiler和Event汇总均按实际N记账。
+接收缓冲仍按world分配，既有world×bytes容量上限不变。
+
+本次tiling仍为32B，但scenario/fanout改为两个16位字段，更新后必须在各节点重新执行
+`bash tests/ll_probe/profiling/build.sh`；独立Event可执行文件另运行`communication/build.sh`。

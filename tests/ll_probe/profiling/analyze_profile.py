@@ -95,7 +95,11 @@ def analyze(paths):
     cfg, world = identity['configuration'], identity['world']
     wire = None
     if kind == 'comm' and cfg['layer'] == 3:
-        edges = {1: 1, 2: world-1, 3: world-1, 4: world*(world-1)}[cfg['scenario']]
+        fanout = cfg.get('fanout')
+        fanout = world-1 if fanout is None else fanout
+        if not 1 <= fanout < world or (cfg['scenario'] != 3 and fanout != world-1):
+            raise ValueError('Invalid communication fanout in report')
+        edges = {1: 1, 2: world-1, 3: fanout, 4: world*(world-1)}[cfg['scenario']]
         wire = cfg['bytes']*edges
     elif kind in ('peer', 'shmem') and cfg['mode'] >= 2:
         wire = cfg['bytes']

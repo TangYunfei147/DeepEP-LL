@@ -12,7 +12,7 @@
 |---|---|---|---|
 | [profile_probe.py](profiling/profile_probe.py) `--kind comm --layer 0` | [comm_host.cpp](communication/host/comm_host.cpp) → `four_comm_do` | [comm_kernel.cpp](communication/kernel/comm_kernel.cpp) → `four_empty` | 同样的三个GM入参，完全空返回，不读tiling |
 | 同上，`--layer 1` | 同一Host，scenario选择key | 同一文件 → `four_comm_1..4` → `Run<Scenario>` | 仅读取32B tiling；task名与传输模式相同，须根据报告layer区分 |
-| 同上，`--layer 3 --scenario 1/2/3/4` | 同一Host准备SHMEM peer表和每发送rank独立slot | 同一文件 → `HasEdge`、`Run<Scenario>`、`four_comm_1..4` | 最简GM→UB→peer GM通信；修改通信图、分片、lane和搬运逻辑从这里开始 |
+| 同上，`--layer 3 --scenario 1/2/3/4` | 同一Host准备SHMEM peer表和每发送rank独立slot | 同一文件 → `HasEdge`、`Run<Scenario>`、`four_comm_1..4` | 最简GM→UB→peer GM通信；场景3的fanout限制接收rank为1..N；修改通信图、分片、lane和搬运逻辑从这里开始 |
 | [profile_probe.py](profiling/profile_probe.py) `--kind metadata` | [metadata_host.cpp](metadata/host/metadata_host.cpp) → `four_metadata_do` / `four_metadata_check_do` | [metadata_kernel.cpp](metadata/kernel/metadata_kernel.cpp) → `four_metadata` / `four_metadata_check`；Sender来自生成快照，见下节 | 正确性核逐项检查q/掩码/权重；正式报告只匹配计时核`four_metadata` |
 | [profile_probe.py](profiling/profile_probe.py) `--kind peer` | [peer_probe.cpp](bandwidth/host/peer_probe.cpp)建立卡0/1 IPC映射 → `ll_transfer_probe_do` | [transfer_probe.cpp](bandwidth/kernel/transfer_probe.cpp) → `ll_transfer_probe` | 单进程双卡的旧版四模式搬运核 |
 | [profile_probe.py](profiling/profile_probe.py) `--kind shmem` | [shmem_probe.cpp](bandwidth/host/shmem_probe.cpp)建立两rank对称映射 → `ll_transfer_probe_do` | 同一 [transfer_probe.cpp](bandwidth/kernel/transfer_probe.cpp) | rank0发送，rank1仅接收校验，不伪造发送task样本 |

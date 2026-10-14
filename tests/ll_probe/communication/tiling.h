@@ -10,6 +10,7 @@ struct FourLayerTiling {
     uint32_t rank;
     uint32_t world;
     uint32_t layer;  // 0=empty launch, 1=tiling-only, 3=transfer
-    uint32_t scenario; // 1=one-to-one,2=many-to-one,3=one-to-many,4=many-to-many
+    uint16_t scenario; // 1=one-to-one,2=many-to-one,3=one-to-many,4=many-to-many
+    uint16_t fanout; // scenario3: rank0 sends only to ranks 1..fanout
 };
 static_assert(sizeof(FourLayerTiling)==32,"one GM tiling block");

@@ -43,7 +43,7 @@ bash tests/ll_probe/four_layers/run.sh python3 -m torch.distributed.run \
   --output-dir results/profile-comm-001
 ```
 
-使用新输出目录。`--layer 0/1/3`分别为空kernel、tiling读取、传输。`--scenario 1/2/3/4`分别为1对1、N对1、1对N、N对N，`--bytes`为每条通信边字节数。用profile_probe.py的--plan逐项检查2/4/8/16/32域、场景和发送量。layer使用0/1/3内部编号，不是四层的序号。
+使用新输出目录。`--layer 0/1/3`分别为空kernel、tiling读取、传输。`--scenario 1/2/3/4`分别为1对1、N对1、1对N、N对N，`--bytes`为每条通信边字节数。场景3可加`--fanout N`，仅rank0向rank1..N发送，默认world-1；例如EP32下`--scenario 3 --fanout 3`仅有3条发送边。用profile_probe.py的--plan逐项检查2/4/8/16/32域、场景和发送量。layer使用0/1/3内部编号，不是四层的序号。
 
 只有用户目标机可以扩展PROBE_VISIBLE_DEVICES。同机域4/8等用对应数量可见卡和`--nproc_per_node`；跨主机每台运行相同命令，将`--standalone`替换为：
 

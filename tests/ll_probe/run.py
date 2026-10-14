@@ -15,7 +15,7 @@ from paths import REPO_ROOT, runtime_environment
 HERE=Path(__file__).resolve().parent
 
 def forwarded(test, tokens):
-    profile={'bytes','cores','lanes','chunk','scenario','mode','batch','hidden','top-k','experts','partitions','warmup','samples','tail','delay-rows','delay-cols'}
+    profile={'bytes','cores','lanes','chunk','scenario','fanout','mode','batch','hidden','top-k','experts','partitions','warmup','samples','tail','delay-rows','delay-cols'}
     native={'num-tokens','num-max-tokens-per-rank','hidden','num-topk','num-experts','dtype','fp8-scale-dtype','do-cpu-sync','seed','warmup','num-iters','perf-tail','delay-rows','delay-cols','dispatch-only','repeat-combine','skip-perf-test','test-first-only'}
     allowed={'peer','no-huge-pages'} if test=='network' else native if test=='native' else profile
     for token in tokens:

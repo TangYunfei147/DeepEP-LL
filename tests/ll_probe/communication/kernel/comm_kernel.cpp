@@ -4,14 +4,14 @@
 #include "kernel_operator.h"
 #include "../tiling.h"
 using namespace AscendC;
-// 通信图不含自环：1=0→1；2=所有非0→0；3=0→所有非0；4=所有rank互发。
+// 通信图不含自环：1=0→1；2=所有非0→0；3=0→1..fanout；4=所有rank互发。
 // world=2 时，场景2/3退化为单条边；双卡通过不能证明真实 N 方竞争已验证。
 template<uint32_t Scenario>
-__aicore__ inline bool HasEdge(uint32_t src,uint32_t dst,uint32_t world) {
+__aicore__ inline bool HasEdge(uint32_t src,uint32_t dst,uint32_t world,uint32_t fanout) {
     if (src==dst) return false;
     if constexpr(Scenario==1) return src==0 && dst==1;
     if constexpr(Scenario==2) return src!=0 && dst==0;
-    if constexpr(Scenario==3) return src==0 && dst!=0;
+    if constexpr(Scenario==3) return src==0 && dst>0 && dst<=fanout;
     return src<world && dst<world;
 }
 template<uint32_t Scenario>
@@ -25,10 +25,10 @@ __aicore__ inline void Run(GM_ADDR src,GM_ADDR peers,GM_ADDR tiling) {
     // volatile GM loads are observable even when the tiling-only path returns.
     const uint64_t bytes=td->bytesPerEdge;
     const uint32_t chunk=td->chunkBytes,lanes=td->lanes,rank=td->rank,world=td->world;
-    const uint32_t scene=td->scenario;
+    const uint32_t scene=td->scenario,fanout=td->fanout;
     if(layer==1) return;
     // Host 传入的 tiling 场景与启动 key 必须一致，防止误测另一张通信图。
-    if(scene!=Scenario) { Trap(); return; }
+    if(scene!=Scenario || fanout<1 || fanout>=world) { Trap(); return; }
     TPipe pipe; TBuf<TPosition::VECCALC> storage;
     pipe.InitBuffer(storage,chunk*lanes);
     auto buf=storage.Get<uint8_t>();
@@ -45,7 +45,7 @@ __aicore__ inline void Run(GM_ADDR src,GM_ADDR peers,GM_ADDR tiling) {
     const auto* addresses=reinterpret_cast<const __gm__ uint64_t*>(peers);
     uint64_t packet=0;
     for(uint32_t peer=0;peer<world;++peer) {
-        if(!HasEdge<Scenario>(rank,peer,world)) continue;
+        if(!HasEdge<Scenario>(rank,peer,world,fanout)) continue;
         GlobalTensor<uint8_t> output;
         output.SetGlobalBuffer(reinterpret_cast<__gm__ uint8_t*>(addresses[peer]));
         for(uint64_t offset=0;offset<owned*32;offset+=chunk) {
