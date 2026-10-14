@@ -1,3 +1,5 @@
+> 按bs/hidden_size控制发送量、P50/P90/P99、理论耗时及利用率配置见 [BANDWIDTH.md](BANDWIDTH.md)。
+
 # 统一 YAML 通信域测试
 
 统一入口为 `tests/ll_probe/run.py`。默认仅输出 CPU 计划，不启动设备；真正执行需要

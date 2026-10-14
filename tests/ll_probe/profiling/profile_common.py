@@ -21,7 +21,7 @@ def describe(values):
     ordered = sorted(values)
     result = dict(sample_count=len(values), mean_us=statistics.mean(values),
                   min_us=min(values), max_us=max(values))
-    for p in (50, 95, 99):
+    for p in (50, 90, 95, 99):
         pos = (len(values)-1)*p/100
         lo, hi = math.floor(pos), math.ceil(pos)
         result[f'p{p}_us'] = ordered[lo] + (ordered[hi]-ordered[lo])*(pos-lo)

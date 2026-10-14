@@ -18,6 +18,7 @@ import subprocess
 import socket
 import traceback
 
+from bandwidth_model import load_hardware
 from profile_common import Capture, read_named_tasks, WARMUP, CAPTURE_STEPS, PROFILE_STEPS, DELAY_SHAPE
 
 HERE = Path(__file__).resolve().parents[1]
@@ -30,7 +31,11 @@ def parser():
     p.add_argument('--kind', choices=('comm', 'metadata', 'peer', 'shmem'), required=True)
     p.add_argument('--output-dir', type=project_path, required=True, help='Fresh run directory shared by ranks')
     p.add_argument('--endpoint', help='SHMEM endpoint, separate from torchrun MASTER_PORT')
-    p.add_argument('--bytes', type=int, default=15392)
+    p.add_argument('--bytes', type=int, help='Payload bytes per communication edge; default 15392 without shape')
+    p.add_argument('--bs', type=int, help='Tokens/rows per edge, used with --hidden-size')
+    p.add_argument('--hidden-size', type=int, help='Elements per row for communication payload sizing')
+    p.add_argument('--element-bytes', type=int, choices=(1,2,4,8), default=2)
+    p.add_argument('--hardware-config', type=project_path, help='Editable bandwidth-reference YAML inside project')
     p.add_argument('--cores', type=int, default=8)
     p.add_argument('--lanes', type=int, default=4)
     p.add_argument('--chunk', type=int, default=4096)
@@ -52,7 +57,30 @@ def parser():
     return p
 
 
+def resolve_payload(args):
+    shape = args.bs is not None or args.hidden_size is not None
+    if shape:
+        if args.kind == 'metadata' or args.bs is None or args.hidden_size is None or args.bs <= 0 or args.hidden_size <= 0:
+            raise ValueError('Communication shape requires positive --bs and --hidden-size; metadata uses --batch/--hidden')
+        size=args.bs*args.hidden_size*args.element_bytes
+        if args.bytes is not None and args.bytes!=size:
+            raise ValueError('--bytes disagrees with bs*hidden-size*element-bytes')
+    else:
+        size=15392 if args.bytes is None else args.bytes
+    if size<=0 or size%32:
+        raise ValueError('Payload must be positive and 32-byte aligned; no implicit padding')
+    args.bytes=size
+    return dict(mode='shape' if shape else 'bytes',bs=args.bs,hidden_size=args.hidden_size,
+                element_bytes=args.element_bytes if shape else None,bytes_per_edge=size)
+
+
 def plan(args, environ):
+    payload=resolve_payload(args)
+    hardware=None
+    if args.hardware_config is not None:
+        args.hardware_config=project_path(args.hardware_config)
+        if not args.hardware_config.is_relative_to(ROOT):raise ValueError('Hardware config must be inside project')
+        hardware=load_hardware(args.hardware_config)
     world = int(environ.get('WORLD_SIZE', '1'))
     rank = int(environ.get('RANK', '0'))
     device = int(environ.get('LOCAL_RANK', '0'))
@@ -114,7 +142,7 @@ def plan(args, environ):
              else dict(kind=args.kind, sampling_world=world))
     if args.kind == 'comm' and args.scenario == 3:
         scope.update(fanout=fanout, sender_ranks=[0], receiver_ranks=list(range(1, fanout+1)))
-    return dict(rank=rank, world=world, device=device,
+    return dict(rank=rank, world=world, device=device, payload=payload, hardware_profile=hardware,
                 measurement_scope=scope, **deployment, library=str(library), kernel=kernel,
                 argv=['profile_probe', *map(str, argv)],
                 warmup=args.warmup, capture_steps=args.samples, sample_window=args.tail,

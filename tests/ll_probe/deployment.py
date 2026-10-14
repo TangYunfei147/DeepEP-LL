@@ -24,7 +24,7 @@ def load_config(path):
         value = {'ips': value}
     if not isinstance(value, dict):
         raise ValueError('Deployment YAML must be a mapping or legacy IPv4 list')
-    allowed = {'ips', 'rank_num_per_server', 'port', 'shmem_port', 'timeout', 'run_id', 'output_root'}
+    allowed = {'ips', 'rank_num_per_server', 'port', 'shmem_port', 'timeout', 'run_id', 'output_root', 'hardware_config'}
     if set(value) - allowed:
         raise ValueError('Unknown deployment fields: ' + ', '.join(sorted(set(value)-allowed)))
     result = dict(rank_num_per_server=16, port=29500, shmem_port=29501, timeout=600, output_root='results')
@@ -75,4 +75,5 @@ def make_plan(config, node_index=0, devices_per_host=None, test='comm', run_id='
                 timeout=timeout,test=test,run_id=run_id,status=status,
                 reason='Native LL requires EP16/32 in this test matrix' if status=='unsupported' else None,
                 output=str(output),
-                topology_source=config.get('_source','inline'),validation=validation)
+                topology_source=config.get('_source','inline'),validation=validation,
+                hardware_config=str(project_path(config['hardware_config'])) if config.get('hardware_config') else None)

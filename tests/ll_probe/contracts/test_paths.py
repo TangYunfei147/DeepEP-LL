@@ -22,7 +22,7 @@ class PortablePaths(unittest.TestCase):
         self.cwd = Path(self.temp.name) / 'unrelated caller'
         self.cwd.mkdir()
         files = ['scripts/a5_validation_env.sh', 'tests/ll_probe/native_ll/run_ll16.sh', 'tests/elastic/test_ep_low_latency.py', 'scripts/project_paths.py', 'scripts/project_env.sh', 'tests/ll_probe/paths.py',
-                 'tests/ll_probe/profiling/profile_probe.py', 'tests/ll_probe/profiling/profile_common.py',
+                 'tests/ll_probe/profiling/profile_probe.py', 'tests/ll_probe/profiling/profile_common.py', 'tests/ll_probe/profiling/bandwidth_model.py',
                  'tests/ll_probe/network_probe/run.py', 'tests/ll_probe/network_probe/defaults.py',
                  'tests/ll_probe/network_probe/config.yaml', 'tests/ll_probe/deployment.py']
         for name in files:

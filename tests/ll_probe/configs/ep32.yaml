@@ -6,3 +6,4 @@ port: 29500
 shmem_port: 29501
 timeout: 600
 output_root: results
+hardware_config: tests/ll_probe/configs/hardware/ascend950.yaml

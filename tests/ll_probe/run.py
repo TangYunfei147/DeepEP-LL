@@ -15,7 +15,7 @@ from paths import REPO_ROOT, runtime_environment
 HERE=Path(__file__).resolve().parent
 
 def forwarded(test, tokens):
-    profile={'bytes','cores','lanes','chunk','scenario','fanout','mode','batch','hidden','top-k','experts','partitions','warmup','samples','tail','delay-rows','delay-cols'}
+    profile={'bs','hidden-size','element-bytes','hardware-config','bytes','cores','lanes','chunk','scenario','fanout','mode','batch','hidden','top-k','experts','partitions','warmup','samples','tail','delay-rows','delay-cols'}
     native={'num-tokens','num-max-tokens-per-rank','hidden','num-topk','num-experts','dtype','fp8-scale-dtype','do-cpu-sync','seed','warmup','num-iters','perf-tail','delay-rows','delay-cols','dispatch-only','repeat-combine','skip-perf-test','test-first-only'}
     allowed={'peer','no-huge-pages'} if test=='network' else native if test=='native' else profile
     for token in tokens:
@@ -54,6 +54,8 @@ def command_for(job, extra):
               '--output-dir',str(node/'data')]
         if job['validation']:
             args += ['--warmup','2','--samples','3','--tail','2','--delay-rows','64','--delay-cols','64']
+        if job.get('hardware_config'):
+            args += ['--hardware-config',job['hardware_config']]
         args += extra
         module=runpy.run_path(args[0]); parsed=module['parser']().parse_args(args[1:])
         module['plan'](parsed,dict(WORLD_SIZE=str(job['world']),RANK=str(job['ranks'][0]),LOCAL_RANK='0'))
