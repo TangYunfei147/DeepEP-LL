@@ -1,3 +1,5 @@
+> 2/4/8/16/32实际通信域及多机32的统一YAML入口见 [DEPLOYMENT.md](../DEPLOYMENT.md)。各节点独立启动，共同run-id；旧双卡验证入口仍仅用于A5。
+
 # LL 建域与网络层诊断
 
 直接编译并调用当前分支 `csrc/runtime/session.cpp` 的 `Session`，沿用 ElasticBuffer 的
@@ -11,7 +13,8 @@ MTE 物理路径，也不发送 UDMA payload。另用 LL 风格 peer 映射 + Da
 
 ## 配置与 rank
 
-`config.yaml` 只包含 IPv4 字符串列表，不需要 PyYAML，不支持变量展开或任意 YAML 对象：
+`config.yaml` 接受统一的 `ips/rank_num_per_server/port/shmem_port` YAML 映射，也兼容旧IPv4列表。
+使用requirements-build.txt中PyYAML安全解析，不支持变量展开或执行对象：
 
 ```yaml
 - 10.0.0.10
@@ -22,9 +25,10 @@ IP 是 bootstrap 可达地址，不是指定数据面网络口。列表第一项
 默认每机 16 卡：**全局 rank = YAML 主机序号 × 16 + 本地卡号**。
 例如 `--peer 19` 表示第二台机器的本地卡 3，与第一台机器的卡 0 比较。
 
-可修改的“宏式常量”在 `defaults.py`：`DEVICES_PER_HOST = 16`、`DEFAULT_PORT = 18679`、
-`DEFAULT_TIMEOUT = 180`、`LL_WORKSPACE_BYTES = 8 << 30`。
-也可通过 `--devices-per-host` 覆盖每机卡数；全体节点必须一致。生产 LL 域只允许 EP16/32/64/128。
+卡数、端口、timeout由统一YAML配置；`--devices-per-host`可覆盖卡数，各节点必须一致。
+默认每机16，MASTER端口29500、SHMEM端口29501、timeout600秒；`--port`仅覆盖SHMEM端口。
+本Session-only诊断支持实际2/4/8/16/32，32必须多机；这不改变原生LL小域unsupported。
+`defaults.py`仅保留 `LL_WORKSPACE_BYTES = 8 << 30`。
 修改 workspace 会偏离 LL 默认配置；正常诊断保留 8 GiB。`--no-huge-pages` 是显式偏离
 ElasticBuffer 默认的兼容选项，不自动回退。
 
@@ -53,15 +57,15 @@ python3 tests/ll_probe/network_probe/run.py --config tests/ll_probe/network_prob
 
 ```bash
 # 第一台（YAML 索引0）；下面的输出目录必须尚不存在
-bash tests/ll_probe/network_probe/run.sh --node-index 0 --peer 19 --target-run \
+bash tests/ll_probe/network_probe/run.sh --node-index 0 --peer 19 --target-run --run-id network-001 \
   --output results/network-case1-node0
 # 第二台（YAML 索引1），在第二台的终端执行
-bash tests/ll_probe/network_probe/run.sh --node-index 1 --peer 19 --target-run \
+bash tests/ll_probe/network_probe/run.sh --node-index 1 --peer 19 --target-run --run-id network-001 \
   --output results/network-case1-node1
 ```
 
 所有节点应在 timeout 内启动。开放第一项 IP 的指定 bootstrap TCP 端口，数据面网络须事先具备。
-`--target-run` 仅用于用户目标机器，显式把可见设备扩展到 `0..DEVICES_PER_HOST-1`。
+`--target-run --run-id network-001` 仅用于用户目标机器，显式把可见设备扩展到 `0..DEVICES_PER_HOST-1`。
 launcher 不修改网络层策略；保留生产默认环境，记录 `DEEPEP_SHMEM_DENSE_QPS`。
 SHMEM 日志默认 INFO；`processes.json` 可关联本次各 rank 的日志 PID。报告包含所用 SHMEM
 库的 hash 和可取得的 CMake 配置，特别是 multi-link/relay；不把默认单链路库解释为多链路验证。

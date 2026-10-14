@@ -1,6 +1,6 @@
 """Profile existing native probes with the shared reference sampling protocol.
 
-Use torchrun for comm/shmem, one Python process for metadata/peer. Target
+Use torchrun for comm/shmem or per-rank local metadata; peer is one process. Target
 kernel tasks are extracted by name; Event/Host CSV remains diagnostic only.
 """
 import sys
@@ -15,6 +15,7 @@ import hashlib
 import json
 import os
 import subprocess
+import socket
 import traceback
 
 from profile_common import Capture, read_named_tasks, WARMUP, CAPTURE_STEPS, PROFILE_STEPS, DELAY_SHAPE
@@ -64,8 +65,10 @@ def plan(args, environ):
         raise ValueError('Invalid warmup/capture/tail counts; set --tail explicitly for short validation')
     if args.delay_rows <= 0 or args.delay_cols <= 0:
         raise ValueError('Delay shape must be positive')
-    if args.kind in ('metadata', 'peer') and (world != 1 or device != 0):
-        raise ValueError('metadata/peer uses one process on device0; peer additionally owns device1')
+    if args.kind == 'peer' and (world != 1 or device != 0):
+        raise ValueError('peer uses one process on device0 and additionally owns device1')
+    if args.kind == 'metadata' and world not in (1, 2, 4, 8, 16, 32):
+        raise ValueError('metadata sampling supports actual worlds 1/2/4/8/16/32; logical partitions are independent')
     if args.kind in ('comm', 'shmem') and not args.endpoint:
         raise ValueError('SHMEM endpoint required')
     if args.kind == 'comm':
@@ -76,7 +79,7 @@ def plan(args, environ):
         library = HERE/'communication/build/libcomm_profile.so'
         kernel = 'four_empty' if args.layer == 0 else f'four_comm_{args.scenario}'
     elif args.kind == 'metadata':
-        argv = [args.batch, args.hidden, args.top_k, args.experts, args.partitions, args.warmup, args.samples]
+        argv = [args.batch, args.hidden, args.top_k, args.experts, args.partitions, args.warmup, args.samples, device]
         library, kernel = HERE/'metadata/build/libmetadata_profile.so', 'four_metadata'
     elif args.kind == 'peer':
         argv = [args.bytes, args.cores, args.lanes, args.chunk, args.mode, args.warmup, args.samples]
@@ -87,7 +90,24 @@ def plan(args, environ):
         argv = [rank, device, args.endpoint, args.bytes, args.cores, args.lanes, args.chunk,
                 args.mode, args.warmup, args.samples]
         library, kernel = HERE/'bandwidth/build/libshmem_profile.so', 'll_transfer_probe'
-    return dict(rank=rank, world=world, device=device, library=str(library), kernel=kernel,
+    deployment_keys = ('DEEPEP_PROBE_RUN_ID', 'DEEPEP_PROBE_TOPOLOGY', 'DEEPEP_PROBE_NODE_INDEX')
+    present = [key in environ for key in deployment_keys]
+    if any(present) and not all(present):
+        raise ValueError('Incomplete unified deployment environment')
+    topology = json.loads(environ.get('DEEPEP_PROBE_TOPOLOGY', 'null'))
+    if all(present):
+        if not environ['DEEPEP_PROBE_RUN_ID'].strip() or not isinstance(topology, dict):
+            raise ValueError('Invalid unified deployment identity')
+        if int(environ['DEEPEP_PROBE_NODE_INDEX']) < 0:
+            raise ValueError('Invalid deployment node index')
+    deployment = ({'deployment_identity': dict(run_id=environ.get('DEEPEP_PROBE_RUN_ID'), topology=topology)}
+                  if 'DEEPEP_PROBE_RUN_ID' in environ or 'DEEPEP_PROBE_TOPOLOGY' in environ else {})
+    scope = (dict(kind='local_metadata_per_rank', sampling_world=world, logical_source_rank=0,
+                  logical_partitions=args.partitions, partitions_are_device_world=False,
+                  includes_cross_rank_metadata_exchange=False) if args.kind == 'metadata'
+             else dict(kind=args.kind, sampling_world=world))
+    return dict(rank=rank, world=world, device=device,
+                measurement_scope=scope, **deployment, library=str(library), kernel=kernel,
                 argv=['profile_probe', *map(str, argv)],
                 warmup=args.warmup, capture_steps=args.samples, sample_window=args.tail,
                 delay_shape=[args.delay_rows, args.delay_cols],
@@ -109,6 +129,11 @@ def main(argv=None):
         print(json.dumps(identity, indent=2))
         return
     runtime_environment()
+    if 'deployment_identity' in identity:
+        identity['rank_provenance'] = dict(
+            hostname=socket.gethostname(),
+            boot_id=Path('/proc/sys/kernel/random/boot_id').read_text().strip(),
+            node_index=int(os.environ.get('DEEPEP_PROBE_NODE_INDEX', '0')))
     rank, world, device = (identity[key] for key in ('rank', 'world', 'device'))
     out = args.output_dir.resolve()/f'rank_{rank}'
     out.mkdir(parents=True, exist_ok=False)

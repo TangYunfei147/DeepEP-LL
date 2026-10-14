@@ -1,3 +1,5 @@
+> 2/4/8/16/32实际通信域及多机32的统一YAML入口见 [DEPLOYMENT.md](DEPLOYMENT.md)。各节点独立启动，共同run-id；旧双卡验证入口仍仅用于A5。
+
 # 统一性能测试入口
 
 源码定位见[脚本与kernel对应表](KERNEL_MAP.md)，包含Host入口、设备函数名、生产LL内部阶段及快照修改规则。

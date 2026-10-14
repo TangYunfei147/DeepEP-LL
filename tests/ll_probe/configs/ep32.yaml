@@ -1,0 +1,8 @@
+ips:
+  - 192.0.2.10
+  - 192.0.2.11
+rank_num_per_server: 16
+port: 29500
+shmem_port: 29501
+timeout: 600
+output_root: results

@@ -302,3 +302,12 @@ def test_case_report_records_actual_core_split():
     config = st.case_config(args, 16)
     assert (config['aiv_cores'], config['send_cores'], config['recv_cores']) == (56,28,28)
     assert 'device' not in config  # Equivalent ranks share the same performance grouping key.
+
+
+def test_multihost_run_paths_use_each_local_parent():
+    first=st.local_run_directory('results/node-0/data', 'shared-run')
+    second=st.local_run_directory('results/node-1/data', 'shared-run')
+    assert first.name==second.name=='shared-run'
+    assert first.parent!=second.parent
+    for invalid in ('../outside', '/absolute', '.', '..', ''):
+        with pytest.raises(ValueError):st.local_run_directory('results/data',invalid)

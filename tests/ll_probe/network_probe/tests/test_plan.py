@@ -21,7 +21,9 @@ class Contracts(unittest.TestCase):
             self.assertEqual(result['endpoint'],'tcp://10.0.0.1:18679')
             self.assertEqual(result['workspace_bytes'],8<<30)
             a.devices_per_host=2
-            with self.assertRaises(ValueError): plan(a)
+            a.peer=1
+            self.assertEqual(plan(a)['world'],4)
+            self.assertEqual(plan(a)['ranks'],[2,3])
             a.validation=True
             with self.assertRaises(ValueError): plan(a)
 

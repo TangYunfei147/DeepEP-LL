@@ -17,6 +17,8 @@ def merge(paths):
         job=report['job']; node=job['node_index']
         if not report['local_success'] or node in seen:
             raise ValueError('Failed or duplicate node report')
+        if job.get('deployment_identity') != ref.get('deployment_identity'):
+            raise ValueError('Deployment/run identity mismatch')
         if any(job[k]!=ref[k] for k in keys): raise ValueError('Configuration/source identity mismatch')
         if job['boot_id'] in boots: raise ValueError('Multiple node reports came from the same machine')
         boots.add(job['boot_id'])
@@ -31,7 +33,7 @@ def merge(paths):
     if checks!={(0,ref['peer']),(ref['peer'],0)}: raise ValueError('Missing bidirectional MTE readback')
     routes=[r for r in records if r['kind']=='udma_route']
     if not routes or any(r['query_rc'] for r in routes): raise ValueError('UDMA query failure')
-    return {'success':True,'scope':ref['scope'],'mte_actual_net_layer':None,
+    return {'success':True,'deployment_identity':ref.get('deployment_identity'),'scope':ref['scope'],'mte_actual_net_layer':None,
             'note':'UDMA established routes only; no UDMA payload; MTE physical route is unobserved',
             'binary_hashes_match':len({r['job']['executable_sha256'] for r in reports})==1,
             'shmem_library_hashes_match':len({r['job']['shmem_library']['sha256'] for r in reports})==1,

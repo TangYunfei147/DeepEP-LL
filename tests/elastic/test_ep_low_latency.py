@@ -29,7 +29,7 @@ for _parent in Path(__file__).resolve().parents:
         sys.path.insert(0, str(_parent / "tests/ll_probe/profiling"))
         break
 from profile_common import run_profiled, read_named_tasks
-from paths import project_path, runtime_environment
+from paths import project_path, runtime_environment, output_path
 
 __test__ = False
 
@@ -795,6 +795,13 @@ def run_case(buffer, args, rank, world, m, mode):
     return result
 
 
+def local_run_directory(output_dir, run_name):
+    """Broadcast only a run basename, never another machine's absolute path."""
+    if not isinstance(run_name, str) or not run_name or Path(run_name).name != run_name or run_name in ('.', '..'):
+        raise ValueError("Run name must be one relative directory component")
+    return output_path(Path(output_dir) / run_name)
+
+
 def worker(local_rank, args):
     import torch
     import torch.distributed as dist
@@ -845,13 +852,20 @@ def worker(local_rank, args):
 
         def reserve_directory():
             if rank == 0:
-                parent = Path(args.output_dir).absolute()
+                parent = output_path(args.output_dir)
                 parent.mkdir(parents=True, exist_ok=True)
-                run_directory[0] = tempfile.mkdtemp(prefix=datetime.now().strftime("%m%d%H%M_"), dir=parent)
+                run_directory[0] = Path(tempfile.mkdtemp(prefix=datetime.now().strftime("%m%d%H%M_"), dir=parent)).name
 
         agree_check(reserve_directory, args, rank)
         dist.broadcast_object_list(run_directory, src=0)
-        args.run_directory = run_directory[0]
+        def prepare_local_directory():
+            directory = local_run_directory(args.output_dir, run_directory[0])
+            directory.mkdir(parents=True, exist_ok=True)
+            args.run_directory = str(directory)
+        agree_check(prepare_local_directory, args, rank)
+        deployment = os.environ.get("DEEPEP_PROBE_TOPOLOGY")
+        if deployment:
+            args.deployment_identity = {"run_id": os.environ["DEEPEP_PROBE_RUN_ID"], "topology": json.loads(deployment)}
         modes = ("normal",)
 
         def save_plan():

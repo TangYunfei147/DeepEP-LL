@@ -12,6 +12,35 @@ from paths import project_path
 from profile_common import describe
 
 
+def audit_deployment(by_rank, deployment):
+    """Validate actual node placement; output paths are deliberately not identity."""
+    if deployment is None:
+        return
+    topology = deployment.get('topology', {})
+    ips = topology.get('ips', [])
+    local = topology.get('rank_num_per_server', 0)
+    world = topology.get('world', 0)
+    if (not deployment.get('run_id') or not isinstance(local, int) or local < 1
+            or not isinstance(ips, list) or not ips or len(set(ips)) != len(ips)
+            or world != local * len(ips) or len(by_rank) != world):
+        raise ValueError('Invalid deployment identity')
+    if world == 32 and len(ips) < 2:
+        raise ValueError('32-rank run requires multiple physical hosts')
+    boots = {}
+    for rank, report in by_rank.items():
+        provenance = report.get('rank_provenance', {})
+        node = provenance.get('node_index')
+        boot = provenance.get('boot_id')
+        if (node != rank // local or report.get('device') != rank % local
+                or not boot or report['world'] != world):
+            raise ValueError('Rank/device/node placement mismatch')
+        if node in boots and boots[node] != boot:
+            raise ValueError('One node index spans multiple physical hosts')
+        boots[node] = boot
+    if set(boots) != set(range(len(ips))) or len(set(boots.values())) != len(boots):
+        raise ValueError('Missing nodes or multiple node indices on the same physical host')
+
+
 def analyze(paths):
     if not paths:
         raise ValueError('No reports')
@@ -28,6 +57,8 @@ def analyze(paths):
         # Output locations differ across machines; they are provenance, not workload identity.
         current['configuration'] = {k: v for k, v in report['configuration'].items() if k != 'output_dir'}
         current['source_sha256'] = report.get('source_sha256')
+        current['deployment_identity'] = report.get('deployment_identity')
+        current['measurement_scope'] = report.get('measurement_scope')
         if identity is not None and current != identity:
             raise ValueError('Mixed configurations or source revisions')
         identity = current
@@ -46,6 +77,7 @@ def analyze(paths):
         by_rank[rank] = report
     if sorted(by_rank) != list(range(identity['world'])):
         raise ValueError('Missing ranks')
+    audit_deployment(by_rank, identity['deployment_identity'])
     kind = identity['configuration']['kind']
     senders = [0] if kind == 'shmem' else list(by_rank)
     keys = [[(g['kernel_name'], g['task_type']) for g in by_rank[r]['kernel_statistics']] for r in senders]
@@ -69,6 +101,7 @@ def analyze(paths):
         wire = cfg['bytes']
     result = dict(**identity, all_rank_audit='passed', kernel_task_reports=tasks,
                   binary_sha256_by_rank={r: report['binary_sha256'] for r, report in by_rank.items()},
+                  rank_provenance_by_rank={r: report.get('rank_provenance') for r, report in by_rank.items()},
                   timing_note='Local named task intervals. Rank-MAX is not globally synchronized makespan; API/Event diagnostics are excluded.')
     if len({report['binary_sha256'] for report in by_rank.values()}) > 1:
         result['build_warning'] = 'Rank binaries differ; inspect per-rank build/compiler identity before comparing performance.'

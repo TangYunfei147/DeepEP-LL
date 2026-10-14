@@ -5,6 +5,7 @@
 #include "../snapshot/kernels/dispatch/low_latency/common/ep_memory_server_dedup_tiling.h"
 #include "../snapshot/kernels/dispatch/low_latency/common/ep_memory_server_dedup_data_layout.h"
 #include <cstdio>
+#include <cstdlib>
 #include <stdexcept>
 #include <vector>
 extern "C" void four_metadata_do(void*,uint8_t*,uint8_t*,uint8_t*,uint8_t*,uint8_t*,uint8_t*,uint8_t*,uint32_t);
@@ -14,16 +15,22 @@ static void check(int rc,const char* label){if(rc)throw std::runtime_error(std::
 #include "../../profiling/host/profile_bridge.h"
 int main(int argc,char** argv){try{
     // Optional: B H K E logical_partitions warmup samples. No communication.
-    if(argc!=1&&argc!=8)throw std::runtime_error("metadata_probe [B H K E partitions warmup samples]");
+    if(argc!=1&&argc!=8&&argc!=9)throw std::runtime_error("metadata_probe [B H K E partitions warmup samples [device]]");
     auto value=[&](int i){size_t end;auto n=std::stoul(argv[i],&end);if(argv[i][end]||n>65536)throw std::runtime_error("invalid argument");return uint32_t(n);};
-    uint32_t H=argc==8?value(2):4096,K=argc==8?value(3):6,E=argc==8?value(4):256,
-       partitions=argc==8?value(5):16,warmup=argc==8?value(6):0,samples=argc==8?value(7):2;
-    std::vector<uint32_t> batches=argc==8?std::vector<uint32_t>{value(1)}:std::vector<uint32_t>{4,32,96};
+    uint32_t H=argc>=8?value(2):4096,K=argc>=8?value(3):6,E=argc>=8?value(4):256,
+       partitions=argc>=8?value(5):16,warmup=argc>=8?value(6):0,samples=argc>=8?value(7):2;
+    std::vector<uint32_t> batches=argc>=8?std::vector<uint32_t>{value(1)}:std::vector<uint32_t>{4,32,96};
+    const uint32_t device=argc==9?value(8):0;
+    if(device>31)throw std::runtime_error("device outside supported ordinal range");
+    if(const char* visible=std::getenv("ASCEND_RT_VISIBLE_DEVICES")){
+        uint32_t count=1;for(const char* p=visible;*p;++p)count+=*p==',';
+        if(device>=count)throw std::runtime_error("device outside visible ordinal range");
+    }
     if(!H||!K||K>32||K>E||E>1024||partitions<16||partitions>256||partitions%DispatchDedup::kLlRanksPerGroup||!E||E%partitions||warmup>10000||samples>10000)
         throw std::runtime_error("unsupported metadata shape");
-    CK(PROBE_ACL_INIT());CK(aclrtSetDevice(0));aclrtStream stream;CK(aclrtCreateStream(&stream));
+    CK(PROBE_ACL_INIT());CK(aclrtSetDevice(int(device)));aclrtStream stream;CK(aclrtCreateStream(&stream));
     const uint32_t sendCores=deepep::query_ll_core_config().active/2U;
-    std::printf("# metadata sender_cores=%u total_ll_cores=%u (one physical device)\n",sendCores,sendCores*2U);
+    std::printf("# metadata sender_cores=%u total_ll_cores=%u (local device=%u logical_source_rank=0)\n",sendCores,sendCores*2U,device);
     std::puts("B,H,K,E,logical_partitions,sample,event_us");
     for(uint32_t B:batches){
         if(!B||B>256)throw std::runtime_error("B must be 1..256");
@@ -35,7 +42,8 @@ int main(int argc,char** argv){try{
           (align(partitions/DispatchDedup::kLlRanksPerGroup*4,32)>64?align(partitions/DispatchDedup::kLlRanksPerGroup*4,32):64)+(groups?align(groups*4,32):0);
         if(used+layout.tokenStride>190*1024||layout.blockCount>255)throw std::runtime_error("sender UB budget exceeded");
         // Logical expert partition for local metadata only; no SHMEM instance
-        // or 16-rank communication is created. Exactly device0 executes.
+        // or logical-partition communication is created. The selected local device executes.
+        // Distributed sampling aligns processes externally; each repeats logical source rank 0.
         DispatchDedup::CommArgs args{};args.rank=0;args.rankSize=partitions;
         DispatchDedup::EpServerDedupTilingData td{};td.bs=B;td.h=H;td.topK=K;td.moeExpertNum=E;
         std::vector<int32_t> ids(B*K);std::vector<float> weights(B*K),outWeights(B*K);
@@ -94,7 +102,7 @@ int main(int argc,char** argv){try{
         ProfilePhase(3);
         CK(aclrtFree(tiling));CK(aclrtFree(s));CK(aclrtFree(m));CK(aclrtFree(d));CK(aclrtFree(w));CK(aclrtFree(i));CK(aclrtFree(a));
     }
-    CK(aclrtDestroyStream(stream));CK(PROBE_ACL_RESET(0));CK(PROBE_ACL_FINALIZE());
-    std::fprintf(stderr,"PASS metadata: repeated route prefix q, dedup masks and weights; device0 only, no distributed ranks\n");
+    CK(aclrtDestroyStream(stream));CK(PROBE_ACL_RESET(int(device)));CK(PROBE_ACL_FINALIZE());
+    std::fprintf(stderr,"PASS metadata: repeated route prefix q, dedup masks and weights; local device=%u logical_source_rank=0, no metadata communication\n",device);
 return 0;
 }catch(const std::exception& e){std::fprintf(stderr,"FAIL %s\n",e.what());return 1;}}

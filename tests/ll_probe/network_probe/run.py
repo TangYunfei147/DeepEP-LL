@@ -1,39 +1,26 @@
 """One local launcher per host; no SSH, no HCCL process group, no pip dependency."""
 import argparse
 import hashlib
-import ipaddress
 import json
 import os
 from pathlib import Path
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from paths import project_path, results_dir, runtime_environment, workspace_root
+from deployment import load_config, make_plan as deployment_plan
 import signal
 import socket
 import subprocess
 import time
-from defaults import DEVICES_PER_HOST, DEFAULT_PORT, DEFAULT_TIMEOUT, LL_WORKSPACE_BYTES
+from defaults import LL_WORKSPACE_BYTES
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[2]
 
 
 def hosts(path):
-    result = []
-    for line in project_path(path).read_text().splitlines():
-        line = line.split('#', 1)[0].strip()
-        if not line:
-            continue
-        if not line.startswith('- '):
-            raise ValueError('config.yaml must contain only a YAML list: - IPv4')
-        value = line[2:].strip().strip('\"\'')
-        address = ipaddress.ip_address(value)
-        if address.version != 4 or address.is_unspecified or address.is_multicast:
-            raise ValueError('Use unicast bootstrap-reachable IPv4 addresses')
-        result.append(str(address))
-    if not result or len(set(result)) != len(result):
-        raise ValueError('Host list must be nonempty and unique')
-    return result
+    config = load_config(path)
+    return deployment_plan(config, test='network')['ips']
 
 
 def identity():
@@ -41,7 +28,7 @@ def identity():
              REPO / 'csrc/runtime/session.cpp', REPO / 'csrc/runtime/session.hpp',
              REPO / 'csrc/runtime/udma_peer_masks.hpp', REPO / 'csrc/kernels/common.hpp',
              REPO / 'csrc/kernels/udma_layout.hpp', REPO / 'scripts/project_paths.py',
-             REPO / 'scripts/project_env.sh', REPO / 'tests/ll_probe/paths.py']
+             REPO / 'scripts/project_env.sh', REPO / 'tests/ll_probe/paths.py', REPO / 'tests/ll_probe/deployment.py']
     return {'revision': subprocess.check_output(['git', '-C', str(REPO), 'rev-parse', 'HEAD'], text=True).strip(),
             'shmem_revision': subprocess.check_output(['git','-C',str(REPO/'third-party/shmem'),'rev-parse','HEAD'],text=True).strip(),
             'source_sha256': {str(p.relative_to(REPO)): hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(files)}}
@@ -57,38 +44,40 @@ def library_identity():
 
 
 def plan(args):
-    ips = hosts(args.config)
-    n = args.devices_per_host
-    world = n * len(ips)
-    if n < 1 or not 0 <= args.node_index < len(ips) or not 0 < args.peer < world:
-        raise ValueError('Invalid devices/node-index/peer; peer is a GLOBAL rank')
-    if world < 2 or world > 512 or world & (world - 1):
-        raise ValueError('Production Session requires a power-of-two world in [2,512]')
-    if args.validation:
-        if len(ips) != 1 or n != 2 or args.target_run:
-            raise ValueError('Validation must use one host, exactly devices 0,1, no --target-run')
-    elif world not in (16,32,64,128):
-        raise ValueError('LL domain supports EP16/32/64/128; use explicit --validation for EP2 Session-only smoke')
-    if not 1024 <= args.port <= 65535 or not 10 <= args.timeout <= 3600:
-        raise ValueError('Invalid port/timeout')
-    return {'hosts': ips, 'devices_per_host': n, 'world': world, 'peer': args.peer,
-            'endpoint': f'tcp://{ips[0]}:{args.port}', 'node_index': args.node_index,
-            'ranks': list(range(args.node_index*n, (args.node_index+1)*n)),
-            'workspace_bytes': (2<<20) if args.validation else LL_WORKSPACE_BYTES,
-            'huge_pages': not (args.validation or args.no_huge_pages),
-            'scope': 'Session-only EP2 validation' if args.validation else 'LL Session domain; no full LL kernel',
-            'mte_actual_net_layer': None,
-            'route_query_scope': 'UDMA established QPs, NOT MTE physical route'}
+    config = load_config(args.config)
+    if args.port is not None:
+        config['shmem_port'] = args.port
+    if args.timeout is not None:
+        config['timeout'] = args.timeout
+    if args.validation and args.target_run:
+        raise ValueError('Validation cannot also request target-run')
+    run_id = getattr(args, 'run_id', None) or os.environ.get('DEEPEP_PROBE_RUN_ID') or 'plan-only'
+    base = deployment_plan(config, args.node_index, args.devices_per_host,
+                           test='network', run_id=run_id, validation=args.validation)
+    world = base['world']
+    if not 0 < args.peer < world:
+        raise ValueError('peer must be a nonzero GLOBAL rank inside the actual world')
+    topology = dict(ips=base['ips'], rank_num_per_server=base['local_world_size'], world=world,
+                    master_addr=base['master_addr'], master_port=base['master_port'],
+                    shmem_port=base['shmem_port'])
+    return dict(base, peer=args.peer,
+                workspace_bytes=(2<<20) if args.validation else LL_WORKSPACE_BYTES,
+                huge_pages=not (args.validation or args.no_huge_pages),
+                scope='Session-only domain diagnostic; no full LL kernel',
+                mte_actual_net_layer=None,
+                deployment_identity=dict(run_id=run_id, topology=topology),
+                route_query_scope='UDMA established QPs, NOT MTE physical route')
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--config', default=str(HERE/'config.yaml'))
     parser.add_argument('--node-index', type=int, default=0)
+    parser.add_argument('--run-id', help='Shared run identity on every target host')
     parser.add_argument('--peer', type=int, default=1, help='global rank: node_index * devices_per_host + local_device')
-    parser.add_argument('--devices-per-host', type=int, default=DEVICES_PER_HOST)
-    parser.add_argument('--port', type=int, default=DEFAULT_PORT)
-    parser.add_argument('--timeout', type=int, default=DEFAULT_TIMEOUT)
+    parser.add_argument('--devices-per-host', type=int, default=None)
+    parser.add_argument('--port', type=int, default=None)
+    parser.add_argument('--timeout', type=int, default=None)
     parser.add_argument('--target-run', action='store_true', help='User target machines only: permit visibility expansion')
     parser.add_argument('--validation', action='store_true')
     parser.add_argument('--no-huge-pages', action='store_true', help='Explicit departure from ElasticBuffer default')
@@ -105,6 +94,13 @@ def main():
         print(json.dumps(job, indent=2)); return
     if not args.validation and not args.target_run:
         raise ValueError('Use --target-run on target machines; A5 validation uses --validation --devices-per-host 2')
+    if job['run_id'] == 'plan-only':
+        if not args.validation:
+            raise ValueError('Use the shared launcher or supply the same --run-id on every host')
+        args.run_id = f'validation-{time.time_ns()}'
+        job = plan(args)
+    args.devices_per_host = job['devices_per_host']
+    args.timeout = job['timeout']
     root = runtime_environment()
     output = (args.output or root/'results'/f'network-{time.time_ns()}-node{args.node_index}').resolve()
     output.relative_to(root)
@@ -134,6 +130,11 @@ def main():
                boot_id=Path('/proc/sys/kernel/random/boot_id').read_text().strip(),
                dense_qps=env.get('DEEPEP_SHMEM_DENSE_QPS','0'))
     (output/'plan.json').write_text(json.dumps(job, indent=2)+'\n')
+    # The unified launcher sends SIGTERM to this leader on timeout. Convert it
+    # into normal unwinding so separately grouped device ranks are reaped.
+    def interrupted(signum, frame):
+        raise KeyboardInterrupt(f"signal {signum}")
+    previous_term = signal.signal(signal.SIGTERM, interrupted)
     processes, logs = [], []
     failed = False
     try:
@@ -156,12 +157,17 @@ def main():
     finally:
         for p in processes:
             if p.poll() is None:
-                os.killpg(p.pid, signal.SIGTERM)
+                try: os.killpg(p.pid, signal.SIGTERM)
+                except ProcessLookupError: pass
+        deadline = time.monotonic() + 3
         for p in processes:
-            try: p.wait(timeout=5)
+            try: p.wait(timeout=max(0, deadline-time.monotonic()))
             except subprocess.TimeoutExpired:
-                os.killpg(p.pid, signal.SIGKILL); p.wait()
+                try: os.killpg(p.pid, signal.SIGKILL)
+                except ProcessLookupError: pass
+        for p in processes: p.wait()
         for log in logs: log.close()
+        signal.signal(signal.SIGTERM, previous_term)
     records=[]
     for rank in job['ranks']:
         for line in (output/f'rank-{rank}.log').read_text(errors='replace').splitlines():
