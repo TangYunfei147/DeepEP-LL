@@ -1,3 +1,5 @@
+> `run.py`所有参数、默认值、适用测试和不生效兼容参数见 [RUN_ARGS.md](RUN_ARGS.md)。
+
 > 按bs/hidden_size控制发送量、P50/P90/P99、理论耗时及利用率配置见 [BANDWIDTH.md](BANDWIDTH.md)。
 
 > 2/4/8/16/32实际通信域及多机32的统一YAML入口见 [DEPLOYMENT.md](DEPLOYMENT.md)。各节点独立启动，共同run-id；旧双卡验证入口仍仅用于A5。

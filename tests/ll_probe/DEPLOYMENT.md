@@ -1,3 +1,5 @@
+> `run.py`所有参数、默认值、适用测试和不生效兼容参数见 [RUN_ARGS.md](RUN_ARGS.md)。
+
 > 按bs/hidden_size控制发送量、P50/P90/P99、理论耗时及利用率配置见 [BANDWIDTH.md](BANDWIDTH.md)。
 
 # 统一 YAML 通信域测试

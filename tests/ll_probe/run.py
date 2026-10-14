@@ -88,17 +88,19 @@ def supervise(command, env, output, timeout):
             proc.wait()
 
 def main(argv=None):
-    p=argparse.ArgumentParser(description=__doc__,allow_abbrev=False)
-    p.add_argument('--config',required=True)
-    p.add_argument('--node-index','--node-rank',type=int,default=0)
-    p.add_argument('--devices-per-host',type=int)
-    p.add_argument('--test',choices=TESTS,required=True)
-    p.add_argument('--run-id')
-    p.add_argument('--plan',action='store_true')
+    p=argparse.ArgumentParser(description=__doc__,allow_abbrev=False,
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+        epilog="完整中文参数说明：tests/ll_probe/RUN_ARGS.md。测试参数放在 -- 后；未指定执行模式时仅输出计划。")
+    p.add_argument('--config',required=True,help='部署YAML路径，相对工程根解析')
+    p.add_argument('--node-index','--node-rank',type=int,default=0,help='本机在ips列表中的索引，从0开始')
+    p.add_argument('--devices-per-host',type=int,help='覆盖YAML的每机rank数，1..16；所有节点一致')
+    p.add_argument('--test',choices=TESTS,required=True,help='选择测试目的；native仅支持EP16/32')
+    p.add_argument('--run-id',help='各节点共享的全新运行标识，优先于YAML；执行时必需')
+    p.add_argument('--plan',action='store_true',help='只打印CPU计划，优先于执行模式，不启动设备')
     modes=p.add_mutually_exclusive_group()
-    modes.add_argument('--target-run',action='store_true')
-    modes.add_argument('--validation',action='store_true')
-    p.add_argument('extra',nargs=argparse.REMAINDER)
+    modes.add_argument('--target-run',action='store_true',help='用户目标机实际执行；按配置选卡，不用于A5')
+    modes.add_argument('--validation',action='store_true',help='A5单机双rank0/1验证，使用小Exp及短采样')
+    p.add_argument('extra',nargs=argparse.REMAINDER,help='-- 后的测试专用参数，完整列表见RUN_ARGS.md')
     args=p.parse_args(argv)
     extra=args.extra
     if extra and extra[0]!='--': p.error('Forwarded arguments require -- separator')
