@@ -63,10 +63,10 @@ sender.write_text(variant.replace(anchor,finish))
     'scope':'Sender route load, prefix q, dedup classify/tasks, source masks/weights; excludes count exchange, packet-tail metadata, quantization and receiver'},indent=2))
 # Create an isolated LL ST variant with independent API-to-consumable loops.
 st=(SOURCE/'tests/elastic/test_ep_low_latency.py').read_text()
-if st.count('def measure(invoke, args, operation, profile_dir, progress=None):')!=1:
+if st.count('def measure(invoke, args, operation, profile_dir, progress=None, kernel_override=None):')!=1:
     raise RuntimeError('LL ST changed; adapter requires review')
-st=st.replace('def measure(invoke, args, operation, profile_dir, progress=None):',
-              'def measure_kernel(invoke, args, operation, profile_dir, progress=None):')
+st=st.replace('def measure(invoke, args, operation, profile_dir, progress=None, kernel_override=None):',
+              'def measure_kernel(invoke, args, operation, profile_dir, progress=None, kernel_override=None):')
 adapter=(HERE.parent/'native_ll/api_adapter.txt').read_text()
 st=st.replace('\ndef main(argv=None):','\n'+adapter+'\n\ndef main(argv=None):')
 # Keep tests.utils and deep_ep imports resolved against the real repository.

@@ -88,3 +88,7 @@
 - 改生产LL：重建匹配源码的生产kernel库/wheel；重建探针库不会更新已安装LL wheel。实际EP16/32验收由用户目标机执行。
 
 所有目标机所需修改通过本分支Git提交获取。A5只使用物理卡0/1；生成文件和结果不提交。不要将旧IPC模式号、comm内部layer编号或metadata逻辑专家分区数当作生产LL的设备rank/tiling格式。
+
+## 解析调度诊断
+
+[PARSE_SCHEDULE.md](profiling/PARSE_SCHEDULE.md)：原ST的opt-in双卡临时搬运核模式，比较整条命令的即时解析、CSV后移、全部解析后移。设备函数仍是bandwidth/kernel/transfer_probe.cpp中的ll_transfer_probe，不执行原生LL协议。普通LL默认逐组解析不变。

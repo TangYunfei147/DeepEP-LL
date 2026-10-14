@@ -601,7 +601,7 @@ def record_case_progress(args, rank, m, mode, phase, error=None):
         print("[LL ST] " + json.dumps(entry, ensure_ascii=False), flush=True)
 
 
-def measure(invoke, args, operation, profile_dir, progress=None):
+def measure(invoke, args, operation, profile_dir, progress=None, kernel_override=None):
     """Reference protocol: 10 warmups, 100 aligned captures, final 50 tasks."""
     import torch.distributed as dist
 
@@ -612,6 +612,13 @@ def measure(invoke, args, operation, profile_dir, progress=None):
     output = run_profiled(invoke, profile_dir, args.warmup, args.num_iters,
                           args.delay_rows, args.delay_cols)
     del output
+    return read_measurement(args, operation, profile_dir, progress, kernel_override)
+
+
+def read_measurement(args, operation, profile_dir, progress=None, kernel_override=None):
+    """Read completed captures; shared with the opt-in parse-scheduling diagnostic."""
+    import torch.distributed as dist
+    kernel = kernel_override or f"{operation}_server_dedup_kernel"
     if progress:
         progress(f"{operation}.read_profile")
     groups = []
@@ -994,6 +1001,10 @@ def configure_endpoints(args, environ):
 
 
 def main(argv=None):
+    values = sys.argv[1:] if argv is None else argv
+    if "--parse-schedule-probe" in values:
+        from parse_schedule_probe import main as diagnostic_main
+        return diagnostic_main(values)
     args = parse_args(argv)
     world, _, local = launch_config(args, os.environ)
     validate_args(args, world)
