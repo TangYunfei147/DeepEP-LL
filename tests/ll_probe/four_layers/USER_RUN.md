@@ -12,11 +12,11 @@
 
 ```bash
 # 从工程根目录执行
-bash tests/ll_probe/build_shmem_probe.sh
+bash tests/ll_probe/bandwidth/build_sdk.sh
 # 以下仍从工程根执行
-python3 tests/ll_probe/four_layers/prepare_snapshot.py
+python3 tests/ll_probe/metadata/prepare_snapshot.py
 bash tests/ll_probe/four_layers/build.sh
-python3 tests/ll_probe/four_layers/verify_adapter.py
+python3 tests/ll_probe/native_ll/tests/verify_adapter.py
 ```
 
 prepare_snapshot.py仅改实验快照，不改生产仓库；记录原sender源码SHA256。计时与正确性两个元数据实现使用不同模板名称，避免链接时混用。每次换仓库版本应重审提取边界，不能盲目复用旧二进制。
@@ -28,7 +28,7 @@ prepare_snapshot.py仅改实验快照，不改生产仓库；记录原sender源�
 ## 第二层：真实路由准备提取
 
 ```bash
-bash tests/ll_probe/four_layers/run.sh tests/ll_probe/four_layers/build/metadata_probe 32 7168 6 256 16 10 50 \
+bash tests/ll_probe/four_layers/run.sh tests/ll_probe/metadata/build/metadata_probe 32 7168 6 256 16 10 50 \
   > results/metadata-B32.csv \
   2> results/metadata-B32.log
 ```
@@ -46,7 +46,7 @@ scenario/tiling key：1=rank0→rank1；2=所有非0 rank→rank0；3=rank0→�
 在每个实际rank的终端运行（RANK/WORLD/DEVICE/ENDPOINT由用户配置），同机和跨主机都使用这一入口；同机每rank选择不同设备，跨主机每rank选择本节点可见设备序号。默认可见设备0/1；用户仅在目标机设置PROBE_VISIBLE_DEVICES显式扩展，例如域8同机设置0,1,2,3,4,5,6,7，DEVICE=RANK。A5_241始终不设置扩展，不使用设备2+。所有rank同一轮使用相同参数和顺序。
 
 ```bash
-# 按所需通信域和场景逐项运行profile_probe.py --plan检查参数（见../PROFILING.md）
+# 按所需通信域和场景逐项运行profiling/profile_probe.py --plan检查参数（见../PROFILING.md）
 # 仅用户目标机，以下举例同机EP8：
 export PROBE_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
 ```
@@ -57,7 +57,7 @@ export PROBE_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
 # 从工程根目录执行
 OUT=results/four-scene4-rank${RANK}-001
 mkdir "$OUT"
-bash tests/ll_probe/four_layers/run.sh tests/ll_probe/four_layers/build/comm_probe "$RANK" "$WORLD" "$DEVICE" "$ENDPOINT" \
+bash tests/ll_probe/four_layers/run.sh tests/ll_probe/communication/build/comm_probe "$RANK" "$WORLD" "$DEVICE" "$ENDPOINT" \
   15392 8 4 4 3 10 50 > "$OUT/samples.csv" 2> "$OUT/run.log"
 ```
 
@@ -72,7 +72,7 @@ CSV记录每rank实际wire字节、Event区间、Host调用至本地stream完成
 复制所有rank结果到授权根目录后，使用analyze_comm.py审计CSV/log及每条边字节数，再输出逐轮rankMAX、每rank和全作业mean/p50/p95/p99：
 
 ```bash
-python3 tests/ll_probe/four_layers/analyze_comm.py results/rank*/samples.csv \
+python3 tests/ll_probe/communication/tests/analyze_comm.py results/rank*/samples.csv \
   --output results/comm-summary-001.json
 ```
 
@@ -80,10 +80,10 @@ python3 tests/ll_probe/four_layers/analyze_comm.py results/rank*/samples.csv \
 
 ## 第四层：完整dispatch/combine
 
-使用生成的 `snapshot/test_ll_four_layers.py`，参数沿用上级指南的原生LL命令，仅替换测试脚本路径：
+使用生成的 `tests/ll_probe/native_ll/snapshot/test_ll_four_layers.py`，参数沿用上级指南的原生LL命令，仅替换测试脚本路径：
 
 ```bash
-bash tests/ll_probe/four_layers/run.sh python3 tests/ll_probe/four_layers/snapshot/test_ll_four_layers.py --plan \
+bash tests/ll_probe/four_layers/run.sh python3 tests/ll_probe/native_ll/snapshot/test_ll_four_layers.py --plan \
   --num-processes 16 --num-nodes 1 --num-tokens 1 2 4 8 16 32 \
   --num-max-tokens-per-rank 256 --hidden 7168 --num-topk 6 --num-experts 256
 ```

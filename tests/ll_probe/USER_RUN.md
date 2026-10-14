@@ -14,8 +14,8 @@
 
 ```bash
 # 从工程根目录执行
-bash tests/ll_probe/build_probe.sh
-bash tests/ll_probe/run_peer_validation.sh
+bash tests/ll_probe/bandwidth/build.sh
+bash tests/ll_probe/bandwidth/tests/run_peer_validation.sh
 ```
 
 通过判据是 PASS、receiver checks before/after、normal cleanup 与退出码 0。当前设备对固定为 0→1；这是同进程 IPC 映射的同机 P2P 实验，不覆盖跨节点或多 peer 拓扑。不支持的 peer 路径会失败，不自动降级本卡拷贝。
@@ -23,8 +23,8 @@ bash tests/ll_probe/run_peer_validation.sh
 先查看扫描计划，再由用户执行目标机测量：
 
 ```bash
-bash tests/ll_probe/run_scan.sh > results/target-plan.json
-bash tests/ll_probe/run_scan.sh --execute \
+bash tests/ll_probe/bandwidth/tests/run_scan.sh > results/target-plan.json
+bash tests/ll_probe/bandwidth/tests/run_scan.sh --execute \
   --bytes 32 128 512 2048 8192 32768 131072 524288 2097152 8388608 33554432 67108864 \
   --cores 1 8 32 --lanes 1 4 --chunk 4096 --modes 0 1 2 3 \
   --warmup 10 --samples 50 \
@@ -44,9 +44,9 @@ event_us 是 ACL event 包围的 stream 区间，包含事件/调度影响，不
 ```bash
 git submodule update --init --recursive --depth 1
 # 从工程根目录执行
-bash tests/ll_probe/build_probe.sh
-bash tests/ll_probe/build_shmem_probe.sh
-bash tests/ll_probe/build_shmem_driver.sh
+bash tests/ll_probe/bandwidth/build.sh
+bash tests/ll_probe/bandwidth/build_sdk.sh
+bash tests/ll_probe/bandwidth/build_shmem_driver.sh
 ```
 
 build_shmem_probe.sh 仅调用 scripts/build_shmem.py --if-needed，SDK固定为 third-party/shmem/install/shmem；不另建实验依赖目录。TCP bootstrap用于建域，数据面为MTE映射；构建身份随结果记录。
@@ -60,12 +60,12 @@ build_shmem_probe.sh 仅调用 scripts/build_shmem.py --if-needed，SDK固定为
 ENDPOINT=tcp://RANK0_IP:19731
 
 # 节点0
-bash tests/ll_probe/run_shmem_scan.sh --rank 0 --device 0 --endpoint "$ENDPOINT" \
+bash tests/ll_probe/bandwidth/tests/run_shmem_scan.sh --rank 0 --device 0 --endpoint "$ENDPOINT" \
   --execute --validation-only --bytes 32 15392 --cores 8 --lanes 4 --modes 2 3 \
   --output results/target-cross-check-rank0
 
 # 节点1，在另一终端执行
-bash tests/ll_probe/run_shmem_scan.sh --rank 1 --device 0 --endpoint "$ENDPOINT" \
+bash tests/ll_probe/bandwidth/tests/run_shmem_scan.sh --rank 1 --device 0 --endpoint "$ENDPOINT" \
   --execute --validation-only --bytes 32 15392 --cores 8 --lanes 4 --modes 2 3 \
   --output results/target-cross-check-rank1
 ```
@@ -73,7 +73,7 @@ bash tests/ll_probe/run_shmem_scan.sh --rank 1 --device 0 --endpoint "$ENDPOINT"
 两节点都通过后，执行发送量扫描；下面命令在两节点分别运行，设置 RANK=0/1，其余配置与顺序一致。每轮每配置依次创建 SHMEM 作业，不要同时启动另外一轮占用同一 endpoint 的扫描。对端等待初始化超时为30秒，父进程每case总超时120秒，请在30秒内启动双方。
 
 ```bash
-bash tests/ll_probe/run_shmem_scan.sh --rank "$RANK" --device 0 --endpoint "$ENDPOINT" --execute \
+bash tests/ll_probe/bandwidth/tests/run_shmem_scan.sh --rank "$RANK" --device 0 --endpoint "$ENDPOINT" --execute \
   --bytes 32 128 512 2048 8192 32768 131072 524288 2097152 8388608 33554432 67108864 \
   --cores 1 8 32 --lanes 1 4 --chunk 4096 --modes 0 1 2 3 \
   --warmup 10 --samples 50 \
@@ -85,7 +85,7 @@ bash tests/ll_probe/run_shmem_scan.sh --rank "$RANK" --device 0 --endpoint "$END
 将 rank1 的完整结果目录复制到 rank0 授权工作目录下（不要覆盖已有目录），执行：
 
 ```bash
-python3 tests/ll_probe/merge_shmem_results.py \
+python3 tests/ll_probe/bandwidth/tests/merge_shmem_results.py \
   results/target-cross-rank0-001/summary.json \
   results/target-cross-rank1-001/summary.json \
   --output results/target-cross-merged-001.json
@@ -129,7 +129,7 @@ python3 tests/elastic/test_ep_low_latency.py \
 对实际生成的 summary.json 进行拟合：
 
 ```bash
-python3 tests/ll_probe/analyze_ll_overhead.py \
+python3 tests/ll_probe/native_ll/analyze_ll_overhead.py \
   /实际运行目录/summary.json --b-min 1 --b-max 32 \
   --output results/ll-fit-small.json
 ```

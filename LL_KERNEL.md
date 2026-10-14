@@ -44,7 +44,7 @@ python -m pytest tests/elastic/test_ll16_protocol.py tests/elastic/test_ll_core_
 Use project-local caches, logs, temporary files and a project-local Python
 environment. In the experiment branch, source `scripts/project_env.sh` first.
 Its regular test launcher accepts physical `--num-processes` independently;
-with torchrun, set the actual `LOCAL_WORLD_SIZE`. `run_ll16.sh` remains an
+with torchrun, set the actual `LOCAL_WORLD_SIZE`. `tests/ll_probe/native_ll/run_ll16.sh` remains an
 explicit convenience launcher for sixteen processes per physical host.
 CPU plan output uses null for unknown compiled group size; actual execution
 reads it from the installed native module. Profiling remains 10 warmups,

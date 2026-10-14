@@ -22,7 +22,7 @@ runtime_environment()
 OUT=Path(tempfile.mkdtemp(prefix='four-layers-',dir=results_dir()))
 print(str(OUT),flush=True)
 if not args.comm_only:
-    subprocess.run(['bash',str(HERE/'run.sh'),str(HERE/'build/metadata_probe')],check=True,
+    subprocess.run(['bash',str(HERE/'run.sh'),str(HERE.parent/'metadata/build/metadata_probe')],check=True,
                    stdout=(OUT/'metadata.log').open('w'),stderr=subprocess.STDOUT,timeout=90)
 cases=[(4,3)] if args.comm_only else [(1,0),(1,1)]+[(key,3) for key in range(1,5)]
 for index,(key,layer) in enumerate(cases):
@@ -31,7 +31,7 @@ for index,(key,layer) in enumerate(cases):
         for rank in [0,1]:
             stdout=(OUT/f'{index}-rank{rank}.csv').open('w');stderr=(OUT/f'{index}-rank{rank}.log').open('w')
             streams.extend([stdout,stderr])
-            cmd=['bash',str(HERE/'run.sh'),str(HERE/'build/comm_probe'),str(rank),'2',str(rank),
+            cmd=['bash',str(HERE/'run.sh'),str(HERE.parent/'communication/build/comm_probe'),str(rank),'2',str(rank),
                  f'tcp://127.0.0.1:{19740+index}','15392','8','4',str(key),str(layer),'0','2']
             env=dict(os.environ)
             if rank==0:env['FOUR_READY_FILE']=str(OUT/f'{index}-rank0.ready')

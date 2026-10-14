@@ -58,7 +58,7 @@
 source scripts/project_env.sh
 export DEEPEP_NPU_ARCH=Ascend950
 python3 -m pip install -v --force-reinstall --no-build-isolation --no-deps .
-bash tests/ll_probe/build_profile_bridge.sh
+bash tests/ll_probe/profiling/build.sh
 ```
 
 独立四层可执行程序另用`bash tests/ll_probe/four_layers/build.sh`重建。metadata提取探针只启动实际发送半区数量的AIV，并按同一数量校验分片/checksum；它仍仅在单张设备上运行，不代表建立了EP16通信域。metadata的event_diagnostics.csv中保留sender_cores/total_ll_cores说明行。

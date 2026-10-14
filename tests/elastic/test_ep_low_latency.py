@@ -24,8 +24,9 @@ from datetime import datetime, timedelta
 
 # Resolve the checked-in profiler helper from both the original and generated ST.
 for _parent in Path(__file__).resolve().parents:
-    if (_parent / "tests/ll_probe/profile_common.py").is_file():
+    if (_parent / "tests/ll_probe/profiling/profile_common.py").is_file():
         sys.path.insert(0, str(_parent / "tests/ll_probe"))
+        sys.path.insert(0, str(_parent / "tests/ll_probe/profiling"))
         break
 from profile_common import run_profiled, read_named_tasks
 from paths import project_path, runtime_environment

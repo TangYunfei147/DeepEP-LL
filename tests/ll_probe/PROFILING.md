@@ -21,8 +21,8 @@
 ```bash
 # 从工程根目录执行
 mkdir -p results
-bash tests/ll_probe/build_shmem_probe.sh
-bash tests/ll_probe/build_profile_bridge.sh
+bash tests/ll_probe/bandwidth/build_sdk.sh
+bash tests/ll_probe/profiling/build.sh
 ```
 
 本入口需要现有torch/torch_npu；分布式采样需要HCCL可用。无需安装额外报告包。单机/跨主机数据面仍是SHMEM MTE可寻址映射；不可达时报告失败，不自动改传输协议。
@@ -35,7 +35,7 @@ bash tests/ll_probe/build_profile_bridge.sh
 # 从工程根目录执行
 export PROBE_VISIBLE_DEVICES=0,1
 bash tests/ll_probe/four_layers/run.sh python3 -m torch.distributed.run \
-  --standalone --nproc_per_node=2 tests/ll_probe/profile_probe.py \
+  --standalone --nproc_per_node=2 tests/ll_probe/profiling/profile_probe.py \
   --kind comm --scenario 4 --layer 3 --bytes 15392 --cores 8 --lanes 4 \
   --endpoint tcp://127.0.0.1:19761 \
   --output-dir results/profile-comm-001
@@ -55,7 +55,7 @@ SHMEM的`--endpoint tcp://首节点可达地址:另一端口`必须所有rank一
 ## 第二层：dispatch本地路由准备
 
 ```bash
-bash tests/ll_probe/four_layers/run.sh python3 tests/ll_probe/profile_probe.py --kind metadata \
+bash tests/ll_probe/four_layers/run.sh python3 tests/ll_probe/profiling/profile_probe.py --kind metadata \
   --batch 32 --hidden 7168 --top-k 6 --experts 256 --partitions 16 \
   --output-dir results/profile-metadata-001
 ```
@@ -72,7 +72,7 @@ LL使用查询的实际AIV核数和1:1分核，见[CORE_CONFIG.md](CORE_CONFIG.m
 
 本分支统一为每机16卡，单机EP16默认启动，跨机EP32使用两台各16卡。先按[LL16指南](LL16.md)重建生产wheel并运行带超时的正确性检查，再执行下述性能协议。旧每机8卡启动配置会被拒绝。 单机也必须显式配置MASTER_ADDR、MASTER_PORT和DEEPEP_SHMEM_ENDPOINT（或对应CLI参数）；完整环境表与旧入口迁移说明见[LL16指南](LL16.md#运行前环境每个新终端都要确认)。
 
-`tests/elastic/test_ep_low_latency.py`已采用公共协议；`four_layers/prepare_snapshot.py`生成的完整API快照继承同一协议。继续使用原LL启动参数，在本任务通信域集合中仅运行实际EP16/32。默认`--warmup 10 --num-iters 100 --perf-tail 50`；`--delay-rows/--delay-cols`显式控制Exp尺寸。
+`tests/elastic/test_ep_low_latency.py`已采用公共协议；`metadata/prepare_snapshot.py`生成的完整API快照继承同一协议。继续使用原LL启动参数，在本任务通信域集合中仅运行实际EP16/32。默认`--warmup 10 --num-iters 100 --perf-tail 50`；`--delay-rows/--delay-cols`显式控制Exp尺寸。
 
 旧参数`--delay-exp-before/after`仅接受1/0；旧的首调用后1000次Exp方案会报错，不再静默执行。Gloo控制组可用于诊断，会标记非参考HCCL口径；性能比较应使用相同后端和扰动设置。完整LL仍需要匹配的已安装wheel及原生依赖，A5双卡无法完成其设备验收。
 
@@ -80,7 +80,7 @@ LL使用查询的实际AIV核数和1:1分核，见[CORE_CONFIG.md](CORE_CONFIG.m
 
 ```bash
 # 从工程根目录执行
-python3 tests/ll_probe/analyze_profile.py \
+python3 tests/ll_probe/profiling/analyze_profile.py \
   results/profile-comm-001/rank_*/report.json \
   --output results/profile-comm-001/summary.json
 ```
@@ -93,4 +93,4 @@ python3 tests/ll_probe/analyze_profile.py \
 
 公共`project_env.sh`不再默认设置设备0/1；A5专用shell入口使用`scripts/a5_validation_env.sh`，专用Python验证器显式固定四个可见性变量为0/1。目标机入口不得source该A5脚本。通用profile入口没有隐式双卡回退，目标机可显式设置PROBE_VISIBLE_DEVICES或继承现有ASCEND可见性。
 
-`python3 validate_profile.py`强制卡0/1，小Exp `[64,64]`、warmup2/capture3/tail2，只验正确性、profiler导出和解析；不是目标带宽或默认负载性能证据。`--plan`不初始化NPU。大Exp默认尺寸、实际N方竞争、跨主机互联和原生EP16/32需要用户目标机验收。
+`python3 profiling/validate_profile.py`强制卡0/1，小Exp `[64,64]`、warmup2/capture3/tail2，只验正确性、profiler导出和解析；不是目标带宽或默认负载性能证据。`--plan`不初始化NPU。大Exp默认尺寸、实际N方竞争、跨主机互联和原生EP16/32需要用户目标机验收。

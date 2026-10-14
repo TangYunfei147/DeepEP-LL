@@ -37,7 +37,7 @@ def hosts(path):
 
 
 def identity():
-    files = [*HERE.glob('*.cpp'), *HERE.glob('*.py'), *HERE.glob('*.sh'),
+    files = [*HERE.glob('kernel/*.cpp'), *HERE.glob('host/*.cpp'), *HERE.glob('*.py'), *HERE.glob('*.sh'),
              REPO / 'csrc/runtime/session.cpp', REPO / 'csrc/runtime/session.hpp',
              REPO / 'csrc/runtime/udma_peer_masks.hpp', REPO / 'csrc/kernels/common.hpp',
              REPO / 'csrc/kernels/udma_layout.hpp', REPO / 'scripts/project_paths.py',
