@@ -37,7 +37,11 @@ def test_bad_shape_rejected(extra):
 
 def test_whitepaper_units_and_fanout_bound():
     hw=load_hardware(HARDWARE)
-    assert hw['specification']['whitepaper_reference']['unified_bus_chip_bidirectional_GBps']==2016
+    import yaml
+    reference=yaml.safe_load(HARDWARE.with_name('ascend950.reference.yaml').read_text())
+    assert reference['whitepaper_reference']['unified_bus_chip_bidirectional_GBps']==2016
+    assert set(hw['specification'])=={'schema_version','label','model'}
+    assert set(hw['specification']['model'])=={'per_rank_tx_GBps','per_rank_rx_GBps'}
     assert hw['specification']['model']['per_rank_tx_GBps']==1008
     cfg=dict(bytes=458752,scenario=3,fanout=3,bs=32,hidden_size=7168,element_bytes=2)
     vol,edges=volume(32,cfg,16)
@@ -96,3 +100,14 @@ def test_summary_records_volume_samples_and_csv(tmp_path):
 def test_invalid_hardware_capacity(tmp_path):
     f=tmp_path/'bad.yaml';f.write_text('schema_version: 1\nmodel:\n  per_rank_tx_GBps: -1\n')
     with pytest.raises(ValueError):load_hardware(f)
+
+
+def test_reference_file_does_not_affect_runtime_model(tmp_path):
+    runtime=tmp_path/'ascend950.yaml'
+    runtime.write_bytes(HARDWARE.read_bytes())
+    before=load_hardware(runtime)
+    reference=tmp_path/'ascend950.reference.yaml'
+    reference.write_text('not a runtime model: true\n')
+    assert load_hardware(runtime)==before
+    reference.write_text('changed documentation only\n')
+    assert load_hardware(runtime)==before

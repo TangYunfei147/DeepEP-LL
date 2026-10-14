@@ -9,6 +9,7 @@ except ImportError:
 
 
 def load_hardware(path):
+    # Only this runtime YAML is loaded; sibling reference files are documentation.
     import yaml
     raw=Path(path).read_bytes()
     data=yaml.safe_load(raw)

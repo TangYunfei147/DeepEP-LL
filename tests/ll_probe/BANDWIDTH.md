@@ -36,7 +36,9 @@ P99基于所选样本线性插值；50条的P99不是足够多独立尾部事件
 hardware_config: tests/ll_probe/configs/hardware/ascend950.yaml
 ```
 
-其中保存用户指定[昇腾950架构白皮书](https://public-download.obs.cn-east-2.myhuaweicloud.com/ascend/%E6%98%87%E8%85%BE950%20NPU%E6%9E%B6%E6%9E%84%E7%99%BD%E7%9A%AE%E4%B9%A6.pdf)的URL、SHA256、页码和原始IO参数。
+原始规格与出处现已分离到同目录`ascend950.reference.yaml`；此参考文件不会被程序加载。
+`ascend950.yaml`仅保留格式/显示元信息和实际启用的model容量，目前仅tx/rx两项。
+参考文件中保存用户指定[昇腾950架构白皮书](https://public-download.obs.cn-east-2.myhuaweicloud.com/ascend/%E6%98%87%E8%85%BE950%20NPU%E6%9E%B6%E6%9E%84%E7%99%BD%E7%9A%AE%E4%B9%A6.pdf)的URL、SHA256、页码和原始IO参数。
 PDF第15/30/31页中UB 2016GB/s为整芯片双向，UBoE 200GB/s和PCIe 128GB/s也为双向；共享端口不能相加。
 默认model用2016/2=1008GB/s作为每rank一颗完整芯片的理想单向收发上限。
 这是计算假设，**不是实际单对卡链路带宽或目标机器实测值**；不同设备划分/可用端口时请调整。
@@ -51,7 +53,7 @@ PDF第15/30/31页中UB 2016GB/s为整芯片双向，UBoE 200GB/s和PCIe 128GB/s�
 | per_host_cross_tx_GBps / per_host_cross_rx_GBps | 每台主机跨机共享总出口/入口容量，默认null |
 | aggregate_GBps | 整个通信作业共享fabric容量，默认null |
 
-null表示未知而未纳入该约束。白皮书没有给出用户实际光模块、布线和竞争条件，因此不猜测跨机值。
+未配置或null表示未知而未纳入该约束。未启用字段的模板集中在`ascend950.reference.yaml`的`optional_model_fields`；要启用，须复制到运行配置的`model`并填写正数。白皮书没有给出用户实际光模块、布线和竞争条件，因此不猜测跨机值。
 确认实际链路后直接改此文件，或复制一个新文件并用`--hardware-config`覆盖。报告嵌入完整配置快照与hash，
 不同rank使用不同配置会被汇总拒绝。模型不使用HBM峰值推断网络峰值，不从核心数猜测PR/DT型号。
 

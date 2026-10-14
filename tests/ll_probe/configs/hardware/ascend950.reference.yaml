@@ -1,0 +1,53 @@
+# 仅供查阅和选参：本文件不会被统计程序加载，不参与计算或报告配置hash。
+# 实际计算配置为同目录ascend950.yaml；修改本文件不会改变统计结果。
+
+# 白皮书出处，仅用于追溯；修改实际机器参数时建议保留原始出处。
+source:
+  title: 昇腾950 NPU架构白皮书
+  url: https://public-download.obs.cn-east-2.myhuaweicloud.com/ascend/%E6%98%87%E8%85%BE950%20NPU%E6%9E%B6%E6%9E%84%E7%99%BD%E7%9A%AE%E4%B9%A6.pdf
+  # 原始PDF文件的SHA256，不是本YAML文件的hash。
+  sha256: ece3405e6a17fabdd462338fb94266558649a6407a2f28008403211387b3a927
+  # PDF阅读器中的页码，从1开始；与正文印刷页码可能不同。
+  pdf_pages_1_based: [15, 30, 31]
+  sections: ["规格表", "4.6互连子系统", "4.6.2 UBoE"]
+# 白皮书原始规格，仅作参考记录；统计计算实际使用下方model。
+# GBps表示GB/s（字节/秒），Gbps表示Gbit/s（比特/秒）；1字节=8比特。
+# 此处GB采用十进制：1GB=10^9字节，不是GiB。
+whitepaper_reference:
+  # 整颗芯片UB收发双向合计峰值，不能直接当作单向或单对卡带宽。
+  unified_bus_chip_bidirectional_GBps: 2016
+  # 整颗芯片的UB端口数量，不是每对卡之间的端口数。
+  unified_bus_ports: 18
+  # 每个满配UB端口的物理lane数量；实际端口可能降为x2或x1。
+  lanes_per_port: 4
+  # 单lane的标称比特速率；与上面的GB/s字段注意区分单位。
+  serdes_lane_Gbps: 112
+  # 整芯片UBoE双向合计峰值；不意味着当前MTE路径采用UBoE。
+  uboe_chip_bidirectional_GBps: 200
+  # UBoE端口数，与UB端口复用，不能把两者峰值相加。
+  uboe_ports: 2
+  # 每个UBoE端口的标称比特速率，实际光模块/组网可能更低。
+  uboe_port_Gbps: 400
+  # PCIe 5.0 x16双向合计峰值，不自动作为NPU间通信的参考。
+  pcie5_x16_bidirectional_GBps: 128
+
+# 可选计算参数模板：目前均未启用，不参与计算。
+# 确认实际容量后，将需要的字段复制到ascend950.yaml的model中并填写正数。
+# 容量均为单向、十进制GB/s；只改本节不会启用约束。
+optional_model_fields:
+  # 同机单条src→dst边的容量。
+  intra_host_pair_GBps: null
+  # 跨机单条src→dst边的容量。
+  inter_host_pair_GBps: null
+  # 每台主机所有跨机发送边共享的总出口。
+  per_host_cross_tx_GBps: null
+  # 每台主机所有跨机接收边共享的总入口。
+  per_host_cross_rx_GBps: null
+  # 整个作业所有发送边共享的fabric总容量。
+  aggregate_GBps: null
+
+notes:
+  - 出框速率受光模块限制；本配置不是目标机器实际链路峰值证明。
+  - null表示未提供该约束，不从单芯片峰值猜测单对卡或跨机共享带宽。
+  - 如单对卡明确使用一个满速x4端口，56GB/s可由4*112/8推导；确认拓扑后再填写，默认不采用。
+  - 理论时间取各有效资源字节数/单向容量的最大值，不计算启动、协议、缓存和拥塞开销。
