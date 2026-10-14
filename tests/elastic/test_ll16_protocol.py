@@ -20,7 +20,7 @@ def method(text, name):
     return text[start:end].replace('__aicore__ ', '')
 
 
-@pytest.mark.parametrize("group", [8, 16])
+@pytest.mark.parametrize("group", range(1, 17))
 def test_production_routing_and_ready_addresses(tmp_path, group):
     sender = (ROOT/'csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_send.h').read_text()
     combine = (ROOT/'csrc/kernels/combine/low_latency/combine_server_dedup_kernel.h').read_text()
@@ -87,7 +87,14 @@ struct Ready {
 };
 int main() {
     constexpr unsigned G=kLlRanksPerGroup;
-    for(unsigned world: {16U,32U,64U,128U,256U}) {
+    for(unsigned world: {16U,32U,64U,128U,256U,16U*G}) {
+        if(world%G) {
+            EpMemoryServerDedupLayout rejected;
+            assert(BuildDispatchServerDedupLayout(world,4,256,4,world*4,&rejected)!=0);
+            CombineDedup::Layout rejectedCombine;
+            assert(!CombineDedup::BuildLayout(world,4,256,4,world*4,rejectedCombine));
+            continue;
+        }
         EpMemoryServerDedupLayout layout;
         assert(BuildDispatchServerDedupLayout(world,4,256,4,world*4,&layout)==0);
         CombineDedup::Layout combined;
@@ -170,3 +177,13 @@ int main() {
     binary = tmp_path/'protocol'
     subprocess.run(['g++','-std=c++17','-O2',f'-DDEEPEP_LL_RANKS_PER_GROUP={group}','-I',str(ROOT),str(cpp),'-o',str(binary)],check=True)
     subprocess.run([str(binary)],check=True,timeout=30)
+
+
+@pytest.mark.parametrize("group", [0, 17, -1])
+def test_invalid_group_size_rejected(tmp_path, group):
+    cpp = tmp_path / "invalid.cpp"
+    cpp.write_text('#include "csrc/kernels/dispatch/low_latency/common/ep_memory_server_dedup_protocol.h"\n')
+    result = subprocess.run(['g++', '-std=c++17', f'-DDEEPEP_LL_RANKS_PER_GROUP={group}',
+                             '-I', str(ROOT), '-fsyntax-only', str(cpp)], capture_output=True, text=True)
+    assert result.returncode != 0
+    assert 'LL logical group must be in [1, 16]' in result.stderr

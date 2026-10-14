@@ -813,7 +813,7 @@ def worker(local_rank, args):
 
     native = require_native("LL ST")
     group_size = getattr(native, "low_latency_ranks_per_group", None)
-    if group_size not in (8, 16) or world % group_size:
+    if not isinstance(group_size, int) or not 1 <= group_size <= 16 or world % group_size:
         raise RuntimeError("Rebuild/install a matching LL wheel with a supported logical group size")
     args.ll_ranks_per_group = group_size
     if not callable(getattr(native, "dispatch_low_latency", None)):

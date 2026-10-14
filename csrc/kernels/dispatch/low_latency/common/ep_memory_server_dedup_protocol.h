@@ -14,8 +14,8 @@ namespace DispatchDedup {
 #define DEEPEP_LL_RANKS_PER_GROUP 16
 #endif
 constexpr uint32_t kLlRanksPerGroup = DEEPEP_LL_RANKS_PER_GROUP;
-static_assert(kLlRanksPerGroup == 8U || kLlRanksPerGroup == 16U,
-              "LL logical group supports 8 or 16 ranks");
+static_assert(kLlRanksPerGroup >= 1U && kLlRanksPerGroup <= 16U,
+              "LL logical group must be in [1, 16]");
 constexpr uint32_t kEpServerDedupAlignmentBytes = 32U;
 constexpr uint32_t kEpServerDedupMaxTopK = 32U;
 
