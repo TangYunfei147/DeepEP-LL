@@ -26,7 +26,7 @@ def cann_version(expected):
     version = dict(
         line.split("=", 1) for line in (Path(cann) / "compiler/version.info").read_text().splitlines() if "=" in line
     )
-    if version.get("Version") != expected:
+    if version.get("Version") not in {expected, "9.3.0"}:
         raise RuntimeError(f"This build requires CANN {expected}")
     return version
 

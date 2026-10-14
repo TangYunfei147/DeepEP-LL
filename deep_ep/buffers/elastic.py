@@ -492,7 +492,9 @@ class ElasticBuffer:
                             hidden.device,
                         ),
                     }
-                    retained += tuple(value for value in tensors.values() if value is not None)
+                    from ..utils.ll_stage_timer import attach
+                    attach(self, tensors, "dispatch")
+                    retained += tuple(value for key, value in tensors.items() if value is not None and key != "ll_stage_timer_mode")
                     runtime.notify_inflight = retained
                     for value in retained:
                         value.record_stream(runtime.stream)
@@ -608,7 +610,9 @@ class ElasticBuffer:
                     "comm_args": runtime.low_latency_comm_args,
                     "tiling": self._upload_low_latency(tiling, x.device),
                 }
-                retained = tuple(tensors.values())
+                from ..utils.ll_stage_timer import attach
+                attach(self, tensors, "combine")
+                retained = tuple(value for key, value in tensors.items() if key != "ll_stage_timer_mode")
                 for value in retained:
                     if not isinstance(value, torch.Tensor):
                         raise ValueError("LL handle is missing a required tensor")

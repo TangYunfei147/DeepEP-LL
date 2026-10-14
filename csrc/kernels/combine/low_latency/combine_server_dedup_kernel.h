@@ -5,6 +5,7 @@
 #define COMBINE_DEDUP_EP_COMBINE_MEMORY_SERVER_DEDUP_KERNEL_H
 
 #include "kernel_operator.h"
+#include "../../dispatch/low_latency/common/ll_stage_timer_device.h"
 #include "../../dispatch/low_latency/common/ep_memory_server_dedup_count_layout.h"
 #include "../../dispatch/low_latency/common/comm_args.h"
 #include "ep_memory_server_dedup_buffer_layout.h"
@@ -24,9 +25,11 @@ public:
     __aicore__ inline void Init(GM_ADDR commArgs, GM_ADDR expertOut, GM_ADDR assistInfoForCombine, GM_ADDR sendCounts,
                                 GM_ADDR expertScales, GM_ADDR tokenType, GM_ADDR relayReadIndex, GM_ADDR sourceMask,
                                 GM_ADDR yOut, uint32_t bs, uint32_t h, uint32_t topK, uint32_t experts, uint8_t dtype,
-                                uint8_t quantMode, int64_t magic, bool enableDedup = true)
+                                uint8_t quantMode, int64_t magic, bool enableDedup = true,
+                                LlStageTimer::DeviceTimer* timer = nullptr)
     {
         (void)quantMode;
+        timer_ = timer;
         core_ = GetBlockIdx();
         coreNum_ = GetBlockNum();
         sendCores_ = recvCores_ = coreNum_ / 2U;
@@ -107,28 +110,48 @@ public:
     // 下列阶段属于同一个设备kernel，复用UB和完成事件，不能当作独立launch相减计时。
     __aicore__ inline void Process()
     {
-        if (enableDedup_) CopyLocalPendingTokens();
+        if (enableDedup_) {
+            if (timer_) timer_->Start(LlStageTimer::CombinePrepare);
+            CopyLocalPendingTokens();
+            if (timer_) timer_->End(LlStageTimer::CombinePrepare);
+        }
         if (core_ >= sendCores_) {
             if (enableDedup_) {
                 if (core_ >= notifyBegin_) {
+                    if (timer_) timer_->Start(LlStageTimer::CombineNotify);
                     NotifyServerCard();
+                    if (timer_) timer_->End(LlStageTimer::CombineNotify);
                     // Notification has been issued; do not add an MTE3 drain.
                 }
+                if (timer_) timer_->Start(LlStageTimer::CombineWaitReady);
                 WaitServerReady();
+                if (timer_) timer_->End(LlStageTimer::CombineWaitReady);
+                if (timer_) timer_->Start(LlStageTimer::CombinePartial);
                 ReturnPartialTokens();
+                if (timer_) timer_->End(LlStageTimer::CombinePartial);
+                if (timer_) timer_->Start(LlStageTimer::CombineAggregate);
                 const uint32_t retiredOutputs = AggregateSourceTokens();
+                if (timer_) timer_->End(LlStageTimer::CombineAggregate);
+                if (timer_) timer_->Start(LlStageTimer::CombineDrain);
                 DrainSharedOutputs(retiredOutputs);
+                if (timer_) timer_->End(LlStageTimer::CombineDrain);
             } else {
+                if (timer_) timer_->Start(LlStageTimer::CombineAggregate);
                 AggregateSourceTokensM6();
+                if (timer_) timer_->End(LlStageTimer::CombineAggregate);
             }
         } else {
+            if (timer_) timer_->Start(LlStageTimer::CombineDirect);
             ReturnDirectTokens();
             // Retain the full drain after direct-return DMA completion.
             PipeBarrier<PIPE_ALL>();
+            if (timer_) timer_->End(LlStageTimer::CombineDirect);
         }
         // Retires prepare publication, both zero sources and server notification;
         // no arena/pipe reset or exit may precede completion of their DMA reads.
+        if (timer_) timer_->Start(LlStageTimer::CombineFinalDrain);
         PipeBarrier<PIPE_ALL>();
+        if (timer_) timer_->End(LlStageTimer::CombineFinalDrain);
     }
 
 private:
@@ -447,6 +470,7 @@ private:
     GM_ADDR masksAddr_ = nullptr;
     GM_ADDR outputAddr_ = nullptr;
     bool enableDedup_ = false;
+    LlStageTimer::DeviceTimer* timer_ = nullptr;
     uint32_t bs_ = 0, experts_ = 0;
     uint8_t dtype_ = 0;
     uint32_t core_ = 0, h_ = 0, topK_ = 0, blocks_ = 0, resultStride_ = 0, tokens_ = 0, lanes_ = 0, laneBytes_ = 0,

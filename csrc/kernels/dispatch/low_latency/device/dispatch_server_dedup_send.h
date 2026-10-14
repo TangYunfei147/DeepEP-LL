@@ -6,6 +6,7 @@
 // prepare_snapshot.py仅在实验副本中截断SendPacket并加入观测输出，生产路径不受该提取影响。
 #ifndef DISPATCH_SERVER_DEDUP_SEND_H
 #define DISPATCH_SERVER_DEDUP_SEND_H
+#include "../common/ll_stage_timer_device.h"
 
 #include "kernel_operator.h"
 #include "dispatch_dedup_mxfp8_quant.h"
@@ -57,11 +58,14 @@ public:
     }
 
     // 摘要：执行本核发送主流程：准备 UB、优先发送去重首跳、再发送 DIRECT，最后写回源端元数据。
-    __aicore__ inline void Process(TBufPool<TPosition::VECCALC, 16>& scratch, uint32_t reservedBytes)
+    __aicore__ inline void Process(TBufPool<TPosition::VECCALC, 16>& scratch, uint32_t reservedBytes,
+                                   LlStageTimer::DeviceTimer* timer = nullptr)
     {
         // 1. 无 token 分片的发送核直接返回；有任务的核复用 SendCnt 释放出的 scratch。
         // reservedBytes 对应仍可能被计数发送读取的 UB，不能当作可用空间覆盖。
         if (enableDedup_ && count_ == 0U) return;
+        timer_ = timer;
+        if (timer_) timer_->Start(LlStageTimer::SendPrepare);
         scratch_ = &scratch;
         TQue<QuePosition::VECIN, 1> input;
         TBufPool<TPosition::VECIN, 1> cleanPool;
@@ -137,10 +141,14 @@ public:
         }
         PipeBarrier<PIPE_V>();
 
+        if (timer_) timer_->End(LlStageTimer::SendPrepare);
+        if (timer_) timer_->Start(LlStageTimer::SendPayload);
         if (enableDedup_)
             SendWithDedup(input);
         else
             SendWithoutDedup(input);
+        if (timer_) timer_->End(LlStageTimer::SendPayload);
+        if (timer_) timer_->Start(LlStageTimer::SendMetadata);
 
         // 6. 等待所有发送 lane 归还后，把本核 sourceMask 和 sourceWeights 写回 GM。
         // 只有 sourceMask 标记的权重位置才有效，未选中位置不应被下游消费。
@@ -152,6 +160,7 @@ public:
             DataCopyPad(weightOut_[uint64_t(start_) * k_], enableDedup_ ? sourceWeights_ : routeWeights_,
                         {1U, count_ * k_ * 4U, 0U, 0U, 0U});
         Sync<HardEvent::MTE3_S>();
+        if (timer_) timer_->End(LlStageTimer::SendMetadata);
     }
 
     // 摘要：去重发送主流程：先发同 server 合并的 FIRST_HOP，再按 server 顺序发缓存的 DIRECT。
@@ -163,7 +172,9 @@ public:
 
         for (uint32_t token = 0; token < count_; ++token) {
             uint32_t directMask = 0, firstHopCount = 0;
+            if (timer_) timer_->Start(LlStageTimer::SendClassify);
             Classify(token, directMask, firstHopCount);
+            if (timer_) timer_->End(LlStageTimer::SendClassify);
             sourceMasks_.SetValue(token, 0U);
             for (uint32_t group = 0; group < firstHopCount; ++group) {
                 const uint32_t mask = firstHopMasks_.GetValue(group);
@@ -361,6 +372,7 @@ private:
     __aicore__ inline void SendPacket(TQue<QuePosition::VECIN, 1>& input, uint32_t token, uint32_t firstK,
                                       uint32_t expert, uint32_t q, uint32_t mask)
     {
+        if (timer_) timer_->Start(LlStageTimer::SendPack);
         const uint32_t tokenId = token, destination = expert / localExperts_;
         auto x = input.template AllocTensor<XType>();
         if constexpr (Prequantized) {
@@ -409,6 +421,8 @@ private:
         if constexpr (!NeedQuantize) input.template FreeTensor<XType>(x);
         SetFlag<HardEvent::V_MTE3>(lane);
         WaitFlag<HardEvent::V_MTE3>(lane);
+        if (timer_) timer_->End(LlStageTimer::SendPack);
+        if (timer_) timer_->Start(LlStageTimer::SendIssue);
         GlobalTensor<uint8_t> destinationGm;
         destinationGm.SetGlobalBuffer(args_->peerMems[destination] +
                                       DispatchServerDedupDispatchOffset(data_, args_->rank, destination,
@@ -417,10 +431,12 @@ private:
         DataCopy(destinationGm, out, uint32_t(data_.tokenStride));
         SetFlag<HardEvent::MTE3_V>(lane);
         ++packets_;
+        if (timer_) timer_->End(LlStageTimer::SendIssue);
     }
 
     const __gm__ DispatchDedup::CommArgs* args_ = nullptr;
     TPipe* pipe_ = nullptr;
+    LlStageTimer::DeviceTimer* timer_ = nullptr;
     bool enableDedup_ = false;
     TBufPool<TPosition::VECCALC, 16>* scratch_ = nullptr;
     uint32_t sendCores_ = 0;

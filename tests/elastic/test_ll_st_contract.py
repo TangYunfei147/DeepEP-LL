@@ -262,15 +262,17 @@ def test_json_fp8_scale_matrix_covers_sync_modes(tmp_path):
 @pytest.mark.parametrize("iterations,expected", [(1, 20), (40, 20), (41, 20), (100, 50), (101, 50)])
 def test_delay_defaults_follow_operator_iterations(iterations, expected):
     args = st.parse_args(["--num-iters", str(iterations)])
-    assert (args.delay_exp_before, args.delay_exp_after) == (0, 1000)
+    assert (args.delay_exp_before, args.delay_exp_after) == (1, 0)
 
 
 def test_delay_defaults_honor_json_and_explicit_overrides(tmp_path):
     import json
 
     path = tmp_path / "delay.json"
-    path.write_text(json.dumps({"loops": 100, "delay_exp_before": 0}))
+    path.write_text(json.dumps({"loops": 100, "delay_exp_before": 1}))
     args = st.parse_args(["--config", str(path)])
-    assert (args.delay_exp_before, args.delay_exp_after) == (0, 1000)
+    assert (args.delay_exp_before, args.delay_exp_after) == (1, 0)
     args = st.parse_args(["--config", str(path), "--num-iters", "80", "--delay-exp-after", "7"])
-    assert (args.delay_exp_before, args.delay_exp_after) == (0, 7)
+    assert (args.delay_exp_before, args.delay_exp_after) == (1, 7)
+    with pytest.raises(ValueError, match="Reference profiler requires"):
+        st.validate_args(args, 16)

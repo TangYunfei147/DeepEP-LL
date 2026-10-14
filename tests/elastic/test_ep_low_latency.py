@@ -23,6 +23,7 @@ import sys
 from datetime import datetime, timedelta
 
 __test__ = False
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 MATRIX_FIELDS = ("num_tokens", "dtype", "num_experts", "hidden", "num_topk", "do_cpu_sync", "fp8_scale_dtype")
@@ -86,8 +87,8 @@ def make_parser():
     parser.add_argument(
         "--perf-tail",
         type=int,
-        default=30,
-        help="Statistics use last N samples; default: min(30, num_iters); 0 uses all",
+        default=50,
+        help="Statistics use last N samples; default: min(50, num_iters); 0 uses all",
     )
     parser.add_argument("--num-processes", type=int, default=8, help="Local spawned processes, as in DeepEP")
     parser.add_argument("--num-nodes", type=int, default=1)
@@ -140,13 +141,17 @@ def make_parser():
     parser.add_argument("--delay-rows", type=int, default=118260)
     parser.add_argument("--delay-cols", type=int, default=30720)
     parser.add_argument(
-        "--delay-exp-before", type=int, default=None, help="Pre-kernel exp padding; default: disabled (0)"
+        "--delay-exp-before", type=int, default=None, help="Compatibility: exactly one Exp before each captured call"
     )
     parser.add_argument(
-        "--delay-exp-after", type=int, default=None, help="Exp padding after the first kernel; default: 1000"
+        "--delay-exp-after", type=int, default=None, help="Compatibility: zero post-call Exp"
     )
-    parser.add_argument("--warmup", type=int, default=5)
-    parser.add_argument("--num-iters", type=int, default=50)
+    parser.add_argument("--warmup", type=int, default=10)
+    parser.add_argument("--num-iters", type=int, default=100)
+    parser.add_argument("--ll-stage-timer", action="store_true", help="Separate device-stage diagnostic calls; requires timer-enabled wheel")
+    parser.add_argument("--ll-timer-iters", type=int, default=5)
+    parser.add_argument("--ll-timer-mode", choices=("observe", "drain"), default="observe")
+    parser.add_argument("--ll-timer-frequency-hz", type=float, default=None, help="GetSystemCycle counter frequency; omit to retain raw ticks")
     parser.add_argument("--dispatch-only", action="store_true")
     parser.add_argument("--repeat-combine", type=int, default=2)
     parser.add_argument("--output", help="New rank-0 JSON result file (will not overwrite)")
@@ -273,7 +278,10 @@ def parse_args(argv=None):
     config_path = probe.parse_known_args(argv)[0].config
     configured = []
     if config_path:
-        config = json.loads(Path(config_path).read_text())
+        config_file = Path(config_path)
+        if not config_file.is_absolute():
+            config_file = PROJECT_ROOT / config_file
+        config = json.loads(config_file.read_text())
         if not isinstance(config, dict):
             raise ValueError("ST config must be a JSON object")
         matrix = config.pop("matrix", {})
@@ -317,6 +325,11 @@ def parse_args(argv=None):
                     ]
                 )
     args = make_parser().parse_args(configured + argv)
+    for name in ("output_dir", "output"):
+        value = getattr(args, name)
+        if value:
+            path = Path(value)
+            setattr(args, name, str(path if path.is_absolute() else PROJECT_ROOT / path))
     tail_explicit = any(option == "--perf-tail" or option.startswith("--perf-tail=") for option in configured + argv)
     if not tail_explicit:
         args.perf_tail = min(args.perf_tail, args.num_iters)
@@ -350,7 +363,7 @@ def launch_config(args, environ):
 
 
 def resolve_delay_counts(args):
-    for name, default in (("delay_exp_before", 0), ("delay_exp_after", 1000)):
+    for name, default in (("delay_exp_before", 1), ("delay_exp_after", 0)):
         if getattr(args, name) is None:
             setattr(args, name, default)
 
@@ -379,6 +392,12 @@ def validate_args(args, world):
         raise ValueError("Require K=1..16, EP<=E<=1024 and E divisible by EP")
     if args.num_sms != 0 or args.num_qps != 0:
         raise ValueError("LL ST requires --num-sms=0 and --num-qps=0; no HT fallback is permitted")
+    if not 1 <= args.ll_timer_iters <= 1000:
+        raise ValueError("ll-timer-iters must be 1..1000")
+    if args.ll_timer_frequency_hz is not None and (not math.isfinite(args.ll_timer_frequency_hz) or args.ll_timer_frequency_hz <= 0):
+        raise ValueError("Timer counter frequency must be positive and finite")
+    if args.ll_stage_timer and args.skip_check:
+        raise ValueError("Stage diagnostics require correctness checks")
     if args.warmup < 0 or args.num_iters < 1 or args.repeat_combine < 2:
         raise ValueError("Require warmup>=0, num-iters>=1 and repeat-combine>=2")
     if not 1 <= args.num_cpu_timeout_secs <= 300:
@@ -387,6 +406,8 @@ def validate_args(args, world):
         raise ValueError("num-bytes must be 2 MiB aligned and between 2 MiB and 32 GiB")
     if args.delay_rows <= 0 or args.delay_cols <= 0 or min(args.delay_exp_before, args.delay_exp_after) < 0:
         raise ValueError("Delay tensor dimensions must be positive and exp counts nonnegative")
+    if (args.delay_exp_before, args.delay_exp_after) != (1, 0):
+        raise ValueError("Reference profiler requires delay-exp-before=1 and delay-exp-after=0")
     if not 0 <= args.perf_tail <= args.num_iters:
         raise ValueError("Require 0 <= perf-tail <= num-iters")
     if args.output and Path(args.output).exists():
@@ -626,66 +647,36 @@ def measure(invoke, args, operation, profile_dir, progress=None):
     kernel = f"{operation}_server_dedup_kernel"
     if progress:
         progress(f"{operation}.warmup")
-    for _ in range(args.warmup):
-        completion_boundary(args)
-        output = trace_call(args, f"{operation}.invoke", invoke)
-        trace_call(args, f"{operation}.event.wait", output[-1].current_stream_wait)
-        trace_call(args, "device.synchronize", torch.npu.synchronize)
-        del output
     completion_boundary(args)
-    if progress:
-        progress(f"{operation}.profile")
     Path(profile_dir).mkdir(parents=True, exist_ok=True)
+    delay = torch.zeros(args.delay_rows, args.delay_cols, dtype=torch.float32, device="npu")
+    alignment = torch.ones(1, dtype=torch.float32, device=control_device(args, torch))
+    dist.all_reduce(alignment, op=dist.ReduceOp.SUM, async_op=False)
     with torch_npu.profiler.profile(
-        activities=[torch_npu.profiler.ProfilerActivity.CPU, torch_npu.profiler.ProfilerActivity.NPU],
-        schedule=torch_npu.profiler.schedule(wait=0, warmup=0, active=1, repeat=1, skip_first=0),
+        schedule=torch_npu.profiler.schedule(wait=0, warmup=1, active=1, repeat=1, skip_first=0),
         on_trace_ready=torch_npu.profiler.tensorboard_trace_handler(str(profile_dir)),
         experimental_config=torch_npu.profiler._ExperimentalConfig(
             aic_metrics=torch_npu.profiler.AiCMetrics.PipeUtilization,
             profiler_level=torch_npu.profiler.ProfilerLevel.Level1,
             export_type=torch_npu.profiler.ExportType.Text,
-            l2_cache=False,
-            data_simplification=False,
-        ),
-        profile_memory=True,
-        with_stack=False,
-        with_flops=False,
-        with_modules=False,
-    ):
-        # One capture, no profiler.step(), matching profile_operator's launch pattern.
-        alignment = torch.randn(128, dtype=torch.float32, device=control_device(args, torch))
-        request = trace_call(
-            args, f"{operation}.alignment.initial", dist.all_reduce, alignment, op=dist.ReduceOp.SUM, async_op=True
-        )
-        trace_call(args, f"{operation}.alignment.wait", request.wait)
-        delay = torch.zeros(args.delay_rows, args.delay_cols, dtype=torch.float32, device="npu")
-        for _ in range(args.delay_exp_before):
+            l2_cache=False, data_simplification=False),
+        profile_memory=True, with_stack=False, with_flops=False, with_modules=False,
+    ) as profiler:
+        for _ in range(args.warmup):
+            output = invoke()
+        torch.npu.synchronize()
+        profiler.step()
+        for _ in range(args.num_iters):
             torch.exp(delay, out=delay)
-        # Capture the first call before exp padding, then align ranks once.
-        with torch.profiler.record_function(f"deepep_ll_{operation}"):
-            if operation == "combine" and args.group_backend == "gloo":
-                completion_boundary(args)
-            output = trace_call(args, f"{operation}.invoke", invoke)
-        for _ in range(args.delay_exp_after):
-            torch.exp(delay, out=delay)
-        trace_call(
-            args,
-            f"{operation}.alignment.after_exp",
-            dist.all_reduce,
-            alignment,
-            op=dist.ReduceOp.SUM,
-            async_op=False,
-        )
-        # Remaining captured calls have no per-iteration all_reduce.
-        for iteration in range(1, args.num_iters):
-            with torch.profiler.record_function(f"deepep_ll_{operation}"):
-                if operation == "combine" and args.group_backend == "gloo":
-                    # CPU collectives cannot order completion of prior NPU combine calls.
-                    completion_boundary(args)
-                output = trace_call(args, f"{operation}.invoke", invoke)
-        # Finish device work once before exporting; no per-iteration NPU sync/event wait.
-        trace_call(args, "device.synchronize", torch.npu.synchronize)
-        del output, delay, alignment
+            alignment.fill_(1)
+            if args.group_backend == "gloo":
+                torch.npu.synchronize()
+            dist.all_reduce(alignment, op=dist.ReduceOp.SUM, async_op=False)
+            output = invoke()
+        dist.barrier()
+        torch.npu.synchronize()
+        profiler.step()
+    del output, delay, alignment
     if progress:
         progress(f"{operation}.read_profile")
     samples = []
@@ -699,6 +690,27 @@ def measure(invoke, args, operation, profile_dir, progress=None):
     gathered = [None] * dist.get_world_size()
     trace_call(args, f"{operation}.samples.all_gather", dist.all_gather_object, gathered, samples)
     return summarize_kernel(gathered, kernel, args.perf_tail)
+
+
+def diagnostic_calls(buffer, invoke, check, args, operation, rank, m, mode):
+    """Run separately from profiler; verify each instrumented operation before saving."""
+    from deep_ep.utils.ll_stage_timer import capture
+    from deep_ep._native import require_native
+    logical_group = require_native("LL timer").low_latency_ranks_per_group
+    directory = Path(args.run_directory) / f"case_{args.case_id:05d}" / mode / "ll_stage_timer" / operation / f"rank_{rank:03d}"
+    for iteration in range(args.ll_timer_iters):
+        completion_boundary(args)
+        with capture(buffer, operation, args.ll_timer_mode, args.ll_timer_frequency_hz) as trace:
+            output = invoke()
+            output[-1].current_stream_wait()
+        agree_check(lambda: check(output), args, rank)
+        metadata = dict(rank=rank, world_size=world, iteration=iteration,
+                        run_id=Path(args.run_directory).name, seed=args.seed, case_id=args.case_id,
+                        correctness="passed", config={**case_config(args, m),
+                        "logical_group_size": logical_group},
+                        protocol="separate diagnostic; completion boundary but no Exp prelude; not the profiler sample set")
+        agree_check(lambda: trace.save(directory / f"sample_{iteration:04d}.json", metadata), args, rank)
+        del output
 
 
 def run_case(buffer, args, rank, world, m, mode):
@@ -767,6 +779,15 @@ def run_case(buffer, args, rank, world, m, mode):
     agree_check(check_backend, args, rank)  # Never allow --skip-check to hide an HT fallback.
     if not args.skip_check:
         agree_check(lambda: verify_dispatch(recv, handle, entries, args, world, m), args, rank)
+    if args.ll_stage_timer:
+        diagnostic_calls(buffer, dispatch,
+                         lambda output: verify_dispatch(output[0], output[3], entries, args, world, m),
+                         args, "dispatch", rank, m, mode)
+        # Reestablish matching fresh handle/output before expert preparation.
+        completion_boundary(args)
+        recv, recv_idx, recv_weights, handle, event = dispatch()
+        event.current_stream_wait()
+        torch.npu.synchronize()
     if args.dispatch_only:
         result = {
             "case_id": args.case_id,
@@ -819,6 +840,15 @@ def run_case(buffer, args, rank, world, m, mode):
                 )
 
         agree_check(check_combine, args, rank)
+    if args.ll_stage_timer:
+        def check_timed_combine(output):
+            if output[1] is not None or tuple(output[0].shape) != (args.num_tokens, args.hidden):
+                raise AssertionError("Instrumented combine output contract differs")
+            torch.testing.assert_close(output[0].cpu(), expected,
+                                       rtol=0.003 if args.dtype == "fp16" else 0.01,
+                                       atol=0.004 if args.dtype == "fp16" else 0.03125)
+        diagnostic_calls(buffer, lambda: buffer.combine(expert_output, handle, topk_weights=None),
+                         check_timed_combine, args, "combine", rank, m, mode)
     result = {
         "case_id": args.case_id,
         "route": mode,
@@ -883,6 +913,19 @@ def worker(local_rank, args):
     )
     buffer = None
     try:
+        # Agree before creating a SHMEM Session or launching an instrumented kernel.
+        core_config = native.low_latency_core_config()
+        capability = {"active_aiv": core_config["active_aiv"],
+                      "logical_group": native.low_latency_ranks_per_group,
+                      "core_protocol": native.low_latency_core_protocol,
+                      "stage_timer": bool(getattr(native, "low_latency_stage_timer_enabled", False))}
+        capabilities = [None] * world
+        dist.all_gather_object(capabilities, capability)
+        if any(item != capabilities[0] for item in capabilities):
+            raise RuntimeError("LL AIV/group/protocol/timer build differs across ranks")
+        if args.ll_stage_timer and not capability["stage_timer"]:
+            raise RuntimeError("All ranks must install a DEEPEP_LL_STAGE_TIMER=ON wheel")
+        args.ll_stage_timer_capabilities = capabilities
         run_directory = [None]
 
         def reserve_directory():

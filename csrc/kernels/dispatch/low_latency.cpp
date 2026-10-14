@@ -22,9 +22,12 @@ extern "C" [[bisheng::core_ratio(0, 1)]] __global__ __aicore__ void dispatch_ser
     GM_ADDR commArgs, GM_ADDR x, GM_ADDR expertIds, GM_ADDR expertScales, GM_ADDR expandXOut, GM_ADDR dynamicScalesOut,
     GM_ADDR expertTokenNumsOut, GM_ADDR sendCountsOut, GM_ADDR tokenTypeOut, GM_ADDR destinationIndexOut,
     GM_ADDR relayReadIndexOut, GM_ADDR sourceMaskOut, GM_ADDR expertScalesOut, GM_ADDR tilingData,
-    int64_t reservedMagic, GM_ADDR inputScales)
+    int64_t reservedMagic, GM_ADDR inputScales, GM_ADDR stageTimer, uint32_t timerMode)
 {
     util_set_ffts_config(reinterpret_cast<const __gm__ DispatchDedup::CommArgs*>(commArgs)->fftsVal);
+    LlStageTimer::DeviceTimer timer;
+    timer.Init(stageTimer, 1U, timerMode);
+    timer.Start(LlStageTimer::Kernel);
     // Host owns validation; each core reads its configuration once before work.
     const auto* tiling = reinterpret_cast<const __gm__ DispatchDedup::EpServerDedupTilingData*>(tilingData);
     const uint32_t bs = tiling->bs;
@@ -38,12 +41,14 @@ extern "C" [[bisheng::core_ratio(0, 1)]] __global__ __aicore__ void dispatch_ser
     const uint8_t expandXOutDtype = tiling->expandXOutDtype;
     const auto inputMode = static_cast<DispatchDedup::EpServerDedupInputMode>(tiling->inputMode);
     AscendC::TPipe pipe;
+    timer.Start(LlStageTimer::WorkerInit);
     // 下列模板分支决定输入类型、线上FP8格式与是否已预量化；比较性能时须固定这些条件。
 #define DISPATCH_SERVER_DEDUP_RUN(XType, WireFp8, E4M3, Prequantized)                                                  \
     DispatchDedup::DispatchMemoryServerDedupKernel<XType, WireFp8, E4M3, Prequantized> kernel;                         \
     kernel.Init(commArgs, x, expertIds, expertScales, expandXOut, dynamicScalesOut, expertTokenNumsOut, sendCountsOut, \
                 tokenTypeOut, destinationIndexOut, relayReadIndexOut, sourceMaskOut, expertScalesOut, bs, h, topK,     \
-                moeExpertNum, expertTokenNumsType, &pipe, inputScales, enableDedup);                                   \
+                moeExpertNum, expertTokenNumsType, &pipe, inputScales, enableDedup, &timer);                           \
+    timer.End(LlStageTimer::WorkerInit);                                                                               \
     kernel.Process()
     if (inputMode == DispatchDedup::EpServerDedupInputMode::PrequantizedFp8Packs && quantMode == 4 &&
         dtype == DispatchDedup::DISPATCH_DEDUP_DATA_TYPE_FP8E4M3 &&
@@ -67,10 +72,20 @@ extern "C" [[bisheng::core_ratio(0, 1)]] __global__ __aicore__ void dispatch_ser
         }
     }
 #undef DISPATCH_SERVER_DEDUP_RUN
+    timer.End(LlStageTimer::Kernel);
+    timer.Finish();
 }
 
 // Same in-library launch mechanism as all other ascendEP kernels.
 #include "low_latency/launch.hpp"
+extern "C" DEEPEP_EXPORT uint32_t deepep_ll_stage_timer_enabled()
+{
+#ifdef DEEPEP_LL_STAGE_TIMER
+    return 1U;
+#else
+    return 0U;
+#endif
+}
 extern "C" DEEPEP_EXPORT uint32_t deepep_ll_ranks_per_group()
 {
     return DispatchDedup::kLlRanksPerGroup;
@@ -87,7 +102,7 @@ extern "C" DEEPEP_EXPORT void dispatch_server_dedup_kernel_do(void* stream, cons
     dispatch_server_dedup_kernel<<<a.coreNum, DEEPEP_KERNEL_LAUNCH_UB(0), stream>>>(
         a.commArgs, a.x, a.expertIds, a.expertScales, a.expandXOut, a.dynamicScalesOut, a.expertTokenNumsOut,
         a.sendCountsOut, a.tokenTypeOut, a.destinationIndexOut, a.relayReadIndexOut, a.sourceMaskOut, a.expertScalesOut,
-        a.tilingData, a.reservedMagic, a.inputScales);
+        a.tilingData, a.reservedMagic, a.inputScales, a.stageTimer, a.timerMode);
 }
 
 #endif

@@ -54,3 +54,5 @@ A5 validation uses devices 0/1 only. CPU protocol tests exercise G=1..16,
 divisible EP16..256 (including non-power-of-two layout cases) and AIV16..72, including repeated ready clearing. They do not prove
 NPU ordering or cross-host communication. Full LL correctness and performance
 must be validated by the user on the target deployment.
+
+LL设备阶段打点：参见 [tests/ll_stage_timer/README.md](tests/ll_stage_timer/README.md)。默认关闭，通过独立诊断调用采集每rank/每AIV阶段累计ticks。

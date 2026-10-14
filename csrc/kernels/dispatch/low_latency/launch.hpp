@@ -24,10 +24,13 @@ struct EpServerDedupKernelArgs {
     uint8_t* tilingData;    // Per-launch device tiling, read from GM by the kernel.
     int64_t reservedMagic;  // Must be zero; device owns the persistent bank selector.
     uint8_t* inputScales;   // ABI: complete INT32 packed E8M0 input rows.
+    uint8_t* stageTimer;
+    uint32_t timerMode;
     uint32_t coreNum;       // Queried pure-AIV launch size; must match Host layouts.
 };
 static_assert(std::is_standard_layout<EpServerDedupKernelArgs>::value, "launch arguments must be standard layout");
-static_assert(sizeof(EpServerDedupKernelArgs) == 136, "launch ABI includes fifteen addresses, reserved magic and active core count");
+static_assert(sizeof(EpServerDedupKernelArgs) == 144,
+              "launch ABI includes timer pointer, timer mode and active core count");
 static_assert(offsetof(EpServerDedupKernelArgs, dynamicScalesOut) == 40, "quant scale address");
 static_assert(offsetof(EpServerDedupKernelArgs, tokenTypeOut) == 64, "token type address");
 static_assert(offsetof(EpServerDedupKernelArgs, destinationIndexOut) == 72, "destination index address");
@@ -39,9 +42,13 @@ static_assert(offsetof(EpServerDedupKernelArgs, reservedMagic) == 112, "reserved
 
 static_assert(offsetof(EpServerDedupKernelArgs, inputScales) == 120, "input packed scale address");
 
+static_assert(offsetof(EpServerDedupKernelArgs, stageTimer) == 128, "timer address");
+static_assert(offsetof(EpServerDedupKernelArgs, timerMode) == 136, "timer mode");
+static_assert(offsetof(EpServerDedupKernelArgs, coreNum) == 140, "active cores");
 }  // namespace deepep
 
 extern "C" void dispatch_server_dedup_kernel_do(void* stream, const deepep::EpServerDedupKernelArgs* args);
 
 extern "C" uint32_t deepep_ll_core_protocol_version();
 extern "C" uint32_t deepep_ll_ranks_per_group();
+extern "C" uint32_t deepep_ll_stage_timer_enabled();

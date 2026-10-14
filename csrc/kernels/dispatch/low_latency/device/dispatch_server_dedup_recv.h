@@ -3,6 +3,7 @@
 
 #ifndef DISPATCH_SERVER_DEDUP_RECV_H
 #define DISPATCH_SERVER_DEDUP_RECV_H
+#include "../common/ll_stage_timer_device.h"
 
 #include "kernel_operator.h"
 #include "adv_api/reduce/sum.h"
@@ -52,8 +53,9 @@ public:
     }
 
     // 摘要：执行接收主流程：加载前缀、构建任务、批量探测、预取并消费就绪包，最后清理本核槽位标记。
-    __aicore__ inline void Process()
+    __aicore__ inline void Process(LlStageTimer::DeviceTimer* timer = nullptr)
     {
+        if (timer) timer->Start(LlStageTimer::RecvPrepare);
         // 1. 调用方已完成计数阶段的写入，才能 Reset TPipe 回收旧计数 UB。
         // 从当前 magic 窗口加载本接收核的完整前缀副本，MTE2_S 后 Scalar 才能使用。
 
@@ -77,10 +79,12 @@ public:
 
 
         // 空任务核没有拥有的接收槽，完成打点后直接返回，无需参与 packet 轮询。
+        if (timer) timer->End(LlStageTimer::RecvPrepare);
         if (tasks_.Count() == 0U) {
             return;
         }
 
+        if (timer) timer->Start(LlStageTimer::RecvPrepare);
         // 3. 为每批最多 16 个 packet 的块标记分配探测/归约空间。
         // flags 和 work 额外留尾部空间，覆盖归约实现的对齐读取；先清零 flags 的无效区域。
         const uint32_t blocks = uint32_t(data_.blockCount);
@@ -110,6 +114,7 @@ public:
         const uint32_t depth = lanes_;
         // 4. issued/consumed 是跨批累计的加载/消费序号，二者之差限制在 lane 深度内。
         // 它们按相同顺序推进，保证 consumed % lanes_ 对应之前预取的同一个 packet。
+        if (timer) timer->End(LlStageTimer::RecvPrepare);
         uint32_t scan = 0U, issued = 0U, consumed = 0U;
         while (tasks_.PendingCount() != 0U) {
             // Include all empty scans in one wait interval. Recording every
@@ -117,6 +122,7 @@ public:
             // 从 pending 表分批循环探测；一批没有就绪项就继续扫描，直到至少一个包到齐。
             // Probe 对每个 packet 检查全部块标记，不是只看到首块就认为数据可读。
 
+            if (timer) timer->Start(LlStageTimer::RecvWait);
             uint32_t count;
             ProbeResult probe;
             do {
@@ -126,6 +132,8 @@ public:
                 probe = Probe(scan, count);
                 if (probe.readyMask == 0U) scan += count;
             } while (probe.readyMask == 0U);
+            if (timer) timer->End(LlStageTimer::RecvWait);
+            if (timer) timer->Start(LlStageTimer::RecvConsume);
 
             // Load and consume the immutable snapshot in the same descending
             // order. Higher-index removals cannot change lower pending entries.
@@ -150,7 +158,9 @@ public:
                 tasks_.RemovePending(scan + index);
                 ++consumed;
             }
+            if (timer) timer->End(LlStageTimer::RecvConsume);
         }
+        if (timer) timer->Start(LlStageTimer::RecvCleanup);
         // 5. pending 清空后，等待各 lane 在途写入，随后统一清除本核所有槽位的块标记。
         // 清理使用稳定任务表，不能使用已压缩为空的 pending 表；payload 本身不清零。
 
@@ -162,6 +172,7 @@ public:
 
         // 最终流水屏障确保输出、relay 和标记清理完成。
         PipeBarrier<PIPE_ALL>();
+        if (timer) timer->End(LlStageTimer::RecvCleanup);
     }
 
 private:

@@ -19,22 +19,32 @@
 // profiler中的combine_server_dedup_kernel包含下层准备、控制通知、回传与最终归约。
 extern "C" [[bisheng::core_ratio(0, 1)]] __global__ __aicore__ void combine_server_dedup_kernel(
     GM_ADDR commArgs, GM_ADDR expertOut, GM_ADDR destinationIndex, GM_ADDR sendCounts, GM_ADDR expertScales,
-    GM_ADDR tokenType, GM_ADDR relayReadIndex, GM_ADDR sourceMask, GM_ADDR yOut, GM_ADDR tilingData)
+    GM_ADDR tokenType, GM_ADDR relayReadIndex, GM_ADDR sourceMask, GM_ADDR yOut, GM_ADDR tilingData, GM_ADDR stageTimer,
+    uint32_t timerMode)
 {
     const auto* args = reinterpret_cast<const __gm__ DispatchDedup::CommArgs*>(commArgs);
     util_set_ffts_config(args->fftsVal);
+    LlStageTimer::DeviceTimer timer;
+    timer.Init(stageTimer, 2U, timerMode);
+    timer.Start(LlStageTimer::Kernel);
+    timer.Start(LlStageTimer::Magic);
     uint32_t magic;
     {
         AscendC::TPipe pipe;
         // 与dispatch共用每核窗口轮转规则；即使本核没有有效token也必须参加本次轮转。
         magic = DispatchDedup::RotateDispatchServerDedupMagic(args, AscendC::GetBlockIdx(), &pipe);
     }
+    timer.End(LlStageTimer::Magic);
+    timer.Start(LlStageTimer::WorkerInit);
     const auto* td = reinterpret_cast<const volatile __gm__ CombineDedup::EpServerDedupCombineTilingData*>(tilingData);
     const bool enableDedup = DispatchDedup::EpServerDedupEnabled(td->numMaxTokensPerRank);
     CombineDedup::CombineMemoryServerDedupKernel kernel;
     kernel.Init(commArgs, expertOut, destinationIndex, sendCounts, expertScales, tokenType, relayReadIndex, sourceMask,
-                yOut, td->bs, td->h, td->topK, td->moeExpertNum, td->dtype, 0, magic, enableDedup);
+                yOut, td->bs, td->h, td->topK, td->moeExpertNum, td->dtype, 0, magic, enableDedup, &timer);
+    timer.End(LlStageTimer::WorkerInit);
     kernel.Process();
+    timer.End(LlStageTimer::Kernel);
+    timer.Finish();
 }
 extern "C" DEEPEP_EXPORT void combine_server_dedup_kernel_do(void* stream,
                                                              const deepep::EpServerDedupCombineKernelArgs* args)
@@ -42,6 +52,6 @@ extern "C" DEEPEP_EXPORT void combine_server_dedup_kernel_do(void* stream,
     const auto& a = *args;
     combine_server_dedup_kernel<<<a.coreNum, DEEPEP_KERNEL_LAUNCH_UB(0), stream>>>(
         a.commArgs, a.expertOut, a.destinationIndex, a.sendCounts, a.expertScales, a.tokenType, a.relayReadIndex,
-        a.sourceMask, a.yOut, a.tilingData);
+        a.sourceMask, a.yOut, a.tilingData, a.stageTimer, a.timerMode);
 }
 #endif

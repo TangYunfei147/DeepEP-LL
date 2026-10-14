@@ -18,6 +18,7 @@ option(DEEPEP_BUILD_EP_GMM_FUSED "Build Ascend950 communication/GMM experiment" 
 find_package(Python REQUIRED COMPONENTS Interpreter Development.Module)
 find_package(pybind11 CONFIG REQUIRED)
 include(cmake/Dependencies.cmake)
+option(DEEPEP_LL_STAGE_TIMER "Compile optional LL device stage tracing" OFF)
 option(DEEPEP_BUILD_MEGAMOE "Build the optional MegaMoE Beta" OFF)
 option(DEEPEP_MEGAMOE_TIMER "Compile MegaMoE device tracing" OFF)
 include(cmake/Device.cmake)

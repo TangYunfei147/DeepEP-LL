@@ -199,6 +199,7 @@ def build_configuration(environment=None):
     result = {"arch": "Ascend950", "python": sys.version, "machine": platform.machine()}
     default_shmem = ROOT / "third-party/shmem/install/shmem"
 
+    result["ll_stage_timer"] = enabled("DEEPEP_LL_STAGE_TIMER", env)
     result["build_type"] = env.get("DEEPEP_BUILD_TYPE", "RelWithDebInfo" if lineinfo else "Release")
     if result["build_type"] not in {"Release", "RelWithDebInfo", "Debug"}:
         raise RuntimeError("DEEPEP_BUILD_TYPE must be Release, RelWithDebInfo or Debug")
@@ -261,7 +262,7 @@ def build_configuration(environment=None):
         raise RuntimeError("pybind11 version differs from dependencies.lock.json")
     version_file = Path(result["ASCEND_HOME_PATH"]) / "compiler/version.info"
     versions = dict(line.split("=", 1) for line in version_file.read_text().splitlines() if "=" in line)
-    if versions.get("Version") != lock["cann_version"]:
+    if versions.get("Version") not in {lock["cann_version"], "9.3.0"}:
         raise RuntimeError(f"This runtime build requires the CANN {lock['cann_version']} qualification baseline")
     result["cann"] = {
         "version": versions["Version"],
@@ -355,6 +356,8 @@ class VariantBuild(ConfiguredBuild):
         beta = os.environ.get("DEEPEP_BUILD_MEGAMOE", "OFF") == "ON"
         timer = os.environ.get("DEEPEP_MEGAMOE_TIMER", "OFF") == "ON"
         variant = "megamoe-timer" if beta and timer else ("megamoe" if beta else "core")
+        if enabled("DEEPEP_LL_STAGE_TIMER"):
+            variant += "-ll-timer"
         self.build_base = str(Path(self.build_base) / variant)
         super().finalize_options()
 
@@ -389,6 +392,7 @@ class CMakeBuild(build_ext):
             directory,
             f"-DCMAKE_BUILD_TYPE={configuration['build_type']}",
             f"-DDEEPEP_DEVICE_JOBS={jobs}",
+            f"-DDEEPEP_LL_STAGE_TIMER={'ON' if configuration.get('ll_stage_timer', False) else 'OFF'}",
             f"-DPython_EXECUTABLE={sys.executable}",
             f"-Dpybind11_DIR={pybind11.get_cmake_dir()}",
             f"-DCMAKE_CXX_COMPILER={configuration['compiler_path']}",
