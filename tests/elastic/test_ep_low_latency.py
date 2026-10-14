@@ -180,6 +180,8 @@ def sample_stats(values):
         "min_us": ordered[0],
         "median_us": statistics.median(values),
         "max_us": ordered[-1],
+        "p50_us": percentile(0.50),
+        "p90_us": percentile(0.90),
         "p95_us": percentile(0.95),
         "p99_us": percentile(0.99),
     }
