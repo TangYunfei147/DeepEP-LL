@@ -18,7 +18,6 @@ import subprocess
 import socket
 import traceback
 
-from startup_diagnostics import StartupDiagnostics
 from bandwidth_model import load_hardware, comm_edges
 from profile_common import Capture, read_named_tasks, WARMUP, CAPTURE_STEPS, PROFILE_STEPS, DELAY_SHAPE
 
@@ -193,122 +192,98 @@ def main(argv=None):
     rank, world, device = (identity[key] for key in ('rank', 'world', 'device'))
     out = args.output_dir.resolve()/f'rank_{rank}'
     out.mkdir(parents=True, exist_ok=False)
-    with StartupDiagnostics(out, rank) as startup:
-        # Set before importing Torch, including when launched directly without run.sh.
-        for key, value in {
-            'TMPDIR': ROOT/'.tmp', 'TMP': ROOT/'.tmp', 'TEMP': ROOT/'.tmp',
-            'XDG_CACHE_HOME': ROOT/'.cache', 'ASCEND_CACHE_PATH': ROOT/'.cache/ascend',
-            'SHMEM_LOG_PATH': out/'shmem_logs', 'ASCEND_WORK_PATH': out/'ascend_logs',
-            'ASCEND_PROCESS_LOG_PATH': out/'ascend_logs',
-        }.items():
-            value.mkdir(parents=True, exist_ok=True)
-            os.environ[key] = str(value)
-        os.environ['PYTHONDONTWRITEBYTECODE'] = '1'
-        startup.mark('torch_import_begin')
-        import torch
-        import torch.distributed as dist
-        import torch_npu  # noqa: F401
-        startup.mark('torch_import_done')
-        startup.mark('set_device_begin')
-        torch.npu.set_device(device)
-        startup.mark('set_device_done')
-        if world > 1:
-            startup.mark('hccl_init_begin')
-            dist.init_process_group('hccl', rank=rank, world_size=world, timeout=timedelta(seconds=180))
-            startup.mark('hccl_init_done')
-            # Initialize all contexts before SHMEM's short client retry window starts.
-            startup.mark('hccl_tensor_begin')
-            temp = torch.ones(1, device='npu')
-            startup.mark('hccl_all_reduce_begin')
-            dist.all_reduce(temp)
-            startup.mark('hccl_all_reduce_submitted')
-            startup.mark('hccl_sync_begin')
-            torch.npu.synchronize()
-            startup.mark('hccl_sync_done')
-            del temp
-        startup.mark('binary_hash_begin')
-        libpath = Path(identity['library'])
-        identity['binary_sha256'] = hashlib.sha256(libpath.read_bytes()).hexdigest()
-        startup.mark('binary_hash_done')
-        startup.mark('git_identity_begin')
-        identity['git_revision'] = subprocess.check_output(['git', '-C', str(HERE), 'rev-parse', 'HEAD'], text=True).strip()
-        identity['git_dirty'] = bool(subprocess.check_output(['git', '-C', str(HERE), 'status', '--porcelain'], text=True).strip())
-        startup.mark('git_identity_done')
-        startup.mark('source_hash_begin')
-        identity['source_sha256'] = {str(p.relative_to(HERE)): hashlib.sha256(p.read_bytes()).hexdigest()
-            for p in sorted(HERE.rglob('*')) if p.is_file() and p.suffix in ('.py', '.cpp', '.h', '.sh', '.txt')
-            and not {'build', 'snapshot', '__pycache__'}.intersection(p.relative_to(HERE).parts)}
-        startup.mark('source_hash_done')
-        startup.mark('identity_write_begin')
-        identity['configuration'] = {k: str(v) if isinstance(v, Path) else v for k, v in vars(args).items()}
-        (out/'identity.json').write_text(json.dumps(identity, indent=2))
-        startup.mark('identity_write_done')
-        capture = None
-        errors = []
-        phases = []
+    # Set before importing Torch, including when launched directly without run.sh.
+    for key, value in {
+        'TMPDIR': ROOT/'.tmp', 'TMP': ROOT/'.tmp', 'TEMP': ROOT/'.tmp',
+        'XDG_CACHE_HOME': ROOT/'.cache', 'ASCEND_CACHE_PATH': ROOT/'.cache/ascend',
+        'SHMEM_LOG_PATH': out/'shmem_logs', 'ASCEND_WORK_PATH': out/'ascend_logs',
+        'ASCEND_PROCESS_LOG_PATH': out/'ascend_logs',
+    }.items():
+        value.mkdir(parents=True, exist_ok=True)
+        os.environ[key] = str(value)
+    os.environ['PYTHONDONTWRITEBYTECODE'] = '1'
+    import torch
+    import torch.distributed as dist
+    import torch_npu  # noqa: F401
+    torch.npu.set_device(device)
+    if world > 1:
+        dist.init_process_group('hccl', rank=rank, world_size=world, timeout=timedelta(seconds=180))
+        # Initialize all contexts before SHMEM's short client retry window starts.
+        temp = torch.ones(1, device='npu')
+        dist.all_reduce(temp)
+        torch.npu.synchronize()
+        del temp
+    libpath = Path(identity['library'])
+    identity['binary_sha256'] = hashlib.sha256(libpath.read_bytes()).hexdigest()
+    identity['git_revision'] = subprocess.check_output(['git', '-C', str(HERE), 'rev-parse', 'HEAD'], text=True).strip()
+    identity['git_dirty'] = bool(subprocess.check_output(['git', '-C', str(HERE), 'status', '--porcelain'], text=True).strip())
+    identity['source_sha256'] = {str(p.relative_to(HERE)): hashlib.sha256(p.read_bytes()).hexdigest()
+        for p in sorted(HERE.rglob('*')) if p.is_file() and p.suffix in ('.py', '.cpp', '.h', '.sh', '.txt')
+        and not {'build', 'snapshot', '__pycache__'}.intersection(p.relative_to(HERE).parts)}
+    identity['configuration'] = {k: str(v) if isinstance(v, Path) else v for k, v in vars(args).items()}
+    (out/'identity.json').write_text(json.dumps(identity, indent=2))
+    capture = None
+    errors = []
+    phases = []
 
-        @ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_int)
-        def hook(phase):
-            nonlocal capture
-            try:
-                phases.append(phase)
-                if phase == 0:
-                    startup.stop('native_validation_done')
-                    capture = Capture(out/'trace', args.delay_rows, args.delay_cols, bridge=True)
-                elif phase == 1:
-                    capture.start_capture()
-                elif phase == 2:
-                    capture.before_sample()
-                elif phase == 3:
-                    capture.close()
-                else:
-                    raise ValueError(f'Unknown native profiling phase {phase}')
-                return 0
-            except BaseException:
-                errors.append(traceback.format_exc())
-                return 1
-
-        startup.mark('library_load_begin')
-        library = ctypes.CDLL(str(libpath), mode=ctypes.RTLD_LOCAL)
-        startup.mark('library_load_done')
-        library.ll_probe_run.argtypes = [ctypes.c_int, ctypes.POINTER(ctypes.c_char_p), type(hook)]
-        library.ll_probe_run.restype = ctypes.c_int
-        encoded = [arg.encode() for arg in identity['argv']]
-        cargv = (ctypes.c_char_p*len(encoded))(*encoded)
-        # C++ validation and CSV diagnostics are kept per rank, separate from Python logs.
-        libc = ctypes.CDLL(None)
-        saved = [os.dup(1), os.dup(2)]
-        rc = -1
+    @ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_int)
+    def hook(phase):
+        nonlocal capture
         try:
-            with (out/'event_diagnostics.csv').open('w') as csvfile, (out/'native.log').open('w') as logfile:
-                sys.stdout.flush(); sys.stderr.flush(); libc.fflush(None)
-                os.dup2(csvfile.fileno(), 1); os.dup2(logfile.fileno(), 2)
-                try:
-                    startup.mark('native_init_validation_begin')
-                    rc = library.ll_probe_run(len(encoded), cargv, hook)
-                finally:
-                    libc.fflush(None)
-                    os.dup2(saved[0], 1); os.dup2(saved[1], 2)
-        finally:
-            for fd in saved:
-                os.close(fd)
-            if capture is not None and not capture.closed:
-                capture.close(success=False)
-        if rc or errors:
-            (out/'failure.json').write_text(json.dumps(dict(returncode=rc, errors=errors, phases=phases), indent=2))
-            raise RuntimeError(f'Native validation/profiling failed: {out}/native.log')
-        if phases != [0, 1]+[2]*args.samples+[3]:
-            raise RuntimeError(f'Unexpected capture phases: {phases}')
-        # Legacy shmem rank1 receives only; it must not invent sender task samples.
-        groups = [] if args.kind == 'shmem' and rank == 1 else read_named_tasks(out/'trace', identity['kernel'], args.samples, args.tail)
-        report = dict(**identity, correctness_passed=True, kernel_statistics=groups,
-                      native_log=str(out/'native.log'), event_csv_role='diagnostic_under_profiler_not_baseline',
-                      task_statistics_are_not_end_to_end_latency=True)
-        if world > 1:
-            dist.barrier()
-            dist.destroy_process_group()
-        (out/'report.json').write_text(json.dumps(report, indent=2))
-        print(f'PASS rank={rank}: receiver/metadata checks and named task profiling: {out}', flush=True)
+            phases.append(phase)
+            if phase == 0:
+                capture = Capture(out/'trace', args.delay_rows, args.delay_cols, bridge=True)
+            elif phase == 1:
+                capture.start_capture()
+            elif phase == 2:
+                capture.before_sample()
+            elif phase == 3:
+                capture.close()
+            else:
+                raise ValueError(f'Unknown native profiling phase {phase}')
+            return 0
+        except BaseException:
+            errors.append(traceback.format_exc())
+            return 1
+
+    library = ctypes.CDLL(str(libpath), mode=ctypes.RTLD_LOCAL)
+    library.ll_probe_run.argtypes = [ctypes.c_int, ctypes.POINTER(ctypes.c_char_p), type(hook)]
+    library.ll_probe_run.restype = ctypes.c_int
+    encoded = [arg.encode() for arg in identity['argv']]
+    cargv = (ctypes.c_char_p*len(encoded))(*encoded)
+    # C++ validation and CSV diagnostics are kept per rank, separate from Python logs.
+    libc = ctypes.CDLL(None)
+    saved = [os.dup(1), os.dup(2)]
+    rc = -1
+    try:
+        with (out/'event_diagnostics.csv').open('w') as csvfile, (out/'native.log').open('w') as logfile:
+            sys.stdout.flush(); sys.stderr.flush(); libc.fflush(None)
+            os.dup2(csvfile.fileno(), 1); os.dup2(logfile.fileno(), 2)
+            try:
+                rc = library.ll_probe_run(len(encoded), cargv, hook)
+            finally:
+                libc.fflush(None)
+                os.dup2(saved[0], 1); os.dup2(saved[1], 2)
+    finally:
+        for fd in saved:
+            os.close(fd)
+        if capture is not None and not capture.closed:
+            capture.close(success=False)
+    if rc or errors:
+        (out/'failure.json').write_text(json.dumps(dict(returncode=rc, errors=errors, phases=phases), indent=2))
+        raise RuntimeError(f'Native validation/profiling failed: {out}/native.log')
+    if phases != [0, 1]+[2]*args.samples+[3]:
+        raise RuntimeError(f'Unexpected capture phases: {phases}')
+    # Legacy shmem rank1 receives only; it must not invent sender task samples.
+    groups = [] if args.kind == 'shmem' and rank == 1 else read_named_tasks(out/'trace', identity['kernel'], args.samples, args.tail)
+    report = dict(**identity, correctness_passed=True, kernel_statistics=groups,
+                  native_log=str(out/'native.log'), event_csv_role='diagnostic_under_profiler_not_baseline',
+                  task_statistics_are_not_end_to_end_latency=True)
+    if world > 1:
+        dist.barrier()
+        dist.destroy_process_group()
+    (out/'report.json').write_text(json.dumps(report, indent=2))
+    print(f'PASS rank={rank}: receiver/metadata checks and named task profiling: {out}', flush=True)
 
 
 if __name__ == '__main__':

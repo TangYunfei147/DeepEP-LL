@@ -106,13 +106,3 @@ python3 tests/ll_probe/profiling/analyze_profile.py \
 `python3 profiling/validate_profile.py`强制卡0/1，小Exp `[64,64]`、warmup2/capture3/tail2，只验正确性、profiler导出和解析；不是目标带宽或默认负载性能证据。`--plan`不初始化NPU。大Exp默认尺寸、实际N方竞争、跨主机互联和原生EP16/32需要用户目标机验收。
 
 场景1/3可用`--targets R [R ...]`指定全局目标rank，场景2可用`--sources R [R ...]`指定来源rank；固定根rank为0。显式targets与fanout互斥，详见[RUN_ARGS.md](RUN_ARGS.md)。
-
-## 初始化停滞诊断
-
-每rank创建输出目录后、导入Torch前，默认开启初始化诊断：
-- `startup.jsonl`：带UTC时间、单调时间、rank/PID的阶段记录，覆盖导入、选卡、HCCL建域、首次all_reduce和同步、二进制/Git/源码身份收集、动态库加载、native初始化及正确性校验。
-- `startup_stacks.log`：某阶段超过30秒时重复转储所有Python线程栈，不退出进程、不重试；可见Python调用位置，不保证包含C++/驱动内部栈。
-- `STARTUP`行也写入当前stderr：Python初始化阶段在launcher.log，native调用阶段在native.log；不会混入Event CSV，独立JSONL包含完整阶段。
-
-诊断在native首次正确性检查完成、创建Capture及预热之前关闭。正常性能采样不写阶段记录或触发栈定时器，10/100/50与Exp/all_reduce协议不变。异常路径取消定时器并关闭文件。
-没有identity.json时优先查看startup.jsonl最后阶段和startup_stacks.log；没有这些文件则查launcher.log中的更早参数/构建检查错误。SIGTERM可能来不及追加退出阶段，最后已flush记录仍可定位。
