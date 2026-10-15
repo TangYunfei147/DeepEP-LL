@@ -95,14 +95,6 @@ extern "C" DEEPEP_EXPORT uint32_t deepep_ll_core_protocol_version()
 {
     return DispatchDedup::kLlCoreProtocolVersion;
 }
-extern "C" DEEPEP_EXPORT uint32_t deepep_ll_rdma_enabled()
-{
-#ifdef DEEPEP_LL_RDMA
-    return 1U;
-#else
-    return 0U;
-#endif
-}
 
 extern "C" DEEPEP_EXPORT void dispatch_server_dedup_kernel_do(void* stream, const deepep::EpServerDedupKernelArgs* args)
 {

@@ -4,7 +4,6 @@
 """V2 expanded dispatch/combine and their Notify metadata orchestration."""
 
 from __future__ import annotations
-import os
 
 from typing import TYPE_CHECKING, Optional, Tuple, Union
 
@@ -237,14 +236,11 @@ class ElasticBuffer:
         self.hidden = hidden
         self.num_topk = num_topk
         self._handle_token = object()
-        rdma = os.environ.get("DEEPEP_LL_BACKEND", "mte") == "rdma"
-        if rdma and (use_1g_huge_pages or combine_only):
-            raise ValueError("RDMA LL requires use_1g_huge_pages=False and combine_only=False")
         self._runtime = Runtime(
             group,
             num_bytes,
             num_cpu_timeout_secs,
-            udma=not rdma,
+            udma=True,
             rank=rank,
             world_size=world_size,
             bootstrap=bootstrap,
@@ -732,8 +728,6 @@ class ElasticBuffer:
                     return self._dispatch_low_latency(
                         x, topk_idx, topk_weights, num_experts, capacity, do_handle_copy, do_cpu_sync, plan
                     )
-        if getattr(runtime, "ll_backend", "mte") == "rdma":
-            raise NotImplementedError("RDMA selected: this request does not satisfy LL; no HT/MTE fallback")
         with runtime.notify_lock:
             error, signature = None, []
             try:
@@ -1035,8 +1029,6 @@ class ElasticBuffer:
         runtime = runtime_of(self)
         runtime.ensure_alive()
         native, npu = require_native("ElasticBuffer.combine"), npu_api()
-        if getattr(runtime, "ll_backend", "mte") == "rdma":
-            raise NotImplementedError("RDMA selected: combine requires an LL handle; no HT/MTE fallback")
         with runtime.notify_lock:
             error, signature, retained = None, [], ()
             try:

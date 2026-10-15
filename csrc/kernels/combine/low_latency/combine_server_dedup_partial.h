@@ -5,7 +5,6 @@
 #define COMBINE_DEDUP_EP_SERVER_DEDUP_PARTIAL_H
 
 #include "kernel_operator.h"
-#include "../../dispatch/low_latency/device/ll_transport.h"
 #include "../../dispatch/low_latency/common/comm_args.h"
 #include "../../dispatch/low_latency/common/dispatch_dedup_types.h"
 #include "ep_memory_server_dedup_buffer_layout.h"
@@ -203,8 +202,10 @@ private:
             const uint32_t memberRank = expert / localExperts_, localExpert = expert % localExperts_;
             const uint64_t slot =
                 (((uint64_t(source) + memberRank) % uint32_t(args_->rankSize)) * localExperts_ + localExpert) * bs_ + q;
-            LlTransport::Get(args_, memberRank, stageBase_ + slot * stageStride_,
-                inputs_[lane * inputBytes_ / 2U], h_ * 2U);
+            data.SetGlobalBuffer(
+                reinterpret_cast<__gm__ uint16_t*>(args_->peerMems[memberRank] + stageBase_ + slot * stageStride_));
+            DataCopyPad(inputs_[lane * inputBytes_ / 2U], data, {1U, h_ * 2U, 0U, 0U, 0U},
+                        {false, 0U, 0U, uint16_t(0)});
         }
         SetFlag<HardEvent::MTE2_V>(lane);
     }
@@ -248,8 +249,10 @@ private:
         Copy(dst[64U], src[64U], uint64_t(56U), uint8_t(blocks_), {1U, 1U, 16U, 15U});
         SetFlag<HardEvent::V_MTE3>(lane);
         WaitFlag<HardEvent::V_MTE3>(lane);
-        LlTransport::Packet(args_, source, window_ + COMBINE_DEDUP_EP_SERVER_DEDUP_SHARED_DATA_OFFSET +
-            (uint64_t(token) * k_ + topk) * packetBytes_, output, packetBytes_);
+        GlobalTensor<uint8_t> target;
+        target.SetGlobalBuffer(args_->peerMems[source] + window_ + COMBINE_DEDUP_EP_SERVER_DEDUP_SHARED_DATA_OFFSET +
+                               (uint64_t(token) * k_ + topk) * packetBytes_);
+        DataCopy(target, output, packetBytes_);
         SetFlag<HardEvent::MTE3_V>(lane);
     }
 

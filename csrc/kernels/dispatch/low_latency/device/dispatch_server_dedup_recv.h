@@ -6,7 +6,6 @@
 #include "../common/ll_stage_timer_device.h"
 
 #include "kernel_operator.h"
-#include "ll_transport.h"
 #include "adv_api/reduce/sum.h"
 #include "../common/ep_memory_server_dedup_protocol.h"
 #include "../../../common/ep_packet_receive_layout.h"
@@ -117,7 +116,6 @@ public:
         // 它们按相同顺序推进，保证 consumed % lanes_ 对应之前预取的同一个 packet。
         if (timer) timer->End(LlStageTimer::RecvPrepare);
         uint32_t scan = 0U, issued = 0U, consumed = 0U;
-        LlTransport::PollDeadline deadline(LlTransport::Rdma(args_));
         while (tasks_.PendingCount() != 0U) {
             // Include all empty scans in one wait interval. Recording every
             // retry perturbs the polling loop and can exhaust the trace buffer.
@@ -132,7 +130,6 @@ public:
                 const uint32_t remaining = tasks_.PendingCount() - scan;
                 count = remaining < kProbeBatch ? remaining : kProbeBatch;
                 probe = Probe(scan, count);
-                deadline.Check();
                 if (probe.readyMask == 0U) scan += count;
             } while (probe.readyMask == 0U);
             if (timer) timer->End(LlStageTimer::RecvWait);
@@ -201,7 +198,7 @@ private:
         for (uint32_t i = 0; i < count; ++i) {
             const uint32_t j = tasks_.PendingIndex(start + i);
             indices.SetValue(i, j);
-            ReadServerDedupFlags(Slot(j), blocks, flags[i * blocks * 8U], LlTransport::Rdma(args_));
+            ReadServerDedupFlags(Slot(j), blocks, flags[i * blocks * 8U]);
         }
         ServerDedupReceiveSync<HardEvent::MTE2_V>();
         Sum<float>(sums, flags, work, SumParams{count, blocks * 8U, blocks * 8U});
@@ -222,7 +219,6 @@ private:
         auto wire = lanesBuf_.Get<uint8_t>()[lane * laneStride_];
         GlobalTensor<uint8_t> source;
         source.SetGlobalBuffer(Slot(j));
-        if (LlTransport::Rdma(args_)) source.SetL2CacheHint(CacheMode::CACHE_MODE_DISABLE);
         if (keepFlags) {
             DataCopy(wire, source, uint32_t(data_.tokenStride));
         } else {
@@ -296,11 +292,12 @@ private:
                 const uint32_t expertId = index & 0xffffU;
                 const uint32_t q = index >> 16U;
                 const uint32_t destinationRank = expertId / localExperts_;
-                LlTransport::Packet(args_, destinationRank,
-                    DispatchServerDedupDispatchOffset(data_, sourceRank, destinationRank,
-                        expertId % localExperts_, q, ranks, localExperts_, bs_), wire, uint32_t(data_.tokenStride), lane);
-                // SDK CQ polling uses MTE2_S. This lane's event was consumed at
-                // entry; other prefetched lanes (including 7) still own theirs.
+                GlobalTensor<uint8_t> output;
+                output.SetGlobalBuffer(args_->peerMems[destinationRank] +
+                                       DispatchServerDedupDispatchOffset(data_, sourceRank, destinationRank,
+                                                                         expertId % localExperts_, q, ranks,
+                                                                         localExperts_, bs_));
+                DataCopy(output, wire, uint32_t(data_.tokenStride));
             }
         }
         SetFlag<HardEvent::MTE3_MTE2>(lane);
@@ -315,7 +312,6 @@ private:
         for (uint32_t j = 0; j < tasks_.Count(); ++j) {
             GlobalTensor<float> output;
             output.SetGlobalBuffer(reinterpret_cast<__gm__ float*>(Slot(j) + 480U));
-            if (LlTransport::Rdma(args_)) output.SetL2CacheHint(CacheMode::CACHE_MODE_DISABLE);
             DataCopyPad(output, zeros, {uint16_t(data_.blockCount), 32U, 0U, 480U, 0U});
         }
     }

@@ -5,7 +5,6 @@
 #define COMBINE_DEDUP_EP_SERVER_DEDUP_SOURCE_AGGREGATE_H
 
 #include "kernel_operator.h"
-#include "../../dispatch/low_latency/device/ll_transport.h"
 #include "ep_memory_server_dedup_combine_config.h"
 #include "../../dispatch/low_latency/common/dispatch_dedup_types.h"
 
@@ -21,7 +20,7 @@ public:
     __aicore__ inline void Init(LocalTensor<uint8_t> scratch, GM_ADDR result, GM_ADDR masks, GM_ADDR weights,
                                 GM_ADDR yOut, uint32_t bs, uint32_t h, uint32_t k, uint8_t dtype, uint32_t participant,
                                 uint32_t participants, const EpCombineM45WorkspaceLayout& layout, uint32_t partialTasks,
-                                bool enableDedup, bool uncached=false)
+                                bool enableDedup)
     {
         outputBytes_ = layout.outputBytes;
         finalLayout_ = EpCombineM5Layout(layout, partialTasks);
@@ -33,14 +32,14 @@ public:
             return;
         }
         InitCommon(scratch, result, masks, weights, yOut, bs, h, k, dtype, participant, participants,
-                   layout.phaseOffset, layout.computeBytes, layout.outputOffset, enableDedup, uncached);
+                   layout.phaseOffset, layout.computeBytes, layout.outputOffset, enableDedup);
     }
 
     // Auto direct aggregation shares the M5 resource layout without inheriting
     // any M4 sends or events. Only the slots actually used for outputs are seeded.
     __aicore__ inline void InitDirectShared(LocalTensor<uint8_t> scratch, GM_ADDR result, GM_ADDR weights, GM_ADDR yOut,
                                             uint32_t bs, uint32_t h, uint32_t k, uint8_t dtype, uint32_t participant,
-                                            uint32_t participants, const EpCombineM45WorkspaceLayout& layout, bool uncached=false)
+                                            uint32_t participants, const EpCombineM45WorkspaceLayout& layout)
     {
         finalLayout_ = EpCombineM5Layout(layout, 0U);
         inputLanes_ = finalLayout_.inputLanes;
@@ -52,7 +51,7 @@ public:
         }
         for (uint32_t lane = 0; lane < outputLanes_; ++lane) SetFlag<HardEvent::MTE3_V>(finalLayout_.outputSlots[lane]);
         InitCommon(scratch, result, nullptr, weights, yOut, bs, h, k, dtype, participant, participants,
-                   layout.phaseOffset, layout.computeBytes, layout.outputOffset, false, uncached);
+                   layout.phaseOffset, layout.computeBytes, layout.outputOffset, false);
     }
 
     __aicore__ inline void DrainM6()
@@ -66,9 +65,7 @@ public:
         if (count_ == 0U) return 0U;
         for (uint32_t lane = 0; lane < inputLanes_; ++lane) SetFlag<HardEvent::V_MTE2>(lane);
         uint32_t remaining = count_, scan = 0U, completed = 0U;
-        LlTransport::PollDeadline deadline(uncached_);
         while (remaining != 0U) {
-            deadline.Check();
             const uint32_t token = pending_.GetValue(scan);
             const uint32_t mask = enableDedup_ ? masks_.GetValue(token - begin_) : 0U;
             if (enableDedup_ && (mask == 0U || (k_ < 32U && (mask >> k_) != 0U))) {
@@ -100,10 +97,9 @@ private:
     __aicore__ inline void InitCommon(LocalTensor<uint8_t> scratch, GM_ADDR result, GM_ADDR masks, GM_ADDR weights,
                                       GM_ADDR yOut, uint32_t bs, uint32_t h, uint32_t k, uint8_t dtype,
                                       uint32_t participant, uint32_t participants, uint32_t phaseOffset,
-                                      uint32_t computeBytes, uint32_t outputOffset, bool enableDedup, bool uncached)
+                                      uint32_t computeBytes, uint32_t outputOffset, bool enableDedup)
     {
         enableDedup_ = enableDedup;
-        uncached_ = uncached;
         scratch_ = scratch[phaseOffset];
         h_ = h;
         k_ = k;
@@ -128,10 +124,6 @@ private:
         outputs_ = scratch[outputOffset].ReinterpretCast<uint16_t>();
         result_.SetGlobalBuffer(reinterpret_cast<__gm__ uint16_t*>(result));
         resultFlags_.SetGlobalBuffer(reinterpret_cast<__gm__ float*>(result));
-        if (uncached) {
-            result_.SetL2CacheHint(CacheMode::CACHE_MODE_DISABLE);
-            resultFlags_.SetL2CacheHint(CacheMode::CACHE_MODE_DISABLE);
-        }
         output_.SetGlobalBuffer(reinterpret_cast<__gm__ uint16_t*>(yOut));
         if (count_ == 0U) return;
         GlobalTensor<uint32_t> maskGm;
@@ -242,7 +234,6 @@ private:
     }
 
     bool enableDedup_ = false;
-    bool uncached_ = false;
     LocalTensor<uint8_t> scratch_;
     LocalTensor<uint32_t> masks_, pending_;
     LocalTensor<float> weights_, flags_, work_, probeSum_, cast_, product_, sum_;

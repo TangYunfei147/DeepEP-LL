@@ -50,6 +50,5 @@ static_assert(offsetof(EpServerDedupKernelArgs, coreNum) == 140, "active cores")
 extern "C" void dispatch_server_dedup_kernel_do(void* stream, const deepep::EpServerDedupKernelArgs* args);
 
 extern "C" uint32_t deepep_ll_core_protocol_version();
-extern "C" uint32_t deepep_ll_rdma_enabled();
 extern "C" uint32_t deepep_ll_ranks_per_group();
 extern "C" uint32_t deepep_ll_stage_timer_enabled();

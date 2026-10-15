@@ -4,7 +4,7 @@
 
 ## 构建与接口
 
-打点默认编译关闭，使用`DEEPEP_LL_STAGE_TIMER=ON`开启。打点最初引入核心协议版本2；当前RDMA通信参数语义已将协议升为3。所有rank必须重建并安装同一版本完整wheel，不能混搭旧设备库。RDMA协议见[审计说明](../ll_rdma/AUDIT.md)。
+打点默认编译关闭，使用`DEEPEP_LL_STAGE_TIMER=ON`开启。Host/Device启动参数ABI更新，核心协议版本升为2；所有rank必须重建并安装同一版本完整wheel，不能混搭旧设备库。
 
 在仓库根目录执行，外部CANN位置由当前环境提供：
 

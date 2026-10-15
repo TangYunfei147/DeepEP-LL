@@ -8,7 +8,6 @@
 #include <vector>
 #include "runtime/session.hpp"
 #include "runtime/ll_core_config.hpp"
-#include "../kernels/dispatch/low_latency/common/ll_rdma_layout.h"
 #include "../kernels/dispatch/low_latency/common/ll_stage_timer_layout.h"
 #include "host/mem/shmem_host_heap.h"
 #include "host/data_plane/shmem_host_rma.h"
@@ -36,8 +35,7 @@ uint32_t pin_session_cores(Session& session)
 uint8_t* peer_buffer_base(Session& session, int peer)
 {
     if (peer < 0 || peer >= session.world()) throw std::invalid_argument("Invalid LL peer");
-    if (session.ll_rdma() && peer != session.rank()) return nullptr;
-    auto* original = static_cast<uint8_t*>(session.ll_rdma() ? session.workspace() : aclshmem_ptr(session.workspace(), peer));
+    auto* original = static_cast<uint8_t*>(aclshmem_ptr(session.workspace(), peer));
     if (original == nullptr) throw std::invalid_argument("Invalid LL peer mapping");
     if (session.capacity() != (8ULL << 30)) return original;
     // Translate the original symmetric pointer before applying the destination-rank
@@ -107,13 +105,6 @@ void bind_low_latency(py::module_& module)
     if (deepep_ll_core_protocol_version() != DispatchDedup::kLlCoreProtocolVersion)
         throw std::runtime_error("LL Host/device core protocol mismatch; rebuild and reinstall the complete wheel");
     module.attr("low_latency_core_protocol") = DispatchDedup::kLlCoreProtocolVersion;
-#ifdef DEEPEP_LL_RDMA
-    if (!deepep_ll_rdma_enabled()) throw std::runtime_error("LL Host/device RDMA build mismatch; rebuild complete wheel");
-    module.attr("low_latency_rdma_enabled") = true;
-#else
-    if (deepep_ll_rdma_enabled()) throw std::runtime_error("LL Host/device RDMA build mismatch; rebuild complete wheel");
-    module.attr("low_latency_rdma_enabled") = false;
-#endif
     module.attr("low_latency_stage_timer_enabled") = bool(deepep_ll_stage_timer_enabled());
     module.def("low_latency_stage_timer_layout", []() {
         py::dict result;
@@ -166,15 +157,8 @@ void bind_low_latency(py::module_& module)
         args.localRankSize = DispatchDedup::kLlRanksPerGroup;
         args.peerMemBytes = session.capacity();
         args.fftsVal = shmemx_get_ffts_config();
-        if (session.ll_rdma()) {
-            args.reservedAddresses[0] = static_cast<uint8_t*>(session.workspace());
-            args.reservedAddresses[1] = static_cast<uint8_t*>(session.ll_rdma_stage());
-            args.reservedConfig[0] = LlRdma::kBackend;
-            args.reservedConfig[1] = session.ll_rdma_qps();
-        }
         for (int peer = 0; peer < session.world(); ++peer) {
             args.peerMems[peer] = peer_buffer_base(session, peer);
-            if (session.ll_rdma() && peer != session.rank()) continue;
             if (args.peerMems[peer] == nullptr || reinterpret_cast<uintptr_t>(args.peerMems[peer]) % 32) {
                 throw std::invalid_argument("LL requires aligned MTE mappings for every peer");
             }

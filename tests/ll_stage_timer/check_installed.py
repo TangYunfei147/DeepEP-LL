@@ -15,7 +15,7 @@ from deep_ep.utils.ll_stage_timer import StageTrace, STAGES, SLOTS, FIELDS
 torch.npu.set_device(0)
 native=require_native('LL timer schema validation')
 assert native.low_latency_stage_timer_enabled
-assert native.low_latency_core_protocol==3
+assert native.low_latency_core_protocol==2
 assert native.low_latency_stage_timer_layout()==dict(schema=1,slots=SLOTS,fields=FIELDS,stages=list(STAGES))
 trace=StageTrace(object(),'dispatch')
 cfg=native.low_latency_core_config()

@@ -108,9 +108,6 @@ public:
     {
         return udma_;
     }
-    bool ll_rdma() const { return ll_rdma_; }
-    uint32_t ll_rdma_qps() const { return ll_rdma_qps_; }
-    void* ll_rdma_stage() const { check_context(); return ll_rdma_stage_; }
 
 private:
 #ifdef DEEPEP_BUILD_EP_GMM_FUSED
@@ -120,9 +117,6 @@ private:
     void allocate_huge_workspace(uint64_t bytes);
     void release_huge_workspace();
     uint32_t low_latency_cores_ = 0;
-    bool ll_rdma_ = false;
-    uint32_t ll_rdma_qps_ = 0;
-    void* ll_rdma_stage_ = nullptr;
     aclrtContext context_ = nullptr;
     void* workspace_ = nullptr;
     void* huge_page_source_ = nullptr;

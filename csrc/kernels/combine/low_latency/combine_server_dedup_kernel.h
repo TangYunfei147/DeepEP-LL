@@ -86,7 +86,6 @@ public:
         table_.SetGlobalBuffer(reinterpret_cast<__gm__ int32_t*>(assistInfoForCombine));
         types_.SetGlobalBuffer(reinterpret_cast<__gm__ int32_t*>(tokenType));
         stage_.SetGlobalBuffer(reinterpret_cast<__gm__ uint16_t*>(args_->peerMems[args_->rank] + stageBase_));
-        if (LlTransport::Rdma(args_)) stage_.SetL2CacheHint(CacheMode::CACHE_MODE_DISABLE);
         preparePublish_ = Allocate<float>(256U);
         prepareInput_ = Allocate<float>(kCombinePrepareRowBytes + 256U);
         prepareWork_ = Allocate<float>(512U);
@@ -165,7 +164,7 @@ private:
             arena_.Get<uint8_t>()[kEpServerDedupCombineResidentUbBytes],
             args_->peerMems[args_->rank] + window_ + COMBINE_DEDUP_EP_SERVER_DEDUP_SHARED_DATA_OFFSET, weightsAddr_,
             outputAddr_, bs_, h_, topK_, dtype_, core_ - sendCores_,
-            recvCores_, workspace_, LlTransport::Rdma(args_));
+            recvCores_, workspace_);
         aggregate.Process();
         aggregate.DrainM6();
     }
@@ -176,7 +175,7 @@ private:
                        args_->peerMems[args_->rank] + window_ + COMBINE_DEDUP_EP_SERVER_DEDUP_SHARED_DATA_OFFSET,
                        masksAddr_, weightsAddr_, outputAddr_, bs_, h_, topK_, dtype_,
                        core_ - sendCores_, recvCores_, workspace_,
-                       partialTasks_, enableDedup_, LlTransport::Rdma(args_));
+                       partialTasks_, enableDedup_);
         return aggregate.Process();
     }
     __aicore__ inline void DrainSharedOutputs(uint32_t retiredOutputs = 0U)
@@ -204,7 +203,6 @@ private:
     {
         GlobalTensor<float> result;
         result.SetGlobalBuffer(reinterpret_cast<__gm__ float*>(args_->peerMems[rank] + control_ + offset));
-        if (LlTransport::Rdma(args_)) result.SetL2CacheHint(CacheMode::CACHE_MODE_DISABLE);
         return result;
     }
     __aicore__ inline void SelectRows(int32_t type)
@@ -379,8 +377,11 @@ private:
                 SetFlag<HardEvent::V_MTE2>(lane);
                 SetFlag<HardEvent::V_MTE3>(lane);
                 WaitFlag<HardEvent::V_MTE3>(lane);
-                LlTransport::Packet(args_, source, window_ + COMBINE_DEDUP_EP_SERVER_DEDUP_SHARED_DATA_OFFSET +
-                    (uint64_t(token) * topK_ + topk) * resultStride_, output, resultStride_);
+                GlobalTensor<uint8_t> destination;
+                destination.SetGlobalBuffer(args_->peerMems[source] + window_ +
+                                            COMBINE_DEDUP_EP_SERVER_DEDUP_SHARED_DATA_OFFSET +
+                                            (uint64_t(token) * topK_ + topk) * resultStride_);
+                DataCopy(destination, output, resultStride_);
                 SetFlag<HardEvent::MTE3_V>(lane);
             }
             // No server fence: the next scan can overlap pending output DMA.
@@ -413,9 +414,7 @@ private:
     __aicore__ inline void WaitFlags(GlobalTensor<float> gm, LocalTensor<float> input, LocalTensor<float> work,
                                      LocalTensor<float> sum, uint32_t flags)
     {
-        LlTransport::PollDeadline deadline(LlTransport::Rdma(args_));
         while (true) {
-            deadline.Check();
             // The previous reduction has completed before MTE2 overwrites input.
             Sync<HardEvent::V_MTE2>();
             DataCopyPad(input, gm, {1U, flags * 32U, 0U, 0U, 0U}, {false, 0U, 0U, 0.0f});
@@ -442,11 +441,9 @@ private:
         const uint32_t groupBase = uint32_t(args_->rank) / DispatchDedup::kLlRanksPerGroup *
                                    DispatchDedup::kLlRanksPerGroup;
         for (uint32_t local = core_ - notifyBegin_; local < DispatchDedup::kLlRanksPerGroup; local += 8U) {
-            LlTransport::Records(args_, groupBase + local,
-                control_ + COMBINE_DEDUP_EP_SERVER_DEDUP_COMBINE_SERVER_READY_OFFSET +
-                (uint32_t(args_->rank) % DispatchDedup::kLlRanksPerGroup) * 32U,
-                notifyUb_.ReinterpretCast<uint8_t>(), kCombineNotifyRows, 512U, false,
-                prepareInput_.ReinterpretCast<uint8_t>());
+            auto ready = Control(groupBase + local, COMBINE_DEDUP_EP_SERVER_DEDUP_COMBINE_SERVER_READY_OFFSET);
+            DataCopyPad(ready[(uint32_t(args_->rank) % DispatchDedup::kLlRanksPerGroup) * 8U], notifyUb_,
+                        {uint16_t(kCombineNotifyRows), 32U, 0U, 480U, 0U});
         }
     }
     __aicore__ inline void WaitServerReady()
