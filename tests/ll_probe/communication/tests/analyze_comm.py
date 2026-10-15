@@ -6,6 +6,8 @@ import math
 from pathlib import Path
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'profiling'))
+from bandwidth_model import comm_edges
 from paths import project_path, results_dir, runtime_environment, workspace_root
 import statistics
 
@@ -27,26 +29,31 @@ def analyze(paths):
         rank=int(rows[0]['rank'])
         if rank in ranks:raise ValueError('Duplicate rank')
         key=tuple(int(rows[0][k]) for k in ['world','scenario','layer','bytes_per_edge'])
-        key += (int(rows[0].get('fanout', int(rows[0]['world'])-1)),)
+        key += (int(rows[0].get('fanout', int(rows[0]['world'])-1)),int(rows[0].get('peer_mask',0)))
         if identity is not None and key!=identity:raise ValueError('Mismatched case')
         identity=key
         for i,row in enumerate(rows):
             if int(row['rank'])!=rank or int(row['sample'])!=i:raise ValueError('Sample identity/alignment mismatch')
-            if tuple(int(row[k]) for k in ['world','scenario','layer','bytes_per_edge'])+(int(row.get('fanout',int(row['world'])-1)),)!=key:raise ValueError('Case changed midstream')
+            if tuple(int(row[k]) for k in ['world','scenario','layer','bytes_per_edge'])+(int(row.get('fanout',int(row['world'])-1)),int(row.get('peer_mask',0)))!=key:raise ValueError('Case changed midstream')
             if any(not math.isfinite(float(row[k])) or float(row[k])<=0 for k in ['event_us','api_us','job_join_us']):raise ValueError('Invalid timing')
         ranks[rank]=rows
-    world,scene,layer,bytes_edge,fanout=identity
+    world,scene,layer,bytes_edge,fanout,peer_mask=identity
     if not 1<=fanout<world or (scene!=3 and fanout!=world-1):raise ValueError("Invalid fanout")
     if sorted(ranks)!=list(range(world)):raise ValueError('Missing ranks')
     count=len(ranks[0])
     if any(len(rows)!=count for rows in ranks.values()):raise ValueError('Unaligned samples')
-    def edge(s,d):return s!=d and (scene==4 or (scene==1 and s==0 and d==1) or (scene==2 and s!=0 and d==0) or (scene==3 and s==0 and 1<=d<=fanout))
+    if peer_mask<0 or peer_mask>=(1<<world) or peer_mask&1 or (scene==4 and peer_mask):raise ValueError('Invalid peer mask')
+    selected=[r for r in range(1,world) if peer_mask&(1<<r)] if peer_mask else None
+    if scene==3 and selected is not None and len(selected)!=fanout:raise ValueError('fanout/mask mismatch')
+    edges=set(comm_edges(world,scene,fanout if scene==3 and selected is None else None,
+                        selected if scene in (1,3) else None,selected if scene==2 else None))
+    def edge(s,d):return (s,d) in edges
     job_bytes=0
     for rank,rows in ranks.items():
         expected=bytes_edge*sum(edge(rank,d) for d in range(world)) if layer==3 else 0
         if any(int(row['rank_wire_bytes'])!=expected for row in rows):raise ValueError('Incorrect wire byte accounting')
         job_bytes+=expected
-    result={'fanout':fanout,'world':world,'scenario':scene,'layer':layer,'bytes_per_edge':bytes_edge,'job_wire_bytes':job_bytes,
+    result={'peer_mask':peer_mask,'fanout':fanout,'world':world,'scenario':scene,'layer':layer,'bytes_per_edge':bytes_edge,'job_wire_bytes':job_bytes,
             'samples':count,'exit_and_receiver_audit':'passed','statistics':{},'per_rank':{}}
     for metric in ['event_us','api_us','job_join_us']:
         maximum=[max(float(ranks[r][i][metric]) for r in ranks) for i in range(count)]

@@ -18,7 +18,7 @@ import subprocess
 import socket
 import traceback
 
-from bandwidth_model import load_hardware
+from bandwidth_model import load_hardware, comm_edges
 from profile_common import Capture, read_named_tasks, WARMUP, CAPTURE_STEPS, PROFILE_STEPS, DELAY_SHAPE
 
 HERE = Path(__file__).resolve().parents[1]
@@ -41,6 +41,8 @@ def parser():
     p.add_argument('--chunk', type=int, default=4096)
     p.add_argument('--scenario', type=int, choices=(1, 2, 3, 4), default=1)
     p.add_argument('--fanout', type=int, help='Scenario3 only: rank0 sends to ranks 1..N; default world-1')
+    p.add_argument('--targets',type=int,nargs='+',help='Global destination ranks for scenario1/3; sender remains rank0')
+    p.add_argument('--sources',type=int,nargs='+',help='Global source ranks for scenario2; receiver remains rank0')
     p.add_argument('--layer', type=int, choices=(0, 1, 3), default=3)
     p.add_argument('--mode', type=int, choices=(0, 1, 2, 3), default=3)
     p.add_argument('--batch', type=int, default=32)
@@ -102,14 +104,19 @@ def plan(args, environ):
         raise ValueError('SHMEM endpoint required')
     if args.fanout is not None and (args.kind != 'comm' or args.scenario != 3):
         raise ValueError('--fanout is only valid for comm scenario3')
+    if (args.targets is not None or args.sources is not None) and args.kind != 'comm':
+        raise ValueError('Rank selection applies only to comm')
     if args.kind == 'comm':
         if world not in (2, 4, 8, 16, 32):
             raise ValueError('comm supports actual worlds 2/4/8/16/32')
-        fanout = world-1 if args.fanout is None else args.fanout
-        if not 1 <= fanout < world:
-            raise ValueError('fanout must be in 1..world-1')
+        edges=comm_edges(world,args.scenario,args.fanout,args.targets,args.sources)
+        if args.targets is not None:args.targets=sorted(args.targets)
+        if args.sources is not None:args.sources=sorted(args.sources)
+        selected_ranks=sorted({s if args.scenario==2 else d for s,d in edges})
+        peer_mask=0 if args.scenario==4 else sum(1<<v for v in selected_ranks)
+        fanout=len(selected_ranks) if args.scenario==3 else world-1
         argv = [rank, world, device, args.endpoint, args.bytes, args.cores,
-                args.lanes, args.scenario, args.layer, args.warmup, args.samples, fanout]
+                args.lanes, args.scenario, args.layer, args.warmup, args.samples, fanout, peer_mask]
         library = HERE/'communication/build/libcomm_profile.so'
         kernel = 'four_empty' if args.layer == 0 else f'four_comm_{args.scenario}'
     elif args.kind == 'metadata':
@@ -140,8 +147,10 @@ def plan(args, environ):
                   logical_partitions=args.partitions, partitions_are_device_world=False,
                   includes_cross_rank_metadata_exchange=False) if args.kind == 'metadata'
              else dict(kind=args.kind, sampling_world=world))
-    if args.kind == 'comm' and args.scenario == 3:
-        scope.update(fanout=fanout, sender_ranks=[0], receiver_ranks=list(range(1, fanout+1)))
+    if args.kind == 'comm':
+        scope.update(sender_ranks=sorted({s for s,d in edges}),receiver_ranks=sorted({d for s,d in edges}),
+                     edge_count=len(edges),peer_mask=peer_mask)
+        if args.scenario==3:scope['fanout']=fanout
     return dict(rank=rank, world=world, device=device, payload=payload, hardware_profile=hardware,
                 measurement_scope=scope, **deployment, library=str(library), kernel=kernel,
                 argv=['profile_probe', *map(str, argv)],

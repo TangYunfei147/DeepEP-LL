@@ -89,8 +89,10 @@ validation下若把samples改为1，也必须同步设置tail≤1。正式目标
 | `--element-bytes N` | 2 | 形状模式元素大小，可选1/2/4/8；byte-pattern搬运，不代表浮点运算 |
 | `--cores N` | 8 | 每张卡启动的AIV核数，1..32；不是rank数，也不是生产LL的动态核数 |
 | `--lanes N` | 4 | 每核流水槽数量，1..4；只有comm搬运路径使用 |
-| `--scenario N` | 1 | 1=0→1；2=所有非0→0；3=0→接收集合；4=所有rank互发且无自环 |
-| `--fanout N` | world-1 | 仅scenario3可显式指定；1..world-1，接收rank为1..N，仍启动完整world |
+| `--scenario N` | 1 | 1=1→1（默认0→1）；2=多→1（默认所有非0→0）；3=0→接收集合；4=所有rank互发且无自环 |
+| `--fanout N` | world-1 | 仅scenario3；接收rank为1..N，与targets互斥，仍启动完整world |
+| `--targets R [R ...]` | 场景1为1；场景3为1..fanout | 场景1/3的全局目标rank列表，发送端固定0；场景1必须恰好一个目标 |
+| `--sources R [R ...]` | 1..world-1 | 场景2的全局来源rank列表，接收端固定0 |
 | `--hardware-config PATH` | YAML指定值，否则无 | 覆盖带宽参考配置；相对工程根解析，必须在工程内。仅comm产生带宽/理论耗时，empty/tiling不计算带宽 |
 
 显式bytes与形状同时给出时必须相等。每边≤64MiB，world×bytes≤256MiB；EP32每边≤8MiB。
@@ -183,3 +185,19 @@ python3 tests/ll_probe/run.py --config tests/ll_probe/configs/ep16.yaml --test n
 
 构建基础wheel不会自动构建独立探针；通常还需执行`bash tests/ll_probe/profiling/build.sh`。
 network另用`network_probe/build.sh`。完整路径/环境与结果汇总步骤见[DEPLOYMENT.md](DEPLOYMENT.md)。
+
+
+显式rank列表使用空格分隔，不能含0、重复项或超出world的值；各机必须设置相同选择。
+例如两机各16卡，global rank16/18/31对应第二台的local rank0/2/15：
+
+```bash
+# 在前面的统一部署参数后选择一种：
+# 1→1：rank0发送到rank16
+--scenario 1 --targets 16
+# 1→多：rank0发送到rank16、18、31
+--scenario 3 --targets 16 18 31
+# 多→1：rank16、18、31发送到rank0
+--scenario 2 --sources 16 18 31
+```
+
+上面列出分隔符`--`之后的测试参数；完整命令见DEPLOYMENT.md。

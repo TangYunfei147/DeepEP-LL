@@ -100,3 +100,5 @@ python3 tests/ll_probe/profiling/analyze_profile.py \
 公共`project_env.sh`不再默认设置设备0/1；A5专用shell入口使用`scripts/a5_validation_env.sh`，专用Python验证器显式固定四个可见性变量为0/1。目标机入口不得source该A5脚本。通用profile入口没有隐式双卡回退，目标机可显式设置PROBE_VISIBLE_DEVICES或继承现有ASCEND可见性。
 
 `python3 profiling/validate_profile.py`强制卡0/1，小Exp `[64,64]`、warmup2/capture3/tail2，只验正确性、profiler导出和解析；不是目标带宽或默认负载性能证据。`--plan`不初始化NPU。大Exp默认尺寸、实际N方竞争、跨主机互联和原生EP16/32需要用户目标机验收。
+
+场景1/3可用`--targets R [R ...]`指定全局目标rank，场景2可用`--sources R [R ...]`指定来源rank；固定根rank为0。显式targets与fanout互斥，详见[RUN_ARGS.md](RUN_ARGS.md)。

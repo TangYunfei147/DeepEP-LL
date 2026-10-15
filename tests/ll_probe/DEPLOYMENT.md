@@ -146,3 +146,24 @@ python3 tests/ll_probe/run.py --config tests/ll_probe/configs/ep32.yaml --node-i
 
 本次tiling仍为32B，但scenario/fanout改为两个16位字段，更新后必须在各节点重新执行
 `bash tests/ll_probe/profiling/build.sh`；独立Event可执行文件另运行`communication/build.sh`。
+
+## 指定目标/来源全局rank
+
+每台机器使用同一份参数，只改变node-index。1→1和1→多的发送端固定为rank0，
+多→1的接收端固定为rank0；以下以EP32两机各16卡为例：
+
+```bash
+# 1→1：0→16；节点1也执行，将node-index改为1
+python3 tests/ll_probe/run.py --config tests/ll_probe/configs/ep32.yaml --node-index 0 --test comm --run-id target16-001 --target-run -- --scenario 1 --targets 16
+# 1→多：0→16、18、31
+python3 tests/ll_probe/run.py --config tests/ll_probe/configs/ep32.yaml --node-index 0 --test comm --run-id targets-001 --target-run -- --scenario 3 --targets 16 18 31
+# 多→1：16、18、31→0
+python3 tests/ll_probe/run.py --config tests/ll_probe/configs/ep32.yaml --node-index 0 --test comm --run-id sources-001 --target-run -- --scenario 2 --sources 16 18 31
+```
+
+列表非空、唯一、范围1..world-1；场景1只能一个目标。sources仅用于场景2，targets仅用于场景1/3，
+targets与fanout互斥。默认通信图保持兼容。所有rank仍参与框架初始化、校验和同步，选择仅限制payload边。
+统计按所选边计算发送量和同机/跨机负载，硬件参考模型也使用同一张通信图。
+
+更新后各节点必须重建`profiling/build.sh`，独立Event入口还需`communication/build.sh`。
+32B tiling保持总尺寸，但内部字段重新排布并增加ABI版本2与32位peer mask，不能混用旧Host/device库。

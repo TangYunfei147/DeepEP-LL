@@ -107,3 +107,8 @@ python3 tests/ll_probe/profiling/analyze_profile.py results/old-run/node-*/data/
 2026-10-14：CPU回归134项通过，覆盖shape冲突/对齐、白皮书单位、fanout数据量、并行发送者、
 跨机共享瓶颈、分位数换算、混硬件配置拒绝和CSV输出。A5仅0/1实际双rank、小Exp，
 bs4×hidden256×2=2048字节的fanout1采样及全rank汇总通过。该短样本验证不代表目标机性能。
+
+
+任意rank选择：`--scenario 1 --targets 16`、`--scenario 3 --targets 16 18 31`、
+`--scenario 2 --sources 16 18 31`。每条选中边仍发送同样的B×H×element_bytes；总量等于边数乘单边字节。
+理论模型按这些实际global rank分配收发量及同机/跨机资源，不再按默认全部peer计算。

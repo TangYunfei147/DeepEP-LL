@@ -7,10 +7,12 @@ struct FourLayerTiling {
     uint64_t bytesPerEdge;
     uint32_t chunkBytes;
     uint32_t lanes;
-    uint32_t rank;
-    uint32_t world;
-    uint32_t layer;  // 0=empty launch, 1=tiling-only, 3=transfer
-    uint16_t scenario; // 1=one-to-one,2=many-to-one,3=one-to-many,4=many-to-many
-    uint16_t fanout; // scenario3: rank0 sends only to ranks 1..fanout
+    uint8_t rank;
+    uint8_t world;
+    uint8_t layer;    // 0=empty, 1=tiling-only, 3=transfer
+    uint8_t scenario; // 1=one-to-one,2=many-to-one,3=one-to-many,4=all-to-all
+    uint32_t fanout;
+    uint32_t peerMask; // scenario1/3: destination mask; scenario2: source mask
+    uint32_t abiVersion; // 2; rebuild Host/device together after layout changes
 };
 static_assert(sizeof(FourLayerTiling)==32,"one GM tiling block");

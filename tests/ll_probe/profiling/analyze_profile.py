@@ -11,7 +11,7 @@ import math
 from paths import project_path
 
 from profile_common import describe
-from bandwidth_model import load_hardware, volume, theoretical_time, bandwidth_statistics
+from bandwidth_model import load_hardware, comm_edges, volume, theoretical_time, bandwidth_statistics
 
 
 def audit_deployment(by_rank, deployment):
@@ -98,11 +98,7 @@ def analyze(paths, hardware_override=None, peak_override=None, peak_description=
     cfg, world = identity['configuration'], identity['world']
     wire = None
     if kind == 'comm' and cfg['layer'] == 3:
-        fanout = cfg.get('fanout')
-        fanout = world-1 if fanout is None else fanout
-        if not 1 <= fanout < world or (cfg['scenario'] != 3 and fanout != world-1):
-            raise ValueError('Invalid communication fanout in report')
-        edges = {1: 1, 2: world-1, 3: fanout, 4: world*(world-1)}[cfg['scenario']]
+        edges=len(comm_edges(world,cfg['scenario'],cfg.get('fanout'),cfg.get('targets'),cfg.get('sources')))
         wire = cfg['bytes']*edges
     elif kind in ('peer', 'shmem') and cfg['mode'] >= 2:
         wire = cfg['bytes']

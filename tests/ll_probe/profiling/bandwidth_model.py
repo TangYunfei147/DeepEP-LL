@@ -25,18 +25,30 @@ def load_hardware(path):
     return dict(sha256=hashlib.sha256(raw).hexdigest(), specification=data)
 
 
-def comm_edges(world, scenario, fanout=None):
+def comm_edges(world, scenario, fanout=None, targets=None, sources=None):
+    if world not in (2,4,8,16,32) or scenario not in (1,2,3,4):raise ValueError('Invalid communication graph')
+    def selected(values):
+        if values is None:return None
+        if not values or any(type(v) is not int or not 1<=v<world for v in values) or len(set(values))!=len(values):
+            raise ValueError('Rank lists must be nonempty, unique, and in 1..world-1; rank0 is the fixed root')
+        return sorted(values)
+    targets,sources=selected(targets),selected(sources)
+    if targets is not None and scenario not in (1,3):raise ValueError('--targets applies only to scenario1/3')
+    if sources is not None and scenario!=2:raise ValueError('--sources applies only to scenario2')
+    if fanout is not None and (scenario!=3 or targets is not None):raise ValueError('--fanout is scenario3-only and cannot combine with --targets')
     n=world-1 if fanout is None else fanout
-    if world not in (2,4,8,16,32) or scenario not in (1,2,3,4) or not 1<=n<world:
-        raise ValueError('Invalid communication graph')
-    if scenario!=3 and fanout is not None:raise ValueError('fanout applies only to scenario3')
-    return [(s,d) for s in range(world) for d in range(world) if s!=d and (
-        (scenario==1 and s==0 and d==1) or (scenario==2 and s!=0 and d==0) or
-        (scenario==3 and s==0 and 1<=d<=n) or scenario==4)]
+    if not 1<=n<world:raise ValueError('Invalid fanout')
+    if scenario==1:
+        targets=[1] if targets is None else targets
+        if len(targets)!=1:raise ValueError('scenario1 requires exactly one target')
+        return [(0,targets[0])]
+    if scenario==2:return [(s,0) for s in (range(1,world) if sources is None else sources)]
+    if scenario==3:return [(0,d) for d in (range(1,n+1) if targets is None else targets)]
+    return [(s,d) for s in range(world) for d in range(world) if s!=d]
 
 
 def volume(world, cfg, local_world=None):
-    edges=comm_edges(world,cfg['scenario'],cfg.get('fanout'))
+    edges=comm_edges(world,cfg['scenario'],cfg.get('fanout'),cfg.get('targets'),cfg.get('sources'))
     size=cfg['bytes']; tx=[0]*world;rx=[0]*world
     for s,d in edges:tx[s]+=size;rx[d]+=size
     local=cross=None
