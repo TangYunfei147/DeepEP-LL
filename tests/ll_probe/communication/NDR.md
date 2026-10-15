@@ -14,7 +14,7 @@
 模式在Host选择独立编译的库，payload循环不增加模式判断。UB原Run/启动包装保持不变。
 NDR每核使用QP索引=core，对每条选中的边一次提交该核完整连续字节段，再quiet。
 源和目标都在SHMEM对称内存；传入本地对称目标地址，由RDMA接口翻译到peer。
-每核仅分配256B的UB描述符工作区，不把payload经UB分块搬运。`lanes/chunk`不调节NDR数据面，
+每核仅分配256B的UB描述符工作区，不把payload经UB分块搬运。`lanes`不调节NDR数据面；`chunk`仅接受默认4096，非默认值显式拒绝，
 仅保留公共tiling字段；`cores`同时决定分片数和每peer QP数量（当前探针1..32）。
 最小32B分片可能使部分核无数据。不同peer依次提交/完成，当前不做跨peer并发队列调度。
 quiet是必要的完成成本；该测量包含提交与完成，不声称是零开销网卡线速时间。
@@ -153,3 +153,27 @@ CSV的详细来源、每rank分布、原始rank-MAX样本、模型约束及配�
 | `api_us` | 微秒；Host从记录start事件之前开始，到kernel提交、end事件记录及stream同步完成为止；包含这些Host调用成本。 |
 | `job_join_us` | 微秒；与api_us起点相同，延伸到该rank完成后置SHMEM barrier；不是全局对齐的整作业makespan。 |
 | `transport` | `ubmem`或`ndr`。 |
+
+## UB Memory 可配置 chunk
+
+`--transport ubmem --chunk BYTES`已接通Host tiling，默认4096；不改变每边总发送量或核间32B对齐分片。
+A5设备0通过CANN `GetCoreMemSize(UB)`查询为253952B（248KiB）每核。
+当前探针只有一块payload UB缓冲，总量为`chunk × lanes`；限制为253952B参考上限与运行设备查询容量的较小值。
+不是所有核共享248KiB，也不能每个lane各占248KiB。chunk须为正的32B倍数，lanes仍为1..4。
+参考最大chunk：lanes=1为253952B，2为126976B，3为84640B，4为63488B（向下32B对齐）。
+这是容量上限，不是吞吐最优值；运行前在native.log打印UB_CONFIG实测平台容量及申请字节。
+
+```bash
+bash tests/ll_probe/profiling/build.sh
+python3 tests/ll_probe/run.py --config tests/ll_probe/configs/ep16.yaml --node-index 0 --test comm --run-id ub-chunk-001 --target-run -- --transport ubmem --scenario 1 --bytes 819200 --cores 10 --lanes 4 --chunk 32768
+```
+
+此例每核81920B，每核远端写三次（32768、32768、16384B），单次kernel总payload仍819200B。
+所有节点须重编探针Host；无需重编SHMEM/wheel。旧可执行文件不接受新的chunk参数会失败，不能仅更新Python后沿用旧库。
+`report.json`/summary.json的configuration记录chunk和lanes，跨配置禁止混合汇总；CSV现有20列保持不变。
+NDR仍每核整段put+quiet，不接受通过非默认chunk暗示切分。旧Host位置参数调用不提供chunk时继续默认4096。
+
+本次chunk改动验证：CPU174项通过；UB profile/standalone构建通过；A5仅设备0/1，
+独立Host双rank场景4的63488B×4 lane（bytes=819232，cores=10，含不均分和尾块）及
+253952B×1 lane（bytes=819200，cores=1）均通过接收数据/guard/正常清理检查。
+这些是正确性验证，不是目标机性能结果。HNS_1825仅编译链接复查通过，未执行NDR收发。

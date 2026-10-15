@@ -24,7 +24,7 @@ def test_cli_and_cross_host_accounting(scenario,extra,expected):
     a=args(['--scenario',str(scenario),*extra]);job=plan(a,dict(WORLD_SIZE='32',RANK='0',LOCAL_RANK='0'))
     assert comm_edges(32,scenario,a.fanout,a.targets,a.sources)==expected
     assert job['world']==32
-    assert int(job['argv'][-1])==sum(1<<v for v in sorted({s if scenario==2 else d for s,d in expected}))
+    assert int(job['argv'][-2])==sum(1<<v for v in sorted({s if scenario==2 else d for s,d in expected}))
     vol,_=volume(32,vars(a),16)
     assert vol['inter_host_sent_bytes']==len(expected)*a.bytes
     assert vol['intra_host_sent_bytes']==0

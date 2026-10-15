@@ -12,6 +12,10 @@ import os
 import argparse
 parser=argparse.ArgumentParser()
 parser.add_argument('--comm-only',action='store_true',help='Run one communication regression after Host-only changes')
+parser.add_argument('--chunk',type=int,default=4096)
+parser.add_argument('--bytes',type=int,default=15392)
+parser.add_argument('--cores',type=int,default=8)
+parser.add_argument('--lanes',type=int,default=4)
 args=parser.parse_args()
 HERE=Path(__file__).resolve().parent
 import tempfile
@@ -32,7 +36,7 @@ for index,(key,layer) in enumerate(cases):
             stdout=(OUT/f'{index}-rank{rank}.csv').open('w');stderr=(OUT/f'{index}-rank{rank}.log').open('w')
             streams.extend([stdout,stderr])
             cmd=['bash',str(HERE/'run.sh'),str(HERE.parent/'communication/build/comm_probe'),str(rank),'2',str(rank),
-                 f'tcp://127.0.0.1:{19740+index}','15392','8','4',str(key),str(layer),'0','2']
+                 f'tcp://127.0.0.1:{19740+index}',str(args.bytes),str(args.cores),str(args.lanes),str(key),str(layer),'0','2','1','0',str(args.chunk)]
             env=dict(os.environ)
             if rank==0:env['FOUR_READY_FILE']=str(OUT/f'{index}-rank0.ready')
             processes.append(subprocess.Popen(cmd,stdout=stdout,stderr=stderr,env=env))

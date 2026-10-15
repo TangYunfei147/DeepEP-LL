@@ -1,4 +1,5 @@
 #include <acl/acl.h>
+#include "tiling/platform/platform_ascendc.h"
 #include "shmem.h"
 #include "../tiling.h"
 #include <chrono>
@@ -31,7 +32,7 @@ static uint8_t pattern(uint32_t rank,uint64_t i) { return uint8_t((rank*31+i*13+
 #include "../../profiling/host/profile_bridge.h"
 int main(int argc,char** argv) {
     try {
-        if(argc!=12&&argc!=13&&argc!=14)throw std::runtime_error("rank world device endpoint bytes cores lanes scenario layer warmup samples [fanout [peer_mask]]");
+        if(argc!=12&&argc!=13&&argc!=14&&argc!=15)throw std::runtime_error("rank world device endpoint bytes cores lanes scenario layer warmup samples [fanout [peer_mask [chunk_bytes]]]");
         auto rank=num(argv[1]),world=num(argv[2]),device=num(argv[3]),bytes=num(argv[5]),cores=num(argv[6]),
             lanes=num(argv[7]),scenario=num(argv[8]),layer=num(argv[9]),warmup=num(argv[10]),samples=num(argv[11]);
         if((world!=2&&world!=4&&world!=8&&world!=16&&world!=32)||rank>=world||device>31||!bytes||bytes%32||bytes>(64ULL<<20)||world*bytes>(256ULL<<20)||
@@ -41,7 +42,12 @@ int main(int argc,char** argv) {
         if(!fanout||fanout>=world||(scenario!=3&&fanout!=world-1))
             throw std::runtime_error("fanout must be in 1..world-1 and applies only to scenario3");
         const uint64_t allowedMask=((1ULL<<world)-1ULL)&~1ULL;
-        uint64_t peerMask=argc==14?num(argv[13]):0;
+        const uint64_t chunk=argc==15?num(argv[14]):4096;
+        if(!chunk||chunk%32||chunk>253952/lanes)throw std::runtime_error("chunk must be 32B aligned; chunk*lanes <= 253952B reference UB");
+#ifdef LL_PROBE_NDR
+        if(chunk!=4096)throw std::runtime_error("chunk tuning applies only to ubmem");
+#endif
+        uint64_t peerMask=argc>=14?num(argv[13]):0;
         if(peerMask>UINT32_MAX||(peerMask&~allowedMask)||(scenario==4&&peerMask))
             throw std::runtime_error("peer mask must contain only non-root ranks inside world");
         if(!peerMask&&scenario!=4)peerMask=scenario==1?2ULL:scenario==2?allowedMask:((1ULL<<(fanout+1))-2ULL);
@@ -51,7 +57,17 @@ int main(int argc,char** argv) {
         if(!visible)throw std::runtime_error("visible devices must be explicit");
         uint32_t visibleCount=1;for(const char* p=visible;*p;++p)visibleCount+=*p==',';
         if(device>=visibleCount)throw std::runtime_error("device outside visible ordinal range");
-        CK(PROBE_ACL_INIT()); CK(aclrtSetDevice(int(device))); aclrtStream stream; CK(aclrtCreateStream(&stream));
+        CK(PROBE_ACL_INIT()); CK(aclrtSetDevice(int(device)));
+#ifndef LL_PROBE_NDR
+        auto* platform=platform_ascendc::PlatformAscendCManager::GetInstance(aclrtGetSocName());
+        uint64_t ubBytes=0;
+        if(platform)platform->GetCoreMemSize(platform_ascendc::CoreMemType::UB,ubBytes);
+        if(!ubBytes||chunk*lanes>ubBytes)throw std::runtime_error("chunk*lanes exceeds queried device UB or UB query failed");
+        std::fprintf(stderr,"UB_CONFIG rank=%llu ub_bytes=%llu chunk_bytes=%llu lanes=%llu allocated_bytes=%llu\n",
+            (unsigned long long)rank,(unsigned long long)ubBytes,(unsigned long long)chunk,
+            (unsigned long long)lanes,(unsigned long long)(chunk*lanes));
+#endif
+        aclrtStream stream; CK(aclrtCreateStream(&stream));
         aclshmemx_init_attr_t attr{}; aclshmemx_uniqueid_t uid{};
         attr.my_pe=int(rank);attr.n_pes=int(world);
 #ifdef LL_PROBE_NDR
@@ -102,7 +118,7 @@ int main(int argc,char** argv) {
         CK(aclrtMalloc(&tiling,sizeof(FourLayerTiling),ACL_MEM_MALLOC_HUGE_FIRST));
         std::vector<uint8_t> input(bytes),output(capacity);
         for(uint64_t i=0;i<bytes;++i)input[i]=pattern(uint32_t(rank),i);
-        FourLayerTiling td{bytes,4096,uint32_t(lanes),uint8_t(rank),uint8_t(world),uint8_t(layer),uint8_t(scenario),uint32_t(fanout),uint32_t(peerMask),2U};
+        FourLayerTiling td{bytes,uint32_t(chunk),uint32_t(lanes),uint8_t(rank),uint8_t(world),uint8_t(layer),uint8_t(scenario),uint32_t(fanout),uint32_t(peerMask),2U};
         CK(aclrtMemcpy(src,bytes,input.data(),bytes,ACL_MEMCPY_HOST_TO_DEVICE));
 #ifndef LL_PROBE_NDR
         CK(aclrtMemcpy(peerTable,world*8,peers.data(),world*8,ACL_MEMCPY_HOST_TO_DEVICE));

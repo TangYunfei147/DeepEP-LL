@@ -38,7 +38,7 @@ def parser():
     p.add_argument('--hardware-config', type=project_path, help='Editable bandwidth-reference YAML inside project')
     p.add_argument('--cores', type=int, default=8)
     p.add_argument('--lanes', type=int, default=4)
-    p.add_argument('--chunk', type=int, default=4096)
+    p.add_argument('--chunk', type=int, default=4096, help='UB chunk bytes: 32B aligned, chunk*lanes <= 253952; runtime also checks device UB')
     p.add_argument('--scenario', type=int, choices=(1, 2, 3, 4), default=1)
     p.add_argument('--transport',choices=('ubmem','ndr'),default='ubmem',help='Compile-time selected communication backend; no silent fallback')
     p.add_argument('--fanout', type=int, help='Scenario3 only: rank0 sends to ranks 1..N; default world-1')
@@ -111,6 +111,10 @@ def plan(args, environ):
     if (args.targets is not None or args.sources is not None) and args.kind != 'comm':
         raise ValueError('Rank selection applies only to comm')
     if args.kind == 'comm':
+        if not 1<=args.lanes<=4 or args.chunk<32 or args.chunk%32 or args.chunk*args.lanes>253952:
+            raise ValueError('comm chunk must be 32B aligned with chunk*lanes <= 253952 and lanes in 1..4')
+        if args.transport=='ndr' and args.chunk!=4096:
+            raise ValueError('chunk tuning applies only to ubmem; NDR sends each core full segment')
         if world not in (2, 4, 8, 16, 32):
             raise ValueError('comm supports actual worlds 2/4/8/16/32')
         edges=comm_edges(world,args.scenario,args.fanout,args.targets,args.sources)
@@ -120,7 +124,7 @@ def plan(args, environ):
         peer_mask=0 if args.scenario==4 else sum(1<<v for v in selected_ranks)
         fanout=len(selected_ranks) if args.scenario==3 else world-1
         argv = [rank, world, device, args.endpoint, args.bytes, args.cores,
-                args.lanes, args.scenario, args.layer, args.warmup, args.samples, fanout, peer_mask]
+                args.lanes, args.scenario, args.layer, args.warmup, args.samples, fanout, peer_mask, args.chunk]
         library = HERE/('communication/build/libcomm_ndr_profile.so' if args.transport=='ndr' else 'communication/build/libcomm_profile.so')
         prefix='four_ndr' if args.transport=='ndr' else 'four_comm'
         kernel = 'four_empty' if args.layer == 0 else f'{prefix}_{args.scenario}'

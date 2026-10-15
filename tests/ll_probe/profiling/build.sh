@@ -12,7 +12,7 @@ require_shmem_sdk
 INC=(-I"$ASCEND_HOME_PATH/asc/include" -I"$ASCEND_HOME_PATH/include" -I"$SHMEM/include" -I"$SHMEM/src")
 DEV=(-O2 -std=c++17 -fPIC -xasc --npu-arch=dav-3510 --cce-auto-infer-kernel-type=false)
 HOST=(-O2 -std=c++17 -fPIC -shared -DLL_PROFILE_BRIDGE)
-LINK=(--cce-fatobj-link -L"$LIB" -Wl,-rpath,"$LIB" -L"$ASCEND_HOME_PATH/lib64" -lshmem -lascendcl -lruntime -lplatform -ltiling_api -lunified_dlog)
+LINK=(--cce-fatobj-link -L"$LIB" -Wl,-rpath,"$LIB" -L"$ASCEND_HOME_PATH/lib64" -lshmem -lascendcl -lruntime -lplatform -ltiling_api -lunified_dlog -lstdc++)
 python3 metadata/prepare_snapshot.py
 "$BISHENG" "${DEV[@]}" "${INC[@]}" -c bandwidth/kernel/transfer_probe.cpp -o bandwidth/build/transfer_profile.o
 "$BISHENG" "${DEV[@]}" "${INC[@]}" -c communication/kernel/comm_kernel.cpp -o communication/build/comm_profile.o

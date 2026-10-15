@@ -43,7 +43,7 @@ def test_plan_default_and_selected_receivers(world):
     base=['--kind','comm','--scenario','3','--endpoint','tcp://127.0.0.1:29501','--output-dir','results/plan']
     env=dict(WORLD_SIZE=str(world),RANK=str(world-1),LOCAL_RANK='0')
     full=profile_probe.plan(profile_probe.parser().parse_args(base),env)
-    assert full['argv'][-2]==str(world-1)
+    assert full['argv'][-3]==str(world-1)
     n=min(3,world-1)
     selected=profile_probe.plan(profile_probe.parser().parse_args(base+['--fanout',str(n)]),env)
     assert selected['measurement_scope']['receiver_ranks']==list(range(1,n+1))

@@ -119,8 +119,8 @@ metadata每个实际rank执行相同logical source-rank=0本地提取；实际wo
 
 当前共用白名单较宽，“能解析”不等于所选kernel会使用：
 
-- `--chunk`（默认4096）、`--mode`（默认3）：供旧peer/shmem搬运探针使用；统一入口不选择它们。
-  comm实际搬运chunk在Host固定为4096；修改这两个选项不会改变本入口的comm。
+- `--chunk`（默认4096字节）：comm的ubmem模式每核每lane搬运块大小，32B对齐，chunk×lanes≤253952B，运行时还检查当前设备UB容量。NDR只接受默认值且不按chunk分块。
+- `--mode`（默认3）：供旧peer/shmem使用，不改变comm。
 - metadata之外的`--batch/--hidden/--top-k/--experts/--partitions`不改变comm。
 - metadata忽略`--bytes/--element-bytes/--cores/--lanes/--scenario/--chunk/--mode`的算法作用；
   部分通用参数仍会被解析或检查。metadata明确拒绝`--bs/--hidden-size`及显式fanout。

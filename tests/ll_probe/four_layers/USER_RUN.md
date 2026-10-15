@@ -63,7 +63,7 @@ bash tests/ll_probe/four_layers/run.sh tests/ll_probe/communication/build/comm_p
   15392 8 4 4 3 10 50 > "$OUT/samples.csv" 2> "$OUT/run.log"
 ```
 
-末尾参数依次为每条边发送字节、AIV核数、lane数、scenario、layer、warmup、samples。chunk当前固定4096B。改变字节数扫描曲线；分别执行scene1/2/3/4，layer0/1/3，始终使用新输出目录和作业endpoint。先启动rank0，等run.log出现READY_SHMEM后再启动其他rank。锁定SDK客户端连接仅重试约20秒，不要让它在rank0设备初始化前耗尽窗口；不能混入不同作业。
+末尾参数依次为每条边发送字节、AIV核数、lane数、scenario、layer、warmup、samples。可在samples后追加fanout、peer_mask、chunk_bytes三个参数；不追加时chunk默认4096B，UB模式chunk须32B对齐且chunk×lanes不超过253952B与运行设备UB容量。改变字节数扫描曲线；分别执行scene1/2/3/4，layer0/1/3，始终使用新输出目录和作业endpoint。先启动rank0，等run.log出现READY_SHMEM后再启动其他rank。锁定SDK客户端连接仅重试约20秒，不要让它在rank0设备初始化前耗尽窗口；不能混入不同作业。
 
 source每次发送前从本卡GM读数据，通过UB发送到SHMEM的MTE可寻址peer映射。只支持该直接寻址数据面；若目标互联仅支持RDMA put，初始化或传输失败须回传日志再适配，不自动换路径。
 
