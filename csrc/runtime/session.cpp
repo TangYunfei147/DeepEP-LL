@@ -1,6 +1,10 @@
 // Copyright (c) 2026, Lu Lu
 
 #include "runtime/session.hpp"
+#ifdef DEEPEP_LL_RDMA
+#include "runtime/ll_core_config.hpp"
+#include "kernels/dispatch/low_latency/common/ll_rdma_layout.h"
+#endif
 #include <cstring>
 #include <cstdlib>
 #include <exception>
@@ -37,6 +41,15 @@ bool Session::busy()
 Session::Session(int rank, int size, uint64_t bytes, const std::string& endpoint, unsigned timeout, bool udma,
                  bool megamoe, bool mpi, bool combine_only, bool use_1g_huge_pages)
 {
+    const char* backend_env = std::getenv("DEEPEP_LL_BACKEND");
+    const std::string backend = backend_env ? backend_env : "mte";
+    if (backend != "mte" && backend != "rdma") throw std::invalid_argument("DEEPEP_LL_BACKEND must be mte or rdma");
+    ll_rdma_ = backend == "rdma";
+    if (ll_rdma_ && (udma || megamoe || combine_only || use_1g_huge_pages))
+        throw std::invalid_argument("RDMA LL requires a plain LL Session; mixed HT/UDMA runtimes are unsupported");
+#ifndef DEEPEP_LL_RDMA
+    if (ll_rdma_) throw std::runtime_error("RDMA selected but wheel lacks DEEPEP_LL_RDMA=ON; no MTE fallback");
+#endif
     if (combine_only && (!udma || megamoe)) throw std::invalid_argument("Combine-only requires UDMA");
     if (use_1g_huge_pages && (!udma || megamoe))
         throw std::invalid_argument("1 GiB huge pages require the Elastic UDMA runtime");
@@ -74,7 +87,18 @@ Session::Session(int rank, int size, uint64_t bytes, const std::string& endpoint
     aclshmemx_uniqueid_t uid{};
     attr.my_pe = rank;
     attr.n_pes = size;
-    const uint64_t allocation_bytes = bytes + ((bytes == (8ULL << 30)) ? (2ULL << 20) : 0ULL);
+    const uint64_t workspace_bytes = bytes + ((bytes == (8ULL << 30)) ? (2ULL << 20) : 0ULL);
+    uint64_t staging_bytes = 0;
+#ifdef DEEPEP_LL_RDMA
+    if (ll_rdma_) {
+        if (bytes != (8ULL << 30)) throw std::invalid_argument("RDMA LL requires the 8 GiB workspace");
+        ll_rdma_qps_ = query_ll_core_config().active;
+        low_latency_cores_ = ll_rdma_qps_;
+        const uint64_t used_staging = uint64_t(ll_rdma_qps_) * LlRdma::kCoreBytes;
+        staging_bytes = (used_staging + alignment - 1U) / alignment * alignment;
+    }
+#endif
+    const uint64_t allocation_bytes = workspace_bytes + staging_bytes;
     attr.local_mem_size = allocation_bytes;
     if (!mpi) {
         std::memcpy(attr.ip_port, endpoint.c_str(), endpoint.size() + 1);
@@ -84,6 +108,9 @@ Session::Session(int rank, int size, uint64_t bytes, const std::string& endpoint
     attr.comm_args = mpi ? nullptr : &uid;
     attr.option_attr.data_op_engine_type =
         udma ? static_cast<data_op_engine_type_t>(ACLSHMEM_DATA_OP_MTE | ACLSHMEM_DATA_OP_UDMA) : ACLSHMEM_DATA_OP_MTE;
+#ifdef DEEPEP_LL_RDMA
+    if (ll_rdma_) attr.option_attr.data_op_engine_type = ACLSHMEM_DATA_OP_ROCE;
+#endif
     attr.option_attr.shm_init_timeout = timeout;
     attr.option_attr.shm_create_timeout = timeout;
     attr.option_attr.control_operation_timeout = timeout;
@@ -101,6 +128,9 @@ Session::Session(int rank, int size, uint64_t bytes, const std::string& endpoint
     bool init_attempted = false;
     bool runtime_started = false;
     try {
+#ifdef DEEPEP_LL_RDMA
+        if (ll_rdma_) check(aclshmemx_set_qp_num(ACLSHMEM_DATA_OP_ROCE, ll_rdma_qps_), "ROCE QP configuration");
+#endif
         if (udma) {
             // Combine owns pairs 0..15; peer-table Dispatch uses pairs 0..7.
             // Serialized operators reuse the bank, not concurrent SQ writers.
@@ -143,12 +173,15 @@ Session::Session(int rank, int size, uint64_t bytes, const std::string& endpoint
             check(aclshmemx_init_attr(mode, &attr), "aclshmemx_init_attr");
             runtime_started = true;
             // Peer-table aggregate packets require physical 512B boundaries.
-            workspace_ = udma ? aclshmem_align(512U, allocation_bytes) : aclshmem_malloc(allocation_bytes);
+            workspace_ = (udma || ll_rdma_) ? aclshmem_align(512U, allocation_bytes) : aclshmem_malloc(allocation_bytes);
         }
         if (workspace_ == nullptr) {
             throw std::runtime_error("SHMEM workspace allocation or translation failed");
         }
+        if (ll_rdma_ && reinterpret_cast<uintptr_t>(workspace_) % 512U)
+            throw std::runtime_error("RDMA workspace requires 512-byte alignment");
         check(aclrtMemset(workspace_, allocation_bytes, 0, allocation_bytes), "aclrtMemset");
+        if (ll_rdma_) ll_rdma_stage_ = static_cast<uint8_t*>(workspace_) + workspace_bytes;
         bytes_ = bytes;
         allocation_bytes_ = allocation_bytes;
         rank_ = rank;

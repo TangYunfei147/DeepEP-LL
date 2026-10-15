@@ -41,6 +41,7 @@ template<class T> struct Tensor {
     T GetValue(unsigned i) { return p[i]; }
     void SetValue(unsigned i,T v) { p[i]=v; }
     Tensor operator[](unsigned i) { return {p+i}; }
+    template<class U> Tensor<U> ReinterpretCast() { return {reinterpret_cast<U*>(p)}; }
 };
 struct Route {
     Args* args_;
@@ -62,6 +63,15 @@ void DataCopyPad(Tensor<float> dst,Tensor<float> src,Copy c) {
     }
 }
 unsigned modelActiveRecv=32;
+std::vector<std::vector<float>>* modelMemory=nullptr;
+namespace LlTransport {
+void Records(Args*, unsigned peer, uint64_t offset, Tensor<uint8_t> records,
+             unsigned count, unsigned stride, bool counts, Tensor<uint8_t>) {
+    assert(!counts && modelMemory && peer<modelMemory->size());
+    DataCopyPad(Tensor<float>{(*modelMemory)[peer].data()+offset/4},
+        records.ReinterpretCast<float>(), {count,32U,0U,stride-32U,0U});
+}
+}
 using CombineDedup::kCombinePrepareRowBytes;
 using CombineDedup::kCombineNotifyRows;
 struct Ready {
@@ -69,6 +79,7 @@ struct Ready {
     unsigned core_;
     std::vector<std::vector<float>>* gm;
     unsigned coreNum_,sendCores_,notifyBegin_;
+    uint64_t control_=0;
     uint64_t selected_=0;
     Tensor<float> preparePublish_{scratch+3072};
     float scratch[4096]{};
@@ -138,6 +149,7 @@ int main() {
             const unsigned receivers=total/2;
             modelActiveRecv=receivers;
             std::vector<std::vector<float>> memory(world,std::vector<float>(8192,0));
+            modelMemory=&memory;
             for(unsigned round=0;round<2;++round) {
                 for(unsigned rank=0;rank<world;++rank) {
                     Args args{rank,world};

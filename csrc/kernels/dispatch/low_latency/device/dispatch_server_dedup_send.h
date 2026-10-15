@@ -9,6 +9,7 @@
 #include "../common/ll_stage_timer_device.h"
 
 #include "kernel_operator.h"
+#include "ll_transport.h"
 #include "dispatch_dedup_mxfp8_quant.h"
 #include "../common/ep_memory_server_dedup_data_layout.h"
 #include "../common/ep_memory_server_dedup_protocol.h"
@@ -423,12 +424,9 @@ private:
         WaitFlag<HardEvent::V_MTE3>(lane);
         if (timer_) timer_->End(LlStageTimer::SendPack);
         if (timer_) timer_->Start(LlStageTimer::SendIssue);
-        GlobalTensor<uint8_t> destinationGm;
-        destinationGm.SetGlobalBuffer(args_->peerMems[destination] +
-                                      DispatchServerDedupDispatchOffset(data_, args_->rank, destination,
-                                                                        expert % localExperts_, q, args_->rankSize,
-                                                                        localExperts_, bs_));
-        DataCopy(destinationGm, out, uint32_t(data_.tokenStride));
+        LlTransport::Packet(args_, destination,
+            DispatchServerDedupDispatchOffset(data_, args_->rank, destination,
+                expert % localExperts_, q, args_->rankSize, localExperts_, bs_), out, uint32_t(data_.tokenStride));
         SetFlag<HardEvent::MTE3_V>(lane);
         ++packets_;
         if (timer_) timer_->End(LlStageTimer::SendIssue);

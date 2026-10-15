@@ -84,6 +84,9 @@ class Runtime:
     ):
         global _OWNER
         native = require_native("Runtime.__init__")
+        self.ll_backend = os.environ.get("DEEPEP_LL_BACKEND", "mte")
+        if self.ll_backend not in ("mte", "rdma"):
+            raise ValueError("DEEPEP_LL_BACKEND must be mte or rdma")
         integer("capacity", capacity, 2 << 20, (1 << 30) if self._megamoe else (1 << 63) - 1)
         if capacity % (2 << 20):
             raise ValueError("capacity must be aligned to 2 MiB")
@@ -176,6 +179,7 @@ class Runtime:
                     + 4 * int(dense_qps)
                     + 8 * int(use_1g_huge_pages)
                     + 16 * int(debug_collectives)
+                    + 32 * int(self.ll_backend == "rdma")
                 )
                 if store_group:
                     values = group.all_gather(local_values, "runtime configuration")
@@ -193,7 +197,7 @@ class Runtime:
                     raise ValueError("Ranks disagree on workspace capacity, timeout or bootstrap endpoint")
                 if any(value[-1] != values[0][-1] for value in values):
                     raise ValueError(
-                        "Ranks disagree on MTE/URMA runtime engines, QP configuration, page size or debug_collectives"
+                        "Ranks disagree on MTE/URMA/RDMA runtime engines, QP configuration, page size or debug_collectives"
                     )
                 if self._megamoe:
                     invalid_hosts = [i for i, value in enumerate(values) if value[4] == 0]

@@ -50,10 +50,12 @@ def source_patches(source):
     return [{"kind": "local-worktree", "sha256": digest.hexdigest()}]
 
 
-def prepare(root=ROOT, *, rebuild=False, if_needed=False, allow_local_changes=False):
+def prepare(root=ROOT, *, rebuild=False, if_needed=False, allow_local_changes=False, rdma_backend=None):
     if platform.system() != "Linux":
         raise RuntimeError("SHMEM compilation requires Linux and the pinned CANN SDK")
     root = Path(root).resolve()
+    if rdma_backend not in (None, "HNS_1825"):
+        raise ValueError("RDMA backend must be HNS_1825 or omitted")
     lock = json.loads((root / "dependencies.lock.json").read_text(encoding="utf-8"))
     source = root / "third-party/shmem"
     if not (source / ".git").exists() or not (source / "scripts/build.sh").is_file():
@@ -69,14 +71,27 @@ def prepare(root=ROOT, *, rebuild=False, if_needed=False, allow_local_changes=Fa
     revision = git("rev-parse", "HEAD")
     if revision != lock["shmem"]["revision"]:
         raise RuntimeError("SHMEM revision differs from dependencies.lock.json; do not build a moving branch")
+    from shmem_rdma_patch import prepare as prepare_rdma_patch, PATCH_ID
     patches = source_patches(source)
-    if patches and not allow_local_changes:
+    managed_only = not patches
+    if patches:
+        try:
+            managed_only = prepare_rdma_patch(source, apply=False)
+        except RuntimeError:
+            if rdma_backend:
+                raise  # Cannot apply the managed RDMA delta over conflicting edits.
+            # Default builds retain their existing --allow-local-changes contract.
+    if patches and not allow_local_changes and not managed_only:
         raise RuntimeError(
             "SHMEM has local changes; pass --allow-local-changes to build them explicitly "
             "(cluster launcher: --allow-local-shmem)"
         )
+    if rdma_backend:
+        prepare_rdma_patch(source, apply=True)
+        patches = source_patches(source)
 
     version = cann_version(lock["cann_version"])
+    rdma_build = {"rdma_backend": rdma_backend, "rdma_patch": PATCH_ID} if rdma_backend else {}
     jobs = os.environ.get("CMAKE_BUILD_PARALLEL_LEVEL", "4")
     if not jobs.isdecimal() or not 1 <= int(jobs) <= 64:
         raise ValueError("CMAKE_BUILD_PARALLEL_LEVEL must be in [1, 64]")
@@ -94,6 +109,7 @@ def prepare(root=ROOT, *, rebuild=False, if_needed=False, allow_local_changes=Fa
             "cann_timestamp": version.get("timestamp", "unknown"),
             "target": lock["target"],
             "source_patches": patches,
+            **rdma_build,
         }
         if identity.get("revision") != revision or identity.get("build") != expected_build:
             raise RuntimeError(
@@ -132,7 +148,8 @@ def prepare(root=ROOT, *, rebuild=False, if_needed=False, allow_local_changes=Fa
         build_env["PATH"] = git_dir + os.pathsep + build_env.get("PATH", os.defpath)
         # -e 防止上游中间命令失败后继续打包，随后误登记旧库为成功产物。
         subprocess.run(
-            ["bash", "-e", "scripts/build.sh", "-soc_type", lock["target"]],
+            ["bash", "-e", "scripts/build.sh", "-soc_type", lock["target"]]
+            + (["-enable_rdma", "-rdma_backend", rdma_backend] if rdma_backend else []),
             cwd=source,
             env=build_env,
             check=True,
@@ -148,6 +165,7 @@ def prepare(root=ROOT, *, rebuild=False, if_needed=False, allow_local_changes=Fa
             "cann_timestamp": version.get("timestamp", "unknown"),
             "target": lock["target"],
             "source_patches": patches,
+            **rdma_build,
         },
     )
     print(f"[SHMEM] SDK identity: {manifest}", flush=True)
@@ -159,10 +177,12 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--rebuild", action="store_true", help="Regenerate this submodule's build/install artifacts")
     parser.add_argument("--if-needed", action="store_true", help="Reuse a verified SDK from this CANN build")
+    parser.add_argument("--rdma-backend", choices=["HNS_1825"], help="Explicitly enable ROCE and the 72-QP host patch")
     parser.add_argument(
         "--allow-local-changes",
         action="store_true",
         help="Build local edits on the pinned commit and record their source fingerprint",
     )
     args = parser.parse_args()
-    prepare(rebuild=args.rebuild, if_needed=args.if_needed, allow_local_changes=args.allow_local_changes)
+    prepare(rebuild=args.rebuild, if_needed=args.if_needed, allow_local_changes=args.allow_local_changes,
+            rdma_backend=args.rdma_backend)

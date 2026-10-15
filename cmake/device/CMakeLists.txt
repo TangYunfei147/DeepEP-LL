@@ -38,6 +38,9 @@ target_compile_options(deepep_kernels PRIVATE "$<$<NOT:$<CONFIG:Debug>>:-O2>" -x
     "-ffile-prefix-map=${ASCEND_HOME_PATH}=CANN_SDK"
     "-ffile-prefix-map=${SHMEM_ROOT}=SHMEM_SDK")
 target_compile_definitions(deepep_kernels PRIVATE CATLASS_ARCH=3510 USE_SIMT L2_CACHE_HINT)
+if(DEEPEP_LL_RDMA)
+    target_compile_definitions(deepep_kernels PRIVATE DEEPEP_LL_RDMA=1 ACLSHMEMI_RDMA_K_BACKEND_HNS_1825=1)
+endif()
 if(DEEPEP_LL_STAGE_TIMER)
     target_compile_definitions(deepep_kernels PRIVATE DEEPEP_LL_STAGE_TIMER=1)
 endif()

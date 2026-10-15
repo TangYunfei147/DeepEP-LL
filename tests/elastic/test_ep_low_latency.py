@@ -120,7 +120,7 @@ def make_parser():
         action="store_true",
         help="Keep the test control group, but construct Buffer with rank/world_size",
     )
-    parser.add_argument("--route", choices=("normal",), default="normal")
+    parser.add_argument("--route", choices=("normal", "hotspot"), default="normal")
     parser.add_argument("--do-handle-copy", type=int, choices=(0, 1), default=1)
     parser.add_argument("--num-sms", type=int, default=0, help="LL only supports the default fixed schedule")
     parser.add_argument("--num-qps", type=int, default=0)
@@ -154,6 +154,8 @@ def make_parser():
     parser.add_argument("--ll-timer-frequency-hz", type=float, default=None, help="GetSystemCycle counter frequency; omit to retain raw ticks")
     parser.add_argument("--dispatch-only", action="store_true")
     parser.add_argument("--repeat-combine", type=int, default=2)
+    parser.add_argument("--correctness-repeats", type=int, default=3, help="Fresh routes on the same Buffer; outside profiling")
+    parser.add_argument("--use-1g-huge-pages", type=int, choices=(0, 1), default=None, help="RDMA requires 0; use the same page policy for MTE comparison")
     parser.add_argument("--output", help="New rank-0 JSON result file (will not overwrite)")
     return parser
 
@@ -415,14 +417,15 @@ def validate_args(args, world):
     return m
 
 
-def make_routes(world, b, k, e, seed):
+def make_routes(world, b, k, e, seed, route="normal"):
     """Independent CPU routes: no repeated experts within any token."""
     rng = random.Random(seed)
     result = []
     for _ in range(world):
         rows = []
         for _ in range(b):
-            chosen = rng.sample(range(e), k)
+            pool = e if route == "normal" else min(e, max(k, 2 * (e // world)))
+            chosen = rng.sample(range(pool), k)
             rows.append(chosen)
         result.append(rows)
     return result
@@ -720,7 +723,7 @@ def run_case(buffer, args, rank, world, m, mode):
         record_case_progress(args, rank, m, mode, phase)
 
     progress("prepare")
-    routes = make_routes(world, args.num_tokens, args.num_topk, args.num_experts, args.seed)
+    routes = make_routes(world, args.num_tokens, args.num_topk, args.num_experts, args.seed, mode)
     entries = expert_entries(routes, args.num_experts, world, rank)
     counts = [len(rows) for rows in entries]
     expert_dtype = torch.float16 if args.dtype == "fp16" else torch.bfloat16
@@ -779,6 +782,19 @@ def run_case(buffer, args, rank, world, m, mode):
     agree_check(check_backend, args, rank)  # Never allow --skip-check to hide an HT fallback.
     if not args.skip_check:
         agree_check(lambda: verify_dispatch(recv, handle, entries, args, world, m), args, rank)
+        if args.correctness_repeats < 1:
+            raise ValueError("correctness-repeats must be positive")
+        for repeat in range(1, args.correctness_repeats):
+            # Reuse both protocol windows with changed routing, on the same Session.
+            completion_boundary(args)
+            routes = make_routes(world, args.num_tokens, args.num_topk, args.num_experts, args.seed + repeat, mode)
+            entries = expert_entries(routes, args.num_experts, world, rank)
+            counts = [len(rows) for rows in entries]
+            indices = torch.tensor(routes[rank], dtype=torch.int64, device="npu")
+            recv, recv_idx, recv_weights, handle, event = dispatch()
+            event.current_stream_wait()
+            torch.npu.synchronize()
+            agree_check(lambda: verify_dispatch(recv, handle, entries, args, world, m), args, rank)
     if args.ll_stage_timer:
         diagnostic_calls(buffer, dispatch,
                          lambda output: verify_dispatch(output[0], output[3], entries, args, world, m),
@@ -916,6 +932,8 @@ def worker(local_rank, args):
         # Agree before creating a SHMEM Session or launching an instrumented kernel.
         core_config = native.low_latency_core_config()
         capability = {"active_aiv": core_config["active_aiv"],
+                      "transport": os.environ.get("DEEPEP_LL_BACKEND", "mte"),
+                      "rdma_compiled": bool(getattr(native, "low_latency_rdma_enabled", False)),
                       "logical_group": native.low_latency_ranks_per_group,
                       "core_protocol": native.low_latency_core_protocol,
                       "stage_timer": bool(getattr(native, "low_latency_stage_timer_enabled", False))}
@@ -937,7 +955,7 @@ def worker(local_rank, args):
         agree_check(reserve_directory, args, rank)
         dist.broadcast_object_list(run_directory, src=0)
         args.run_directory = run_directory[0]
-        modes = ("normal",)
+        modes = (args.route,)
 
         def save_plan():
             if rank == 0:
@@ -970,6 +988,7 @@ def worker(local_rank, args):
                 num_topk=0,
                 explicitly_destroy=True,
                 num_cpu_timeout_secs=args.num_cpu_timeout_secs,
+                use_1g_huge_pages=(capability["transport"] != "rdma" if args.use_1g_huge_pages is None else bool(args.use_1g_huge_pages)),
             )
 
         if not args.fresh_buffer_per_case:

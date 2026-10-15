@@ -49,10 +49,11 @@ private:
     LocalTensor<uint32_t> header_, index_;
 };
 
-__aicore__ inline void ReadServerDedupFlags(GM_ADDR slot, uint32_t blocks, LocalTensor<float> flags)
+__aicore__ inline void ReadServerDedupFlags(GM_ADDR slot, uint32_t blocks, LocalTensor<float> flags, bool uncached=false)
 {
     GlobalTensor<float> input;
     input.SetGlobalBuffer(reinterpret_cast<__gm__ float*>(slot + 480U));
+    if (uncached) input.SetL2CacheHint(CacheMode::CACHE_MODE_DISABLE);
     DataCopy(flags, input, DataCopyParams{uint16_t(blocks), 1U, 15U, 0U});
 }
 

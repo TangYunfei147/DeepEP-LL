@@ -200,6 +200,7 @@ def build_configuration(environment=None):
     default_shmem = ROOT / "third-party/shmem/install/shmem"
 
     result["ll_stage_timer"] = enabled("DEEPEP_LL_STAGE_TIMER", env)
+    result["ll_rdma"] = enabled("DEEPEP_LL_RDMA", env)
     result["build_type"] = env.get("DEEPEP_BUILD_TYPE", "RelWithDebInfo" if lineinfo else "Release")
     if result["build_type"] not in {"Release", "RelWithDebInfo", "Debug"}:
         raise RuntimeError("DEEPEP_BUILD_TYPE must be Release, RelWithDebInfo or Debug")
@@ -239,10 +240,13 @@ def build_configuration(environment=None):
         if "lib/libshmem.so" not in hashes or not any(key.startswith("include/") for key in hashes):
             raise RuntimeError("SHMEM SDK manifest must cover headers and libshmem.so")
     except (OSError, ValueError, TypeError, RuntimeError) as exc:
-        if beta == "ON":
+        if beta == "ON" or result["ll_rdma"]:
             raise
         warnings.warn(f"{exc}; continuing with SHMEM_ROOT={manifest.parent}", RuntimeWarning, stacklevel=2)
     library = manifest.parent / "lib/libshmem.so"
+    if result["ll_rdma"] and (sdk.get("build", {}).get("rdma_backend") != "HNS_1825"
+                              or sdk.get("build", {}).get("rdma_patch") != "deepep-roce-72-v1"):
+        raise RuntimeError("RDMA wheel requires SDK built with scripts/build_shmem.py --rdma-backend HNS_1825")
     if not library.is_file():
         raise RuntimeError(f"SHMEM SDK is missing {library}")
     files = sorted(
@@ -393,6 +397,7 @@ class CMakeBuild(build_ext):
             f"-DCMAKE_BUILD_TYPE={configuration['build_type']}",
             f"-DDEEPEP_DEVICE_JOBS={jobs}",
             f"-DDEEPEP_LL_STAGE_TIMER={'ON' if configuration.get('ll_stage_timer', False) else 'OFF'}",
+            f"-DDEEPEP_LL_RDMA={'ON' if configuration.get('ll_rdma', False) else 'OFF'}",
             f"-DPython_EXECUTABLE={sys.executable}",
             f"-Dpybind11_DIR={pybind11.get_cmake_dir()}",
             f"-DCMAKE_CXX_COMPILER={configuration['compiler_path']}",

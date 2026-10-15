@@ -5,6 +5,7 @@
 #define DISPATCH_SERVER_DEDUP_COUNTS_H
 
 #include "kernel_operator.h"
+#include "ll_transport.h"
 #include "adv_api/reduce/sum.h"
 #include "../common/ep_memory_server_dedup_count_layout.h"
 
@@ -44,6 +45,10 @@ public:
         GM_ADDR localState = args_->peerMems[epRankId_] + stateOffset_;
         windowInstatusFp32Tensor_.SetGlobalBuffer(reinterpret_cast<__gm__ float*>(localState));
         selfRankWinInGMTensor_.SetGlobalBuffer(reinterpret_cast<__gm__ float*>(localState));
+        if (LlTransport::Rdma(args_)) {
+            windowInstatusFp32Tensor_.SetL2CacheHint(CacheMode::CACHE_MODE_DISABLE);
+            selfRankWinInGMTensor_.SetL2CacheHint(CacheMode::CACHE_MODE_DISABLE);
+        }
         recvCntWorkspaceGM_ = localState + layout_.prefixOffset;
         sendCountsOutGM_ = sendCountsOut;
         expertIdsGMTensor_.SetGlobalBuffer(reinterpret_cast<__gm__ int32_t*>(expertIds));
@@ -273,10 +278,9 @@ __aicore__ inline void ServerDedupCounts::SendExpertCntRange(uint32_t start, uin
         const uint32_t count =
             end - expert < moeExpertNumPerRank_ - localExpert ? end - expert : moeExpertNumPerRank_ - localExpert;
         const uint64_t offset = (uint64_t(localExpert) * epWorldSize_ + epRankId_) * kEpServerDedupCountGmStride;
-        peer.SetGlobalBuffer(reinterpret_cast<__gm__ int32_t*>(args_->peerMems[dst] + stateOffset_ + offset));
-        // DataCopy strides are GM count slots: one record per source rank.
-        const DataCopyParams copy{uint16_t(count), 1U, 0U, uint16_t(epWorldSize_ * CNT_GM_STRIDE_BLOCKS - 1U)};
-        DataCopy<int32_t>(peer, statusTensor_[(expert - start) * UB_ALIGN_DATA_COUNT], copy);
+        LlTransport::Records(args_, dst, stateOffset_ + offset,
+            statusTensor_[(expert - start) * UB_ALIGN_DATA_COUNT].ReinterpretCast<uint8_t>(),
+            count, epWorldSize_ * kEpServerDedupCountGmStride, true, workBuf_.Get<uint8_t>());
         expert += count;
     }
 }
@@ -521,7 +525,9 @@ __aicore__ inline void ServerDedupCounts::WaitDispatch()
     DataCopyParams intriParams{static_cast<uint16_t>(recStatusNumPerCore_), 1,
                                static_cast<uint16_t>(CNT_GM_STRIDE_BLOCKS - 1U), 0};
     SyncFunc<AscendC::HardEvent::S_V>();
+    LlTransport::PollDeadline deadline(LlTransport::Rdma(args_));
     while (sumOfFlag != compareTarget) {
+        deadline.Check();
         DataCopy(statusFp32Tensor_,
                  windowInstatusFp32Tensor_[startStatusIndex_ * kEpServerDedupCountGmStride / sizeof(float)],
                  intriParams);

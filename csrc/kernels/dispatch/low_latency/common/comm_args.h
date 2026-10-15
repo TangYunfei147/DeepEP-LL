@@ -124,7 +124,8 @@ struct CommArgs {
     uint64_t peerMemBytes = 0U;
     int32_t commDomain = 0;
     uint32_t reserved0 = 0U;
-    // Unused ABI tail; kept zero by the Host.
+    // LL ABI v3: RDMA uses addresses[0:2] for symmetric workspace/staging,
+    // config[0:2] for backend/QP count. MTE and other paths keep this tail zero.
     GM_ADDR reservedAddresses[4] = {};
     uint32_t reservedConfig[2] = {};
 };

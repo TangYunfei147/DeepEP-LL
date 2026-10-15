@@ -57,6 +57,7 @@ Thumbs.db
 /third-party/shmem/
 
 /.venv-ll-timer/
+/.venv-ll-rdma/
 /.tmp/
 /.cache/
 /.logs/
