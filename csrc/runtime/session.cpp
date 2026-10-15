@@ -95,7 +95,8 @@ Session::Session(int rank, int size, uint64_t bytes, const std::string& endpoint
         ll_rdma_qps_ = query_ll_core_config().active;
         low_latency_cores_ = ll_rdma_qps_;
         const uint64_t used_staging = uint64_t(ll_rdma_qps_) * LlRdma::kCoreBytes;
-        staging_bytes = (used_staging + alignment - 1U) / alignment * alignment;
+        if (size > int(DispatchDedup::kLlPhysicalRanksPerHost))
+            staging_bytes = (used_staging + alignment - 1U) / alignment * alignment;
     }
 #endif
     const uint64_t allocation_bytes = workspace_bytes + staging_bytes;
@@ -109,7 +110,8 @@ Session::Session(int rank, int size, uint64_t bytes, const std::string& endpoint
     attr.option_attr.data_op_engine_type =
         udma ? static_cast<data_op_engine_type_t>(ACLSHMEM_DATA_OP_MTE | ACLSHMEM_DATA_OP_UDMA) : ACLSHMEM_DATA_OP_MTE;
 #ifdef DEEPEP_LL_RDMA
-    if (ll_rdma_) attr.option_attr.data_op_engine_type = ACLSHMEM_DATA_OP_ROCE;
+    if (ll_rdma_) attr.option_attr.data_op_engine_type = size > int(DispatchDedup::kLlPhysicalRanksPerHost)
+        ? static_cast<data_op_engine_type_t>(ACLSHMEM_DATA_OP_MTE | ACLSHMEM_DATA_OP_ROCE) : ACLSHMEM_DATA_OP_MTE;
 #endif
     attr.option_attr.shm_init_timeout = timeout;
     attr.option_attr.shm_create_timeout = timeout;
@@ -129,7 +131,7 @@ Session::Session(int rank, int size, uint64_t bytes, const std::string& endpoint
     bool runtime_started = false;
     try {
 #ifdef DEEPEP_LL_RDMA
-        if (ll_rdma_) check(aclshmemx_set_qp_num(ACLSHMEM_DATA_OP_ROCE, ll_rdma_qps_), "ROCE QP configuration");
+        if (ll_rdma_ && size > int(DispatchDedup::kLlPhysicalRanksPerHost)) check(aclshmemx_set_qp_num(ACLSHMEM_DATA_OP_ROCE, ll_rdma_qps_), "ROCE QP configuration");
 #endif
         if (udma) {
             // Combine owns pairs 0..15; peer-table Dispatch uses pairs 0..7.
@@ -181,7 +183,7 @@ Session::Session(int rank, int size, uint64_t bytes, const std::string& endpoint
         if (ll_rdma_ && reinterpret_cast<uintptr_t>(workspace_) % 512U)
             throw std::runtime_error("RDMA workspace requires 512-byte alignment");
         check(aclrtMemset(workspace_, allocation_bytes, 0, allocation_bytes), "aclrtMemset");
-        if (ll_rdma_) ll_rdma_stage_ = static_cast<uint8_t*>(workspace_) + workspace_bytes;
+        if (staging_bytes) ll_rdma_stage_ = static_cast<uint8_t*>(workspace_) + workspace_bytes;
         bytes_ = bytes;
         allocation_bytes_ = allocation_bytes;
         rank_ = rank;

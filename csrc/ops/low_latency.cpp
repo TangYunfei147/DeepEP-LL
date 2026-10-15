@@ -36,8 +36,8 @@ uint32_t pin_session_cores(Session& session)
 uint8_t* peer_buffer_base(Session& session, int peer)
 {
     if (peer < 0 || peer >= session.world()) throw std::invalid_argument("Invalid LL peer");
-    if (session.ll_rdma() && peer != session.rank()) return nullptr;
-    auto* original = static_cast<uint8_t*>(session.ll_rdma() ? session.workspace() : aclshmem_ptr(session.workspace(), peer));
+    if (session.ll_rdma() && !DispatchDedup::LlSameHost(session.rank(), peer)) return nullptr;
+    auto* original = static_cast<uint8_t*>(peer == session.rank() ? session.workspace() : aclshmem_ptr(session.workspace(), peer));
     if (original == nullptr) throw std::invalid_argument("Invalid LL peer mapping");
     if (session.capacity() != (8ULL << 30)) return original;
     // Translate the original symmetric pointer before applying the destination-rank
@@ -135,9 +135,10 @@ void bind_low_latency(py::module_& module)
         result["control_capacity_aiv"] = DispatchDedup::kLlMaxCoreNum;
         return result;
     });
-    if (deepep_ll_ranks_per_group() != DispatchDedup::kLlRanksPerGroup)
-        throw std::runtime_error("LL Host/device group size mismatch; rebuild the complete wheel");
-    module.attr("low_latency_ranks_per_group") = DispatchDedup::kLlRanksPerGroup;
+    for (uint32_t world : {16U, 32U})
+        if (deepep_ll_ranks_per_group(world) != DispatchDedup::LlGroupForWorld(world))
+            throw std::runtime_error("LL Host/device tiling-key policy mismatch; rebuild the complete wheel");
+    module.def("low_latency_ranks_per_group", [](uint32_t world) { return DispatchDedup::LlGroupForWorld(world); });
     module.def("low_latency_layout", [](int p, int b, int h, int k, int e, const std::string& dtype) {
         // A rejected shape is a Host-only capability result, not a launch failure.
         dtype_code(dtype);
@@ -155,15 +156,16 @@ void bind_low_latency(py::module_& module)
         if (session.combine_only()) throw std::invalid_argument("LL requires a dense-channel Session");
         if (session.capacity() != DispatchDedup::kEpServerDedupPeerBytes ||
             session.world() > DispatchDedup::DISPATCH_DEDUP_MAX_RANK_SIZE ||
-            session.world() < 16 || session.world() % DispatchDedup::kLlRanksPerGroup != 0) {
+            session.world() < 16 || session.world() % DispatchDedup::LlGroupForWorld(session.world()) != 0) {
             throw std::invalid_argument("LL requires exactly 8 GiB of symmetric workspace");
         }
         pin_session_cores(session);
         DispatchDedup::CommArgs args{};
         args.rank = session.rank();
         args.rankSize = session.world();
-        args.localRank = session.rank() % DispatchDedup::kLlRanksPerGroup;
-        args.localRankSize = DispatchDedup::kLlRanksPerGroup;
+        args.localRank = session.rank() % DispatchDedup::LlGroupForWorld(session.world());
+        args.localRankSize = DispatchDedup::LlGroupForWorld(session.world());
+        args.reserved0 = DispatchDedup::kLlPhysicalRanksPerHost;
         args.peerMemBytes = session.capacity();
         args.fftsVal = shmemx_get_ffts_config();
         if (session.ll_rdma()) {
@@ -174,7 +176,7 @@ void bind_low_latency(py::module_& module)
         }
         for (int peer = 0; peer < session.world(); ++peer) {
             args.peerMems[peer] = peer_buffer_base(session, peer);
-            if (session.ll_rdma() && peer != session.rank()) continue;
+            if (session.ll_rdma() && !DispatchDedup::LlSameHost(session.rank(), peer)) continue;
             if (args.peerMems[peer] == nullptr || reinterpret_cast<uintptr_t>(args.peerMems[peer]) % 32) {
                 throw std::invalid_argument("LL requires aligned MTE mappings for every peer");
             }
@@ -186,6 +188,7 @@ void bind_low_latency(py::module_& module)
         const bool fp8 = dtype == "float8_e4m3fn";
         layout(p, b, h, k, e, fp8);
         DispatchDedup::EpServerDedupTilingData data{};
+        data.tilingKey = DispatchDedup::LlTilingKeyForWorld(p);
         data.bs = b;
         data.h = h;
         data.numMaxTokensPerRank = num_max_tokens_per_rank;
@@ -206,7 +209,8 @@ void bind_low_latency(py::module_& module)
                        throw std::invalid_argument("LL combine exceeds dtype, topology, UB or workspace limits");
                    }
                    CombineDedup::EpServerDedupCombineTilingData data{};
-                   data.bs = b;
+                   data.tilingKey = DispatchDedup::LlTilingKeyForWorld(p);
+        data.bs = b;
                    data.h = h;
                    data.numMaxTokensPerRank = num_max_tokens_per_rank;
                    data.topK = k;

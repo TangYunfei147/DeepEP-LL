@@ -38,11 +38,16 @@ extern "C" [[bisheng::core_ratio(0, 1)]] __global__ __aicore__ void combine_serv
     timer.Start(LlStageTimer::WorkerInit);
     const auto* td = reinterpret_cast<const volatile __gm__ CombineDedup::EpServerDedupCombineTilingData*>(tilingData);
     const bool enableDedup = DispatchDedup::EpServerDedupEnabled(td->numMaxTokensPerRank);
-    CombineDedup::CombineMemoryServerDedupKernel kernel;
-    kernel.Init(commArgs, expertOut, destinationIndex, sendCounts, expertScales, tokenType, relayReadIndex, sourceMask,
-                yOut, td->bs, td->h, td->topK, td->moeExpertNum, td->dtype, 0, magic, enableDedup, &timer);
-    timer.End(LlStageTimer::WorkerInit);
-    kernel.Process();
+    if (!DispatchDedup::LlTilingKeyValid(args->rankSize, td->tilingKey)) { AscendC::Trap(); return; }
+#define COMBINE_RUN(Group) \
+    CombineDedup::CombineMemoryServerDedupKernel<Group> kernel; \
+    kernel.Init(commArgs, expertOut, destinationIndex, sendCounts, expertScales, tokenType, relayReadIndex, sourceMask, \
+                yOut, td->bs, td->h, td->topK, td->moeExpertNum, td->dtype, 0, magic, enableDedup, &timer); \
+    timer.End(LlStageTimer::WorkerInit); \
+    kernel.Process()
+    if (td->tilingKey == uint8_t(DispatchDedup::LlTilingKey::Group4)) { COMBINE_RUN(4U); }
+    else { COMBINE_RUN(16U); }
+#undef COMBINE_RUN
     timer.End(LlStageTimer::Kernel);
     timer.Finish();
 }

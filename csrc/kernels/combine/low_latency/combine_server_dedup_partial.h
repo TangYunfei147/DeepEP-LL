@@ -19,6 +19,7 @@ using namespace AscendC;
 // 输出地址与MTE3完成事件交给M5继续使用；退出本类不表示所有远端消费已经完成。
 // Recv-core M4 scans type/routing metadata per destination server. Its output
 // addresses and completion events remain live through the M5 handoff.
+template<uint32_t Group>
 class ServerDedupPartial {
 public:
     __aicore__ inline void Init(const __gm__ DispatchDedup::CommArgs* args, TPipe* pipe, LocalTensor<uint8_t> scratch,
@@ -74,8 +75,8 @@ public:
                              uint8_t(blocks_), 1U, 16U);
         }
         PipeBarrier<PIPE_V>();
-        const uint32_t servers = uint32_t(args_->rankSize) / DispatchDedup::kLlRanksPerGroup;
-        const uint32_t ownServer = uint32_t(args_->rank) / DispatchDedup::kLlRanksPerGroup;
+        const uint32_t servers = uint32_t(args_->rankSize) / Group;
+        const uint32_t ownServer = uint32_t(args_->rank) / Group;
         uint32_t owner = 0U, completed = 0U;
         for (uint32_t step = 1U; step <= servers; ++step) {
             const uint32_t count = SelectServer(ServerDedupHalfOrder(servers, ownServer, step - 1U), owner, step == 1U);
@@ -166,7 +167,7 @@ private:
                     return 0U;
                 }
             }
-            ServerDedupRankMask(mask, upper, ranks, int32_t(server * DispatchDedup::kLlRanksPerGroup), int32_t((server + 1U) * DispatchDedup::kLlRanksPerGroup), span);
+            ServerDedupRankMask(mask, upper, ranks, int32_t(server * Group), int32_t((server + 1U) * Group), span);
             And(mask.ReinterpretCast<uint16_t>(), mask.ReinterpretCast<uint16_t>(),
                 typeMask.ReinterpretCast<uint16_t>(), int32_t((span + 15U) / 16U));
             PipeBarrier<PIPE_V>();
@@ -203,7 +204,8 @@ private:
             const uint32_t memberRank = expert / localExperts_, localExpert = expert % localExperts_;
             const uint64_t slot =
                 (((uint64_t(source) + memberRank) % uint32_t(args_->rankSize)) * localExperts_ + localExpert) * bs_ + q;
-            LlTransport::Get(args_, memberRank, stageBase_ + slot * stageStride_,
+            if (memberRank / Group != uint32_t(args_->rank) / Group) { Trap(); return; }
+            LlTransport::LoadLocalPeer(args_, memberRank, stageBase_ + slot * stageStride_,
                 inputs_[lane * inputBytes_ / 2U], h_ * 2U);
         }
         SetFlag<HardEvent::MTE2_V>(lane);

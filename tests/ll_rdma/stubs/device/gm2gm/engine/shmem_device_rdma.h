@@ -14,10 +14,6 @@ inline void aclshmemx_roce_qp_put_nbi(uint8_t* d,uint8_t* s,uint8_t* scratch,uin
     std::memset(scratch,0xa5,128); // WQE/CQE workspace really destroys its UB contents.
     Model::pending.push_back({Model::translate(d),s,n,uint32_t(pe),qp}); ++Model::puts;
 }
-inline void aclshmemx_roce_qp_get_nbi(uint8_t* d,uint8_t* s,uint8_t* scratch,uint32_t n,int pe,uint32_t qp,uint32_t) {
-    std::memset(scratch,0xa5,128);
-    Model::pending.push_back({d,Model::translate(s),n,uint32_t(pe),qp}); ++Model::gets;
-}
 inline void aclshmemx_roce_qp_quiet(uint32_t pe,uint32_t qp,uint8_t* scratch,uint32_t syncId) {
     AscendC::SetFlag<AscendC::HardEvent::MTE2_S>(syncId);
     AscendC::WaitFlag<AscendC::HardEvent::MTE2_S>(syncId);

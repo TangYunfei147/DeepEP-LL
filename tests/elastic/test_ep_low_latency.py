@@ -699,7 +699,9 @@ def diagnostic_calls(buffer, invoke, check, args, operation, rank, m, mode):
     """Run separately from profiler; verify each instrumented operation before saving."""
     from deep_ep.utils.ll_stage_timer import capture
     from deep_ep._native import require_native
-    logical_group = require_native("LL timer").low_latency_ranks_per_group
+    import torch.distributed as dist
+    world = dist.get_world_size()
+    logical_group = require_native("LL timer").low_latency_ranks_per_group(world)
     directory = Path(args.run_directory) / f"case_{args.case_id:05d}" / mode / "ll_stage_timer" / operation / f"rank_{rank:03d}"
     for iteration in range(args.ll_timer_iters):
         completion_boundary(args)
@@ -934,7 +936,7 @@ def worker(local_rank, args):
         capability = {"active_aiv": core_config["active_aiv"],
                       "transport": os.environ.get("DEEPEP_LL_BACKEND", "mte"),
                       "rdma_compiled": bool(getattr(native, "low_latency_rdma_enabled", False)),
-                      "logical_group": native.low_latency_ranks_per_group,
+                      "logical_group": native.low_latency_ranks_per_group(world),
                       "core_protocol": native.low_latency_core_protocol,
                       "stage_timer": bool(getattr(native, "low_latency_stage_timer_enabled", False))}
         capabilities = [None] * world

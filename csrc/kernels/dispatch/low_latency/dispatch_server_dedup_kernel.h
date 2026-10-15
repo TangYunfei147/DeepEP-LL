@@ -11,7 +11,7 @@
 #include "device/dispatch_server_dedup_recv.h"
 
 namespace DispatchDedup {
-template <class XType, bool WireFp8, bool E4M3, bool Prequantized = false>
+template <class XType, bool WireFp8, bool E4M3, bool Prequantized = false, uint32_t Group = 16U>
 class DispatchMemoryServerDedupKernel {
 public:
     __aicore__ inline void Init(GM_ADDR commArgs, GM_ADDR x, GM_ADDR expertIds, GM_ADDR expertScales,
@@ -85,7 +85,7 @@ public:
 private:
     LlStageTimer::DeviceTimer* timer_ = nullptr;
     ServerDedupCounts counts_;
-    ServerDedupSender<XType, WireFp8, E4M3, Prequantized> sender_;
+    ServerDedupSender<XType, WireFp8, E4M3, Prequantized, Group> sender_;
     ServerDedupReceiver<XType, WireFp8, E4M3, Prequantized> receiver_;
     const __gm__ DispatchDedup::CommArgs* args_ = nullptr;
     TPipe* pipe_ = nullptr;

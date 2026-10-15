@@ -30,6 +30,7 @@ extern "C" [[bisheng::core_ratio(0, 1)]] __global__ __aicore__ void dispatch_ser
     timer.Start(LlStageTimer::Kernel);
     // Host owns validation; each core reads its configuration once before work.
     const auto* tiling = reinterpret_cast<const __gm__ DispatchDedup::EpServerDedupTilingData*>(tilingData);
+    if (!DispatchDedup::LlTilingKeyValid(reinterpret_cast<const __gm__ DispatchDedup::CommArgs*>(commArgs)->rankSize, tiling->tilingKey)) { AscendC::Trap(); return; }
     const uint32_t bs = tiling->bs;
     const uint32_t h = tiling->h;
     const bool enableDedup = DispatchDedup::EpServerDedupEnabled(tiling->numMaxTokensPerRank);
@@ -43,13 +44,19 @@ extern "C" [[bisheng::core_ratio(0, 1)]] __global__ __aicore__ void dispatch_ser
     AscendC::TPipe pipe;
     timer.Start(LlStageTimer::WorkerInit);
     // 下列模板分支决定输入类型、线上FP8格式与是否已预量化；比较性能时须固定这些条件。
-#define DISPATCH_SERVER_DEDUP_RUN(XType, WireFp8, E4M3, Prequantized)                                                  \
-    DispatchDedup::DispatchMemoryServerDedupKernel<XType, WireFp8, E4M3, Prequantized> kernel;                         \
+#define DISPATCH_SERVER_DEDUP_RUN_GROUP(XType, WireFp8, E4M3, Prequantized, Group)                                                  \
+    DispatchDedup::DispatchMemoryServerDedupKernel<XType, WireFp8, E4M3, Prequantized, Group> kernel;                         \
     kernel.Init(commArgs, x, expertIds, expertScales, expandXOut, dynamicScalesOut, expertTokenNumsOut, sendCountsOut, \
                 tokenTypeOut, destinationIndexOut, relayReadIndexOut, sourceMaskOut, expertScalesOut, bs, h, topK,     \
                 moeExpertNum, expertTokenNumsType, &pipe, inputScales, enableDedup, &timer);                           \
     timer.End(LlStageTimer::WorkerInit);                                                                               \
     kernel.Process()
+#define DISPATCH_SERVER_DEDUP_RUN(XType, WireFp8, E4M3, Prequantized) \
+    if (tiling->tilingKey == uint8_t(DispatchDedup::LlTilingKey::Group4)) { \
+        DISPATCH_SERVER_DEDUP_RUN_GROUP(XType, WireFp8, E4M3, Prequantized, 4U); \
+    } else { \
+        DISPATCH_SERVER_DEDUP_RUN_GROUP(XType, WireFp8, E4M3, Prequantized, 16U); \
+    }
     if (inputMode == DispatchDedup::EpServerDedupInputMode::PrequantizedFp8Packs && quantMode == 4 &&
         dtype == DispatchDedup::DISPATCH_DEDUP_DATA_TYPE_FP8E4M3 &&
         expandXOutDtype == DispatchDedup::DISPATCH_DEDUP_DATA_TYPE_FP8E4M3) {
@@ -72,6 +79,7 @@ extern "C" [[bisheng::core_ratio(0, 1)]] __global__ __aicore__ void dispatch_ser
         }
     }
 #undef DISPATCH_SERVER_DEDUP_RUN
+#undef DISPATCH_SERVER_DEDUP_RUN_GROUP
     timer.End(LlStageTimer::Kernel);
     timer.Finish();
 }
@@ -86,9 +94,9 @@ extern "C" DEEPEP_EXPORT uint32_t deepep_ll_stage_timer_enabled()
     return 0U;
 #endif
 }
-extern "C" DEEPEP_EXPORT uint32_t deepep_ll_ranks_per_group()
+extern "C" DEEPEP_EXPORT uint32_t deepep_ll_ranks_per_group(uint32_t world)
 {
-    return DispatchDedup::kLlRanksPerGroup;
+    return world <= 16U ? uint32_t(DispatchDedup::LlTilingKey::Group4) : uint32_t(DispatchDedup::LlTilingKey::Group16);
 }
 
 extern "C" DEEPEP_EXPORT uint32_t deepep_ll_core_protocol_version()

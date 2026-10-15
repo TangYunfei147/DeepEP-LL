@@ -1,3 +1,7 @@
+# 历史记录：以下为 ABI 3 全 RDMA 版本的验证
+
+当前 ABI 4 混合 MTE/RDMA-put 版本请查看 [HYBRID_VALIDATION.md](HYBRID_VALIDATION.md)。下列结果不代替新版本验证。
+
 # 本次验证记录（2026-10-15）
 
 代码在独立 `DeepEP-LL-kernel` checkout 的 `kernel/ll-configurable-groups` 上实现，未替换原实验 checkout。基线 `cb59bff99ecd39d27ef57788c5e6fd0009e4e636`；SHMEM Git revision 保持 `4dd80e2129da42bd773982c2bb3758af1ed0bba8`，生成的 ROCE-only 72-QP 三处修改由 `scripts/shmem_rdma_patch.py` 复现。

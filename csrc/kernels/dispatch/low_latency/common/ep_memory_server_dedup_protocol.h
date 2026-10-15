@@ -6,16 +6,15 @@
 
 #include <cstddef>
 #include <cstdint>
+#include "ll_group_policy.h"
+
+#ifdef DEEPEP_LL_RANKS_PER_GROUP
+#error LL grouping is selected by tiling key; remove DEEPEP_LL_RANKS_PER_GROUP
+#endif
 
 namespace DispatchDedup {
-// Logical contiguous-rank routing group; independent of physical host/device count.
-// Edit this default and rebuild the complete wheel AND experimental snapshots.
-#ifndef DEEPEP_LL_RANKS_PER_GROUP
-#define DEEPEP_LL_RANKS_PER_GROUP 16
-#endif
-constexpr uint32_t kLlRanksPerGroup = DEEPEP_LL_RANKS_PER_GROUP;
-static_assert(kLlRanksPerGroup >= 1U && kLlRanksPerGroup <= 16U,
-              "LL logical group must be in [1, 16]");
+// Routing group is selected by Host tiling key; this constant is capacity only.
+constexpr uint32_t kLlRanksPerGroup = kLlMaxRanksPerGroup;
 constexpr uint32_t kEpServerDedupAlignmentBytes = 32U;
 constexpr uint32_t kEpServerDedupMaxTopK = 32U;
 

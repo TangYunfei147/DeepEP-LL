@@ -15,7 +15,13 @@ helpers = runpy.run_path(str(ROOT / "tests/elastic/test_dispatch.py"))
 package = helpers["_import_installed_deep_ep"]()
 from deep_ep._native import require_native
 native = require_native("RDMA build capability check")
-assert native.low_latency_core_protocol == 3
+assert native.low_latency_core_protocol == 4
+assert native.low_latency_ranks_per_group(16) == 4
+assert native.low_latency_ranks_per_group(32) == 16
+for p in (16, 32):
+    d = native.low_latency_dispatch_tiling(p, 4, 256, 4, 128, "bfloat16", 64)
+    c = native.low_latency_combine_tiling(p, 4, 256, 4, 128, "bfloat16", 64)
+    assert d[21] == (4 if p <= 16 else 16) and c[15] == d[21]
 assert bool(native.low_latency_rdma_enabled) == bool(args.rdma)
 assert bool(native.low_latency_stage_timer_enabled) == bool(args.timer)
 os.environ["DEEPEP_LL_BACKEND"] = "invalid-selector"
@@ -33,4 +39,4 @@ if not args.rdma:
         assert "no MTE fallback" in str(exc)
     else:
         raise AssertionError("Disabled RDMA was accepted")
-print(f"PASS installed {package.__file__}: ABI=3 RDMA={args.rdma} timer={args.timer}; Host negative checks only")
+print(f"PASS installed {package.__file__}: ABI=4 RDMA={args.rdma} timer={args.timer}; Host negative checks only")

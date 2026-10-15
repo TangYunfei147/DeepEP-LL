@@ -48,7 +48,8 @@ def main():
     check = [sys.executable, str(Path(__file__).with_name("preflight.py")), "--output", str(directory / "preflight.json")]
     if args.validation:
         check.append("--validation")
-    subprocess.run(check, env=env, check=True)
+    if args.rank is not None:  # Cross-host only: local MTE does not require an RDMA NIC.
+        subprocess.run(check, env=env, check=True)
     binary = ROOT / "build/ll_rdma/rdma_smoke"
     if not binary.is_file():
         p.error("Build tests/ll_rdma/build_smoke.sh first")
@@ -58,7 +59,7 @@ def main():
             log = (directory / f"rank-{rank}.log").open("w")
             logs.append(log)
             command = [str(binary), str(rank), "2", str(rank if args.rank is None else 0), args.endpoint,
-                       str(args.rounds), str(args.cores)]
+                       str(args.rounds), str(args.cores), "2" if args.rank is None else "1"]
             children.append(subprocess.Popen(command, cwd=ROOT, env=env, stdout=log, stderr=subprocess.STDOUT))
         deadline = time.monotonic() + args.timeout
         while any(child.poll() is None for child in children):
@@ -70,6 +71,7 @@ def main():
         if any(child.returncode for child in children):
             raise RuntimeError("RDMA smoke failed; inspect per-rank logs")
         (directory / "result.json").write_text(json.dumps({"status": "passed", "scope": "two-rank primitive only",
+            "transport": "mte" if args.rank is None else "rdma-put",
             "rank": args.rank, "rounds": args.rounds, "cores": args.cores, "devices": args.devices}) + "\n")
         print(f"PASS: {directory}; full LL and performance remain separate")
     finally:

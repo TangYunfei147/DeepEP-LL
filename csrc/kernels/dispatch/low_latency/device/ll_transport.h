@@ -1,5 +1,6 @@
 #pragma once
 #include "../common/ll_rdma_layout.h"
+#include "../common/ll_group_policy.h"
 #include "kernel_operator.h"
 #ifdef DEEPEP_LL_RDMA
 #include "device/gm2gm/engine/shmem_device_rdma.h"
@@ -25,11 +26,16 @@ public:
     }
 };
 __aicore__ inline bool Rdma(const __gm__ Args* a) { return a->reservedConfig[0] == LlRdma::kBackend; }
+__aicore__ inline bool SameHost(const __gm__ Args* a, uint32_t peer) {
+    return DispatchDedup::LlSameHost(uint32_t(a->rank), peer,
+        a->reserved0 ? a->reserved0 : DispatchDedup::kLlPhysicalRanksPerHost);
+}
+__aicore__ inline bool RemoteWrite(const __gm__ Args* a, uint32_t peer) { return Rdma(a) && !SameHost(a, peer); }
 __aicore__ inline void Check(const __gm__ Args* a, uint32_t peer, uint64_t offset, uint64_t bytes) {
     if (peer >= uint32_t(a->rankSize) || offset > a->peerMemBytes || bytes > a->peerMemBytes - offset) Trap();
 }
 __aicore__ inline GM_ADDR Address(const __gm__ Args* a, uint32_t peer, uint64_t offset) {
-    return Rdma(a) ? a->reservedAddresses[0] + uint64_t(peer) * 1024U + offset : a->peerMems[peer] + offset;
+    return RemoteWrite(a, peer) ? a->reservedAddresses[0] + uint64_t(peer) * 1024U + offset : a->peerMems[peer] + offset;
 }
 __aicore__ inline GlobalTensor<uint8_t> Tensor(GM_ADDR p, bool uncached=false) {
     GlobalTensor<uint8_t> t; t.SetGlobalBuffer(p);
@@ -63,7 +69,7 @@ __aicore__ inline void Packet(const __gm__ Args* a, uint32_t peer, uint64_t offs
                               LocalTensor<uint8_t> packet, uint32_t bytes, uint32_t syncId=7U) {
     Check(a, peer, offset, bytes);
     auto dst = Address(a, peer, offset);
-    if (!Rdma(a) || peer == uint32_t(a->rank)) { DataCopy(Tensor(dst,Rdma(a)), packet, bytes); return; }
+    if (!RemoteWrite(a, peer)) { DataCopy(Tensor(dst,Rdma(a)), packet, bytes); return; }
     if (bytes == 0U || bytes % 512U || syncId >= 8U) { Trap(); return; }
     auto stage = Stage(a, bytes);
     PipeBarrier<PIPE_ALL>();
@@ -88,7 +94,7 @@ __aicore__ inline void Records(const __gm__ Args* a, uint32_t peer, uint64_t off
     if (!count) return;
     Check(a, peer, offset, uint64_t(count - 1U) * stride + 32U);
     auto dst = Address(a, peer, offset);
-    if (!Rdma(a) || peer == uint32_t(a->rank)) {
+    if (!RemoteWrite(a, peer)) {
         DataCopyPad(Tensor(dst,Rdma(a)), records, {uint16_t(count), 32U, 0U, stride - 32U, 0U}); return;
     }
     auto stage = Stage(a, count * 32U);
@@ -102,24 +108,13 @@ __aicore__ inline void Records(const __gm__ Args* a, uint32_t peer, uint64_t off
     for (uint32_t i = 0; i < count; ++i) Put(a, peer, dst + uint64_t(i)*stride, stage + i*32U, counts ? 4U : 32U, scratch);
     Quiet(peer, scratch);
 }
-__aicore__ inline void Get(const __gm__ Args* a, uint32_t peer, uint64_t offset,
-                           LocalTensor<uint16_t> output, uint32_t bytes) {
+// Partial members belong to one aligned logical group (4 or 16), always
+// within one physical host. Cross-host reads are forbidden, including fallback.
+__aicore__ inline void LoadLocalPeer(const __gm__ Args* a, uint32_t peer, uint64_t offset,
+                                    LocalTensor<uint16_t> output, uint32_t bytes) {
     Check(a, peer, offset, bytes);
-    auto src = Address(a, peer, offset);
-    if (Rdma(a) && peer != uint32_t(a->rank)) {
-        auto stage = Stage(a, bytes);
-        PipeBarrier<PIPE_ALL>();
-        Sync<HardEvent::V_S>(7U); // input-lane Cast must retire before Scalar overwrites SDK scratch
-#ifdef DEEPEP_LL_RDMA
-        aclshmemx_roce_qp_get_nbi(stage, src, (__ubuf__ uint8_t*)output.GetPhyAddr(), bytes, peer, GetBlockIdx(), 7U);
-        Quiet(peer, output.ReinterpretCast<uint8_t>());
-#else
-        Trap();
-#endif
-        src = stage;
-    }
-    DataCopyPad(output.ReinterpretCast<uint8_t>(), Tensor(src,Rdma(a)), {1U, bytes, 0U, 0U, 0U}, {false, 0U, 0U, uint8_t(0)});
-    // The next Get may reuse this core's GM slot.
-    if (Rdma(a)) { Sync<HardEvent::MTE2_S>(7U); PipeBarrier<PIPE_ALL>(); }
+    if (!SameHost(a, peer) || a->peerMems[peer] == nullptr) { Trap(); return; }
+    DataCopyPad(output.ReinterpretCast<uint8_t>(), Tensor(a->peerMems[peer] + offset, Rdma(a)),
+                {1U, bytes, 0U, 0U, 0U}, {false, 0U, 0U, uint8_t(0)});
 }
 }

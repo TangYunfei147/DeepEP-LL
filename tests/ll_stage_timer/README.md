@@ -1,21 +1,23 @@
 # LL dispatch/combine阶段打点
 
-维护分支：`kernel/ll-configurable-groups`。本功能保持纯AIV、实际核数查询和1:1收发分工，不改变逻辑组配置及EP准入条件。
+维护分支：`kernel/ll-ndr-hns1825`。本功能保持纯AIV、实际核数查询和1:1收发分工，不改变逻辑组配置及EP准入条件。
 
 ## 构建与接口
 
-打点默认编译关闭，使用`DEEPEP_LL_STAGE_TIMER=ON`开启。打点最初引入核心协议版本2；当前RDMA通信参数语义已将协议升为3。所有rank必须重建并安装同一版本完整wheel，不能混搭旧设备库。RDMA协议见[审计说明](../ll_rdma/AUDIT.md)。
+打点默认编译关闭，使用`DEEPEP_LL_STAGE_TIMER=ON`开启。打点最初引入核心协议版本2；当前混合通信/tiling key语义已将协议升为4。所有rank必须重建并安装同一版本完整wheel，不能混搭旧设备库。RDMA协议见[审计说明](../ll_rdma/AUDIT.md)。
 
 在仓库根目录执行，外部CANN位置由当前环境提供：
 
 ```bash
 # 若尚未加载CANN，显式设置CANN_ENV为当前机器set_env.sh路径。
-source scripts/ll_timer_env.sh
+source tests/ll_rdma/env.sh
 git submodule update --init --recursive --depth 1
 unset SHMEM_ROOT CATLASS_ROOT
-python scripts/build_shmem.py --if-needed
+python scripts/build_shmem.py --if-needed --rdma-backend HNS_1825
+export DEEPEP_LL_RDMA=ON
 export DEEPEP_NPU_ARCH=Ascend950
 export DEEPEP_LL_STAGE_TIMER=ON
+export DEEPEP_LL_BACKEND=rdma
 export LD_LIBRARY_PATH="$PWD/third-party/shmem/install/shmem/lib:${LD_LIBRARY_PATH:-}"
 python -m pip install -r requirements-build.txt
 python -m pip install -v --force-reinstall --no-build-isolation --no-deps .
@@ -39,13 +41,16 @@ trace.save(output_dir / "dispatch-stage.json", metadata={"rank": rank})
 
 ## 目标机运行
 
-下例为每机16卡。所有节点配置相同参数和可达地址，`NODE_RANK`从0开始。单机EP16设置`NNODES=1`；两机EP32设置`NNODES=2`。默认逻辑组G=16独立于物理卡数，修改G需全量重建。
+下例为每机16卡。所有节点配置相同参数和可达地址，`NODE_RANK`从0开始。单机EP16设置`NNODES=1`；两机EP32设置`NNODES=2`。本分支按通信域自动选择tiling key：EP16为G=4，EP32及以上为G=16；物理每机16卡独立于逻辑组。
 
 ```bash
 # 在目标机仓库根目录执行。先激活匹配wheel的Python环境。
-source scripts/ll_timer_env.sh
+source tests/ll_rdma/env.sh
+export DEEPEP_LL_BACKEND=rdma
 export ASCEND_RT_VISIBLE_DEVICES=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15
 export ASCEND_VISIBLE_DEVICES="$ASCEND_RT_VISIBLE_DEVICES"
+export CUDA_VISIBLE_DEVICES="$ASCEND_RT_VISIBLE_DEVICES"
+export PROBE_VISIBLE_DEVICES="$ASCEND_RT_VISIBLE_DEVICES"
 NNODES=1
 NODE_RANK=0
 MASTER_ADDR=127.0.0.1       # 多机时改成首节点可达IP
@@ -58,7 +63,7 @@ python tests/elastic/test_ep_low_latency.py \
   --master-addr "$MASTER_ADDR" --master-port "$MASTER_PORT" --shmem-port "$SHMEM_PORT" \
   --num-tokens 32 --num-max-tokens-per-rank 256 \
   --hidden 7168 --num-topk 6 --num-experts 256 --dtype bf16 --do-cpu-sync 0 \
-  --ll-stage-timer --ll-timer-iters 5 --ll-timer-mode observe \
+  --use-1g-huge-pages 0 --ll-stage-timer --ll-timer-iters 5 --ll-timer-mode observe \
   --skip-perf-test --output-dir "$PWD/results/ll-stage-001"
 ```
 
@@ -87,7 +92,7 @@ M决定去重：`M>32`启用，`M<=32`关闭。若对比两条路径，在满足
 | `send_prepare`、`send_payload`、`send_metadata` | UB/路由准备，发送主循环，lane收尾及源掩码/权重写回 | 同上 |
 | `send_classify` | 去重路由分类累计，不含外部q计算 | 同上`Classify`调用点 |
 | `send_pack` | 输入搬入、可选量化、包尾/标志打包及lane等待；不解释为纯计算 | 同上`SendPacket` |
-| `send_issue` | 对端地址计算及MTE下发；真正完成依赖原lane收尾 | 同上 |
+| `send_issue` | 机内为MTE下发；跨机包含暂存和RDMA put/quiet，不能解读为纯网络时间 | 同上 |
 | `receiver`、`recv_prepare` | 接收父区间；前缀/任务表和接收UB准备 | `dispatch/low_latency/device/dispatch_server_dedup_recv.h` |
 | `recv_wait`、`recv_consume`、`recv_cleanup` | 探测直到出现ready批次、加载/消费及relay、最后lane/标志清理；重复区间累计 | 同上 |
 | `count_finish` | 原计数收尾及控制状态恢复 | dispatch总调度 |

@@ -25,8 +25,8 @@ extern "C" [[bisheng::core_ratio(0,1)]] __global__ __aicore__ void ll_rdma_smoke
     const uint64_t slot=uint64_t(core)*kSlot;
     uint32_t error=0;
     if (mode==1U) {
-        // Source is initialized in symmetric GM on each rank before the barrier.
-        LlTransport::Get(a,peer,kSource+slot,received.ReinterpretCast<uint16_t>(),bytes);
+        // Local peer source is initialized before the barrier; this mode never runs across hosts.
+        LlTransport::LoadLocalPeer(a,peer,kSource+slot,received.ReinterpretCast<uint16_t>(),bytes);
         Sync<HardEvent::MTE2_S>();
         for(uint32_t i=0;i<bytes;++i) if(received.GetValue(i)!=Value(peer,core,epoch,i)) error=1U;
     } else if (rank==writer) {

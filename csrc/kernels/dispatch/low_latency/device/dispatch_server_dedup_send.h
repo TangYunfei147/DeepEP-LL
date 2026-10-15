@@ -21,7 +21,7 @@ using namespace AscendC;
 
 // R02-01/R05-04 source path: first hops precede the cached DIRECT tasks on
 // each core, sharing one packet sequence and ring of in-flight send buffers.
-template <class XType, bool WireFp8, bool E4M3, bool Prequantized = false>
+template <class XType, bool WireFp8, bool E4M3, bool Prequantized = false, uint32_t Group = 16U>
 class ServerDedupSender {
     static_assert(!Prequantized || WireFp8, "prequantized input requires FP8 wire");
     static constexpr bool NeedQuantize = WireFp8 && !Prequantized;
@@ -105,9 +105,9 @@ public:
         Allocate(maskBuf_, uint32_t(DispatchDedupAlign(uint64_t(count_) * 4U, 32U)));
         Allocate(directBuf_, uint32_t(DispatchDedupAlign(uint64_t(count_) * k_ * 16U, 32U)));
         // One uint32 state per server, including EP256's 16 host groups.
-        const uint32_t serverBytes = uint32_t(DispatchDedupAlign(uint64_t(args_->rankSize / kLlRanksPerGroup) * 4U, 32U));
+        const uint32_t serverBytes = uint32_t(DispatchDedupAlign(uint64_t(args_->rankSize / Group) * 4U, 32U));
         Allocate(serverBuf_, serverBytes < 64U ? 64U : serverBytes);
-        const uint32_t remoteServers = args_->rankSize / kLlRanksPerGroup - 1U;
+        const uint32_t remoteServers = args_->rankSize / Group - 1U;
         const uint32_t maxGroups = remoteServers < k_ / 2U ? remoteServers : k_ / 2U;
         if (maxGroups != 0U) Allocate(firstHopBuf_, uint32_t(DispatchDedupAlign(maxGroups * 4U, 32U)));
 
@@ -209,9 +209,9 @@ public:
         // Stable per-server scans retain the original q and token/k order.
         // Each core advances independently; the packet/lane sequence continues
         // across first hops and server boundaries without an added drain.
-        const uint32_t serverNum = args_->rankSize / kLlRanksPerGroup;
-        const uint32_t expertsPerServer = localExperts_ * kLlRanksPerGroup;
-        const uint32_t ownServer = args_->rank / kLlRanksPerGroup;
+        const uint32_t serverNum = args_->rankSize / Group;
+        const uint32_t expertsPerServer = localExperts_ * Group;
+        const uint32_t ownServer = args_->rank / Group;
         for (uint32_t step = 0; step < serverNum; ++step) {
             const uint32_t server = EpServerOrder::ServerDedupDispatchDirectOrder(serverNum, ownServer, step);
             const uint32_t firstExpert = server * expertsPerServer;
@@ -236,7 +236,7 @@ public:
         const uint32_t remainder = total % sendCores_;
         const uint32_t begin = core * base + (core < remainder ? core : remainder);
         const uint32_t count = base + (core < remainder ? 1U : 0U);
-        const uint32_t serverNum = args_->rankSize / kLlRanksPerGroup;
+        const uint32_t serverNum = args_->rankSize / Group;
         if (serverNum < 16U) {
             for (uint32_t i = begin; i < begin + count; ++i) {
                 const uint32_t expert = uint32_t(routeIds_.GetValue(i));
@@ -246,8 +246,8 @@ public:
         }
         // Keep the original route ownership and q slots. Only reorder this
         // core's sends by the same 256P+ server order used by dedup DIRECT.
-        const uint32_t expertsPerServer = localExperts_ * kLlRanksPerGroup;
-        const uint32_t ownServer = args_->rank / kLlRanksPerGroup;
+        const uint32_t expertsPerServer = localExperts_ * Group;
+        const uint32_t ownServer = args_->rank / Group;
         for (uint32_t step = 0; step < serverNum; ++step) {
             const uint32_t server = EpServerOrder::ServerDedupDispatchDirectOrder(serverNum, ownServer, step);
             const uint32_t firstExpert = server * expertsPerServer;
@@ -282,9 +282,9 @@ private:
         uint32_t seen = 0, grouped = 0;
         for (uint32_t k = 0; k < k_; ++k) {
             const uint32_t expert = uint32_t(routeIds_.GetValue((start_ + token) * k_ + k));
-            const uint32_t server = expert / localExperts_ / kLlRanksPerGroup;
+            const uint32_t server = expert / localExperts_ / Group;
             const uint32_t bit = uint32_t(1) << k, serverBit = uint32_t(1) << server;
-            if (server == uint32_t(args_->rank) / kLlRanksPerGroup) {
+            if (server == uint32_t(args_->rank) / Group) {
                 directMask |= bit;
             } else if ((seen & serverBit) == 0U) {
                 seen |= serverBit;
