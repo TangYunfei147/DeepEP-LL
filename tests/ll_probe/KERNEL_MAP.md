@@ -114,3 +114,16 @@
 这是专项微架构诊断，不含Exp/all_reduce，不替代正式LL性能采样或RDMA OTS。
 缓存hint、ASM审查和解释限制见 [README](mte2_depth/README.md)，A5记录见
 [VALIDATION](mte2_depth/VALIDATION.md)。生产kernel与生成快照未修改。
+
+
+## 单 AIV MTE3 写请求有效深度诊断
+
+[mte3_depth/run_a5.sh](mte3_depth/run_a5.sh) → [run.py](mte3_depth/run.py)
+→ [host.cpp](mte3_depth/host.cpp) → [kernel.cpp](mte3_depth/kernel.cpp) 的
+`mte3_depth_do` / `mte3_depth`。单进程单AIV、blockDim=1，设备0/1逐卡顺序。
+计时前完成GM→UB预加载，计时内N次独立UB→本卡GM写；batch统一MTE3_S，
+serial逐请求等待；可选独立Vector门控。检查整个GM分配、gap与双侧guard。
+测得的是MTE3写指令有效排队/背压行为，不能直接命名为底层OTS，也不推导跨机额度。
+原始ticks与完整Event分开，不含正式LL的Exp/all_reduce。
+构建、门控、ASM与解释见[README](mte3_depth/README.md)，A5记录见
+[VALIDATION](mte3_depth/VALIDATION.md)。生产LL、原MTE2探针和生成快照不修改。
