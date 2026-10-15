@@ -1,3 +1,5 @@
+> 最简通信支持 `--transport ubmem|ndr`（默认ubmem）；NDR构建、计时边界及目标机步骤见 [NDR.md](communication/NDR.md)。
+
 > `run.py`所有参数、默认值、适用测试和不生效兼容参数见 [RUN_ARGS.md](RUN_ARGS.md)。
 
 > 按bs/hidden_size控制发送量、P50/P90/P99、理论耗时及利用率配置见 [BANDWIDTH.md](BANDWIDTH.md)。
@@ -35,7 +37,7 @@ output_root: results
 |---|---|---|
 | empty | 全部支持，32多机 | 每rank真正空kernel；框架Exp/all_reduce使用实际world |
 | tiling | 全部支持，32多机 | 每rank读取tiling，不传payload |
-| comm | 全部支持，32多机 | SHMEM映射上的MTE通信，支持1→1、N→1、1→N、N→N |
+| comm | 全部支持，32多机 | SHMEM MTE（ubmem）或ROCE QP（ndr）通信，支持1→1、N→1、1→N、N→N |
 | metadata | 全部支持，32多机 | 每个实际rank在本卡做相同logical source-rank=0的路由元数据计算 |
 | native | 仅16/32；2/4/8明确unsupported | 生产完整dispatch/combine，保留生产协议约束 |
 | network | 全部支持，32多机 | Session及指定两global rank的链路诊断，不是完整LL或带宽性能 |
@@ -47,7 +49,7 @@ Exp/all_reduce；**不包含跨rank计数交换、packet tail和receiver准备**
 旧 `bandwidth/tests` 的IPC入口只测同机两卡，旧SHMEM入口只支持两个rank；这是保留的诊断工具，
 不是全域测试入口。2/4/8/16/32的正式带宽测试统一走 `--test comm`。`--bytes`按每条有向边计，
 每边不超过64MiB，world×bytes不超过256MiB，因此EP32每边上限8MiB。
-跨机必须支持所需SHMEM MTE peer映射；不可达时失败，不自动改成另一种通信协议。
+UB跨机必须支持所需SHMEM MTE peer映射；NDR需要匹配的RDMA SDK及网卡。不可达时失败，不自动改成另一种通信协议。
 
 ## 构建
 

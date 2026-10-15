@@ -56,7 +56,9 @@ def source_patches(source):
     return [{"kind": "local-worktree", "sha256": digest.hexdigest()}]
 
 
-def prepare(root=ROOT, *, rebuild=False, if_needed=False, allow_local_changes=False):
+def prepare(root=ROOT, *, rebuild=False, if_needed=False, allow_local_changes=False, rdma_backend=None):
+    if rdma_backend not in (None, 'XSCALE', 'HNS_1825'):
+        raise ValueError('RDMA backend must be XSCALE or HNS_1825')
     runtime_environment()
     if platform.system() != "Linux":
         raise RuntimeError("SHMEM compilation requires Linux and the pinned CANN SDK")
@@ -96,12 +98,17 @@ def prepare(root=ROOT, *, rebuild=False, if_needed=False, allow_local_changes=Fa
     manifest = source / "install/shmem/deepep-sdk.json"
     if if_needed and not rebuild and manifest.is_file():
         identity = json.loads(manifest.read_text(encoding="utf-8"))
+        # Reusing the installed SDK preserves its explicitly selected backend.
+        if rdma_backend is None:
+            rdma_backend = identity.get('build', {}).get('rdma_backend')
         expected_build = {
             "cann_version": version["Version"],
             "cann_timestamp": version.get("timestamp", "unknown"),
             "target": lock["target"],
             "source_patches": patches,
         }
+        if rdma_backend is not None:
+            expected_build['rdma_backend'] = rdma_backend
         if identity.get("revision") != revision or identity.get("build") != expected_build:
             raise RuntimeError(
                 "Existing SHMEM build identity changed; stop SDK users and rebuild explicitly "
@@ -139,7 +146,8 @@ def prepare(root=ROOT, *, rebuild=False, if_needed=False, allow_local_changes=Fa
         build_env["PATH"] = git_dir + os.pathsep + build_env.get("PATH", os.defpath)
         # -e 防止上游中间命令失败后继续打包，随后误登记旧库为成功产物。
         subprocess.run(
-            ["bash", "-e", "scripts/build.sh", "-soc_type", lock["target"]],
+            ["bash", "-e", "scripts/build.sh", "-soc_type", lock["target"]]
+            + (["-enable_rdma", "-rdma_backend", rdma_backend] if rdma_backend else []),
             cwd=source,
             env=build_env,
             check=True,
@@ -155,6 +163,7 @@ def prepare(root=ROOT, *, rebuild=False, if_needed=False, allow_local_changes=Fa
             "cann_timestamp": version.get("timestamp", "unknown"),
             "target": lock["target"],
             "source_patches": patches,
+            **({"rdma_backend": rdma_backend} if rdma_backend else {}),
         },
     )
     print(f"[SHMEM] SDK identity: {manifest}", flush=True)
@@ -171,5 +180,6 @@ if __name__ == "__main__":
         action="store_true",
         help="Build local edits on the pinned commit and record their source fingerprint",
     )
+    parser.add_argument("--rdma-backend", choices=("XSCALE", "HNS_1825"), help="Enable NDR/RDMA using the actual NIC backend; existing SDK needs --rebuild")
     args = parser.parse_args()
-    prepare(rebuild=args.rebuild, if_needed=args.if_needed, allow_local_changes=args.allow_local_changes)
+    prepare(rebuild=args.rebuild, if_needed=args.if_needed, allow_local_changes=args.allow_local_changes, rdma_backend=args.rdma_backend)

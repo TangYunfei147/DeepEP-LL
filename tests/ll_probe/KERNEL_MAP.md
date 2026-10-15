@@ -92,3 +92,13 @@
 ## 解析调度诊断
 
 [PARSE_SCHEDULE.md](profiling/PARSE_SCHEDULE.md)：原ST的opt-in双卡临时搬运核模式，比较整条命令的即时解析、CSV后移、全部解析后移。设备函数仍是bandwidth/kernel/transfer_probe.cpp中的ll_transfer_probe，不执行原生LL协议。普通LL默认逐组解析不变。
+
+## NDR可选通信数据面
+
+`--transport ndr`：同一[comm_host.cpp](communication/host/comm_host.cpp)用LL_PROBE_NDR编译，
+创建ROCE域、对称源/目标和每peer的cores个QP，经`four_ndr_do`启动
+[comm_kernel.cpp](communication/kernel/comm_kernel.cpp)的`four_ndr_1..4 → RunNdr<Scenario>`。
+每核按相同字节分片拥有QP=core，逐peer put+quiet。UB的Run不改动。
+[ndr_build.py](communication/ndr_build.py)读取仓内SDK后端构建独立库；
+[ndr_support.py](communication/ndr_support.py)检查运行身份，不执行设备操作。
+完整边界和目标操作见[NDR.md](communication/NDR.md)。

@@ -14,3 +14,5 @@ require_shmem_sdk
 "$BISHENG" -O2 -std=c++17 -I"$ASCEND_HOME_PATH/include" -I"$SHMEM/include" \
   host/comm_host.cpp build/comm_kernel.o --cce-fatobj-link -L"$LIB" -L"$ASCEND_HOME_PATH/lib64" \
   -Wl,-rpath,"$LIB" -lshmem -lascendcl -lruntime -o build/comm_probe
+
+python3 "$REPO_ROOT/tests/ll_probe/communication/ndr_build.py"

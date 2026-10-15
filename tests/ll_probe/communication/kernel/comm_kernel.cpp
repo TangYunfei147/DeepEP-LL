@@ -2,6 +2,10 @@
 // 脚本 profile_probe.py --kind comm → comm_host.cpp → four_comm_do。
 // scenario/key 选择模板专门化入口；这是显式分发，不依赖自动生成的算子 TilingKey。
 #include "kernel_operator.h"
+#ifdef LL_PROBE_NDR
+#include "shmem.h"
+#include "device/gm2gm/engine/shmem_device_rdma.h"
+#endif
 #include "../tiling.h"
 using namespace AscendC;
 // 通信图不含自环：1/3由peerMask选择目标，2选择来源，4所有rank互发。
@@ -80,3 +84,50 @@ extern "C" void four_comm_do(uint32_t cores,void* stream,GM_ADDR src,GM_ADDR pee
     case 4: four_comm_4<<<cores,nullptr,stream>>>(src,peers,tiling); break;
     }
 }
+
+#ifdef LL_PROBE_NDR
+// Separate device entry: UB Memory's Run/launch path above is unchanged.
+// Each core owns QP=core for every peer. No peer/QP has multiple producers.
+template<uint32_t Scenario>
+__aicore__ inline void RunNdr(GM_ADDR src,GM_ADDR dst,GM_ADDR tiling,uint64_t ffts) {
+    const auto* td=reinterpret_cast<const volatile __gm__ FourLayerTiling*>(tiling);
+    const uint64_t bytes=td->bytesPerEdge;
+    const uint32_t chunk=td->chunkBytes,lanes=td->lanes,rank=td->rank,world=td->world;
+    const uint32_t layer=td->layer,scene=td->scenario,fanout=td->fanout,mask=td->peerMask,abi=td->abiVersion;
+    if(abi!=2) { Trap(); return; }
+    if(layer==0||layer==1)return;
+    if(scene!=Scenario||fanout<1||fanout>=world){Trap();return;}
+    const uint32_t core=GetBlockIdx(),cores=GetBlockNum();
+    const uint64_t blocks=bytes/32;
+    const uint64_t owned=blocks/cores+(core<blocks%cores);
+    const uint64_t first=core*(blocks/cores)+(core<blocks%cores?core:blocks%cores);
+    if(!owned)return;
+    util_set_ffts_config(ffts);
+    TPipe pipe; TBuf<TPosition::VECCALC> workspace;
+    pipe.InitBuffer(workspace,256);
+    auto scratch=workspace.Get<uint8_t>();
+    auto* buf=reinterpret_cast<__ubuf__ uint8_t*>(scratch.GetPhyAddr());
+    auto* input=reinterpret_cast<__gm__ uint8_t*>(src)+first*32;
+    // Pass a LOCAL symmetric address. The RDMA interface translates it to peer.
+    auto* output=reinterpret_cast<__gm__ uint8_t*>(dst)+uint64_t(rank)*bytes+first*32;
+    for(uint32_t peer=0;peer<world;++peer){
+        if(!HasEdge<Scenario>(rank,peer,world,fanout,mask))continue;
+        aclshmemx_roce_qp_put_nbi<uint8_t>(output,input,buf,uint32_t(owned*32),int(peer),core,0);
+        // Required completion: never report submission-only as transfer latency.
+        // Also makes reuse of this core's descriptor workspace safe for next peer.
+        aclshmemx_roce_qp_quiet<uint8_t>(peer,core,buf,0);
+    }
+}
+#define NDR_ENTRY(K) \
+extern "C" [[bisheng::core_ratio(0,1)]] __global__ __aicore__ void four_ndr_##K(GM_ADDR src,GM_ADDR dst,GM_ADDR tiling,uint64_t ffts) { RunNdr<K>(src,dst,tiling,ffts); }
+NDR_ENTRY(1) NDR_ENTRY(2) NDR_ENTRY(3) NDR_ENTRY(4)
+extern "C" void four_ndr_do(uint32_t cores,void* stream,GM_ADDR src,GM_ADDR dst,GM_ADDR tiling,uint64_t ffts,uint32_t key){
+    switch(key){
+    case 0:four_empty<<<cores,nullptr,stream>>>(src,dst,tiling);break;
+    case 1:four_ndr_1<<<cores,nullptr,stream>>>(src,dst,tiling,ffts);break;
+    case 2:four_ndr_2<<<cores,nullptr,stream>>>(src,dst,tiling,ffts);break;
+    case 3:four_ndr_3<<<cores,nullptr,stream>>>(src,dst,tiling,ffts);break;
+    case 4:four_ndr_4<<<cores,nullptr,stream>>>(src,dst,tiling,ffts);break;
+    }
+}
+#endif

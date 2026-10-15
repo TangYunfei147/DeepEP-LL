@@ -29,15 +29,15 @@ def analyze(paths):
         rank=int(rows[0]['rank'])
         if rank in ranks:raise ValueError('Duplicate rank')
         key=tuple(int(rows[0][k]) for k in ['world','scenario','layer','bytes_per_edge'])
-        key += (int(rows[0].get('fanout', int(rows[0]['world'])-1)),int(rows[0].get('peer_mask',0)))
+        key += (int(rows[0].get('fanout', int(rows[0]['world'])-1)),int(rows[0].get('peer_mask',0)),rows[0].get('transport','ubmem'))
         if identity is not None and key!=identity:raise ValueError('Mismatched case')
         identity=key
         for i,row in enumerate(rows):
             if int(row['rank'])!=rank or int(row['sample'])!=i:raise ValueError('Sample identity/alignment mismatch')
-            if tuple(int(row[k]) for k in ['world','scenario','layer','bytes_per_edge'])+(int(row.get('fanout',int(row['world'])-1)),int(row.get('peer_mask',0)))!=key:raise ValueError('Case changed midstream')
+            if tuple(int(row[k]) for k in ['world','scenario','layer','bytes_per_edge'])+(int(row.get('fanout',int(row['world'])-1)),int(row.get('peer_mask',0)),row.get('transport','ubmem'))!=key:raise ValueError('Case changed midstream')
             if any(not math.isfinite(float(row[k])) or float(row[k])<=0 for k in ['event_us','api_us','job_join_us']):raise ValueError('Invalid timing')
         ranks[rank]=rows
-    world,scene,layer,bytes_edge,fanout,peer_mask=identity
+    world,scene,layer,bytes_edge,fanout,peer_mask,transport=identity
     if not 1<=fanout<world or (scene!=3 and fanout!=world-1):raise ValueError("Invalid fanout")
     if sorted(ranks)!=list(range(world)):raise ValueError('Missing ranks')
     count=len(ranks[0])
@@ -53,7 +53,7 @@ def analyze(paths):
         expected=bytes_edge*sum(edge(rank,d) for d in range(world)) if layer==3 else 0
         if any(int(row['rank_wire_bytes'])!=expected for row in rows):raise ValueError('Incorrect wire byte accounting')
         job_bytes+=expected
-    result={'peer_mask':peer_mask,'fanout':fanout,'world':world,'scenario':scene,'layer':layer,'bytes_per_edge':bytes_edge,'job_wire_bytes':job_bytes,
+    result={'transport':transport,'peer_mask':peer_mask,'fanout':fanout,'world':world,'scenario':scene,'layer':layer,'bytes_per_edge':bytes_edge,'job_wire_bytes':job_bytes,
             'samples':count,'exit_and_receiver_audit':'passed','statistics':{},'per_rank':{}}
     for metric in ['event_us','api_us','job_join_us']:
         maximum=[max(float(ranks[r][i][metric]) for r in ranks) for i in range(count)]

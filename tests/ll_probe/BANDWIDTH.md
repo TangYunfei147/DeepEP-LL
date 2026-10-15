@@ -1,3 +1,5 @@
+> 最简通信支持 `--transport ubmem|ndr`（默认ubmem）；NDR构建、计时边界及目标机步骤见 [NDR.md](communication/NDR.md)。
+
 # 发送量、重复采样和带宽统计
 
 ## 控制每条边的数据量

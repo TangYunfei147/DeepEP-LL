@@ -22,3 +22,5 @@ python3 metadata/prepare_snapshot.py
 "$BISHENG" "${HOST[@]}" "${INC[@]}" bandwidth/host/shmem_probe.cpp profiling/host/profile_bridge.cpp bandwidth/build/transfer_profile.o "${LINK[@]}" -o bandwidth/build/libshmem_profile.so
 "$BISHENG" "${HOST[@]}" "${INC[@]}" communication/host/comm_host.cpp profiling/host/profile_bridge.cpp communication/build/comm_profile.o "${LINK[@]}" -o communication/build/libcomm_profile.so
 "$BISHENG" "${HOST[@]}" "${INC[@]}" metadata/host/metadata_host.cpp profiling/host/profile_bridge.cpp metadata/build/metadata_profile.o metadata/build/metadata_check_profile.o "${LINK[@]}" -o metadata/build/libmetadata_profile.so
+
+python3 "$REPO_ROOT/tests/ll_probe/communication/ndr_build.py"

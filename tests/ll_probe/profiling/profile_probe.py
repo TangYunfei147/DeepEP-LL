@@ -40,6 +40,7 @@ def parser():
     p.add_argument('--lanes', type=int, default=4)
     p.add_argument('--chunk', type=int, default=4096)
     p.add_argument('--scenario', type=int, choices=(1, 2, 3, 4), default=1)
+    p.add_argument('--transport',choices=('ubmem','ndr'),default='ubmem',help='Compile-time selected communication backend; no silent fallback')
     p.add_argument('--fanout', type=int, help='Scenario3 only: rank0 sends to ranks 1..N; default world-1')
     p.add_argument('--targets',type=int,nargs='+',help='Global destination ranks for scenario1/3; sender remains rank0')
     p.add_argument('--sources',type=int,nargs='+',help='Global source ranks for scenario2; receiver remains rank0')
@@ -77,12 +78,15 @@ def resolve_payload(args):
 
 
 def plan(args, environ):
+    if args.transport!='ubmem' and args.kind!='comm':raise ValueError('NDR is available only for comm/empty/tiling probes')
     payload=resolve_payload(args)
     hardware=None
     if args.hardware_config is not None:
         args.hardware_config=project_path(args.hardware_config)
         if not args.hardware_config.is_relative_to(ROOT):raise ValueError('Hardware config must be inside project')
         hardware=load_hardware(args.hardware_config)
+        if hardware["specification"].get("transport","ubmem")!=args.transport:
+            raise ValueError("Hardware reference transport mismatch; NDR needs a NIC-specific model with transport: ndr")
     world = int(environ.get('WORLD_SIZE', '1'))
     rank = int(environ.get('RANK', '0'))
     device = int(environ.get('LOCAL_RANK', '0'))
@@ -117,8 +121,9 @@ def plan(args, environ):
         fanout=len(selected_ranks) if args.scenario==3 else world-1
         argv = [rank, world, device, args.endpoint, args.bytes, args.cores,
                 args.lanes, args.scenario, args.layer, args.warmup, args.samples, fanout, peer_mask]
-        library = HERE/'communication/build/libcomm_profile.so'
-        kernel = 'four_empty' if args.layer == 0 else f'four_comm_{args.scenario}'
+        library = HERE/('communication/build/libcomm_ndr_profile.so' if args.transport=='ndr' else 'communication/build/libcomm_profile.so')
+        prefix='four_ndr' if args.transport=='ndr' else 'four_comm'
+        kernel = 'four_empty' if args.layer == 0 else f'{prefix}_{args.scenario}'
     elif args.kind == 'metadata':
         argv = [args.batch, args.hidden, args.top_k, args.experts, args.partitions, args.warmup, args.samples, device]
         library, kernel = HERE/'metadata/build/libmetadata_profile.so', 'four_metadata'
@@ -148,6 +153,7 @@ def plan(args, environ):
                   includes_cross_rank_metadata_exchange=False) if args.kind == 'metadata'
              else dict(kind=args.kind, sampling_world=world))
     if args.kind == 'comm':
+        scope.update(transport=args.transport,completion=('per-core per-peer QP quiet' if args.transport=='ndr' else 'local MTE drain') if args.layer==3 else 'no payload')
         scope.update(sender_ranks=sorted({s for s,d in edges}),receiver_ranks=sorted({d for s,d in edges}),
                      edge_count=len(edges),peer_mask=peer_mask)
         if args.scenario==3:scope['fanout']=fanout
@@ -173,6 +179,10 @@ def main(argv=None):
     if args.plan:
         print(json.dumps(identity, indent=2))
         return
+    if args.transport=='ndr':
+        import runpy
+        support=runpy.run_path(str(HERE/'communication/ndr_support.py'))
+        identity['ndr_build_identity']=support['verify_runtime']()
     runtime_environment()
     if 'deployment_identity' in identity:
         identity['rank_provenance'] = dict(

@@ -1,3 +1,5 @@
+> 最简通信支持 `--transport ubmem|ndr`（默认ubmem）；NDR构建、计时边界及目标机步骤见 [NDR.md](communication/NDR.md)。
+
 > P50/P90/P99输出位置、汇总口径及其他入口缺口见 [PERCENTILES.md](PERCENTILES.md)。
 
 > `run.py`所有参数、默认值、适用测试和不生效兼容参数见 [RUN_ARGS.md](RUN_ARGS.md)。

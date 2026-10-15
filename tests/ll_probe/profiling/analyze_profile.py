@@ -62,6 +62,9 @@ def analyze(paths, hardware_override=None, peak_override=None, peak_description=
         current['deployment_identity'] = report.get('deployment_identity')
         current['measurement_scope'] = report.get('measurement_scope')
         current['hardware_profile'] = report.get('hardware_profile')
+        ndr=report.get('ndr_build_identity')
+        current['ndr_backend'] = ndr['identity']['backend'] if ndr else None
+        current['ndr_sdk_contract'] = {k:ndr['identity'][k] for k in ('sdk_revision','sdk_build')} if ndr else None
         if identity is not None and current != identity:
             raise ValueError('Mixed configurations or source revisions')
         identity = current
@@ -121,6 +124,9 @@ def analyze(paths, hardware_override=None, peak_override=None, peak_description=
         if peak_override is not None:
             hardware=dict(specification=dict(label=peak_description,model=dict(aggregate_GBps=peak_override)),
                           source='explicit aggregate peak override')
+        transport=cfg.get('transport','ubmem')
+        if hardware is not None and peak_override is None and hardware['specification'].get('transport','ubmem')!=transport:
+            raise ValueError('Hardware reference transport does not match captured data path')
         theory=theoretical_time(vol,edges,local,hardware)
         stats=bandwidth_statistics(tasks[0]['rank_max_samples'],vol,theory)
         result['bandwidth_summary']=dict(volume=vol,theory=theory,reference=hardware,statistics=stats,
@@ -134,7 +140,7 @@ def analyze(paths, hardware_override=None, peak_override=None, peak_description=
 def write_table(result, path):
     summary=result.get('bandwidth_summary',{})
     vol=summary.get('volume',{});stats=summary.get('statistics',{})
-    columns=['kernel','task_type','samples','captured_samples','bs','hidden_size','element_bytes','reference_kind','reference_label','bytes_per_edge','job_sent_bytes','intra_host_sent_bytes',
+    columns=['transport','ndr_backend','kernel','task_type','samples','captured_samples','bs','hidden_size','element_bytes','reference_kind','reference_label','bytes_per_edge','job_sent_bytes','intra_host_sent_bytes',
              'inter_host_sent_bytes','theoretical_time_us','latency_percentile','time_us',
              'effective_GBps','reference_utilization_percent']
     with path.open('x',newline='') as stream:
@@ -142,7 +148,7 @@ def write_table(result, path):
         for task in result['kernel_task_reports']:
             latency=task['iteration_rank_max']
             for q in (50,90,99):
-                row=dict(kernel=task['kernel'],task_type=task['task_type'],samples=latency['sample_count'],
+                row=dict(transport=result['configuration'].get('transport','ubmem'),ndr_backend=result.get('ndr_backend'),kernel=task['kernel'],task_type=task['task_type'],samples=latency['sample_count'],
                          latency_percentile=f'P{q}',time_us=latency[f'p{q}_us'])
                 if summary:
                     row.update(captured_samples=summary['capture_samples_per_rank'],

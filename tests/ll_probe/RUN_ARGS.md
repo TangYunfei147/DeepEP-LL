@@ -1,3 +1,5 @@
+> 最简通信支持 `--transport ubmem|ndr`（默认ubmem）；NDR构建、计时边界及目标机步骤见 [NDR.md](communication/NDR.md)。
+
 # run.py 参数手册
 
 本手册对应 `tests/ll_probe/run.py`，逐项列出当前统一入口的参数、默认值及实际作用。
