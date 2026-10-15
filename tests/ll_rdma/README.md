@@ -1,13 +1,15 @@
 # HNS_1825 NPU Direct RDMA LL 验收
 
-分支：`kernel/ll-configurable-groups`。通信路径、真实 SDK API、顺序和剩余风险见 [AUDIT.md](AUDIT.md)。本目录覆盖生产 dispatch/combine 的 RDMA 适配；双 rank 程序只测传输原语。正式统计协议入口见 [PROFILING.md](../ll_probe/PROFILING.md)。
+分支：`kernel/ll-ndr-hns1825`。通信路径、真实 SDK API、顺序和剩余风险见 [AUDIT.md](AUDIT.md)。本目录覆盖生产 dispatch/combine 的 RDMA 适配；双 rank 程序只测传输原语。正式统计协议入口见 [PROFILING.md](../ll_probe/PROFILING.md)。
+
+生产 LL 的 NDR 改动独立维护在本分支；`kernel/ll-configurable-groups` 仅保留泛化性改动和阶段打点。两个分支须分别构建匹配 wheel/SDK，不混用已安装产物。
 
 ## 获取与构建
 
 每台目标主机通过 Git 获取同一提交，后续只通过 Git 更新：
 
 ```bash
-git clone --branch kernel/ll-configurable-groups https://github.com/TangYunfei147/DeepEP-LL.git
+git clone --branch kernel/ll-ndr-hns1825 https://github.com/TangYunfei147/DeepEP-LL.git
 cd DeepEP-LL
 git submodule update --init --recursive --depth 1
 python3 -m venv --system-site-packages .venv-ll-rdma

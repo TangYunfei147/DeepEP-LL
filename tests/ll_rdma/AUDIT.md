@@ -1,6 +1,6 @@
 # LL HNS_1825 数据面审计与协议
 
-维护分支 `kernel/ll-configurable-groups`。NDR 在这里指 NPU Direct RDMA，使用 SHMEM AIV 直驱 RoCE；不指 NVIDIA NDR InfiniBand。审计基线为 `cb59bff99ecd39d27ef57788c5e6fd0009e4e636`，SHMEM 基线仍锁定 `4dd80e2129da42bd773982c2bb3758af1ed0bba8`。
+维护分支 `kernel/ll-ndr-hns1825`。NDR 在这里指 NPU Direct RDMA，使用 SHMEM AIV 直驱 RoCE；不指 NVIDIA NDR InfiniBand。审计基线为 `cb59bff99ecd39d27ef57788c5e6fd0009e4e636`，SHMEM 基线仍锁定 `4dd80e2129da42bd773982c2bb3758af1ed0bba8`。
 
 ## 通信路径
 
