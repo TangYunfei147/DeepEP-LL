@@ -36,3 +36,6 @@ for world in [2,4,8,16,32]:
         slots=[(d,s*15392,(s+1)*15392) for s,d in graph]
         assert len({(d,begin) for d,begin,_ in slots})==len(slots)
 print('PASS API invoke/wait/sync boundary, warmup exclusion, iteration rankMAX and world2/4/8/16/32 graph slots')
+
+assert all(f"p{q}_us" in api["rank_max_stats"] for q in (50,90,99))
+assert all(all(f"p{q}_us" in row for q in (50,90,99)) for row in api["ranks"])

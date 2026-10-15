@@ -311,3 +311,29 @@ def test_multihost_run_paths_use_each_local_parent():
     assert first.parent!=second.parent
     for invalid in ('../outside', '/absolute', '.', '..', ''):
         with pytest.raises(ValueError):st.local_run_directory('results/data',invalid)
+
+
+def test_selected_rank_max_percentiles_reach_csv(tmp_path):
+    import csv,json
+    perf=st.summarize_kernel([[999,1,10],[999,10,1]],'dispatch_server_dedup_kernel',2)
+    assert perf['rank_max_samples_us']==[10,10]
+    assert [perf[f'p{q}_us'] for q in (50,90,99)]==[10,10,10]
+    assert perf['ranks'][0]['p50_us']==5.5
+    result={'case_id':0,'config':{'B':8},'route':'normal','dispatch':perf}
+    st.write_reports(tmp_path,{'results':[result]})
+    row=list(csv.DictReader((tmp_path/'summary.csv').open()))[0]
+    assert [float(row[f'p{q}_us']) for q in (50,90,99)]==[10,10,10]
+    assert 'rank-MAX' in row['percentile_scope']
+    assert json.loads((tmp_path/'summary.json').read_text())['results'][0]['dispatch']['p90_us']==10
+
+
+def test_percentile_window_and_alignment_rejected():
+    for values,tail in (([],0),([[1],[1,2]],0),([[1]],2),([[1]],-1)):
+        with pytest.raises(ValueError):st.summarize_kernel(values,'test',tail)
+
+
+def test_legacy_event_host_percentiles_remain_separate():
+    from tests.ll_probe.profiling.profile_common import event_host_stats
+    stats=event_host_stats([1,2,3,4,5],[10,20,30,40,50])
+    assert [stats[f'event_p{q}_us'] for q in (50,90,99)]==pytest.approx([3,4.6,4.96])
+    assert [stats[f'host_p{q}_us'] for q in (50,90,99)]==pytest.approx([30,46,49.6])

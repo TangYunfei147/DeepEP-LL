@@ -16,7 +16,7 @@ def stats(values):
     def q(p):
         x=(len(ordered)-1)*p;lo=int(x);hi=min(lo+1,len(ordered)-1)
         return ordered[lo]+(ordered[hi]-ordered[lo])*(x-lo)
-    return dict(mean=statistics.mean(values),p50=q(.5),p95=q(.95),p99=q(.99),minimum=min(values),maximum=max(values))
+    return dict(mean=statistics.mean(values),p50=q(.5),p90=q(.9),p95=q(.95),p99=q(.99),minimum=min(values),maximum=max(values))
 
 def analyze(paths):
     ranks={};identity=None

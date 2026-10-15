@@ -188,6 +188,13 @@ def sample_stats(values):
 
 
 def summarize_kernel(samples_by_rank, kernel, tail):
+    if not samples_by_rank or len({len(raw) for raw in samples_by_rank}) != 1:
+        raise ValueError("Incomplete or unaligned per-rank sample sets")
+    if tail < 0 or tail > len(samples_by_rank[0]):
+        raise ValueError("Invalid percentile sample window")
+    selected_by_rank = [raw[-tail:] if tail else raw for raw in samples_by_rank]
+    rank_max = [max(values) for values in zip(*selected_by_rank)]
+    rank_max_stats = sample_stats(rank_max)
     ranks = []
     for rank, raw in enumerate(samples_by_rank):
         selected = raw[-tail:] if tail else raw
@@ -199,6 +206,10 @@ def summarize_kernel(samples_by_rank, kernel, tail):
         "kernel": kernel,
         "perf_tail": tail,
         "ranks": ranks,
+        "iteration_rank_max": rank_max_stats,
+        "rank_max_samples_us": rank_max,
+        "percentile_scope": "per-iteration rank-MAX over selected tail; not globally aligned makespan",
+        **{f"p{q}_us": rank_max_stats[f"p{q}_us"] for q in (50, 90, 99)},
         "min_rank_mean_kernel_us": fastest["mean_us"],
         "median_rank_mean_kernel_us": statistics.median(row["mean_us"] for row in ranks),
         "max_rank_mean_kernel_us": slowest["mean_us"],
@@ -235,7 +246,9 @@ def write_reports(directory, report):
             for task in perf.get("kernel_task_reports", [perf]):
                 task_base = {**base, "kernel": task.get("kernel", ""), "task_type": task.get("task_type", "")}
                 summaries.append({**task_base, **{key: task[key] for key in (
-                    "min_rank_mean_kernel_us", "median_rank_mean_kernel_us", "max_rank_mean_kernel_us", "slowest_rank")}})
+                    "min_rank_mean_kernel_us", "median_rank_mean_kernel_us", "max_rank_mean_kernel_us", "slowest_rank",
+                    "p50_us", "p90_us", "p99_us", "percentile_scope")},
+                    "samples": task["iteration_rank_max"]["samples"], "perf_tail": task["perf_tail"]})
                 ranks.extend({**task_base, **{key: value for key, value in rank.items() if key != "kernel_us"}}
                              for rank in task["ranks"])
     for filename, rows in (("summary.csv", summaries), ("ranks.csv", ranks)):
@@ -639,6 +652,10 @@ def read_measurement(args, operation, profile_dir, progress=None, kernel_overrid
                for i, (name, kind) in enumerate(identities[0])]
     for report, (name, kind) in zip(by_task, identities[0]):
         report["task_type"] = kind
+        if dist.get_rank() == 0:
+            print(f"[LL kernel percentile] {operation} {name}/{kind}: "
+                  f"P50={report['p50_us']:.6g} us P90={report['p90_us']:.6g} us "
+                  f"P99={report['p99_us']:.6g} us (selected-tail iteration rank-MAX)", flush=True)
     # Preserve downstream single-task consumers without merging multiple tasks.
     result = dict(by_task[0]) if len(by_task) == 1 else {"measurement": "separate_kernel_task_durations"}
     result.update(kernel_task_reports=by_task, trace_reports_by_rank=gathered,

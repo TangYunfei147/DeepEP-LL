@@ -28,6 +28,14 @@ def describe(values):
     return result
 
 
+def event_host_stats(event, host):
+    """Keep legacy Event and Host intervals separate; do not substitute task times."""
+    e,h=describe(event),describe(host)
+    return dict(event_mean_us=e['mean_us'],event_median_us=e['p50_us'],host_mean_us=h['mean_us'],
+                **{f'event_p{q}_us':e[f'p{q}_us'] for q in (50,90,99)},
+                **{f'host_p{q}_us':h[f'p{q}_us'] for q in (50,90,99)})
+
+
 def read_named_tasks(root, kernel, expected, tail=PROFILE_STEPS):
     """Prefer op_summary, fall back to kernel_details with recorded provenance.
 

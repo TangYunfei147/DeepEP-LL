@@ -2,6 +2,8 @@
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'profiling'))
+from profile_common import event_host_stats
 
 import argparse
 import csv
@@ -97,7 +99,7 @@ def main():
                 if any(t<=0 or not math.isfinite(t) for t in event+host): raise ValueError('Invalid timing')
                 if event:
                     mean=statistics.mean(event)
-                    report.update(event_mean_us=mean,event_median_us=statistics.median(event),host_mean_us=statistics.mean(host))
+                    report.update(event_host_stats(event, host))
                     if case['mode']>=2:
                         gbps=case['bytes']/(mean*1000); report['wire_gbps']=gbps
                         if args.peak_gbps is not None: report['attainment']=gbps/args.peak_gbps
