@@ -102,3 +102,15 @@
 [ndr_build.py](communication/ndr_build.py)读取仓内SDK后端构建独立库；
 [ndr_support.py](communication/ndr_support.py)检查运行身份，不执行设备操作。
 完整边界和目标操作见[NDR.md](communication/NDR.md)。
+
+
+## 单 AIV MTE2 有效深度诊断
+
+入口 [mte2_depth/run_a5.sh](mte2_depth/run_a5.sh) → [run.py](mte2_depth/run.py)
+→ [host.cpp](mte2_depth/host.cpp) → [kernel.cpp](mte2_depth/kernel.cpp) 的
+`mte2_depth_do` / `mte2_depth`。每次纯 AIV blockDim=1，设备0/1逐卡顺序验证，
+不建立通信域；N=0..32编译期展开，batch最终一次等待，serial每请求等待。
+计时前排空UB guard初始化，计时后导出校验；issue/drain/total原始ticks与完整Event时间分开。
+这是专项微架构诊断，不含Exp/all_reduce，不替代正式LL性能采样或RDMA OTS。
+缓存hint、ASM审查和解释限制见 [README](mte2_depth/README.md)，A5记录见
+[VALIDATION](mte2_depth/VALIDATION.md)。生产kernel与生成快照未修改。
