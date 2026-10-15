@@ -83,3 +83,73 @@ A5当前SDK的RDMA关闭，未重建SDK、未执行NDR网卡收发。编译通�
 本轮UB重建通过，双rank profiler smoke在探针调用前的HCCL初始化失败：
 `RunAicpuCommInit / get kernel failed`。未获得本轮设备正确性通过结论，未重试采样；
 日志保留在results/ndr-ub-validation.log及其引用的comm.log（生成日志不提交）。
+
+## 结果 CSV 逐列说明
+
+### 汇总 summary.csv
+
+`profiling/analyze_profile.py --output results/<run-id>/summary.json` 默认同时生成同目录
+`summary.csv`；可用 `--csv-output` 指定CSV路径。父目录须已存在，JSON/CSV输出文件须为新文件。
+输入和输出建议使用同一个run-id目录，不要沿用示例中另一次运行的目录名。
+
+以下20列按当前 `profiling/analyze_profile.py::write_table` 的实际输出顺序说明。
+每个独立的 `(kernel, task_type)` 有P50/P90/P99三行，不是每rank一行。
+对comm，先按每rank时间顺序取最后tail条，再对同序号的**全部rank**取task时长最大值，
+最后对该序列求分位数（排序后线性插值）。即使某rank没有发送边，也参与此rank-MAX。
+该值不是各rank分位数的最大值，也不是全局时间戳对齐的作业完成时间。
+
+| 列名 | 单位/取值 | 含义 |
+|---|---|---|
+| `transport` | `ubmem` / `ndr` | 本次探针实际选择的数据面。 |
+| `ndr_backend` | `XSCALE` / `HNS_1825`，或空 | NDR构建身份中的SDK后端；UB模式为空。 |
+| `kernel` | 字符串 | profiler匹配的设备kernel名称；通信一般为`four_comm_1..4`或`four_ndr_1..4`，空核为`four_empty`。tiling与传输共用场景名称，须结合JSON中的layer判断。 |
+| `task_type` | profiler原始类型 | 该kernel对应的task类型；不同类型独立统计，不相加。 |
+| `samples` | 次 | 实际用于分位数统计的逐轮rank-MAX样本数，默认最后50条；不是rank数×50。 |
+| `captured_samples` | 次/rank | 每个rank采集的目标task样本数，默认100；不含预热。仅有通信带宽汇总时填写。 |
+| `bs` | 行/token数 | 用`--bs`指定的每条边逻辑行数；直接用`--bytes`时为空。 |
+| `hidden_size` | 元素/行 | 用`--hidden-size`指定的每行元素数；直接用`--bytes`时为空。 |
+| `element_bytes` | 字节/元素 | 计算发送量使用的逻辑元素大小；不是对探针pattern数据做真实模型dtype运算。直接用`--bytes`时此列也为空。 |
+| `reference_kind` | `no_reference_config` / `ideal_capacity_lower_bound` | 无参考模型，或有容量模型推导的理想耗时下界。后者不是实测链路峰值。 |
+| `reference_label` | 字符串或空 | 所用硬件模型的label，或显式峰值覆盖的说明；无参考时为空。 |
+| `bytes_per_edge` | 字节 | 一次目标kernel调用中，每条选定有向边的payload量；形状输入时等于`bs × hidden_size × element_bytes`。不是每核发送量。 |
+| `job_sent_bytes` | 字节 | 一次调用中所有选定有向边的发送量之和，即`bytes_per_edge × 边数`；不再把接收量加一次。不是100次采集的总量。 |
+| `intra_host_sent_bytes` | 字节或空 | 上述发送量中同主机边的部分，根据记录的每机rank数和连续rank分配判断；缺部署拓扑时为空。 |
+| `inter_host_sent_bytes` | 字节或空 | 上述发送量中跨主机边的部分；有拓扑且没有跨机边时为0，未知时为空。run-id中的cross不参与分类。 |
+| `theoretical_time_us` | 微秒或空 | 对已配置且适用的各资源计算`字节量 / (容量GB/s × 1000)`，取最大值作为理想下界。不含启动、协议、串行化及拥塞成本。无参考时为空。 |
+| `latency_percentile` | `P50` / `P90` / `P99` | 本行对应的时延分位数；P99表示约99%的所选时延样本不高于该值（按线性插值定义）。 |
+| `time_us` | 微秒 | 本行分位数对应的逐轮rank-MAX kernel/task时长，不是Event、Python API或整作业墙钟时间。 |
+| `effective_GBps` | 十进制GB/s | `job_sent_bytes / (time_us × 1000)`；1GB=10^9字节。它是在本行时延分位数处换算的有效payload带宽，**不是带宽分布自身的P50/P90/P99**。 |
+| `reference_utilization_percent` | %或空 | `theoretical_time_us / time_us × 100`，相对所选理想模型的达成率；无参考时为空，不代表0%。不截断到100%，超出时需核对模型和测量口径。 |
+
+只有comm的layer=3且只有一组kernel/task统计时，当前脚本才填充完整带宽汇总列。
+empty/tiling或没有该汇总的情况只填写transport、backend、kernel、task_type、samples及分位时延，
+其余列为空。NDR未提供NIC模型时仍有有效带宽，但理论耗时和利用率为空。
+
+发送量只计目标探针payload，不含预热/正确性检查、Exp、HCCL all_reduce、NIC协议头或重传。
+NDR时间包含QP提交与quiet完成等待；UB时间包含本核MTE流水收尾。
+CSV的详细来源、每rank分布、原始rank-MAX样本、模型约束及配置保存在同名JSON中。
+
+例：EP16单机，`--scenario 3 --targets 3 5 --bytes 15392`：每次调用两条边，
+`job_sent_bytes=30784`，`intra_host_sent_bytes=30784`，`inter_host_sent_bytes=0`。
+若某一行`time_us=10`，则`effective_GBps=3.0784`。这里10微秒仅是公式示例，不是实测结果。
+
+### 每rank的 event_diagnostics.csv
+
+这是Host输出的独立诊断表，位于`node-N/data/rank_R/`，不要与上面的summary.csv混为一谈。
+经过profiler采集的Event/API数值受profiler影响，不作为无profiler基线。
+
+| 列名 | 单位/含义 |
+|---|---|
+| `sample` | 从0开始的采集序号，不含预热。 |
+| `rank` | 全局rank。 |
+| `world` | 本次实际参与rank总数。 |
+| `scenario` | 1：单源单目标；2：多源到0；3：0到多个目标；4：全有向无自环。具体选中边还需结合mask。 |
+| `layer` | comm内部层号：0空核、1仅读tiling、3传payload；不是四层实验的顺序编号。 |
+| `bytes_per_edge` | 每条边的配置payload字节数；layer0/1保留配置值但不实际发送。 |
+| `rank_wire_bytes` | 本rank本轮实际配置的发送payload量；layer3为出边数×bytes，layer0/1为0。不是NIC线缆物理字节计数。 |
+| `fanout` | 场景3的目标数；其他场景保留world-1的兼容值，不能直接当实际出边数。 |
+| `peer_mask` | 十进制位掩码，第p位表示选中的全局rank p；场景1/3选目标，场景2选来源，场景4不使用该掩码。 |
+| `event_us` | 微秒；ACL start/end事件包围目标kernel，在两次事件之间计时。 |
+| `api_us` | 微秒；Host从记录start事件之前开始，到kernel提交、end事件记录及stream同步完成为止；包含这些Host调用成本。 |
+| `job_join_us` | 微秒；与api_us起点相同，延伸到该rank完成后置SHMEM barrier；不是全局对齐的整作业makespan。 |
+| `transport` | `ubmem`或`ndr`。 |
