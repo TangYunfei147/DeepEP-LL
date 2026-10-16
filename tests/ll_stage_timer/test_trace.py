@@ -26,6 +26,7 @@ def sample(offset=10**17, rank=0):
 
 def test_exact_ticks_envelope_and_independent_clocks():
     trace = timer.chrome_trace([sample(), sample(2*10**17, 1)])
+    assert 'displayTimeUnit' not in trace  # Chrome rejects 'us'; ts/dur remain us.
     events = [e for e in trace['traceEvents'] if e['ph']=='X']
     assert len(events) == 64
     for pid in (1, 2):

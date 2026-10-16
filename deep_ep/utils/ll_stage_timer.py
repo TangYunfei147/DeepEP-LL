@@ -112,7 +112,9 @@ def chrome_trace(saved_records, frequency_hz=None):
                                dur=span*1e6/frequency, args=args))
     if not identities:
         raise ValueError('No LL stage records')
-    return dict(traceEvents=events, displayTimeUnit='us',
+    # Chrome Trace Event ts/dur are microseconds. displayTimeUnit is a viewer
+    # preference with a different enum; Chrome tracing rejects 'us'. Omit it.
+    return dict(traceEvents=events,
                 metadata={'format': 'LL stage schema 1 Chrome trace',
                           'interpretation': 'Repeated events show envelopes including gaps; args.total_us is accumulated active time. Independent rank/sample origins; no cross-rank or profiler clock alignment.'})
 
