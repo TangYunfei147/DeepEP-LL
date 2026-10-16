@@ -17,7 +17,7 @@ spec.loader.exec_module(timer)
 def sample(offset=10**17, rank=0):
     raw = [[[0]*8 for _ in range(32)] for _ in range(16)]
     for core, rows in enumerate(raw):
-        rows[0] = [timer.MAGIC, 1, 1, 16, core, 2, 1, len(timer.STAGES)]
+        rows[0] = [timer.MAGIC, 1, 1, 16, core, 2, 1, len(timer.LEGACY_STAGES)]
         rows[1] = [offset+100, offset+200, 100, 1, offset+100, 0, 0, 0]
         rows[15] = [offset+110, offset+180, 30, 3, offset+170, 0, 0, 0]
     return dict(raw=raw, operation='dispatch', frequency_hz=1e9,

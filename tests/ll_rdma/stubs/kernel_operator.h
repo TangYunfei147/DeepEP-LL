@@ -34,6 +34,7 @@ template<class T> struct LocalTensor {
 };
 template<class T> struct GlobalTensor {
     T* p=nullptr;
+    T& operator()(uint32_t index) { return p[index]; }
     void SetGlobalBuffer(T* q) { p=q; }
     void SetL2CacheHint(CacheMode) {}
 };

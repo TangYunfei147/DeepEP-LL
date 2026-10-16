@@ -1003,13 +1003,16 @@ def worker(local_rank, args):
                       "rdma_compiled": bool(getattr(native, "low_latency_rdma_enabled", False)),
                       "logical_group": native.low_latency_ranks_per_group(world),
                       "core_protocol": native.low_latency_core_protocol,
-                      "stage_timer": bool(getattr(native, "low_latency_stage_timer_enabled", False))}
+                      "stage_timer": bool(getattr(native, "low_latency_stage_timer_enabled", False)),
+                      "stage_timer_schema": native.low_latency_stage_timer_layout()["schema"]}
         capabilities = [None] * world
         dist.all_gather_object(capabilities, capability)
         if any(item != capabilities[0] for item in capabilities):
             raise RuntimeError("LL AIV/group/protocol/timer build differs across ranks")
         if args.ll_stage_timer and not capability["stage_timer"]:
             raise RuntimeError("All ranks must install a DEEPEP_LL_STAGE_TIMER=ON wheel")
+        if args.ll_stage_timer and capability['stage_timer_schema'] != 2:
+            raise RuntimeError('Detailed LL diagnostics require timer schema 2; rebuild/install the matching wheel on every rank')
         args.ll_stage_timer_capabilities = capabilities
         run_directory = [None]
 

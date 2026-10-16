@@ -113,7 +113,7 @@ M决定去重：`M>32`启用，`M<=32`关闭。若对比两条路径，在满足
   ...
 ```
 
-每文件包含原始`[实际AIV数,32,8]` int64数组和每核/阶段解析值。第0槽记录magic/schema/操作/核数/核号/模式/完成标志；阶段槽记录first/last/累计ticks/次数及活动状态。分配器创建512B对齐视图，Host拒绝未对齐的直接传入指针；每核独占2048B，避免跨核cache-line写回冲突，当前支持16..72偶数核。每轮新建零缓冲，不覆盖前一轮；未执行阶段保持零值，不冒充零成本样本。
+每文件包含原始`[实际AIV数,32,8]` int64数组和每核/阶段解析值。第0槽记录magic/schema/操作/核数/核号/模式/完成标志；schema 2阶段记录采用4个int64：first、start_or_last_end、累计ticks、count|active(bit62)，从第8个word开始紧凑排列；不是每阶段独占一行。schema 1旧文件仍按8字段解析。分配器创建512B对齐视图，Host拒绝未对齐的直接传入指针；每核独占2048B，避免跨核cache-line写回冲突，当前支持16..72偶数核。每轮新建零缓冲，不覆盖前一轮；未执行阶段保持零值，不冒充零成本样本。
 
 **目标计数器换算已由用户确认：`time_us = ticks / 1000`。** 测试及命令行分析默认1GHz，原始ticks仍保留；可用frequency参数显式覆盖其他已确认环境。
 
@@ -171,7 +171,7 @@ python tests/ll_stage_timer/export_trace.py \
 - 单次阶段显示首次到末次真实区间；重复阶段标为`[envelope xN]`，宽度是首尾包络，
   **包括中间空隙，不是累计执行时间**。点击事件查看`total_us/total_ticks`累计耗时、
   `average_us`、`calls`、`gap_ticks`及原始起止ticks。
-- schema 1没有保存每次重复调用的起止点，无法从现有数据还原Mega_Moe式逐次动态事件；
+- schema 1/2都没有保存每次重复调用的起止点，无法从现有数据还原Mega_Moe式逐次动态事件；
   不伪造连续片段。父子阶段/并行阶段不可直接相加，drain数据也不是未插桩性能基线。
 
 ## 推荐：一个命令完成统计和tracing导出
@@ -238,3 +238,43 @@ timer缓冲在采样前分配，采集循环只执行前处理、LL调用及设�
 DEEPEP_LL_RDMA=ON、DEEPEP_LL_STAGE_TIMER=ON，执行既有pip重装命令。
 SDK、C++ kernel和ABI4未变，不需仅为本次更新重建SHMEM。
 默认单AIV轨道适用于自动trace、analyze.py及export_trace.py。更新Git后对已有raw sample重新分析即可，无需重新采集；核间起始偏移保持原样，不做逐核归零。
+
+## dispatch细分阶段（timer schema 2）
+
+核心通信ABI仍为4；timer schema升为2，原始张量形状仍为[实际AIV,32,8]，
+每核仍2048B、512B对齐。设备和Host/Python必须全rank重建安装匹配wheel，入口会互检timer schema。
+解析器兼容旧schema 1文件，但一次统计不混用不同schema；旧文件没有新阶段，必须重新采集才能获得细分。
+
+| 父区间 | 子阶段 | 边界含义 |
+|---|---|---|
+| recv_consume | recv_lane_wait | IssueLoad中等待MTE3_MTE2，保护lane复用 |
+| recv_consume | recv_gm_to_ub | 接收packet的GM→UB搬运下发、相关视图准备和事件发布 |
+| recv_consume | recv_load_wait | ConsumeLoaded入口等待MTE2_S，使Scalar能读取包尾 |
+| recv_consume | recv_metadata | 包尾解码、type/destination构造、FIRST_HOP转发包尾及marker准备 |
+| recv_consume | recv_output_wait | 输出前S_MTE3同步和MTE2_MTE3等待 |
+| recv_consume | recv_output_write | token/scale、tokenType、destinationIndex、relayReadIndex等写回；分段累计 |
+| recv_consume | recv_forward | FIRST_HOP目标遍历及Packet转发；当前NDR组内relay为机内MTE |
+| send_pack | send_input_gm_to_ub | 输入队列分配、可选预量化padding、token/scale搬入下发和EnQue |
+| send_pack | send_input_wait | DeQue及非量化路径MTE2_S同步，分段累计 |
+| send_pack | send_tail | FillTail填充发送包尾元数据 |
+| send_pack | send_lane_wait | 等待MTE3_V，使发送lane可复用 |
+| send_issue | send_mte_write | 本机Packet的MTE写入下发 |
+| send_issue | send_rdma_stage | 跨机Packet原有排空、UB→注册GM暂存、MTE3_S完成同步 |
+| send_issue | send_rdma_body_post | 逐块480B body的RDMA put提交，包含SDK内部开销 |
+| send_issue | send_rdma_body_wait | body quiet完成等待 |
+| send_issue | send_rdma_flag_post | 逐块32B flag的RDMA put提交 |
+| send_issue | send_rdma_flag_wait | flag quiet完成等待，保护暂存复用 |
+| send_issue | send_rdma_restore | SDK借用UB前128B的恢复及原有同步/排空 |
+
+发送lane等待和输入搬入原本位于send_pack，不属于send_issue；新增打点保留原算法边界，
+不把这些操作移动到send_issue中。send_issue的细分重点是本机MTE或跨机两阶段RDMA发布。
+
+observe不增加流水屏障，搬运区间通常表示下发成本，不能等同于设备传输完成时间。
+drain会在每个子阶段Start/End继续加入PIPE_ALL，可能将后续等待成本转移到前一阶段排空，
+并破坏预取/发送重叠。因此建议先用observe定位等待，再用drain查看串行化后的成本；
+子阶段之和不保证等于父区间（还有边界和插桩开销）。重复区间仍只提供包络与累计值，
+不会伪造每次调用的时间点。详细插桩增加开销，正式基线保持timer OFF。
+
+目标机更新后沿用原SDK（本次未改变SDK），保持DEEPEP_LL_RDMA=ON、
+DEEPEP_LL_STAGE_TIMER=ON，重新完整构建安装wheel，然后使用原测试命令重新采集。
+分析仍只需一个analyze.py命令，CSV及trace自动包含新阶段。

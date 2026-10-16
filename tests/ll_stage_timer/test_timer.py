@@ -18,7 +18,7 @@ analyzer=load('stage_analyzer',Path(__file__).with_name('analyze.py'))
 def raw(cores=16):
     result=[[[0]*8 for _ in range(timer.SLOTS)] for _ in range(cores)]
     for core,rows in enumerate(result):
-        rows[0]=[timer.MAGIC,timer.SCHEMA,1,cores,core,1,1,len(timer.STAGES)]
+        rows[0]=[timer.MAGIC,1,1,cores,core,1,1,len(timer.LEGACY_STAGES)]
         rows[1]=[100,200,100,1,100,0,0,0]
         rows[15]=[110,180,30,3,170,0,0,0]
     return result

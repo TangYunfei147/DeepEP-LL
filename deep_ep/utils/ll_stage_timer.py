@@ -10,7 +10,7 @@ from pathlib import Path
 import threading
 
 MAGIC = 0x4C4C5431
-SCHEMA = 1
+SCHEMA = 2
 DEFAULT_FREQUENCY_HZ = 1_000_000_000  # Target-confirmed: time_us = ticks / 1000.
 SLOTS, FIELDS = 32, 8
 STAGES = ('header', 'kernel', 'magic', 'worker_init', 'count_init', 'count_send', 'sender',
@@ -19,6 +19,13 @@ STAGES = ('header', 'kernel', 'magic', 'worker_init', 'count_init', 'count_send'
           'count_finish', 'combine_prepare', 'combine_notify', 'combine_wait_ready',
           'combine_direct', 'combine_partial', 'combine_aggregate', 'combine_drain', 'combine_final_drain',
           'send_classify', 'send_pack', 'send_issue')
+LEGACY_STAGES = STAGES
+STAGES += ('recv_lane_wait', 'recv_gm_to_ub', 'recv_load_wait', 'recv_metadata',
+           'recv_output_wait', 'recv_output_write', 'recv_forward',
+           'send_input_gm_to_ub', 'send_input_wait', 'send_tail', 'send_lane_wait',
+           'send_mte_write', 'send_rdma_stage', 'send_rdma_body_post', 'send_rdma_body_wait',
+           'send_rdma_flag_post', 'send_rdma_flag_wait', 'send_rdma_restore')
+ACTIVE = 1 << 62
 _state = threading.local()
 
 
@@ -31,24 +38,38 @@ def parse_records(raw, operation, frequency_hz=None):
     if not 16 <= cores <= 72 or cores % 2:
         raise ValueError('Expected actual even AIV count in [16,72]')
     op = 1 if operation == 'dispatch' else 2
-    records, modes = [], set()
+    records, modes, schemas = [], set(), set()
     for core, slots in enumerate(raw):
         if len(slots) != SLOTS or any(len(row) != FIELDS for row in slots):
             raise ValueError('Timer shape mismatch')
         header = slots[0]
+        schema = header[1]
+        if schema not in (1, 2):
+            raise ValueError('Unsupported timer schema')
+        names = LEGACY_STAGES if schema == 1 else STAGES
+        schemas.add(schema)
         if any(type(value) is not int or value < 0 for value in header):
             raise ValueError("Invalid timer header word")
-        if header[:5] != [MAGIC, SCHEMA, op, cores, core] or header[6:] != [1, len(STAGES)]:
+        if header[:5] != [MAGIC, schema, op, cores, core] or header[6:] != [1, len(names)]:
             raise ValueError(f'Incomplete or mismatched timer header on core {core}')
         if header[5] not in (1, 2):
             raise ValueError('Unknown boundary mode')
         modes.add(header[5])
+        if schema == 2:
+            words = [value for row in slots for value in row]
+            if any(type(value) is not int or not 0 <= value < (1 << 63) for value in words):
+                raise ValueError('Invalid raw timer word')
+            normalized = [header]
+            for offset in range(8, SLOTS * FIELDS, 4):
+                first, last, total, count = words[offset:offset+4]
+                normalized.append([first, last, total, count & ~ACTIVE, first, int(bool(count & ACTIVE)), 0, 0])
+            slots = normalized
         if slots[1][3] != 1:
             raise ValueError('Exactly one completed kernel interval is required')
         for stage, row in enumerate(slots[1:], 1):
             if any(type(value) is not int or value < 0 for value in row):
                 raise ValueError('Invalid raw timer word')
-            if stage >= len(STAGES):
+            if stage >= len(names):
                 if any(row):
                     raise ValueError('Unknown stage data')
                 continue
@@ -62,7 +83,7 @@ def parse_records(raw, operation, frequency_hz=None):
             if last < first or active_start < first or active_start > last or total > last-first:
                 raise ValueError('Invalid timestamp order or accumulated interval')
             record = dict(core=core, role='send' if core < cores//2 else 'receive',
-                          stage=STAGES[stage], first_tick=first, last_tick=last,
+                          stage=names[stage], first_tick=first, last_tick=last,
                           total_ticks=total, calls=count, average_ticks=total/count)
             if frequency_hz is not None:
                 record['total_us'] = total*1e6/frequency_hz
@@ -70,7 +91,9 @@ def parse_records(raw, operation, frequency_hz=None):
             records.append(record)
     if len(modes) != 1:
         raise ValueError('Mixed boundary modes')
-    return dict(schema=SCHEMA, operation=operation, active_aiv=cores,
+    if len(schemas) != 1:
+        raise ValueError('Mixed timer schemas')
+    return dict(schema=schema, operation=operation, active_aiv=cores,
                 boundary_mode='observe' if modes == {1} else 'drain', frequency_hz=frequency_hz,
                 clock='AscendC::GetSystemCycle; no cross-rank clock alignment assumed', records=records,
                 interpretation='Nested and overlapping stages must not be summed; repeated-stage totals exclude gaps.')
@@ -99,7 +122,7 @@ def chrome_trace(saved_records, frequency_hz=None, lane_layout='core'):
         # Parents first at equal starts, so viewers can nest complete events.
         records = sorted(report['records'], key=lambda row: (row['core'], row['first_tick'], -row['last_tick']))
         for row in records:
-            tid = row['core'] if lane_layout == 'core' else row['core'] * SLOTS + STAGES.index(row['stage'])
+            tid = row['core'] if lane_layout == 'core' else row['core'] * 64 + STAGES.index(row['stage'])
             lane = f"AIV {row['core']:02d} {row['role']}"
             if lane_layout == 'stage':
                 lane += f" / {row['stage']}"
@@ -124,7 +147,7 @@ def chrome_trace(saved_records, frequency_hz=None, lane_layout='core'):
     # Chrome Trace Event ts/dur are microseconds. displayTimeUnit is a viewer
     # preference with a different enum; Chrome tracing rejects 'us'. Omit it.
     return dict(traceEvents=events,
-                metadata={'format': 'LL stage schema 1 Chrome trace', 'lane_layout': lane_layout,
+                metadata={'format': 'LL stage Chrome trace (schemas 1/2)', 'lane_layout': lane_layout,
                           'interpretation': 'Repeated events show envelopes including gaps; args.total_us is accumulated active time. Independent rank/sample origins; no cross-rank or profiler clock alignment.'})
 
 

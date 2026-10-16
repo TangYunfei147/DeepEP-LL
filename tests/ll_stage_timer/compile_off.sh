@@ -7,11 +7,14 @@ set -u
 OUT=$(mktemp -d "$LL_TIMER_ROOT/.tmp/ll-timer-off-XXXXXXXX")
 SDK="$LL_TIMER_ROOT/third-party/shmem/install/shmem"
 test -f "$SDK/lib/libshmem.so"
-for op in dispatch combine; do
+for rdma in 0 1; do
+  FLAGS=(); if [[ "$rdma" == 1 ]]; then FLAGS=(-DDEEPEP_LL_RDMA=1 -DACLSHMEMI_RDMA_K_BACKEND_HNS_1825=1); fi
+  for op in dispatch combine; do
   bisheng -O2 -std=c++17 -fPIC -xasc --npu-arch=dav-3510 --cce-auto-infer-kernel-type=false \
-    -DCATLASS_ARCH=3510 -DUSE_SIMT -DL2_CACHE_HINT \
+    -DCATLASS_ARCH=3510 -DUSE_SIMT -DL2_CACHE_HINT "${FLAGS[@]}" \
     -I"$ASCEND_HOME_PATH/include" -I"$ASCEND_HOME_PATH/asc/include" \
     -I"$SDK/include" -I"$SDK/src" -I"$SDK/src/device" -I"$SDK/src/device_simt" \
-    -c "$LL_TIMER_ROOT/csrc/kernels/$op/low_latency.cpp" -o "$OUT/$op.o"
+    -c "$LL_TIMER_ROOT/csrc/kernels/$op/low_latency.cpp" -o "$OUT/$op-rdma-$rdma.o"
+  done
 done
 printf 'PASS both production LL entries compile with timer OFF: %s\n' "$OUT"

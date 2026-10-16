@@ -1,6 +1,7 @@
 #pragma once
 #include "../common/ll_rdma_layout.h"
 #include "../common/ll_group_policy.h"
+#include "../common/ll_stage_timer_device.h"
 #include "kernel_operator.h"
 #ifdef DEEPEP_LL_RDMA
 #include "device/gm2gm/engine/shmem_device_rdma.h"
@@ -66,24 +67,42 @@ __aicore__ inline void Quiet(uint32_t peer, LocalTensor<uint8_t> scratch, uint32
 // staging reuse. This conservative first implementation serializes packets;
 // its completion and WQE costs must be measured before introducing a ring.
 __aicore__ inline void Packet(const __gm__ Args* a, uint32_t peer, uint64_t offset,
-                              LocalTensor<uint8_t> packet, uint32_t bytes, uint32_t syncId=7U) {
+                              LocalTensor<uint8_t> packet, uint32_t bytes, uint32_t syncId=7U,
+                              LlStageTimer::DeviceTimer* timer=nullptr) {
     Check(a, peer, offset, bytes);
     auto dst = Address(a, peer, offset);
-    if (!RemoteWrite(a, peer)) { DataCopy(Tensor(dst,Rdma(a)), packet, bytes); return; }
+    if (!RemoteWrite(a, peer)) {
+        if (timer) timer->Start(LlStageTimer::SendMteWrite);
+        DataCopy(Tensor(dst,Rdma(a)), packet, bytes);
+        if (timer) timer->End(LlStageTimer::SendMteWrite);
+        return;
+    }
     if (bytes == 0U || bytes % 512U || syncId >= 8U) { Trap(); return; }
     auto stage = Stage(a, bytes);
+    if (timer) timer->Start(LlStageTimer::SendRdmaStage);
     PipeBarrier<PIPE_ALL>();
     DataCopy(Tensor(stage,true), packet, bytes);
     Sync<HardEvent::MTE3_S>(syncId); // registered GM complete before Scalar posts NIC WQEs
+    if (timer) timer->End(LlStageTimer::SendRdmaStage);
+    if (timer) timer->Start(LlStageTimer::SendRdmaBodyPost);
     for (uint32_t b = 0; b < bytes; b += 512U) Put(a, peer, dst + b, stage + b, 480U, packet, syncId);
+    if (timer) timer->End(LlStageTimer::SendRdmaBodyPost);
+    if (timer) timer->Start(LlStageTimer::SendRdmaBodyWait);
     Quiet(peer, packet, syncId);
+    if (timer) timer->End(LlStageTimer::SendRdmaBodyWait);
+    if (timer) timer->Start(LlStageTimer::SendRdmaFlagPost);
     for (uint32_t b = 0; b < bytes; b += 512U) Put(a, peer, dst + b + 480U, stage + b + 480U, 32U, packet, syncId);
+    if (timer) timer->End(LlStageTimer::SendRdmaFlagPost);
+    if (timer) timer->Start(LlStageTimer::SendRdmaFlagWait);
     Quiet(peer, packet, syncId);
+    if (timer) timer->End(LlStageTimer::SendRdmaFlagWait);
+    if (timer) timer->Start(LlStageTimer::SendRdmaRestore);
     // SDK workspace borrows the first 128B after staging. Restore it because
     // relay callers reuse this packet for several destinations.
     DataCopy(packet, Tensor(stage,true), 128U);
     Sync<HardEvent::MTE2_S>(syncId);
     PipeBarrier<PIPE_ALL>();
+    if (timer) timer->End(LlStageTimer::SendRdmaRestore);
 }
 // Strided 32B records. Count records publish only word 0 after words 1..7
 // complete. Ready records carry no payload and are published after local stage

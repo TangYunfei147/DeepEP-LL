@@ -5,6 +5,7 @@
 #include "kernels/dispatch/low_latency/device/ll_transport.h"
 using namespace AscendC;
 int main() {
+    std::vector<uint64_t> timers(72U*LlStageTimer::kWordsPerCore);
     std::vector<uint8_t> local(256*1024),remote(local.size()),stages(72U*LlRdma::kCoreBytes),packet(128*1024);
     Model::local=local.data(); Model::remote=remote.data();
     DispatchDedup::CommArgs a; a.rank=0; a.rankSize=32; a.reserved0=16; a.peerMemBytes=128*1024;
@@ -27,7 +28,22 @@ int main() {
                         }
                     };
                     unsigned q=Model::quiets;
+#ifdef DEEPEP_LL_STAGE_TIMER
+                    auto* counters=timers.data()+core*LlStageTimer::kWordsPerCore;
+                    std::fill(counters,counters+LlStageTimer::kWordsPerCore,0);
+                    LlStageTimer::DeviceTimer timer;
+                    timer.Init(reinterpret_cast<GM_ADDR>(timers.data()),1U,1U);
+                    timer.Start(LlStageTimer::Kernel);
+                    LlTransport::Packet(&a,16,0,{packet.data()},bytes,7U,&timer);
+                    timer.End(LlStageTimer::Kernel); timer.Finish();
+                    for(auto stage : {LlStageTimer::SendRdmaStage, LlStageTimer::SendRdmaBodyPost,
+                         LlStageTimer::SendRdmaBodyWait, LlStageTimer::SendRdmaFlagPost,
+                         LlStageTimer::SendRdmaFlagWait, LlStageTimer::SendRdmaRestore})
+                        assert(counters[LlStageTimer::StageOffset(stage)+3U]==1U);
+                    assert(counters[LlStageTimer::StageOffset(LlStageTimer::SendMteWrite)+3U]==0U);
+#else
                     LlTransport::Packet(&a,16,0,{packet.data()},bytes);
+#endif
                     assert(Model::quiets-q==2 && Model::pending.empty());
                     assert(std::memcmp(target,saved.data(),bytes)==0 && packet==saved);
                     ++cases;

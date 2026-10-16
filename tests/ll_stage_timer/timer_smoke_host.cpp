@@ -43,7 +43,7 @@ int main(int argc, char** argv)
                 const auto* row = data.data() + c * LlStageTimer::kWordsPerCore;
                 if (row[0] != LlStageTimer::kMagic || row[4] != c || row[6] != 1 || row[5] != mode)
                     throw std::runtime_error("header mismatch");
-                if (row[LlStageTimer::RecvWait * 8 + 3] != 3) throw std::runtime_error("repeat count mismatch");
+                if (row[LlStageTimer::StageOffset(LlStageTimer::RecvWait) + 3] != 3) throw std::runtime_error("repeat count mismatch");
             }
         std::ofstream file(argv[1]);
         if (!file) throw std::runtime_error("cannot create output");
