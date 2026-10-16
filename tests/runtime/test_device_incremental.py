@@ -10,6 +10,9 @@ import pytest
 
 
 ROOT = Path(__file__).resolve().parents[2]
+DISPATCH_MODES = ("prequant_e4m3", "fp16", "fp16_e4m3", "fp16_e5m2", "bf16", "bf16_e4m3", "bf16_e5m2")
+DISPATCH_VARIANTS = [f"dispatch/low_latency/variants/{mode}_g{group}.cpp"
+                     for mode in DISPATCH_MODES for group in (4, 16)]
 
 
 def tool(name):
@@ -138,11 +141,13 @@ def test_real_device_rules_recompile_only_ll_when_timer_changes(tmp_path):
     shutil.copyfile(ROOT / "cmake/Dependencies.cmake", source / "cmake/Dependencies.cmake")
     units = ["notify/notify.cpp", "dispatch/dispatch.cpp", "combine/combine.cpp",
              "combine/reuse.cpp", "combine/combine_ep8_mte.cpp",
-             "dispatch/low_latency.cpp", "combine/low_latency.cpp"]
+             "dispatch/low_latency.cpp", "combine/low_latency.cpp", *DISPATCH_VARIANTS]
     for unit in units:
         path = source / "csrc/kernels" / unit
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("// fake translation unit\n")
+    variant_header = source / "csrc/kernels/dispatch/low_latency/dispatch_variant_kernel.h"
+    variant_header.write_text("// shared dispatch variant dependency\n")
     sdk = source / "sdk"
     for path in [sdk / "lib64/libascendcl.so", sdk / "lib64/libruntime.so", sdk / "lib/libshmem.so"]:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -172,8 +177,10 @@ if "-o" in args:
         def escape(value):
             return str(value).replace("\\\\", "/").replace(" ", "\\\\ ").replace(":", "\\\\:")
         dependencies = [unit]
-        if unit.replace("\\\\", "/").endswith("/dispatch/low_latency.cpp"):
+        if unit.replace("\\\\", "/").endswith("/variants/bf16_g4.cpp"):
             dependencies.append(Path(__file__).parent / "checkout with spaces/sdk/shared.h")
+        if "/variants/" in unit.replace("\\\\", "/"):
+            dependencies.append(Path(__file__).parent / "checkout with spaces/csrc/kernels/dispatch/low_latency/dispatch_variant_kernel.h")
         Path(args[args.index("-MF") + 1]).write_text(
             escape(output) + ": " + " ".join(escape(item) for item in dependencies) + "\\n")
 ''')
@@ -198,11 +205,12 @@ if "-o" in args:
         return [json.loads(line) for line in commands.read_text().splitlines()[len(before):]]
 
     initial = run("OFF")
-    assert len(initial) == 8  # Seven objects plus the shared library.
+    assert len(initial) == 22  # Five HT and sixteen LL objects plus the shared library.
     changed = run("ON")
-    assert len(changed) == 3
-    assert sorted(Path(unit).parent.name for unit in changed if unit != "link") == ["combine", "dispatch"]
-    assert all(unit == "link" or unit.endswith("/low_latency.cpp") for unit in changed)
+    assert len(changed) == 17
+    expected_ll = {"dispatch/low_latency.cpp", "combine/low_latency.cpp", *DISPATCH_VARIANTS}
+    assert {Path(unit).relative_to(source / "csrc/kernels").as_posix()
+            for unit in changed if unit != "link"} == expected_ll
     for timer in ["OFF", "ON", "OFF"]:
         assert run(timer) == ["link"]
     assert run("OFF") == []
@@ -217,7 +225,7 @@ if "-o" in args:
     shared_header.write_text("// changed SDK dependency\n")
     changed = run("OFF")
     assert len(changed) == 2
-    assert any(unit.endswith("/dispatch/low_latency.cpp") for unit in changed)
+    assert any(unit.endswith("/variants/bf16_g4.cpp") for unit in changed)
     assert "link" in changed
     (source / "csrc/kernels/combine/low_latency.cpp").write_text("// changed LL source\n")
     changed = run("OFF")
@@ -227,6 +235,13 @@ if "-o" in args:
     # The inactive timer variant must catch both edits when selected again.
     changed = run("ON")
     assert len(changed) == 3
-    assert sorted(Path(unit).parent.name for unit in changed if unit != "link") == ["combine", "dispatch"]
+    assert sorted(Path(unit).parent.name for unit in changed if unit != "link") == ["combine", "variants"]
     assert run("OFF") == ["link"]
     assert run("OFF") == []
+    variant_header.write_text("// changed shared dispatch variant dependency\n")
+    for timer in ("OFF", "ON"):
+        changed = run(timer)
+        assert len(changed) == 15
+        assert {Path(unit).relative_to(source / "csrc/kernels").as_posix()
+                for unit in changed if unit != "link"} == set(DISPATCH_VARIANTS)
+    assert run("ON") == []

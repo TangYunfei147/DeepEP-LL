@@ -38,6 +38,14 @@ add_library(deepep_kernel_common OBJECT
 set(_ll_sources
     "${DEEPEP_SOURCE_DIR}/csrc/kernels/dispatch/low_latency.cpp"
     "${DEEPEP_SOURCE_DIR}/csrc/kernels/combine/low_latency.cpp")
+# One dispatch mode/group per translation unit keeps each device compilation
+# bounded; all supported modes still enter the final production library.
+foreach(_mode prequant_e4m3 fp16 fp16_e4m3 fp16_e5m2 bf16 bf16_e4m3 bf16_e5m2)
+    foreach(_group 4 16)
+        list(APPEND _ll_sources
+            "${DEEPEP_SOURCE_DIR}/csrc/kernels/dispatch/low_latency/variants/${_mode}_g${_group}.cpp")
+    endforeach()
+endforeach()
 add_library(deepep_kernel_ll_plain OBJECT ${_ll_sources})
 add_library(deepep_kernel_ll_timer OBJECT ${_ll_sources})
 set_target_properties(deepep_kernel_ll_plain deepep_kernel_ll_timer PROPERTIES EXCLUDE_FROM_ALL TRUE)

@@ -15,3 +15,5 @@ NDR 固定编入 HNS_1825 能力，`python scripts/build_shmem.py` 默认构建�
 公共Runtime/Session保留MTE默认；由已确认LL用途的测试入口选择混合后端，不按缓冲容量猜用途。维护原则见[配置注意事项](tests/ll_stage_timer/CONFIGURATION_NOTES.md)。
 
 NDR wheel/kernel增量构建、timer对象复用与目标机计时步骤见[增量构建说明](docs/BUILD_INCREMENTAL.md)。
+
+NDR dispatch已拆为14个独立特化入口以缩短首次编译，保持全部类型/G和单次启动；内部launch符号v2需整套wheel更新。profiler名称与冷构建实测见[首次编译说明](docs/BUILD_COLD.md)。

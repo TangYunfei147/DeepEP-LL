@@ -11,6 +11,7 @@
 #include "../kernels/dispatch/low_latency/common/ll_rdma_layout.h"
 #include "../kernels/dispatch/low_latency/common/ll_stage_timer_layout.h"
 #include "../kernels/dispatch/low_latency/common/ll_expert_timer_layout.h"
+#include "../kernels/dispatch/low_latency/common/ll_dispatch_variant.h"
 #include "host/mem/shmem_host_heap.h"
 #include "host/data_plane/shmem_host_rma.h"
 #include "host/data_plane/shmem_host_p2p_sync.h"
@@ -117,6 +118,30 @@ uint8_t dtype_code(const std::string& dtype)
     if (dtype == "float8_e4m3fn") return DispatchDedup::DISPATCH_DEDUP_DATA_TYPE_FP8E4M3;
     throw std::invalid_argument("LL dispatch supports BF16/FP16 or packed FP8 E4M3FN");
 }
+static_assert(DispatchDedup::kLlDispatchFp16 == DispatchDedup::DISPATCH_DEDUP_DATA_TYPE_FP16 &&
+              DispatchDedup::kLlDispatchBf16 == DispatchDedup::DISPATCH_DEDUP_DATA_TYPE_BFP16 &&
+              DispatchDedup::kLlDispatchE4M3 == DispatchDedup::DISPATCH_DEDUP_DATA_TYPE_FP8E4M3 &&
+              DispatchDedup::kLlDispatchE5M2 == DispatchDedup::DISPATCH_DEDUP_DATA_TYPE_FP8E5M2,
+              "LL dispatch variant dtype values must match tiling");
+static_assert(DispatchDedup::kLlDispatchPlain16 == uint8_t(DispatchDedup::EpServerDedupInputMode::Plain16) &&
+              DispatchDedup::kLlDispatchQuantize16 == uint8_t(DispatchDedup::EpServerDedupInputMode::Quantize16) &&
+              DispatchDedup::kLlDispatchPrequantized == uint8_t(DispatchDedup::EpServerDedupInputMode::PrequantizedFp8Packs),
+              "LL dispatch variant input mode values must match tiling");
+
+// Both device tiling construction and Host launch selection use these fields.
+// Selection needs no device readback and does not synchronize the stream.
+DispatchDedup::EpServerDedupTilingData dispatch_format_tiling(int world, const std::string& dtype)
+{
+    DispatchDedup::EpServerDedupTilingData data{};
+    const bool fp8 = dtype == "float8_e4m3fn";
+    data.tilingKey = DispatchDedup::LlTilingKeyForWorld(world);
+    data.dtype = dtype_code(dtype);
+    data.quantMode = fp8 ? 4 : 0;
+    data.inputMode = static_cast<uint8_t>(fp8 ? DispatchDedup::EpServerDedupInputMode::PrequantizedFp8Packs
+                                            : DispatchDedup::EpServerDedupInputMode::Plain16);
+    data.expandXOutDtype = data.dtype;
+    return data;
+}
 }  // namespace
 
 void bind_low_latency(py::module_& module)
@@ -215,19 +240,13 @@ void bind_low_latency(py::module_& module)
                                                  int num_max_tokens_per_rank) {
         const bool fp8 = dtype == "float8_e4m3fn";
         layout(p, b, h, k, e, fp8);
-        DispatchDedup::EpServerDedupTilingData data{};
-        data.tilingKey = DispatchDedup::LlTilingKeyForWorld(p);
+        auto data = dispatch_format_tiling(p, dtype);
         data.bs = b;
         data.h = h;
         data.numMaxTokensPerRank = num_max_tokens_per_rank;
         data.topK = k;
         data.moeExpertNum = e;
         data.expertTokenNumsType = 1;
-        data.dtype = dtype_code(dtype);
-        data.quantMode = fp8 ? 4 : 0;
-        data.inputMode = static_cast<uint8_t>(fp8 ? DispatchDedup::EpServerDedupInputMode::PrequantizedFp8Packs
-                                                  : DispatchDedup::EpServerDedupInputMode::Plain16);
-        data.expandXOutDtype = data.dtype;
         return bytes(data);
     });
     module.def("low_latency_combine_tiling",
@@ -252,6 +271,11 @@ void bind_low_latency(py::module_& module)
         dtype_code(dtype);
         const bool fp8 = dtype == "float8_e4m3fn";
         const auto plan = layout(session.world(), b, h, k, e, fp8);
+        const auto format = dispatch_format_tiling(session.world(), dtype);
+        const uint32_t variant = DispatchDedup::LlDispatchVariantForTiling(
+            format.dtype, format.quantMode, format.expandXOutDtype, format.inputMode, format.tilingKey);
+        if (variant == DispatchDedup::kLlDispatchInvalidVariant)
+            throw std::invalid_argument("Unsupported LL dispatch specialization");
         const int64_t c = plan.capacityRows;
         if (!stream_address || rows < c || session.capacity() != DispatchDedup::kEpServerDedupPeerBytes) {
             throw std::invalid_argument("Invalid LL output capacity, workspace or stream");
@@ -288,7 +312,7 @@ void bind_low_latency(py::module_& module)
         session.workspace();  // Validate the owning context before launch.
         py::gil_scoped_release release;
         session.invalidate_dispatch_controls();
-        dispatch_server_dedup_kernel_do(reinterpret_cast<void*>(stream_address), &args);
+        dispatch_server_dedup_kernel_do_v2(reinterpret_cast<void*>(stream_address), &args, variant);
     });
     module.def("combine_low_latency", [](Session& session, py::dict tensors, int b, int h, int k, int e,
                                          const std::string& dtype, uintptr_t stream_address) {

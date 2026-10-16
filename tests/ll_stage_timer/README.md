@@ -397,3 +397,5 @@ send_input_gm_to_ub、send_input_wait、send_tail、send_lane_wait、send_issue�
 
 ## 跨kernel分支的统一实验
 共同入口、构建和比较步骤见[PARITY.md](PARITY.md)。泛化分支默认G16与NDR的G4可直接作为变量对比，不强制一致；结果记录两边实际G。
+
+NDR dispatch已拆为14个独立特化入口以缩短首次编译，保持全部类型/G和单次启动；内部launch符号v2需整套wheel更新。profiler名称与冷构建实测见[首次编译说明](../../docs/BUILD_COLD.md)。

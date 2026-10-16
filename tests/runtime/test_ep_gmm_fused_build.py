@@ -34,7 +34,8 @@ def test_source_metadata_location_follows_component_flag(tmp_path, monkeypatch, 
         monkeypatch.delenv("DEEPEP_BUILD_EP_GMM_FUSED", raising=False)
     else:
         monkeypatch.setenv("DEEPEP_BUILD_EP_GMM_FUSED", ep_gmm_fused)
-    for name in ("setup.py", "build_support.py", "VERSION"):
+    for name in ("setup.py", "build_support.py", "VERSION", "scripts/shmem_sdk_identity.py"):
+        (tmp_path / name).parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(ROOT / name, tmp_path / name)
     packages = ["deep_ep"]
     if ep_gmm_fused == "ON":
@@ -219,7 +220,8 @@ def test_build_directories_preserve_core_defaults_and_explicit_paths(build, monk
 
 @pytest.fixture
 def packaging_source(tmp_path):
-    for name in ("setup.py", "build_support.py", "VERSION", "pyproject.toml"):
+    for name in ("setup.py", "build_support.py", "VERSION", "pyproject.toml", "scripts/shmem_sdk_identity.py"):
+        (tmp_path / name).parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(ROOT / name, tmp_path / name)
     for directory in ("deep_ep", "experiments/ep_gmm_fused/python"):
         shutil.copytree(ROOT / directory, tmp_path / directory, ignore=shutil.ignore_patterns("__pycache__"))

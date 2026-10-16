@@ -68,6 +68,61 @@ def test_kernel_csv_contract(tmp_path):
         st.kernel_durations(tmp_path, "combine_server_dedup_kernel", 1)
 
 
+@pytest.mark.parametrize("entry", ["dispatch_server_dedup_kernel"] + [
+    f"dispatch_server_dedup_kernel_{mode}_g{group}"
+    for mode in ("prequant_e4m3", "fp16", "fp16_e4m3", "fp16_e5m2",
+                 "bf16", "bf16_e4m3", "bf16_e5m2")
+    for group in (4, 16)
+])
+def test_dispatch_profiler_entries_and_stable_tail(tmp_path, entry):
+    # Reverse CSV order to check timestamp ordering before last-50 selection.
+    rows = [f"void {entry}(),{i},{i}" for i in range(100, 0, -1)]
+    rows += [f"{name},999,0" for name in (
+        "dispatch_server_dedup_kernel_bf16_g8",
+        "dispatch_server_dedup_kernel_unknown_g4",
+        "dispatch_server_dedup_kernel_bf16_g4_suffix",
+        "dispatch_server_dedup_kernel_suffix",
+        "prefix_dispatch_server_dedup_kernel_bf16_g4",
+        "combine_server_dedup_kernel",
+        "HcomAllReduce",
+    )]
+    (tmp_path / "kernel_details.csv").write_text(
+        "Name,Duration(us),Start Time(us)\n" + "\n".join(rows))
+    samples = st.kernel_durations(tmp_path, "dispatch_server_dedup_kernel", 100)
+    assert samples == list(range(1, 101))
+    result = st.summarize_kernel([samples], "dispatch_server_dedup_kernel", 50)
+    assert result["ranks"][0]["samples"] == 50
+    assert result["ranks"][0]["mean_us"] == 75.5
+    with pytest.raises(ValueError, match="expected 101"):
+        st.kernel_durations(tmp_path, "dispatch_server_dedup_kernel", 101)
+
+
+@pytest.mark.parametrize("second", [
+    "dispatch_server_dedup_kernel",  # Old and new wheel traces cannot mix.
+    "dispatch_server_dedup_kernel_bf16_g16",
+    "dispatch_server_dedup_kernel_fp16_g4",
+])
+def test_dispatch_profiler_rejects_mixed_entries_across_exports(tmp_path, second):
+    for directory, name in (("a", "dispatch_server_dedup_kernel_bf16_g4"), ("b", second)):
+        export = tmp_path / directory
+        export.mkdir()
+        (export / "kernel_details.csv").write_text(f"Name,Duration(us)\n{name},2\n")
+    with pytest.raises(ValueError, match="Mixed dispatch profiler entries"):
+        st.kernel_durations(tmp_path, "dispatch_server_dedup_kernel", 2)
+
+
+@pytest.mark.parametrize("second", [
+    "dispatch_server_dedup_kernel_bf16_g4 [task=2]",
+    "void dispatch_server_dedup_kernel_bf16_g4()",
+])
+def test_dispatch_profiler_rejects_different_task_names(tmp_path, second):
+    (tmp_path / "kernel_details.csv").write_text(
+        "Name,Duration(us)\ndispatch_server_dedup_kernel_bf16_g4,2\n"
+        f"{second},3\n")
+    with pytest.raises(ValueError, match="Mixed dispatch profiler task names"):
+        st.kernel_durations(tmp_path, "dispatch_server_dedup_kernel", 2)
+
+
 def test_tail_stats_and_reports(tmp_path):
     import json
     import csv
