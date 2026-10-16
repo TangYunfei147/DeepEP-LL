@@ -8,6 +8,8 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 include("${CMAKE_CURRENT_LIST_DIR}/../Dependencies.cmake")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${SHMEM_ROOT}/deepep-sdk.json")
 set(_sdk_include "${ASCEND_HOME_PATH}/include")
 set(_arch_include "${ASCEND_HOME_PATH}/${CMAKE_SYSTEM_PROCESSOR}-linux/include")
 set(_tikcpp "${ASCEND_HOME_PATH}/compiler/tikcpp")
@@ -25,35 +27,54 @@ find_path(DEVICE_RT_INCLUDE rt.h HINTS
     "${ASCEND_HOME_PATH}/${CMAKE_SYSTEM_PROCESSOR}-linux/pkg_inc/runtime"
     "${ASCEND_HOME_PATH}/${CMAKE_SYSTEM_PROCESSOR}-linux/runtime/include"
     NO_DEFAULT_PATH)
-add_library(deepep_kernels SHARED "${DEEPEP_SOURCE_DIR}/csrc/kernels/notify/notify.cpp"
+# Share HT objects and retain both LL diagnostic variants. Only the selected
+# variant is built, so repeated timer switches reuse dependency-tracked objects.
+add_library(deepep_kernel_common OBJECT
+    "${DEEPEP_SOURCE_DIR}/csrc/kernels/notify/notify.cpp"
     "${DEEPEP_SOURCE_DIR}/csrc/kernels/dispatch/dispatch.cpp"
     "${DEEPEP_SOURCE_DIR}/csrc/kernels/combine/combine.cpp"
     "${DEEPEP_SOURCE_DIR}/csrc/kernels/combine/reuse.cpp"
-    "${DEEPEP_SOURCE_DIR}/csrc/kernels/combine/combine_ep8_mte.cpp"
+    "${DEEPEP_SOURCE_DIR}/csrc/kernels/combine/combine_ep8_mte.cpp")
+set(_ll_sources
     "${DEEPEP_SOURCE_DIR}/csrc/kernels/dispatch/low_latency.cpp"
     "${DEEPEP_SOURCE_DIR}/csrc/kernels/combine/low_latency.cpp")
-target_compile_options(deepep_kernels PRIVATE "$<$<NOT:$<CONFIG:Debug>>:-O2>" -xasc --npu-arch=dav-3510
+add_library(deepep_kernel_ll_plain OBJECT ${_ll_sources})
+add_library(deepep_kernel_ll_timer OBJECT ${_ll_sources})
+set_target_properties(deepep_kernel_ll_plain deepep_kernel_ll_timer PROPERTIES EXCLUDE_FROM_ALL TRUE)
+target_compile_definitions(deepep_kernel_ll_timer PRIVATE DEEPEP_LL_STAGE_TIMER=1)
+if(DEEPEP_LL_STAGE_TIMER)
+    set(_ll_variant deepep_kernel_ll_timer)
+else()
+    set(_ll_variant deepep_kernel_ll_plain)
+endif()
+add_library(deepep_kernels SHARED
+    $<TARGET_OBJECTS:deepep_kernel_common> $<TARGET_OBJECTS:${_ll_variant}>)
+
+add_library(deepep_kernel_options INTERFACE)
+target_compile_options(deepep_kernel_options INTERFACE "$<$<NOT:$<CONFIG:Debug>>:-O2>" -xasc --npu-arch=dav-3510
     --cce-auto-infer-kernel-type=false
     "-ffile-prefix-map=${DEEPEP_SOURCE_DIR}=."
     "-ffile-prefix-map=${ASCEND_HOME_PATH}=CANN_SDK"
     "-ffile-prefix-map=${SHMEM_ROOT}=SHMEM_SDK")
-target_compile_definitions(deepep_kernels PRIVATE CATLASS_ARCH=3510 USE_SIMT L2_CACHE_HINT)
-target_compile_definitions(deepep_kernels PRIVATE DEEPEP_LL_RDMA=1 ACLSHMEMI_RDMA_K_BACKEND_HNS_1825=1)
-if(DEEPEP_LL_STAGE_TIMER)
-    target_compile_definitions(deepep_kernels PRIVATE DEEPEP_LL_STAGE_TIMER=1)
-endif()
-target_include_directories(deepep_kernels PRIVATE
+# Preserve the original SHARED target's automatically added export definition.
+target_compile_definitions(deepep_kernel_options INTERFACE CATLASS_ARCH=3510 USE_SIMT L2_CACHE_HINT
+    DEEPEP_LL_RDMA=1 ACLSHMEMI_RDMA_K_BACKEND_HNS_1825=1 deepep_kernels_EXPORTS)
+target_include_directories(deepep_kernel_options INTERFACE
     "${_sdk_include}" "${_arch_include}"
     "${_tikcpp}" "${_tikcpp}/tikcfw"
     "${_tikcpp}/tikcfw/impl" "${_tikcpp}/tikcfw/interface"
     "${SHMEM_ROOT}/include" "${SHMEM_ROOT}/src" "${SHMEM_ROOT}/src/device"
     "${SHMEM_ROOT}/src/device_simt")
 if(DEVICE_RT_INCLUDE)
-    target_include_directories(deepep_kernels PRIVATE "${DEVICE_RT_INCLUDE}")
+    target_include_directories(deepep_kernel_options INTERFACE "${DEVICE_RT_INCLUDE}")
     message(STATUS "Device runtime compatibility headers: ${DEVICE_RT_INCLUDE}")
 else()
     message(STATUS "No standalone rt.h found; using the selected CANN -xasc toolchain headers")
 endif()
+foreach(_objects deepep_kernel_common deepep_kernel_ll_plain deepep_kernel_ll_timer)
+    target_link_libraries(${_objects} PRIVATE deepep_kernel_options)
+endforeach()
+
 target_link_options(deepep_kernels PRIVATE --cce-fatobj-link -Wl,-z,relro,-z,now,-z,noexecstack)
 target_link_libraries(deepep_kernels PRIVATE ascend_runtime ascendcl shmem ${CMAKE_DL_LIBS})
 set_target_properties(deepep_kernels PROPERTIES BUILD_WITH_INSTALL_RPATH TRUE

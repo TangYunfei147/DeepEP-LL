@@ -13,3 +13,5 @@ NDR 固定编入 HNS_1825 能力，`python scripts/build_shmem.py` 默认构建�
 完整步骤：[混合通信指南](tests/ll_rdma/README.md)；[协议审计](tests/ll_rdma/AUDIT.md)；[阶段打点](tests/ll_stage_timer/README.md)。
 
 公共Runtime/Session保留MTE默认；由已确认LL用途的测试入口选择混合后端，不按缓冲容量猜用途。维护原则见[配置注意事项](tests/ll_stage_timer/CONFIGURATION_NOTES.md)。
+
+NDR wheel/kernel增量构建、timer对象复用与目标机计时步骤见[增量构建说明](docs/BUILD_INCREMENTAL.md)。

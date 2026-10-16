@@ -85,3 +85,5 @@ normal 全 rank 通过后，将 `--route normal` 改为 `--route hotspot` 再执
 回传所有主机的 Git SHA、SDK manifest、构建开关/ABI、G/key、实际 AIV、物理 rank 分布、环境前检、原语日志、完整 LL cases/summary/progress/loaded-library hashes、原始 profiler task/trace/样本及实际命令。A5 结果只说明可运行性；跨机 RDMA 写、完整 LL 和性能仍由目标机验收。
 
 公共Runtime/Session保留MTE默认；由已确认LL用途的测试入口选择混合后端，不按缓冲容量猜用途。维护原则见[配置注意事项](../ll_stage_timer/CONFIGURATION_NOTES.md)。
+
+NDR wheel/kernel增量构建、timer对象复用与目标机计时步骤见[增量构建说明](../../docs/BUILD_INCREMENTAL.md)。

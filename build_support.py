@@ -12,6 +12,7 @@ import shutil
 import subprocess
 import sys
 import sysconfig
+import time
 import warnings
 
 from setuptools.command.build_ext import build_ext
@@ -162,9 +163,38 @@ def validate_shmem_sdk(root, expected):
 
 def build_cache_key(configuration):
     """Keep object files across source edits; isolate incompatible toolchains."""
-    identity = {key: value for key, value in configuration.items() if key not in {"source_sha256", "source_version"}}
+    # CMake retains separate timer/plain LL objects in the same native tree.
+    # Selecting diagnostics must not discard unrelated native objects.
+    identity = {key: value for key, value in configuration.items()
+                if key not in {"source_sha256", "source_version", "ll_stage_timer"}}
     identity["source_root"] = str(ROOT.resolve())
     return hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()[:16]
+
+
+def configure_identity(directory, arguments):
+    """Match explicit settings and detect manual cache edits, not source edits.
+
+    CMake's generated build graph remains responsible for source, header and
+    CMake input dependencies. It is entered even when explicit configure skips.
+    """
+    hashes = {}
+    for relative in (".", "device"):
+        tree = directory / relative
+        cache = tree / "CMakeCache.txt"
+        if not cache.is_file() or not any((tree / name).is_file() for name in ("build.ninja", "Makefile")):
+            return None
+        hashes[relative] = hashlib.sha256(cache.read_bytes()).hexdigest()
+    return {"arguments": [str(arg) for arg in arguments], "cache_sha256": hashes}
+
+
+def configuration_matches(directory, arguments):
+    expected = configure_identity(directory, arguments)
+    if expected is None:
+        return False
+    try:
+        return json.loads((directory / ".deepep-configure.json").read_text(encoding="utf-8")) == expected
+    except (OSError, ValueError):
+        return False
 
 
 def find_host_compiler(env):
@@ -389,7 +419,9 @@ class CMakeBuild(build_ext):
     def build_extension(self, ext):
         import pybind11
 
+        started = time.perf_counter()
         configuration = build_configuration()
+        seconds = {"preflight": time.perf_counter() - started}
         megamoe = configuration.get("megamoe", {})
         ep_gmm_fused = configuration.get("ep_gmm_fused", {}).get("enabled", False)
         fingerprint = build_cache_key(configuration)
@@ -429,9 +461,23 @@ class CMakeBuild(build_ext):
                     *(f"-D{name}={value}" for name, value in configuration["ep_gmm_fused_paths"].items()),
                 ]
             )
-        checked_run(arguments)
+        configure_skipped = configuration_matches(directory, arguments)
+        stamp = directory / ".deepep-configure.json"
+        # A failed configure/build must not leave an apparently valid new stamp.
+        stamp.unlink(missing_ok=True)
+        phase = time.perf_counter()
+        if not configure_skipped:
+            checked_run(arguments)
+        seconds["configure"] = time.perf_counter() - phase
+        phase = time.perf_counter()
         checked_run([cmake, "--build", directory, "--parallel", jobs])
+        seconds["build"] = time.perf_counter() - phase
+        phase = time.perf_counter()
         checked_run([cmake, "--install", directory])
+        seconds["install"] = time.perf_counter() - phase
+        identity = configure_identity(directory, arguments)
+        if identity is not None:
+            stamp.write_text(json.dumps(identity, indent=2) + "\n", encoding="utf-8")
         # A reused setuptools build_lib may still contain the former library.
         (destination / "libdeepep_notify.so").unlink(missing_ok=True)
         # Elastic implementation/layout modules now live under buffers/.
@@ -475,3 +521,14 @@ class CMakeBuild(build_ext):
             (component / "_build_info.json").write_text(
                 json.dumps(component_info, indent=2, sort_keys=True) + "\n", encoding="utf-8"
             )
+        seconds["total"] = time.perf_counter() - started
+        report = directory / "build-timing.json"
+        timing = {"cache_key": fingerprint, "configure_skipped": configure_skipped,
+                  "ll_stage_timer": configuration.get("ll_stage_timer", False),
+                  "source_sha256": configuration["source_sha256"], "jobs": int(jobs),
+                  "completed_unix_ns": time.time_ns(), "seconds": seconds}
+        report.write_text(json.dumps(timing, indent=2) + "\n", encoding="utf-8")
+        with (directory / "build-timings.jsonl").open("a", encoding="utf-8") as history:
+            history.write(json.dumps(timing, sort_keys=True) + "\n")
+        print(f"Native build: configure {'reused' if configure_skipped else 'run'}, "
+              f"build {seconds['build']:.3f}s, install {seconds['install']:.3f}s; report: {report}", flush=True)

@@ -73,7 +73,7 @@ def test_beta_requires_sdk_and_timer_requires_beta(build):
         "missing_device_header",
     ],
 )
-def test_sdk_identity_warning(build, monkeypatch, tmp_path, fault):
+def test_ndr_sdk_identity_is_required(build, monkeypatch, tmp_path, fault):
     import hashlib
     import warnings
     from types import SimpleNamespace
@@ -105,6 +105,7 @@ def test_sdk_identity_warning(build, monkeypatch, tmp_path, fault):
     monkeypatch.setitem(sys.modules, "pybind11", SimpleNamespace(__version__=lock["python_build"]["pybind11"]))
     identity = {
         "revision": lock["shmem"]["revision"],
+        "build": {"rdma_backend": "HNS_1825", "rdma_patch": "deepep-roce-72-v1"},
         "sha256": {
             str(path.relative_to(sdk).as_posix()): hashlib.sha256(path.read_bytes()).hexdigest()
             for path in files
@@ -135,18 +136,32 @@ def test_sdk_identity_warning(build, monkeypatch, tmp_path, fault):
     }
     with warnings.catch_warnings(record=True) as messages:
         warnings.simplefilter("always")
-        if fault in ("missing_library", "missing_device_header"):
-            with pytest.raises(RuntimeError, match="missing"):
+        if fault is not None:
+            errors = {
+                "missing": (RuntimeError, "no deepep-sdk.json"),
+                "json": (ValueError, "Expecting value"),
+                "list": (ValueError, "Invalid SHMEM SDK manifest"),
+                "revision": (RuntimeError, "source revision differs"),
+                "header": (RuntimeError, "public API differs"),
+                "checksum": (RuntimeError, "checksum mismatch"),
+                "coverage": (RuntimeError, "must cover headers"),
+                "path": (RuntimeError, "Invalid SHMEM SDK manifest path"),
+                "missing_library": (RuntimeError, "Invalid SHMEM SDK manifest path"),
+                "missing_device_header": (RuntimeError, "missing"),
+            }
+            error, match = errors[fault]
+            with pytest.raises(error, match=match):
                 build.build_configuration(env)
+            assert not messages
             return
         result = build.build_configuration(env)
-    assert bool(messages) == (fault is not None)
-    assert all("continuing with SHMEM_ROOT=" in str(message.message) for message in messages)
+    assert not messages
+    assert result["ll_rdma"] is True
     assert (
         result["shmem"]["sha256"]["lib/libshmem.so"]
         == hashlib.sha256((sdk / "lib/libshmem.so").read_bytes()).hexdigest()
     )
-    assert result["shmem"]["revision"] == ("unknown" if fault in ("missing", "json", "list") else identity["revision"])
+    assert result["shmem"]["revision"] == identity["revision"]
     assert manifest.exists() == (fault != "missing")
     before = build.build_cache_key(result)
     result["shmem"]["sha256"]["lib/libshmem.so"] = "0" * 64
@@ -403,8 +418,9 @@ def test_compiler_symlink_keeps_invocation_name(build, monkeypatch, tmp_path):
     monkeypatch.setattr(build, "ROOT", source)
     manifest = {
         "revision": lock["shmem"]["revision"],
+        "build": {"rdma_backend": "HNS_1825", "rdma_patch": "deepep-roce-72-v1"},
         "sha256": {
-            str(path.relative_to(sdk)): hashlib.sha256(data.encode()).hexdigest()
+            path.relative_to(sdk).as_posix(): hashlib.sha256(data.encode()).hexdigest()
             for path, data in files.items()
             if path.is_relative_to(sdk)
         },
