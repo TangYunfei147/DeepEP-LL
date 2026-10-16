@@ -131,9 +131,41 @@ def test_multiple_shapes_cli_documents_and_index(tmp_path):
         destination=output/f'case_{number:05d}'/'normal'/'ll_stage_timer'
         document=(destination/'bottleneck_summary.md').read_text(encoding='utf-8')
         assert str(hidden) in document
+        assert 'recv_consume专项' in document and 'recv_load_wait' in document
+        assert (destination/'recv_core_samples.csv').is_file()
         assert json.loads((destination/'summary.json').read_text())['configurations']['dispatch']['hidden']==hidden
     before=(output/'REPORT_INDEX.md').read_bytes()
     rejected=subprocess.run([sys.executable,str(ROOT/'tests/ll_stage_timer/analyze.py'),str(parent),
                              '--output-dir',str(output)],cwd=tmp_path,capture_output=True,text=True)
     assert rejected.returncode and 'already exists' in rejected.stderr
     assert (output/'REPORT_INDEX.md').read_bytes()==before
+
+
+def test_receiver_includes_noncritical_and_unobserved_cores():
+    sample=saved()
+    words=[value for row in sample['raw'][12] for value in row]
+    offset=8+(analyzer.timer.STAGES.index('recv_consume')-1)*4
+    words[offset:offset+4]=[120005,120705,700,2]
+    sample['raw'][12]=[words[n:n+8] for n in range(0,256,8)]
+    report=analyzer.timer.parse_records(sample['raw'],'dispatch',1e9)
+    rows=analyzer.receiver_samples(report,sample['metadata'])
+    assert {row['core'] for row in rows}==set(range(8,16))
+    assert next(row for row in rows if row['core']==12 and row['stage']=='recv_consume')['per_call']==pytest.approx(.35)
+    absent=next(row for row in rows if row['core']==13 and row['stage']=='recv_consume')
+    assert absent['present'] is False and absent['duration'] is None
+    assert sum(row['forward_bytes'] or 0 for row in rows)==8*3584  # no repeated count per stage
+
+
+def test_receiver_call_weighting_missing_and_legacy_counts():
+    all_rows=[]
+    for iteration,(duration,calls) in enumerate(((10,2),(90,3),(None,None))):
+        report=dict(operation='dispatch',active_aiv=16,frequency_hz=1e6,traffic_available=False,traffic=None,
+                    records=[] if duration is None else [dict(core=8,stage='recv_consume',first_tick=0,last_tick=100,
+                                                              total_ticks=duration,calls=calls)])
+        all_rows.extend(analyzer.receiver_samples(report,dict(rank=0,iteration=iteration)))
+    entry=next(row for row in analyzer.receiver_summary(all_rows) if row['core']==8 and row['stage']=='recv_consume')
+    assert entry['samples']==3 and entry['observed_samples']==2
+    assert entry['per_call']['mean']==17.5  # (10/2+90/3)/2
+    assert entry['weighted_per_call']==20  # (10+90)/(2+3), separate metric
+    assert entry['forward_bytes'] is None
+    assert analyzer.receiver_samples(dict(operation='combine'),{})==[]

@@ -28,6 +28,16 @@ python tests/ll_stage_timer/analyze.py "results/$CASE_NAME/qwe" \
 
 observe MTE下发区间不等于传输完成，drain会改变重叠与等待位置。没有逐peer/逐包数据和物理拓扑，无法仅凭低带宽或高recv_wait证明多对一拥塞。非标准跳过通信数据不生成正常通信瓶颈提示；无频率保留ticks。总结不混用profiler task、Event、API时间，性能收益仍需timer OFF验证。
 
+### recv_consume专项展开
+
+`bottleneck_summary.md`自动展示最慢3个dispatch rank的**全部接收核**：consume累计时间、消费批次数、每次成本、每核跨卡转发字节/次数，并逐核完整列出recv_lane_wait、recv_gm_to_ub、recv_load_wait、recv_metadata、recv_output_wait、recv_output_write、recv_forward及准备/等待/清理阶段；不受原最长核/前8阶段筛选限制。
+
+新增`recv_core_samples.csv`覆盖**全部rank、全部接收核、每轮、每阶段**，包括`present/duration/calls/per_call/consume_fraction`。无记录为不可用，不补0。每核每轮的跨卡转发计数只附在recv_consume行，避免按阶段重复计数；schema1/2无计数，本卡移交不混入跨卡转发。
+
+`summary.json.receiver_summary`提供对应逐核汇总。`per_call.mean`先逐轮除calls再平均；`weighted_per_call`是总时间/总calls，两种权重分别保留。consume.calls是消费批次，forward.calls是转发区间，output_write可能每包多次，均不能当成通用包数。
+
+子阶段占比使用同核同轮累计时间，外层包络必须包含子阶段才给出比例；这不能证明逐次区间可相加。现有首尾包络和累计值不能恢复完整并集，因此不计算“consume减子阶段之和”，也不把差额归为固定开销。比较转发量/批次数及每次成本用于定位，不等于证明链路或流水瓶颈。无需重采，Git更新后对原raw使用新的output-dir重新分析即可。
+
 ## 从克隆仓库到执行
 
 以下步骤在**用户目标机**执行。每台参与节点都需准备同一分支、同一提交和匹配wheel；单机EP16，两机EP32，每机16个连续rank。原生LL不支持EP2/4/8。
