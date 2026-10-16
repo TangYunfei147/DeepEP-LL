@@ -73,27 +73,13 @@ def prepare(root=ROOT, *, rebuild=False, if_needed=True, allow_local_changes=Fal
     revision = git("rev-parse", "HEAD")
     if revision != lock["shmem"]["revision"]:
         raise RuntimeError("SHMEM revision differs from dependencies.lock.json; do not build a moving branch")
-    from shmem_rdma_patch import prepare as prepare_rdma_patch, PATCH_ID
     patches = source_patches(source)
-    managed_only = not patches
-    if patches:
-        try:
-            managed_only = prepare_rdma_patch(source, apply=False)
-        except RuntimeError:
-            if rdma_backend:
-                raise  # Cannot apply the managed RDMA delta over conflicting edits.
-            # Default builds retain their existing --allow-local-changes contract.
-    if patches and not allow_local_changes and not managed_only:
-        raise RuntimeError(
-            "SHMEM has local changes; pass --allow-local-changes to build them explicitly "
-            "(cluster launcher: --allow-local-shmem)"
-        )
-    if rdma_backend:
-        prepare_rdma_patch(source, apply=True)
-        patches = source_patches(source)
+    if patches and not allow_local_changes:
+        raise RuntimeError("SHMEM has local changes; pass --allow-local-changes to build them explicitly "
+                           "(cluster launcher: --allow-local-shmem)")
 
     version = cann_version(lock["cann_version"])
-    rdma_build = {"rdma_backend": rdma_backend, "rdma_patch": PATCH_ID} if rdma_backend else {}
+    rdma_build = {"rdma_backend": rdma_backend} if rdma_backend else {}
     jobs = os.environ.get("CMAKE_BUILD_PARALLEL_LEVEL", "4")
     if not jobs.isdecimal() or not 1 <= int(jobs) <= 64:
         raise ValueError("CMAKE_BUILD_PARALLEL_LEVEL must be in [1, 64]")
@@ -181,7 +167,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--rebuild", action="store_true", help="Regenerate this submodule's build/install artifacts")
     parser.add_argument("--if-needed", action="store_true", help="Compatibility alias: verified SDK reuse is now the default")
-    parser.add_argument("--rdma-backend", choices=["HNS_1825"], default="HNS_1825", help="Compatibility option: NDR always builds HNS_1825 with the 72-QP host patch")
+    parser.add_argument("--rdma-backend", choices=["HNS_1825"], default="HNS_1825", help="Compatibility option: NDR always builds HNS_1825 with the native SDK QP limit")
     parser.add_argument(
         "--allow-local-changes",
         action="store_true",

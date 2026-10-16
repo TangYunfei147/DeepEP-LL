@@ -148,7 +148,7 @@ def test_real_device_rules_recompile_only_ll_when_timer_changes(tmp_path):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("fake SDK library")
     (sdk / "deepep-sdk.json").write_text(
-        '{"build":{"rdma_backend":"HNS_1825","rdma_patch":"deepep-roce-72-v1"}}')
+        '{"build":{"rdma_backend":"HNS_1825","cann_version":"test","cann_timestamp":"test","target":"Ascend950","source_patches":[]}}')
     shared_header = sdk / "shared.h"
     shared_header.write_text("// fake dependency used by LL dispatch\n")
     compiler = tmp_path / "fake_compiler.py"

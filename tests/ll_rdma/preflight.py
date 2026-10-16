@@ -44,7 +44,7 @@ def inspect(args):
     manifest = ROOT / "third-party/shmem/install/shmem/deepep-sdk.json"
     try:
         report["sdk"] = json.loads(manifest.read_text())["build"]
-        if report["sdk"].get("rdma_backend") != "HNS_1825" or report["sdk"].get("rdma_patch") != "deepep-roce-72-v1":
+        if report["sdk"].get("rdma_backend") != "HNS_1825":
             blocked.append("SDK was not built explicitly for HNS_1825")
     except (OSError, KeyError, ValueError) as exc:
         blocked.append(f"SDK identity unavailable: {exc}")

@@ -10,7 +10,6 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
 import build_support
 import build_shmem
-import shmem_rdma_patch
 
 
 @pytest.mark.parametrize("environment", [{}, {"DEEPEP_LL_RDMA": "ON"}, {"DEEPEP_LL_RDMA": "1"}])
@@ -41,12 +40,11 @@ def sdk_fixture(tmp_path, monkeypatch):
     manifest.parent.mkdir(parents=True)
     identity = {"revision": "pinned", "build": {
         "cann_version": "9.3.0", "cann_timestamp": "known", "target": "Ascend950",
-        "source_patches": [], "rdma_backend": "HNS_1825", "rdma_patch": shmem_rdma_patch.PATCH_ID}}
+        "source_patches": [], "rdma_backend": "HNS_1825"}}
     manifest.write_text(json.dumps(identity))
     monkeypatch.setattr(build_shmem.platform, "system", lambda: "Linux")
     monkeypatch.setattr(build_shmem, "source_patches", lambda _: [])
     monkeypatch.setattr(build_shmem, "cann_version", lambda _: {"Version": "9.3.0", "timestamp": "known"})
-    monkeypatch.setattr(shmem_rdma_patch, "prepare", lambda *a, **k: True)
     monkeypatch.setattr(build_shmem.subprocess, "check_output", lambda args, **kw:
                         str(source) if args[-1] == "--show-toplevel" else "pinned")
     monkeypatch.setattr(build_shmem.subprocess, "run", lambda *a, **kw: pytest.fail("must not rebuild"))
@@ -76,4 +74,19 @@ def test_corrupt_sdk_is_not_reused(tmp_path, monkeypatch):
         raise RuntimeError("SHMEM SDK checksum mismatch")
     monkeypatch.setattr(build_support, "validate_shmem_sdk", reject)
     with pytest.raises(RuntimeError, match="checksum mismatch"):
+        build_shmem.prepare(root)
+
+
+def test_unknown_build_option_is_not_reused(tmp_path, monkeypatch):
+    root, manifest, identity = sdk_fixture(tmp_path, monkeypatch)
+    identity["build"]["obsolete_source_transform"] = "retired"
+    manifest.write_text(json.dumps(identity))
+    with pytest.raises(RuntimeError, match="--rebuild"):
+        build_shmem.prepare(root)
+
+
+def test_source_edits_have_no_implicit_exemption(tmp_path, monkeypatch):
+    root, _, _ = sdk_fixture(tmp_path, monkeypatch)
+    monkeypatch.setattr(build_shmem, "source_patches", lambda _: [{"kind": "local-worktree", "sha256": "edited"}])
+    with pytest.raises(RuntimeError, match="--allow-local-changes"):
         build_shmem.prepare(root)

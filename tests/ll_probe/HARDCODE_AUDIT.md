@@ -5,7 +5,7 @@
 - **LL rank 准入**：在 2/4/8/16/32 目标集合中仅 16/32 可运行。两卡 RDMA smoke 是独立 primitive，不能降低 LL 准入条件。
 - **包协议**：480B body＋32B flags、512B 记录槽、原有 rank bias 1024B、8GiB 用户 workspace 与双窗口保留；这些不是网卡 MTU 或链路峰值。
 - **RDMA 暂存**：128KiB/实际核，512B 对齐，放在同一对称分配的原 guard 后；SDK UB scratch 至少 128B。额外暂存不能误计入公开 8GiB 数据布局。
-- **SDK QP policy**：锁定 SHMEM 的 ROCE 56 上限通过仓内可复现补丁扩至 72，UDMA 仍 56。动态数组审计不等于目标 provider 资源容量通过。
+- **SDK QP policy**：遵循锁定 SHMEM 原生每 peer 56 QP 上限，不再扩容。启用跨机 RDMA 时每实际 AIV 独占 QP，超限必须在初始化前报错，不截断、不共享、不减少启动核数；纯 MTE 的 LL 72 核控制容量保持不变。动态数组审计不等于目标 provider 资源容量通过。
 - **timeout**：RDMA 接收与 SDK Ascend950 CQ 使用 `60e9` 原始 cycle 界限；设备 timer 的微秒转换仍须显式计数器频率，不能把固定界限当作实测频率。
 - **ABI**：当前核心协议 4，CommArgs 保留尾部承载 RDMA workspace/staging/backend/QP；结构总大小未改，但旧 v2 wheel 不兼容。
 - **未验收的硬件前提**：HNS_1825 驱动/provider、NPU HBM 注册、PCIe/NIC 亲和性、RC 完成可见性、全域通道数量与多机连接。见 [协议审计](../ll_rdma/AUDIT.md)。

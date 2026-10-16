@@ -48,6 +48,6 @@ NIC 可写接收/控制/暂存视图保持 L2 bypass。机内读取不经 NIC，
 
 ## SDK 与验收边界
 
-SHMEM 仍锁定 `4dd80e2129da42bd773982c2bb3758af1ed0bba8`。统一 `build_shmem.py --rdma-backend HNS_1825` 保留 ROCE-only 三处 72-QP policy 补丁与指纹，UDMA 56 上限不改；不另建 SDK 树。普通 qp_put/qp_quiet 支持 HNS_1825，XSCALE aggregate 接口不使用。SDK 可能为机内 peer 也建立 ROCE 通道，但 kernel 机内数据不使用它们；资源容量仍需目标机验收。
+SHMEM 仍锁定 `4dd80e2129da42bd773982c2bb3758af1ed0bba8`。统一 `build_shmem.py` 构建 HNS_1825，使用锁定 SDK 原生每 peer 56 QP 限制（`include/host/shmem_host_def.h:34`），不应用或接受 QP 扩容修改，不另建 SDK 树。旧补丁 SDK 不可复用；保留产物，用户停止相关作业后显式 `--rebuild` 并重建全 rank wheel。普通 qp_put/qp_quiet 支持 HNS_1825，XSCALE aggregate 接口不使用。SDK 可能为机内 peer 也建立 ROCE 通道，但 kernel 机内数据不使用它们；资源容量仍需目标机验收。
 
 两 rank primitive 可显式描述同机两卡（每机 2 rank）或跨机各一卡（每机 1 rank），这是测试真实物理部署，不是伪造原生 LL rank 数。生产机界仍固定 16。A5 只允许前者、设备 0/1；跨机 RDMA 写、完整 LL EP16/32 和性能由用户在目标环境验收。

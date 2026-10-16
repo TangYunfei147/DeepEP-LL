@@ -5,6 +5,7 @@
 #include "host/data_plane/shmem_host_rma.h"
 #include "host/data_plane/shmem_host_p2p_sync.h"
 #include "kernels/dispatch/low_latency/common/ll_rdma_layout.h"
+#include "runtime/ll_rdma_qp_config.hpp"
 #include <cstring>
 #include <iostream>
 #include <stdexcept>
@@ -28,6 +29,7 @@ int main(int argc,char** argv) {
         int64_t available=0; Check(aclrtGetDeviceInfo(device,ACL_DEV_ATTR_VECTOR_CORE_NUM,&available),"AIV query");
         if(cores==0) cores=uint32_t(available);
         if(cores<16 || cores>72 || cores%2 || cores>uint32_t(available)) throw std::invalid_argument("cores must be even, 16..72, <=available");
+        deepep::validate_ll_rdma_qps(cores, ranksPerHost==1);
         if(ranksPerHost==1) Check(aclshmemx_set_qp_num(ACLSHMEM_DATA_OP_ROCE,cores),"ROCE QP configuration");
         constexpr uint64_t logical=8ULL<<20, guard=4096;
         const uint64_t needed=logical+guard+uint64_t(cores)*LlRdma::kCoreBytes;

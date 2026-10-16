@@ -6,12 +6,13 @@ set -u
 SDK="$LL_RDMA_ROOT/third-party/shmem/install/shmem"
 OUT="$LL_RDMA_ROOT/build/ll_rdma"
 mkdir -p "$OUT"
-python3 - "$SDK" <<'PY'
+python3 - "$SDK" "$LL_RDMA_ROOT" <<'PY'
 import json,sys
 from pathlib import Path
 m=json.loads((Path(sys.argv[1])/'deepep-sdk.json').read_text())
-assert m['build'].get('rdma_backend')=='HNS_1825', 'Build the explicit HNS_1825 SDK first'
-assert m['build'].get('rdma_patch')=='deepep-roce-72-v1', 'Build the SDK with the project ROCE QP policy patch'
+sys.path.insert(0, sys.argv[2])
+from scripts.shmem_sdk_identity import validate_build_identity
+validate_build_identity(m.get('build'), require_rdma=True)
 PY
 INC=(-I"$LL_RDMA_ROOT/csrc" -I"$ASCEND_HOME_PATH/asc/include" -I"$ASCEND_HOME_PATH/include"
      -I"$SDK/include" -I"$SDK/src" -I"$SDK/src/device")

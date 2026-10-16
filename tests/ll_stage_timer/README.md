@@ -237,7 +237,7 @@ timer缓冲在采样前分配，采集循环只执行前处理、LL调用及设�
 
 新流程修改了Python capture接口，所有节点须安装匹配版本wheel：更新Git后保持
 DEEPEP_LL_STAGE_TIMER=ON，执行既有pip重装命令。
-以上稳定尾段采样本身不改变SDK；当前专家诊断新增dispatch参数，须使用ABI5完整wheel，SDK配置不变时无需重建SHMEM。
+以上稳定尾段采样本身不改变SDK；当前专家诊断新增dispatch参数，须使用ABI5完整wheel，SDK配置不变且通过当前原生源码身份校验时无需重建SHMEM；旧QP扩容SDK必须在停止使用者后显式重建。
 默认单AIV轨道适用于自动trace、analyze.py及export_trace.py。更新Git后对已有raw sample重新分析即可，无需重新采集；核间起始偏移保持原样，不做逐核归零。
 
 ## dispatch细分阶段（timer schema 2）
@@ -276,7 +276,7 @@ drain会在每个子阶段Start/End继续加入PIPE_ALL，可能将后续等待�
 子阶段之和不保证等于父区间（还有边界和插桩开销）。重复区间仍只提供包络与累计值，
 不会伪造每次调用的时间点。详细插桩增加开销，正式基线保持timer OFF。
 
-目标机更新后沿用原SDK（本次未改变SDK），保持
+细分timer本身不改变SDK；仅通过当前原生源码身份校验的SDK可复用，旧QP扩容SDK须先停止使用者并显式重建。保持
 DEEPEP_LL_STAGE_TIMER=ON，重新完整构建安装wheel，然后使用原测试命令重新采集。
 分析仍只需一个analyze.py命令，CSV及trace自动包含新阶段。
 ## 可选接收侧专家统计（ABI 5，本地修改待设备验收）

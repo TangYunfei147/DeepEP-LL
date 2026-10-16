@@ -4,6 +4,8 @@
 
 # 本次验证记录（2026-10-15）
 
+> 2026-10-16：下述 ROCE 72-QP 补丁及其构建/复用特判已撤销，脚本已删除。这些记录仅保留当时事实，不代表当前构建流程或当前验证结论；旧补丁 SDK 不可继续复用。
+
 代码在独立 `DeepEP-LL-kernel` checkout 的 `kernel/ll-configurable-groups` 上实现，未替换原实验 checkout。基线 `cb59bff99ecd39d27ef57788c5e6fd0009e4e636`；SHMEM Git revision 保持 `4dd80e2129da42bd773982c2bb3758af1ed0bba8`，生成的 ROCE-only 72-QP 三处修改由 `scripts/shmem_rdma_patch.py` 复现。
 
 | 验证 | 结果与范围 |

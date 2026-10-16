@@ -20,4 +20,4 @@ A5 当前前检仍未枚举到 RDMA 设备（`.logs/hybrid-preflight.json`）；
 
 正式性能协议未修改：10次预热、100次采集、Exp＋scalar all_reduce、每kernel/task最后50条；timer诊断和原语不替代性能基线。没有匹配实测基线，不宣称加速。
 
-SHMEM 仍为锁定基线及已记录的 ROCE-only 72-QP 补丁；未另建SDK树、未升级驱动或系统依赖。生成 SDK 修改、wheel、原始日志和数据不提交。
+当时 SHMEM 为锁定基线及 ROCE-only 72-QP 补丁（该补丁于2026-10-16撤销，旧SDK不可复用；本段仅为历史事实）；未另建SDK树、未升级驱动或系统依赖。生成 SDK 修改、wheel、原始日志和数据不提交。

@@ -8,12 +8,17 @@ provider must attest that the library was built from the pinned commit.
 """
 
 import argparse
+try:
+    from scripts.shmem_sdk_identity import validate_build_identity
+except ModuleNotFoundError:
+    from shmem_sdk_identity import validate_build_identity
 import hashlib
 import json
 from pathlib import Path
 
 
 def record(sdk, revision, *, build_info=None):
+    validate_build_identity(build_info)
     sdk = Path(sdk).resolve()
     lock = json.loads((Path(__file__).resolve().parents[1] / "dependencies.lock.json").read_text())
     expected = lock["shmem"]
@@ -46,6 +51,7 @@ def check(sdk):
     lock = json.loads((Path(__file__).resolve().parents[1] / "dependencies.lock.json").read_text())["shmem"]
     manifest = sdk / "deepep-sdk.json"
     recorded = json.loads(manifest.read_text())
+    validate_build_identity(recorded.get("build"))
     if recorded.get("revision") != lock["revision"]:
         raise ValueError("SDK source revision must match dependencies.lock.json")
     for relative, expected in lock["header_sha256_lf"].items():
@@ -69,7 +75,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--sdk", required=True)
     mode = parser.add_mutually_exclusive_group(required=True)
-    mode.add_argument("--revision", help="SDK provider's source revision attestation")
+    mode.add_argument("--revision", help="SDK provider's source revision attestation (complete build_info is required; use build_shmem.py)")
     mode.add_argument("--check", action="store_true", help="verify an existing SDK identity without modifying it")
     args = parser.parse_args()
     print(check(args.sdk) if args.check else record(args.sdk, args.revision))

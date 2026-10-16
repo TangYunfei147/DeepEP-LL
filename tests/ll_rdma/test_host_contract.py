@@ -1,5 +1,4 @@
 from pathlib import Path
-import importlib.util
 import json
 import os
 import shutil
@@ -33,33 +32,6 @@ def test_no_ht_fallback(monkeypatch):
         buffer.dispatch(object())
     with pytest.raises(NotImplementedError, match="no HT/MTE fallback"):
         buffer.combine(object(), object())
-
-
-def test_qp_patch_is_idempotent_and_preserves_udma_and_user_edits(tmp_path):
-    spec = importlib.util.spec_from_file_location("qp_patch", ROOT / "scripts/shmem_rdma_patch.py")
-    patch = importlib.util.module_from_spec(spec); spec.loader.exec_module(patch)
-    source = tmp_path / "shmem"
-    source.mkdir()
-    subprocess.run(["git", "init", "-q", str(source)], check=True)
-    for relative, (old, _) in patch.REPLACEMENTS.items():
-        path = source / relative; path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(old + "\n// UDMA capacity stays ACLSHMEM_MAX_QP_NUM\n")
-    subprocess.run(["git", "-C", str(source), "add", "."], check=True)
-    subprocess.run(["git", "-C", str(source), "-c", "user.name=codex_remote", "-c", "user.email=799847028@qq.com",
-                    "commit", "-qm", "fixture"], check=True)
-    assert patch.prepare(source, apply=False)
-    assert not subprocess.check_output(["git", "-C", str(source), "diff"])
-    assert patch.prepare(source, apply=True)
-    before = subprocess.check_output(["git", "-C", str(source), "diff"])
-    assert patch.prepare(source, apply=True)
-    assert subprocess.check_output(["git", "-C", str(source), "diff"]) == before
-    path = source / next(iter(patch.REPLACEMENTS))
-    assert "UDMA capacity stays ACLSHMEM_MAX_QP_NUM" in path.read_text()
-    path.write_text(path.read_text() + "// user modification\n")
-    modified = subprocess.check_output(["git", "-C", str(source), "diff"])
-    with pytest.raises(RuntimeError, match="preserve user edits"):
-        patch.prepare(source, apply=True)
-    assert subprocess.check_output(["git", "-C", str(source), "diff"]) == modified
 
 
 def test_moved_checkout_plan_and_environment(tmp_path):
