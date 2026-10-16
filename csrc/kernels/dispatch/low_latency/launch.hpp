@@ -27,9 +27,10 @@ struct EpServerDedupKernelArgs {
     uint8_t* stageTimer;
     uint32_t timerMode;
     uint32_t coreNum;       // Queried pure-AIV launch size; must match Host layouts.
+    uint8_t* expertTimer;   // Optional diagnostics, launch ABI 5.
 };
 static_assert(std::is_standard_layout<EpServerDedupKernelArgs>::value, "launch arguments must be standard layout");
-static_assert(sizeof(EpServerDedupKernelArgs) == 144,
+static_assert(sizeof(EpServerDedupKernelArgs) == 152,
               "launch ABI includes timer pointer, timer mode and active core count");
 static_assert(offsetof(EpServerDedupKernelArgs, dynamicScalesOut) == 40, "quant scale address");
 static_assert(offsetof(EpServerDedupKernelArgs, tokenTypeOut) == 64, "token type address");
@@ -45,6 +46,7 @@ static_assert(offsetof(EpServerDedupKernelArgs, inputScales) == 120, "input pack
 static_assert(offsetof(EpServerDedupKernelArgs, stageTimer) == 128, "timer address");
 static_assert(offsetof(EpServerDedupKernelArgs, timerMode) == 136, "timer mode");
 static_assert(offsetof(EpServerDedupKernelArgs, coreNum) == 140, "active cores");
+static_assert(offsetof(EpServerDedupKernelArgs, expertTimer) == 144, "expert timer address");
 }  // namespace deepep
 
 extern "C" void dispatch_server_dedup_kernel_do(void* stream, const deepep::EpServerDedupKernelArgs* args);

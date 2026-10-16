@@ -4,7 +4,7 @@
 
 namespace LlStageTimer {
 // 默认编译关闭。observe不插入额外流水屏障；drain显式串行化边界，只用于诊断。
-// GM布局：[first_start,last_end,sum_ticks,count,active_start,active,0,0]。
+// Schema 2 GM阶段布局：[first_start,start_or_last_end,sum_ticks,count|active]。
 // 重复区间只累计同一核自己的记录；first..last包含间隙，不应作为有效阶段时间。
 class DeviceTimer {
 public:
@@ -32,10 +32,10 @@ public:
         if (!address_) return;
         if (mode_ == 2U) AscendC::PipeBarrier<PIPE_ALL>();
         const uint64_t cycle = AscendC::GetSystemCycle();
-        const uint32_t row = uint32_t(stage) * kFields;
+        const uint32_t row = 8U + (uint32_t(stage) - 1U) * 4U;
         if (data_(row + 3U) == 0U) data_(row) = cycle;
-        data_(row + 4U) = cycle;
-        data_(row + 5U) = 1U;
+        data_(row + 1U) = cycle;
+        data_(row + 3U) = data_(row + 3U) | kActive;
 #endif
     }
     __aicore__ inline void End(Stage stage)
@@ -44,12 +44,11 @@ public:
         if (!address_) return;
         if (mode_ == 2U) AscendC::PipeBarrier<PIPE_ALL>();
         const uint64_t cycle = AscendC::GetSystemCycle();
-        const uint32_t row = uint32_t(stage) * kFields;
-        const uint64_t start = data_(row + 4U);
+        const uint32_t row = 8U + (uint32_t(stage) - 1U) * 4U;
+        const uint64_t start = data_(row + 1U);
         data_(row + 1U) = cycle;
         data_(row + 2U) = data_(row + 2U) + cycle - start;
-        data_(row + 3U) = data_(row + 3U) + 1U;
-        data_(row + 5U) = 0U;
+        data_(row + 3U) = (data_(row + 3U) & ~kActive) + 1U;
 #endif
     }
     __aicore__ inline void Finish()

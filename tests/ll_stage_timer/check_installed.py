@@ -11,15 +11,19 @@ helpers['_import_installed_deep_ep']()
 import torch
 import torch_npu
 from deep_ep._native import require_native
-from deep_ep.utils.ll_stage_timer import StageTrace, STAGES, SLOTS, FIELDS
+from deep_ep.utils.ll_stage_timer import StageTrace, STAGES, SLOTS, FIELDS, SCHEMA
 torch.npu.set_device(0)
 native=require_native('LL timer schema validation')
 assert native.low_latency_stage_timer_enabled
-assert native.low_latency_core_protocol==2
-assert native.low_latency_stage_timer_layout()==dict(schema=1,slots=SLOTS,fields=FIELDS,stages=list(STAGES))
+assert native.low_latency_core_protocol==5
+assert native.low_latency_stage_timer_layout()==dict(schema=SCHEMA,slots=SLOTS,fields=FIELDS,stages=list(STAGES))
 trace=StageTrace(object(),'dispatch')
 cfg=native.low_latency_core_config()
 assert tuple(trace.tensor.shape)==(cfg['active_aiv'],SLOTS,FIELDS)
 assert trace.tensor.data_ptr()%512==0
 assert trace.tensor.device.index==0 and torch.count_nonzero(trace.tensor).item()==0
 print(f"PASS installed timer ABI/schema and actual device0 allocation ({cfg['active_aiv']} AIV); no LL launch")
+expert=StageTrace(object(),'dispatch',expert_config=dict(rank=0,world=16,experts=256))
+assert tuple(expert.expert_tensor.shape)==(cfg['active_aiv'],8+256*4,8)
+assert expert.expert_tensor.data_ptr()%512==0
+print('PASS installed expert timer layout/alignment; no LL launch')

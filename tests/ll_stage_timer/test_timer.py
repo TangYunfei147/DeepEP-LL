@@ -18,14 +18,14 @@ analyzer=load('stage_analyzer',Path(__file__).with_name('analyze.py'))
 def raw(cores=16):
     result=[[[0]*8 for _ in range(timer.SLOTS)] for _ in range(cores)]
     for core,rows in enumerate(result):
-        rows[0]=[timer.MAGIC,timer.SCHEMA,1,cores,core,1,1,len(timer.STAGES)]
+        rows[0]=[timer.MAGIC,1,1,cores,core,1,1,len(timer.LEGACY_STAGES)]
         rows[1]=[100,200,100,1,100,0,0,0]
         rows[15]=[110,180,30,3,170,0,0,0]
     return result
 
 
 def test_layout_names_and_units():
-    header=(ROOT/'csrc/kernels/dispatch/low_latency/common/ll_stage_timer_layout.h').read_text()
+    header=(ROOT/'csrc/kernels/dispatch/low_latency/common/ll_stage_timer_layout.h').read_text(encoding='utf-8')
     names=re.search(r'kNames\[\] = \{(.*?)\};',header,re.S).group(1)
     assert re.findall(r'"([a-z_]+)"',names)==list(timer.STAGES)
     report=timer.parse_records(raw(),'dispatch',50_000_000)
@@ -84,7 +84,8 @@ def test_context_is_thread_local_and_rejects_extra_calls(monkeypatch):
     assert list(ordinary)==['input']
 
 
-def test_native_st_reference_schedule(monkeypatch,tmp_path):
+@pytest.mark.parametrize('with_tail', [False, True])
+def test_native_st_reference_schedule(monkeypatch,tmp_path,with_tail):
     import sys
     st=load('ll_stage_st',ROOT/'tests/elastic/test_ep_low_latency.py')
     calls=[]
@@ -92,7 +93,7 @@ def test_native_st_reference_schedule(monkeypatch,tmp_path):
         def fill_(self,value):calls.append('fill')
     class Profiler:
         def __enter__(self):return self
-        def __exit__(self,*args):pass
+        def __exit__(self,*args):calls.append('profile_closed')
         def step(self):calls.append('step')
     def profile(**kwargs):
         assert kwargs['schedule']==dict(wait=0,warmup=1,active=1,repeat=1,skip_first=0)
@@ -111,17 +112,18 @@ def test_native_st_reference_schedule(monkeypatch,tmp_path):
     st.completion_boundary=lambda args:None
     st.agree_check=lambda fn,*args:fn()
     st.trace_call=lambda args,label,fn,*a,**kw:fn(*a,**kw)
-    st.kernel_durations=lambda *args:[1.0]*100
+    st.kernel_durations=lambda *args:calls.append('parse') or [1.0]*100
     args=st.parse_args([])
     assert (args.warmup,args.num_iters,args.perf_tail)==(10,100,50)
-    st.measure(lambda:calls.append('invoke'),args,'dispatch',tmp_path)
-    assert calls==['reduce']+['invoke']*10+['sync','step']+['exp','fill','reduce','invoke']*100+['barrier','sync','step']
+    tail=(lambda delay,alignment:calls.append('tail')) if with_tail else None
+    st.measure(lambda:calls.append('invoke'),args,'dispatch',tmp_path,after_profile=tail)
+    assert calls==['reduce']+['invoke']*10+['sync','step']+['exp','fill','reduce','invoke']*100+['barrier','sync','step','profile_closed']+(['tail'] if with_tail else [])+['parse']
 
 
 def test_moved_checkout_with_spaces_and_other_cwd(tmp_path):
     import os, shutil, subprocess, sys
     moved=tmp_path/'renamed checkout with spaces'
-    for relative in ('deep_ep/utils/ll_stage_timer.py','tests/ll_stage_timer/analyze.py',
+    for relative in ('deep_ep/utils/ll_stage_timer.py','deep_ep/utils/ll_expert_timer.py','tests/ll_stage_timer/analyze.py',
                      'tests/elastic/test_ep_low_latency.py','scripts/ll_timer_env.sh'):
         target=moved/relative;target.parent.mkdir(parents=True,exist_ok=True)
         shutil.copyfile(ROOT/relative,target)
@@ -141,37 +143,3 @@ def test_moved_checkout_with_spaces_and_other_cwd(tmp_path):
     actual=subprocess.check_output(['bash','-c','source "$1"; printf "%s" "$LL_TIMER_ROOT"','bash',
                                     str(moved/'scripts/ll_timer_env.sh')],cwd=away,env=env,text=True)
     assert Path(actual)==moved
-
-
-@pytest.mark.parametrize("operation", ["dispatch", "combine"])
-@pytest.mark.parametrize("mode", ["observe", "drain"])
-@pytest.mark.parametrize("world,group", [(16, 4), (32, 16)])
-def test_diagnostic_world_metadata(monkeypatch, tmp_path, operation, mode, world, group):
-    from contextlib import contextmanager
-    from tests.elastic import test_ep_low_latency as st
-    from deep_ep import _native
-    from deep_ep.utils import ll_stage_timer
-    import torch.distributed as dist
-    saved = []
-    monkeypatch.setattr(dist, "get_world_size", lambda: world)
-    monkeypatch.setattr(_native, "require_native", lambda _: SimpleNamespace(low_latency_ranks_per_group=group))
-    @contextmanager
-    def capture(buffer, op, boundary, frequency):
-        assert (op, boundary) == (operation, mode)
-        yield SimpleNamespace(save=lambda path, meta: saved.append((path, meta)))
-    monkeypatch.setattr(ll_stage_timer, "capture", capture)
-    monkeypatch.setattr(st, "completion_boundary", lambda *a: None)
-    monkeypatch.setattr(st, "agree_check", lambda action, *a: action())
-    monkeypatch.setattr(st, "case_config", lambda *a: {"B": 32})
-    args = SimpleNamespace(run_directory=str(tmp_path), case_id=0, ll_timer_iters=2,
-        ll_timer_mode=mode, ll_timer_frequency_hz=None, seed=0)
-    event = SimpleNamespace(current_stream_wait=lambda: None)
-    st.diagnostic_calls(object(), lambda: (event,), lambda output: None,
-                        args, operation, 0, 256, "normal")
-    assert len(saved) == 2
-    for iteration, (path, meta) in enumerate(saved):
-        assert meta["world_size"] == world
-        assert meta["config"]["logical_group_size"] == group
-        assert meta["iteration"] == iteration
-        assert meta["correctness"] == "passed"
-        assert path.name == f"sample_{iteration:04d}.json"

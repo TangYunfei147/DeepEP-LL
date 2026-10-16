@@ -2,11 +2,15 @@
 #include <cstdint>
 
 namespace LlStageTimer {
-constexpr uint32_t kSchema = 1U;
+constexpr uint32_t kSchema = 2U;
 constexpr uint64_t kMagic = 0x4c4c5431ULL;
 constexpr uint32_t kSlots = 32U;
 constexpr uint32_t kFields = 8U;
 constexpr uint32_t kWordsPerCore = kSlots * kFields;
+constexpr uint64_t kActive = uint64_t(1) << 62U;
+// Schema 2 packs each stage into first/start_or_end/sum/count|active (4 words).
+// Header remains 8 words; the tensor shape and 2048B/core allocation are unchanged.
+constexpr uint32_t StageOffset(uint32_t stage) { return 8U + (stage - 1U) * 4U; }
 // 每核独占2048B，避免不同核对同一cache line写回。第0行是头，余下为阶段记录。
 enum Stage : uint32_t {
     Kernel = 1,
@@ -38,6 +42,24 @@ enum Stage : uint32_t {
     SendClassify,
     SendPack,
     SendIssue,
+    RecvLaneWait,
+    RecvGmToUb,
+    RecvLoadWait,
+    RecvMetadata,
+    RecvOutputWait,
+    RecvOutputWrite,
+    RecvForward,
+    SendInputGmToUb,
+    SendInputWait,
+    SendTail,
+    SendLaneWait,
+    SendMteWrite,
+    SendRdmaStage,
+    SendRdmaBodyPost,
+    SendRdmaBodyWait,
+    SendRdmaFlagPost,
+    SendRdmaFlagWait,
+    SendRdmaRestore,
     StageCount
 };
 constexpr const char* kNames[] = {"header",
@@ -69,7 +91,13 @@ constexpr const char* kNames[] = {"header",
                                   "combine_final_drain",
                                   "send_classify",
                                   "send_pack",
-                                  "send_issue"};
-static_assert(StageCount <= kSlots, "timer capacity");
+                                  "send_issue",
+                                  "recv_lane_wait", "recv_gm_to_ub", "recv_load_wait",
+                                  "recv_metadata", "recv_output_wait", "recv_output_write", "recv_forward",
+                                  "send_input_gm_to_ub", "send_input_wait", "send_tail", "send_lane_wait",
+                                  "send_mte_write", "send_rdma_stage", "send_rdma_body_post",
+                                  "send_rdma_body_wait", "send_rdma_flag_post", "send_rdma_flag_wait",
+                                  "send_rdma_restore"};
+static_assert(8U + (StageCount - 1U) * 4U <= kWordsPerCore, "timer capacity");
 static_assert(sizeof(kNames) / sizeof(kNames[0]) == StageCount, "timer names");
 }  // namespace LlStageTimer

@@ -59,6 +59,36 @@ def case_config(args, m):
     }
 
 
+def compiled_group(native, world):
+    value=native.low_latency_ranks_per_group
+    group=value(world) if callable(value) else value
+    if type(group) is not int or not 1 <= group <= 16 or world%group:
+        raise RuntimeError('Invalid compiled LL logical group')
+    return group
+
+
+def comparison_metadata(args, world, m):
+    runtime=getattr(args,'runtime_identity',None)
+    if runtime is None: return None  # CPU fixtures / legacy custom callers.
+    return dict(**runtime, comparison_schema=1, sampling_protocol='exp-reduce-stable-tail-v2',
+                perf_enabled=not args.skip_perf_test, world_size=world,
+                local_world_size=int(os.environ.get('LOCAL_WORLD_SIZE',args.num_processes)),
+                case=case_config(args,m), route=args.route, seed=args.seed,
+                warmup=args.warmup, num_iters=args.num_iters, perf_tail=args.perf_tail,
+                delay_rows=args.delay_rows, delay_cols=args.delay_cols, group_backend=args.group_backend,
+                timer_mode=args.ll_timer_mode if args.ll_stage_timer else None,
+                timer_iters=args.ll_timer_iters if args.ll_stage_timer else 0,
+                frequency_hz=args.ll_timer_frequency_hz, stage_capture=args.ll_stage_timer,
+                expert_capture=args.ll_expert_timer, do_handle_copy=args.do_handle_copy,
+                correctness_repeats=args.correctness_repeats, repeat_combine=args.repeat_combine,
+                skip_check=args.skip_check, dispatch_only=args.dispatch_only,
+                fresh_buffer_per_case=args.fresh_buffer_per_case,
+                trace_ops=args.trace_ops, num_bytes=args.num_bytes,
+                use_1g_huge_pages=(runtime['transport']!='rdma' if args.use_1g_huge_pages is None else bool(args.use_1g_huge_pages)),
+                source_revision=os.environ.get('DEEPEP_LL_RUN_REVISION','unknown'),
+                source_dirty=os.environ.get('DEEPEP_LL_RUN_DIRTY','unknown'))
+
+
 def validate_native_cases(native, cases, world):
     """Host-only capability checks for every combination, before communication."""
     for case in cases:
@@ -84,6 +114,7 @@ def make_parser():
     parser.add_argument("--config", help="JSON settings and Cartesian matrix")
     parser.add_argument("--plan", action="store_true", help="Print the case matrix without importing Torch")
     parser.add_argument("--output-dir", default="benchmark-runs", help="Parent for a unique run directory and traces")
+    parser.add_argument("--run-name", help="Optional fixed child directory name; existing directory is rejected")
     parser.add_argument(
         "--perf-tail",
         type=int,
@@ -120,7 +151,7 @@ def make_parser():
         action="store_true",
         help="Keep the test control group, but construct Buffer with rank/world_size",
     )
-    parser.add_argument("--route", choices=("normal",), default="normal")
+    parser.add_argument("--route", choices=("normal", "hotspot"), default="normal")
     parser.add_argument("--do-handle-copy", type=int, choices=(0, 1), default=1)
     parser.add_argument("--num-sms", type=int, default=0, help="LL only supports the default fixed schedule")
     parser.add_argument("--num-qps", type=int, default=0)
@@ -149,11 +180,14 @@ def make_parser():
     parser.add_argument("--warmup", type=int, default=10)
     parser.add_argument("--num-iters", type=int, default=100)
     parser.add_argument("--ll-stage-timer", action="store_true", help="Separate device-stage diagnostic calls; requires timer-enabled wheel")
+    parser.add_argument('--ll-expert-timer', action='store_true', help='Opt-in dispatch per-expert receive work; requires --ll-stage-timer and ABI 5')
     parser.add_argument("--ll-timer-iters", type=int, default=5)
     parser.add_argument("--ll-timer-mode", choices=("observe", "drain"), default="observe")
-    parser.add_argument("--ll-timer-frequency-hz", type=float, default=None, help="GetSystemCycle counter frequency; omit to retain raw ticks")
+    parser.add_argument("--ll-timer-frequency-hz", type=float, default=1_000_000_000, help="GetSystemCycle frequency; default 1GHz (ticks/1000 us)")
     parser.add_argument("--dispatch-only", action="store_true")
     parser.add_argument("--repeat-combine", type=int, default=2)
+    parser.add_argument("--correctness-repeats", type=int, default=3, help="Fresh routes on the same Buffer; outside profiling")
+    parser.add_argument("--use-1g-huge-pages", type=int, choices=(0, 1), default=None, help="RDMA requires 0; use the same page policy for MTE comparison")
     parser.add_argument("--output", help="New rank-0 JSON result file (will not overwrite)")
     return parser
 
@@ -245,7 +279,9 @@ def write_reports(directory, report):
             if operation not in result:
                 continue
             perf = result[operation]
-            base = {"case_id": result["case_id"], **result["config"], "route": result["route"], "operation": operation}
+            identity=result.get('comparison') or {}
+            base = {"case_id": result["case_id"], **result["config"], "route": result["route"], "operation": operation,
+                    **{key:identity.get(key) for key in ('implementation','transport','logical_group','active_aiv','core_protocol','source_revision')}}
             summaries.append(
                 {
                     **base,
@@ -398,6 +434,8 @@ def validate_args(args, world):
         raise ValueError("Timer counter frequency must be positive and finite")
     if args.ll_stage_timer and args.skip_check:
         raise ValueError("Stage diagnostics require correctness checks")
+    if args.ll_expert_timer and not args.ll_stage_timer:
+        raise ValueError('--ll-expert-timer requires --ll-stage-timer')
     if args.warmup < 0 or args.num_iters < 1 or args.repeat_combine < 2:
         raise ValueError("Require warmup>=0, num-iters>=1 and repeat-combine>=2")
     if not 1 <= args.num_cpu_timeout_secs <= 300:
@@ -415,14 +453,15 @@ def validate_args(args, world):
     return m
 
 
-def make_routes(world, b, k, e, seed):
+def make_routes(world, b, k, e, seed, route="normal"):
     """Independent CPU routes: no repeated experts within any token."""
     rng = random.Random(seed)
     result = []
     for _ in range(world):
         rows = []
         for _ in range(b):
-            chosen = rng.sample(range(e), k)
+            pool = e if route == "normal" else min(e, max(k, 2 * (e // world)))
+            chosen = rng.sample(range(pool), k)
             rows.append(chosen)
         result.append(rows)
     return result
@@ -638,7 +677,18 @@ def record_case_progress(args, rank, m, mode, phase, error=None):
         print("[LL ST] " + json.dumps(entry, ensure_ascii=False), flush=True)
 
 
-def measure(invoke, args, operation, profile_dir, progress=None):
+def sampling_prelude(delay, alignment, args):
+    """The same Exp + scalar collective before normal and diagnostic samples."""
+    import torch
+    import torch.distributed as dist
+    torch.exp(delay, out=delay)
+    alignment.fill_(1)
+    if args.group_backend == 'gloo':
+        torch.npu.synchronize()
+    dist.all_reduce(alignment, op=dist.ReduceOp.SUM, async_op=False)
+
+
+def measure(invoke, args, operation, profile_dir, progress=None, after_profile=None):
     """Measure exported device kernel tasks; never substitute Host wall time."""
     import torch
     import torch.distributed as dist
@@ -667,15 +717,14 @@ def measure(invoke, args, operation, profile_dir, progress=None):
         torch.npu.synchronize()
         profiler.step()
         for _ in range(args.num_iters):
-            torch.exp(delay, out=delay)
-            alignment.fill_(1)
-            if args.group_backend == "gloo":
-                torch.npu.synchronize()
-            dist.all_reduce(alignment, op=dist.ReduceOp.SUM, async_op=False)
+            sampling_prelude(delay, alignment, args)
             output = invoke()
         dist.barrier()
         torch.npu.synchronize()
         profiler.step()
+    if after_profile is not None:
+        # Append diagnostics only after profiler closes, before parsing/filesystem work.
+        after_profile(delay, alignment)
     del output, delay, alignment
     if progress:
         progress(f"{operation}.read_profile")
@@ -692,27 +741,104 @@ def measure(invoke, args, operation, profile_dir, progress=None):
     return summarize_kernel(gathered, kernel, args.perf_tail)
 
 
-def diagnostic_calls(buffer, invoke, check, args, operation, rank, m, mode):
-    """Run separately from profiler; verify each instrumented operation before saving."""
-    from deep_ep.utils.ll_stage_timer import capture
+def create_run_directory(parent, name=None):
+    parent = Path(parent).absolute()
+    if name is not None and (not name or name in ('.', '..') or '/' in name or '\\' in name):
+        raise ValueError('--run-name must be a single nonempty directory name')
+    parent.mkdir(parents=True, exist_ok=True)
+    if name is None:
+        return tempfile.mkdtemp(prefix=datetime.now().strftime('%m%d%H%M_'), dir=parent)
+    selected = parent / name
+    selected.mkdir(exist_ok=False)
+    return str(selected)
+
+
+def new_stage_trace(buffer, operation, args, rank):
+    from deep_ep.utils.ll_stage_timer import StageTrace
+    if getattr(args, 'll_expert_timer', False) and operation == 'dispatch':
+        import torch.distributed as dist
+        return StageTrace(buffer, operation, args.ll_timer_mode, args.ll_timer_frequency_hz,
+                          expert_config=dict(rank=rank,world=dist.get_world_size(),experts=args.num_experts))
+    return StageTrace(buffer, operation, args.ll_timer_mode, args.ll_timer_frequency_hz)
+
+
+def diagnostic_calls(buffer, invoke, check, args, operation, rank, m, mode,
+                     *, prepared=None, prelude_buffers=None):
+    """Sample a stabilized tail, retaining outputs/timers until all launches finish."""
+    from deep_ep.utils.ll_stage_timer import capture, StageTrace
     from deep_ep._native import require_native
+    import torch
     import torch.distributed as dist
     world = dist.get_world_size()
-    logical_group = require_native("LL timer").low_latency_ranks_per_group
+    logical_group = compiled_group(require_native("LL timer"),world)
     directory = Path(args.run_directory) / f"case_{args.case_id:05d}" / mode / "ll_stage_timer" / operation / f"rank_{rank:03d}"
-    for iteration in range(args.ll_timer_iters):
+    if prepared is None:
+        prepared = []
+        def allocate():
+            for _ in range(args.ll_timer_iters):
+                prepared.append(new_stage_trace(buffer, operation, args, rank))
+        agree_check(allocate, args, rank)
+    after_perf = prelude_buffers is not None
+    if not after_perf:
         completion_boundary(args)
-        with capture(buffer, operation, args.ll_timer_mode, args.ll_timer_frequency_hz) as trace:
+        delay = torch.zeros(args.delay_rows, args.delay_cols, dtype=torch.float32, device='npu')
+        alignment = torch.ones(1, dtype=torch.float32, device=control_device(args, torch))
+        dist.all_reduce(alignment, op=dist.ReduceOp.SUM, async_op=False)
+        for _ in range(args.warmup):
+            output = invoke()
+        torch.npu.synchronize()
+        for _ in range(args.num_iters):
+            sampling_prelude(delay, alignment, args)
+            output = invoke()
+    else:
+        delay, alignment = prelude_buffers
+    pending = []
+    for iteration, trace in enumerate(prepared):
+        sampling_prelude(delay, alignment, args)
+        with capture(buffer, operation, args.ll_timer_mode, args.ll_timer_frequency_hz,
+                     prepared=trace, defer_complete=True):
             output = invoke()
             output[-1].current_stream_wait()
+        pending.append((iteration, trace, output))
+    # No CPU copy, correctness collective or filesystem operation in the sample loop.
+    completion_boundary(args)
+    for iteration, trace, output in pending:
+        agree_check(trace.complete, args, rank)
         agree_check(lambda: check(output), args, rank)
         metadata = dict(rank=rank, world_size=world, iteration=iteration,
+                        comparison=comparison_metadata(args,world,m),
                         run_id=Path(args.run_directory).name, seed=args.seed, case_id=args.case_id,
                         correctness="passed", config={**case_config(args, m),
                         "logical_group_size": logical_group},
-                        protocol="separate diagnostic; completion boundary but no Exp prelude; not the profiler sample set")
+                        protocol="stabilized diagnostic tail; Exp+scalar all_reduce; deferred validation/export; excluded from profiler",
+                        sampling=dict(after_perf=after_perf, warmup=args.warmup, settle_iters=args.num_iters,
+                                      diagnostic_iters=args.ll_timer_iters, delay_rows=args.delay_rows,
+                                      delay_cols=args.delay_cols, group_backend=args.group_backend,
+                                      expert_timer=bool(getattr(args,'ll_expert_timer',False))))
         agree_check(lambda: trace.save(directory / f"sample_{iteration:04d}.json", metadata), args, rank)
-        del output
+
+
+def sample_operation(buffer, invoke, check, args, operation, rank, m, mode, progress):
+    """Keep the diagnostic tail identical with and without external profiling."""
+    prepared = None
+    if args.ll_stage_timer:
+        from deep_ep.utils.ll_stage_timer import StageTrace
+        prepared = []
+        def allocate():
+            for _ in range(args.ll_timer_iters):
+                prepared.append(new_stage_trace(buffer, operation, args, rank))
+        agree_check(allocate, args, rank)
+    def diagnostic(delay=None, alignment=None):
+        diagnostic_calls(buffer, invoke, check, args, operation, rank, m, mode, prepared=prepared,
+                         prelude_buffers=None if delay is None else (delay, alignment))
+    if args.skip_perf_test:
+        if args.ll_stage_timer:
+            progress(f'{operation}.diagnostic')
+            diagnostic()
+        return None
+    profile = Path(args.run_directory) / f'case_{args.case_id:05d}' / mode / operation / f'rank_{rank:03d}'
+    return measure(invoke, args, operation, profile, progress,
+                   after_profile=diagnostic if args.ll_stage_timer else None)
 
 
 def run_case(buffer, args, rank, world, m, mode):
@@ -722,7 +848,7 @@ def run_case(buffer, args, rank, world, m, mode):
         record_case_progress(args, rank, m, mode, phase)
 
     progress("prepare")
-    routes = make_routes(world, args.num_tokens, args.num_topk, args.num_experts, args.seed)
+    routes = make_routes(world, args.num_tokens, args.num_topk, args.num_experts, args.seed, mode)
     entries = expert_entries(routes, args.num_experts, world, rank)
     counts = [len(rows) for rows in entries]
     expert_dtype = torch.float16 if args.dtype == "fp16" else torch.bfloat16
@@ -781,15 +907,19 @@ def run_case(buffer, args, rank, world, m, mode):
     agree_check(check_backend, args, rank)  # Never allow --skip-check to hide an HT fallback.
     if not args.skip_check:
         agree_check(lambda: verify_dispatch(recv, handle, entries, args, world, m), args, rank)
-    if args.ll_stage_timer:
-        diagnostic_calls(buffer, dispatch,
-                         lambda output: verify_dispatch(output[0], output[3], entries, args, world, m),
-                         args, "dispatch", rank, m, mode)
-        # Reestablish matching fresh handle/output before expert preparation.
-        completion_boundary(args)
-        recv, recv_idx, recv_weights, handle, event = dispatch()
-        event.current_stream_wait()
-        torch.npu.synchronize()
+        if args.correctness_repeats < 1:
+            raise ValueError("correctness-repeats must be positive")
+        for repeat in range(1, args.correctness_repeats):
+            # Reuse both protocol windows with changed routing, on the same Session.
+            completion_boundary(args)
+            routes = make_routes(world, args.num_tokens, args.num_topk, args.num_experts, args.seed + repeat, mode)
+            entries = expert_entries(routes, args.num_experts, world, rank)
+            counts = [len(rows) for rows in entries]
+            indices = torch.tensor(routes[rank], dtype=torch.int64, device="npu")
+            recv, recv_idx, recv_weights, handle, event = dispatch()
+            event.current_stream_wait()
+            torch.npu.synchronize()
+            agree_check(lambda: verify_dispatch(recv, handle, entries, args, world, m), args, rank)
     if args.dispatch_only:
         result = {
             "case_id": args.case_id,
@@ -799,11 +929,11 @@ def run_case(buffer, args, rank, world, m, mode):
             "config": case_config(args, m),
             "tested_operations": ["dispatch"],
         }
-        if not args.skip_perf_test:
-            profile = Path(args.run_directory) / f"case_{args.case_id:05d}" / mode
-            result["dispatch"] = measure(
-                dispatch, args, "dispatch", profile / "dispatch" / f"rank_{rank:03d}", progress
-            )
+        perf = sample_operation(buffer, dispatch,
+            lambda output: verify_dispatch(output[0], output[3], entries, args, world, m),
+            args, 'dispatch', rank, m, mode, progress)
+        if perf is not None:
+            result['dispatch'] = perf
         if rank == 0:
             print(json.dumps(result, ensure_ascii=False), flush=True)
         completion_boundary(args)
@@ -842,15 +972,12 @@ def run_case(buffer, args, rank, world, m, mode):
                 )
 
         agree_check(check_combine, args, rank)
-    if args.ll_stage_timer:
-        def check_timed_combine(output):
-            if output[1] is not None or tuple(output[0].shape) != (args.num_tokens, args.hidden):
-                raise AssertionError("Instrumented combine output contract differs")
-            torch.testing.assert_close(output[0].cpu(), expected,
-                                       rtol=0.003 if args.dtype == "fp16" else 0.01,
-                                       atol=0.004 if args.dtype == "fp16" else 0.03125)
-        diagnostic_calls(buffer, lambda: buffer.combine(expert_output, handle, topk_weights=None),
-                         check_timed_combine, args, "combine", rank, m, mode)
+    def check_timed_combine(output):
+        if output[1] is not None or tuple(output[0].shape) != (args.num_tokens, args.hidden):
+            raise AssertionError("Instrumented combine output contract differs")
+        torch.testing.assert_close(output[0].cpu(), expected,
+                                   rtol=0.003 if args.dtype == "fp16" else 0.01,
+                                   atol=0.004 if args.dtype == "fp16" else 0.03125)
     result = {
         "case_id": args.case_id,
         "route": mode,
@@ -858,12 +985,14 @@ def run_case(buffer, args, rank, world, m, mode):
         "backend": "ll",
         "config": case_config(args, m),
     }
-    if not args.skip_perf_test:
+    if not args.skip_perf_test or args.ll_stage_timer:
         if rank == 0:
             print(f"[LL ST] timing dispatch/combine: warmup={args.warmup}, iterations={args.num_iters}", flush=True)
-        profile = Path(args.run_directory) / f"case_{args.case_id:05d}" / mode
-        rank_directory = f"rank_{rank:03d}"
-        result["dispatch"] = measure(dispatch, args, "dispatch", profile / "dispatch" / rank_directory, progress)
+        perf = sample_operation(buffer, dispatch,
+            lambda output: verify_dispatch(output[0], output[3], entries, args, world, m),
+            args, 'dispatch', rank, m, mode, progress)
+        if perf is not None:
+            result['dispatch'] = perf
         # Prepare fresh matching metadata and expert output outside the combine capture.
         progress("dispatch.refresh")
         completion_boundary(args)
@@ -871,13 +1000,11 @@ def run_case(buffer, args, rank, world, m, mode):
         trace_call(args, "dispatch.event.wait", event.current_stream_wait)
         trace_call(args, "device.synchronize", torch.npu.synchronize)
         expert_output = prepare_experts(recv, counts, rank, args.num_experts, world, expert_dtype)
-        result["combine"] = measure(
+        perf = sample_operation(buffer,
             lambda: buffer.combine(expert_output, handle, topk_weights=None),
-            args,
-            "combine",
-            profile / "combine" / rank_directory,
-            progress,
-        )
+            check_timed_combine, args, 'combine', rank, m, mode, progress)
+        if perf is not None:
+            result['combine'] = perf
     if rank == 0:
         print(json.dumps(result, ensure_ascii=False), flush=True)
     completion_boundary(args)
@@ -918,28 +1045,42 @@ def worker(local_rank, args):
         # Agree before creating a SHMEM Session or launching an instrumented kernel.
         core_config = native.low_latency_core_config()
         capability = {"active_aiv": core_config["active_aiv"],
-                      "logical_group": native.low_latency_ranks_per_group,
+                      "transport": os.environ.get("DEEPEP_LL_BACKEND", "mte"),
+                      "rdma_compiled": bool(getattr(native, "low_latency_rdma_enabled", False)),
+                      "logical_group": compiled_group(native,world),
+                      "implementation": getattr(native,'low_latency_implementation','unknown'),
                       "core_protocol": native.low_latency_core_protocol,
-                      "stage_timer": bool(getattr(native, "low_latency_stage_timer_enabled", False))}
+                      "stage_timer": bool(getattr(native, "low_latency_stage_timer_enabled", False)),
+                      "stage_timer_schema": native.low_latency_stage_timer_layout()["schema"],
+                      "expert_timer_requested": bool(args.ll_expert_timer)}
         capabilities = [None] * world
         dist.all_gather_object(capabilities, capability)
         if any(item != capabilities[0] for item in capabilities):
             raise RuntimeError("LL AIV/group/protocol/timer build differs across ranks")
+        if capability['implementation'] not in ('ndr-hns1825','configurable-groups'):
+            raise RuntimeError('Rebuild the wheel with the shared experiment implementation identity')
+        requested_impl=os.environ.get('DEEPEP_LL_EXPECT_IMPLEMENTATION')
+        if requested_impl and capability['implementation']!=requested_impl:
+            raise RuntimeError('Installed wheel belongs to a different kernel branch')
+        if capability['transport']=='rdma' and not capability['rdma_compiled']:
+            raise RuntimeError('Requested RDMA is not compiled in this wheel; no MTE fallback')
         if args.ll_stage_timer and not capability["stage_timer"]:
             raise RuntimeError("All ranks must install a DEEPEP_LL_STAGE_TIMER=ON wheel")
+        if args.ll_stage_timer and capability['stage_timer_schema'] != 2:
+            raise RuntimeError('Detailed LL diagnostics require timer schema 2; rebuild/install the matching wheel on every rank')
+        if args.ll_expert_timer and capability['core_protocol'] != 5:
+            raise RuntimeError('Expert diagnostics require ABI 5 on every rank')
         args.ll_stage_timer_capabilities = capabilities
         run_directory = [None]
 
         def reserve_directory():
             if rank == 0:
-                parent = Path(args.output_dir).absolute()
-                parent.mkdir(parents=True, exist_ok=True)
-                run_directory[0] = tempfile.mkdtemp(prefix=datetime.now().strftime("%m%d%H%M_"), dir=parent)
+                run_directory[0] = create_run_directory(args.output_dir, args.run_name)
 
         agree_check(reserve_directory, args, rank)
         dist.broadcast_object_list(run_directory, src=0)
         args.run_directory = run_directory[0]
-        modes = ("normal",)
+        modes = (args.route,)
 
         def save_plan():
             if rank == 0:
@@ -972,6 +1113,7 @@ def worker(local_rank, args):
                 num_topk=0,
                 explicitly_destroy=True,
                 num_cpu_timeout_secs=args.num_cpu_timeout_secs,
+                use_1g_huge_pages=(capability["transport"] != "rdma" if args.use_1g_huge_pages is None else bool(args.use_1g_huge_pages)),
             )
 
         if not args.fresh_buffer_per_case:
@@ -982,6 +1124,7 @@ def worker(local_rank, args):
                 case_m = validate_args(case, world)
                 case.run_directory = args.run_directory
                 case.case_id = case_id
+                case.runtime_identity = capability
                 if args.fresh_buffer_per_case:
                     buffer = create_buffer(case)
                 for mode in modes:
@@ -997,6 +1140,7 @@ def worker(local_rank, args):
                             )
                         raise
                     result["case_id"] = case_id
+                    result['comparison'] = comparison_metadata(case,world,case_m)
                     results.append(result)
 
                     def save_case():

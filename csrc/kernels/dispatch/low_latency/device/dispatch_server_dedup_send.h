@@ -374,6 +374,7 @@ private:
     {
         if (timer_) timer_->Start(LlStageTimer::SendPack);
         const uint32_t tokenId = token, destination = expert / localExperts_;
+        if (timer_) timer_->Start(LlStageTimer::SendInputGmToUb);
         auto x = input.template AllocTensor<XType>();
         if constexpr (Prequantized) {
             // The full payload queue slot stages H bytes and 4P scale bytes.
@@ -389,7 +390,10 @@ private:
                         {1U, uint32_t(data_.scaleBytes), 0U, 0U, 0U}, {false, 0U, 0U, uint8_t(0)});
         }
         input.EnQue(x);
+        if (timer_) timer_->End(LlStageTimer::SendInputGmToUb);
+        if (timer_) timer_->Start(LlStageTimer::SendInputWait);
         x = input.template DeQue<XType>();
+        if (timer_) timer_->End(LlStageTimer::SendInputWait);
         LocalTensor<uint8_t> payload;
         if constexpr (NeedQuantize) {
             payload = quantBuf_.Get<uint8_t>();
@@ -400,13 +404,19 @@ private:
             input.template FreeTensor<XType>(x);
             Sync<HardEvent::V_S>();
         } else {
+            if (timer_) timer_->Start(LlStageTimer::SendInputWait);
             Sync<HardEvent::MTE2_S>();
+            if (timer_) timer_->End(LlStageTimer::SendInputWait);
             payload = x.template ReinterpretCast<uint8_t>();
         }
+        if (timer_) timer_->Start(LlStageTimer::SendTail);
         FillTail(payload, token, firstK, mask);
+        if (timer_) timer_->End(LlStageTimer::SendTail);
         Sync<HardEvent::S_V>();
         const uint32_t lane = packets_ % lanes_;
+        if (timer_) timer_->Start(LlStageTimer::SendLaneWait);
         WaitFlag<HardEvent::MTE3_V>(lane);
+        if (timer_) timer_->End(LlStageTimer::SendLaneWait);
         auto out = outBuf_.Get<uint8_t>()[lane * data_.tokenStride];
         auto outWords = out.template ReinterpretCast<int32_t>();
         auto inWords = payload.template ReinterpretCast<int32_t>();
@@ -428,7 +438,9 @@ private:
                                       DispatchServerDedupDispatchOffset(data_, args_->rank, destination,
                                                                         expert % localExperts_, q, args_->rankSize,
                                                                         localExperts_, bs_));
+        if (timer_) timer_->Start(LlStageTimer::SendMteWrite);
         DataCopy(destinationGm, out, uint32_t(data_.tokenStride));
+        if (timer_) timer_->End(LlStageTimer::SendMteWrite);
         SetFlag<HardEvent::MTE3_V>(lane);
         ++packets_;
         if (timer_) timer_->End(LlStageTimer::SendIssue);

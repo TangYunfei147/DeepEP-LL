@@ -13,6 +13,13 @@ extern "C" [[bisheng::core_ratio(0, 1)]] __global__ __aicore__ void ll_timer_smo
         (void)cycle;
         timer.End(LlStageTimer::RecvWait);
     }
+    for (uint32_t stage = LlStageTimer::Magic; stage < LlStageTimer::StageCount; ++stage) {
+        if (stage == LlStageTimer::RecvWait) continue;
+        timer.Start(static_cast<LlStageTimer::Stage>(stage));
+        volatile uint64_t cycle = GetSystemCycle();
+        (void)cycle;
+        timer.End(static_cast<LlStageTimer::Stage>(stage));
+    }
     timer.End(LlStageTimer::Kernel);
     timer.Finish();
 }

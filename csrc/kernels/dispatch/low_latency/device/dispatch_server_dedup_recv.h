@@ -4,6 +4,7 @@
 #ifndef DISPATCH_SERVER_DEDUP_RECV_H
 #define DISPATCH_SERVER_DEDUP_RECV_H
 #include "../common/ll_stage_timer_device.h"
+#include "../common/ll_expert_timer_device.h"
 
 #include "kernel_operator.h"
 #include "adv_api/reduce/sum.h"
@@ -29,9 +30,10 @@ public:
     __aicore__ inline void Init(const __gm__ DispatchDedup::CommArgs* args, GM_ADDR expandX, GM_ADDR dynamicScales,
                                 GM_ADDR tokenType, GM_ADDR destinationIndex, GM_ADDR relayReadIndex, uint32_t bs,
                                 uint32_t h, uint32_t k, uint32_t experts, TPipe* pipe, int64_t magic = 0,
-                                bool enableDedup = true)
+                                bool enableDedup = true, LlExpertTimer::DeviceTimer* expertTimer = nullptr)
     {
         args_ = args;
+        expertTimer_ = expertTimer;
         coreNum_ = GetBlockNum();
         recvCoreNum_ = coreNum_ / 2U;
         pipe_ = pipe;
@@ -55,6 +57,7 @@ public:
     // 摘要：执行接收主流程：加载前缀、构建任务、批量探测、预取并消费就绪包，最后清理本核槽位标记。
     __aicore__ inline void Process(LlStageTimer::DeviceTimer* timer = nullptr)
     {
+        timer_ = timer;
         if (timer) timer->Start(LlStageTimer::RecvPrepare);
         // 1. 调用方已完成计数阶段的写入，才能 Reset TPipe 回收旧计数 UB。
         // 从当前 magic 窗口加载本接收核的完整前缀副本，MTE2_S 后 Scalar 才能使用。
@@ -215,7 +218,10 @@ private:
     // 摘要：等待 lane 的旧输出完成后，将 packet 从 GM 预取到 UB，分别发布给 Scalar 和 MTE3 的依赖事件。
     __aicore__ inline void IssueLoad(uint32_t j, uint32_t lane, bool keepFlags)
     {
+        if (timer_) timer_->Start(LlStageTimer::RecvLaneWait);
         WaitFlag<HardEvent::MTE3_MTE2>(lane);
+        if (timer_) timer_->End(LlStageTimer::RecvLaneWait);
+        if (timer_) timer_->Start(LlStageTimer::RecvGmToUb);
         auto wire = lanesBuf_.Get<uint8_t>()[lane * laneStride_];
         GlobalTensor<uint8_t> source;
         source.SetGlobalBuffer(Slot(j));
@@ -229,28 +235,54 @@ private:
         SetFlag<HardEvent::MTE2_MTE3>(lane);
         // Publish immediately after this load, before queuing later loads.
         SetFlag<HardEvent::MTE2_S>(lane);
+        if (timer_) timer_->End(LlStageTimer::RecvGmToUb);
     }
 
     // 摘要：消费已预取包，写出 token/scale 和路由元数据；FIRST_HOP 还向其余专家转发，再归还 lane。
     __aicore__ inline void ConsumeLoaded(uint32_t j, uint32_t lane, bool keepFlags)
     {
+        if (timer_) timer_->Start(LlStageTimer::RecvLoadWait);
         WaitFlag<HardEvent::MTE2_S>(lane);
+        if (timer_) timer_->End(LlStageTimer::RecvLoadWait);
+        uint32_t expert = 0;
+        if (expertTimer_ && expertTimer_->Enabled()) {
+            // Position encodes rotated source, local expert, q. Source rotation
+            // does not change the local-expert remainder.
+            expert = uint32_t(args_->rank)*localExperts_ + (tasks_.Position(j)/bs_)%localExperts_;
+            expertTimer_->CountPacket(expert);
+        }
         auto wire = lanesBuf_.Get<uint8_t>()[lane * laneStride_];
         const uint32_t row = tasks_.Begin() + j;
         const uint32_t headerOffset = uint32_t(keepFlags ? data_.headerWireOffset : data_.headerPayloadOffset);
         if (!enableDedup_ && !keepFlags) {
             // Compact offsets are logical payload offsets. Retain this lane
             // until all payload, scale and metadata output reads complete.
+            if (timer_) timer_->Start(LlStageTimer::RecvOutputWait);
             WaitFlag<HardEvent::MTE2_MTE3>(lane);
+            if (timer_) timer_->End(LlStageTimer::RecvOutputWait);
+            if (timer_) timer_->Start(LlStageTimer::RecvOutputWrite);
+            if (expertTimer_) expertTimer_->Start(expert, LlExpertTimer::OutputWrite);
             DataCopyPad(expandX_[uint64_t(row) * hiddenBytes_], wire, {1U, hiddenBytes_, 0U, 0U, 0U});
             if constexpr (WireFp8)
                 DataCopyPad(dynamicScales_[uint64_t(row) * data_.scaleBytes], wire[uint32_t(data_.quantCount)],
                             {1U, uint32_t(data_.scaleBytes), 0U, 0U, 0U});
+            if (timer_) timer_->End(LlStageTimer::RecvOutputWrite);
+            if (expertTimer_) expertTimer_->End(expert, LlExpertTimer::OutputWrite);
+            if (timer_) timer_->Start(LlStageTimer::RecvMetadata);
+            if (expertTimer_) expertTimer_->Start(expert, LlExpertTimer::Metadata);
             auto header = wire[headerOffset].template ReinterpretCast<uint32_t>();
+            if (expertTimer_) expertTimer_->End(expert, LlExpertTimer::Metadata);
+            if (timer_) timer_->End(LlStageTimer::RecvMetadata);
+            if (timer_) timer_->Start(LlStageTimer::RecvOutputWrite);
+            if (expertTimer_) expertTimer_->Start(expert, LlExpertTimer::OutputWrite);
             DataCopyPad(destinationIndex_[uint64_t(row) * 3U], header, {1U, 12U, 0U, 0U, 0U});
             SetFlag<HardEvent::MTE3_MTE2>(lane);
+            if (expertTimer_) expertTimer_->End(expert, LlExpertTimer::OutputWrite);
+            if (timer_) timer_->End(LlStageTimer::RecvOutputWrite);
             return;
         }
+        if (timer_) timer_->Start(LlStageTimer::RecvMetadata);
+        if (expertTimer_) expertTimer_->Start(expert, LlExpertTimer::Metadata);
         auto type = wire[uint32_t(data_.tokenStride)].template ReinterpretCast<uint32_t>();
         auto destination = wire[uint32_t(data_.tokenStride) + 32U].template ReinterpretCast<uint32_t>();
         ServerDedupPacketTail tail(wire, headerOffset,
@@ -260,6 +292,8 @@ private:
             BuildServerDedupMetadata(type, destination, tail, tasks_.Position(j));
         else
             for (uint32_t i = 0U; i < 3U; ++i) destination.SetValue(i, tail.Header().GetValue(i));
+        if (expertTimer_) expertTimer_->End(expert, LlExpertTimer::Metadata);
+        // FIRST_HOP preparation is shared work: retain only the core stage timer.
         if (firstHop) {
             PrepareServerDedupForward(tail);
             // Forwarded packets only need compact payload. The hint remains
@@ -267,8 +301,13 @@ private:
             wire.template ReinterpretCast<float>().SetValue(PacketReceiveLayout::kMarkerOffset / 4U,
                                                             PacketReceiveLayout::kCompact);
         }
+        if (timer_) timer_->End(LlStageTimer::RecvMetadata);
+        if (timer_) timer_->Start(LlStageTimer::RecvOutputWait);
         ServerDedupReceiveSync<HardEvent::S_MTE3>();
         WaitFlag<HardEvent::MTE2_MTE3>(lane);
+        if (timer_) timer_->End(LlStageTimer::RecvOutputWait);
+        if (timer_) timer_->Start(LlStageTimer::RecvOutputWrite);
+        if (expertTimer_) expertTimer_->Start(expert, LlExpertTimer::OutputWrite);
         if (keepFlags) {
             WriteServerDedupPayloadRange(expandX_[uint64_t(row) * hiddenBytes_], wire, 0U, hiddenBytes_);
             if constexpr (WireFp8)
@@ -282,8 +321,13 @@ private:
         }
         if (enableDedup_) DataCopyPad(tokenType_[row], type, {1U, 4U, 0U, 0U, 0U});
         DataCopyPad(destinationIndex_[uint64_t(row) * 3U], destination, {1U, 12U, 0U, 0U, 0U});
+        if (expertTimer_) expertTimer_->End(expert, LlExpertTimer::OutputWrite);
+        if (timer_) timer_->End(LlStageTimer::RecvOutputWrite);
         if (firstHop) {
+            if (timer_) timer_->Start(LlStageTimer::RecvOutputWrite);
             DataCopyPad(relayReadIndex_[uint64_t(row) * k_ * 2U], tail.ReadIndex(), {1U, k_ * 8U, 0U, 0U, 0U});
+            if (timer_) timer_->End(LlStageTimer::RecvOutputWrite);
+            if (timer_) timer_->Start(LlStageTimer::RecvForward);
             const uint32_t sourceRank = tail.Header().GetValue(0U);
             const uint32_t ranks = uint32_t(args_->rankSize);
             const uint32_t members = tail.ReadIndex().GetValue(0U);
@@ -292,13 +336,16 @@ private:
                 const uint32_t expertId = index & 0xffffU;
                 const uint32_t q = index >> 16U;
                 const uint32_t destinationRank = expertId / localExperts_;
+                if (expertTimer_) expertTimer_->Start(expertId, LlExpertTimer::Forward);
                 GlobalTensor<uint8_t> output;
                 output.SetGlobalBuffer(args_->peerMems[destinationRank] +
                                        DispatchServerDedupDispatchOffset(data_, sourceRank, destinationRank,
                                                                          expertId % localExperts_, q, ranks,
                                                                          localExperts_, bs_));
                 DataCopy(output, wire, uint32_t(data_.tokenStride));
+                if (expertTimer_) expertTimer_->End(expertId, LlExpertTimer::Forward);
             }
+            if (timer_) timer_->End(LlStageTimer::RecvForward);
         }
         SetFlag<HardEvent::MTE3_MTE2>(lane);
     }
@@ -317,6 +364,8 @@ private:
     }
 
     const __gm__ DispatchDedup::CommArgs* args_ = nullptr;
+    LlStageTimer::DeviceTimer* timer_ = nullptr;
+    LlExpertTimer::DeviceTimer* expertTimer_ = nullptr;
     TPipe* pipe_ = nullptr;
     bool enableDedup_ = false;
     uint64_t windowOffset_ = 0;

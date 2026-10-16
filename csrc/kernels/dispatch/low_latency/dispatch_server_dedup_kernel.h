@@ -5,6 +5,7 @@
 #define DISPATCH_SERVER_DEDUP_KERNEL_H
 
 #include "common/ll_stage_timer_device.h"
+#include "common/ll_expert_timer_device.h"
 #include "device/dispatch_server_dedup_magic.h"
 #include "device/dispatch_server_dedup_counts.h"
 #include "device/dispatch_server_dedup_send.h"
@@ -20,7 +21,8 @@ public:
                                 GM_ADDR relayReadIndexOut, GM_ADDR sourceMaskOut, GM_ADDR expertScalesOut, uint32_t bs,
                                 uint32_t h, uint32_t topK, uint32_t experts, uint32_t expertTokenNumsType, TPipe* pipe,
                                 GM_ADDR inputScales = nullptr, bool enableDedup = true,
-                                LlStageTimer::DeviceTimer* timer = nullptr)
+                                LlStageTimer::DeviceTimer* timer = nullptr,
+                                LlExpertTimer::DeviceTimer* expertTimer = nullptr)
     {
         timer_ = timer;
         args_ = reinterpret_cast<const __gm__ DispatchDedup::CommArgs*>(commArgs);
@@ -39,7 +41,7 @@ public:
                          magic, inputScales, enableDedup);
         else
             receiver_.Init(args_, expandXOut, dynamicScalesOut, tokenTypeOut, destinationIndexOut, relayReadIndexOut,
-                           bs, h, topK, experts, pipe, magic, enableDedup);
+                           bs, h, topK, experts, pipe, magic, enableDedup, expertTimer);
     }
 
     // 完整dispatch：所有核先发送计数，再按固定核分工并行执行Sender与Receiver。

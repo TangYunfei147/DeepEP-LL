@@ -22,7 +22,7 @@ extern "C" [[bisheng::core_ratio(0, 1)]] __global__ __aicore__ void dispatch_ser
     GM_ADDR commArgs, GM_ADDR x, GM_ADDR expertIds, GM_ADDR expertScales, GM_ADDR expandXOut, GM_ADDR dynamicScalesOut,
     GM_ADDR expertTokenNumsOut, GM_ADDR sendCountsOut, GM_ADDR tokenTypeOut, GM_ADDR destinationIndexOut,
     GM_ADDR relayReadIndexOut, GM_ADDR sourceMaskOut, GM_ADDR expertScalesOut, GM_ADDR tilingData,
-    int64_t reservedMagic, GM_ADDR inputScales, GM_ADDR stageTimer, uint32_t timerMode)
+    int64_t reservedMagic, GM_ADDR inputScales, GM_ADDR stageTimer, uint32_t timerMode, GM_ADDR expertTimer)
 {
     util_set_ffts_config(reinterpret_cast<const __gm__ DispatchDedup::CommArgs*>(commArgs)->fftsVal);
     LlStageTimer::DeviceTimer timer;
@@ -35,6 +35,8 @@ extern "C" [[bisheng::core_ratio(0, 1)]] __global__ __aicore__ void dispatch_ser
     const bool enableDedup = DispatchDedup::EpServerDedupEnabled(tiling->numMaxTokensPerRank);
     const uint32_t topK = tiling->topK;
     const uint32_t moeExpertNum = tiling->moeExpertNum;
+    LlExpertTimer::DeviceTimer expert;
+    expert.Init(expertTimer, moeExpertNum, uint32_t(reinterpret_cast<const __gm__ DispatchDedup::CommArgs*>(commArgs)->rank), timerMode);
     const uint32_t expertTokenNumsType = tiling->expertTokenNumsType;
     const uint8_t quantMode = tiling->quantMode;
     const uint8_t dtype = tiling->dtype;
@@ -47,7 +49,7 @@ extern "C" [[bisheng::core_ratio(0, 1)]] __global__ __aicore__ void dispatch_ser
     DispatchDedup::DispatchMemoryServerDedupKernel<XType, WireFp8, E4M3, Prequantized> kernel;                         \
     kernel.Init(commArgs, x, expertIds, expertScales, expandXOut, dynamicScalesOut, expertTokenNumsOut, sendCountsOut, \
                 tokenTypeOut, destinationIndexOut, relayReadIndexOut, sourceMaskOut, expertScalesOut, bs, h, topK,     \
-                moeExpertNum, expertTokenNumsType, &pipe, inputScales, enableDedup, &timer);                           \
+                moeExpertNum, expertTokenNumsType, &pipe, inputScales, enableDedup, &timer, &expert);                           \
     timer.End(LlStageTimer::WorkerInit);                                                                               \
     kernel.Process()
     if (inputMode == DispatchDedup::EpServerDedupInputMode::PrequantizedFp8Packs && quantMode == 4 &&
@@ -73,6 +75,7 @@ extern "C" [[bisheng::core_ratio(0, 1)]] __global__ __aicore__ void dispatch_ser
     }
 #undef DISPATCH_SERVER_DEDUP_RUN
     timer.End(LlStageTimer::Kernel);
+    expert.Finish();
     timer.Finish();
 }
 
@@ -102,7 +105,7 @@ extern "C" DEEPEP_EXPORT void dispatch_server_dedup_kernel_do(void* stream, cons
     dispatch_server_dedup_kernel<<<a.coreNum, DEEPEP_KERNEL_LAUNCH_UB(0), stream>>>(
         a.commArgs, a.x, a.expertIds, a.expertScales, a.expandXOut, a.dynamicScalesOut, a.expertTokenNumsOut,
         a.sendCountsOut, a.tokenTypeOut, a.destinationIndexOut, a.relayReadIndexOut, a.sourceMaskOut, a.expertScalesOut,
-        a.tilingData, a.reservedMagic, a.inputScales, a.stageTimer, a.timerMode);
+        a.tilingData, a.reservedMagic, a.inputScales, a.stageTimer, a.timerMode, a.expertTimer);
 }
 
 #endif
