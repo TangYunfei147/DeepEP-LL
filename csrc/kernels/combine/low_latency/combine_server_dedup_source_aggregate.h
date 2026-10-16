@@ -55,6 +55,8 @@ public:
                    layout.phaseOffset, layout.computeBytes, layout.outputOffset, false, uncached);
     }
 
+    __aicore__ inline void SetTimer(LlStageTimer::DeviceTimer* timer) { timer_ = timer; }
+
     __aicore__ inline void DrainM6()
     {
         for (uint32_t lane = 0; lane < outputLanes_; ++lane)
@@ -67,6 +69,7 @@ public:
         for (uint32_t lane = 0; lane < inputLanes_; ++lane) SetFlag<HardEvent::V_MTE2>(lane);
         uint32_t remaining = count_, scan = 0U, completed = 0U;
         LlTransport::PollDeadline deadline(uncached_);
+        if (timer_) timer_->Start(LlStageTimer::CombineWaitResult);
         while (remaining != 0U) {
             deadline.Check();
             const uint32_t token = pending_.GetValue(scan);
@@ -79,6 +82,8 @@ public:
                 if (++scan == remaining) scan = 0U;
                 continue;
             }
+            if (timer_) timer_->End(LlStageTimer::CombineWaitResult);
+            if (timer_) timer_->Start(LlStageTimer::CombineOutputTask);
             // No further probes after this point: clear every original token's
             // complete K*N flags, including mask-inactive slots. This source is
             // independent of the final token's in-flight payload and yOut.
@@ -90,6 +95,8 @@ public:
             pending_.SetValue(scan, pending_.GetValue(remaining - 1U));
             --remaining;
             ++completed;
+            if (timer_) timer_->End(LlStageTimer::CombineOutputTask);
+            if (remaining && timer_) timer_->Start(LlStageTimer::CombineWaitResult);
             if (scan == remaining) scan = 0U;  // re-probe the swapped real TokenId
         }
         for (uint32_t lane = 0; lane < inputLanes_; ++lane) WaitFlag<HardEvent::V_MTE2>(lane);
@@ -187,7 +194,9 @@ private:
     __aicore__ inline void Load(uint32_t token, uint32_t k, uint32_t member)
     {
         const uint32_t lane = (inputSequence_ + member) % inputLanes_;
+        if (timer_) timer_->Start(LlStageTimer::CombineDataWait);
         WaitFlag<HardEvent::V_MTE2>(lane);
+        if (timer_) timer_->End(LlStageTimer::CombineDataWait);
         const uint32_t retire = enableDedup_ ? finalLayout_.inputRetireMasks[lane] & ~retiredOutputs_ : 0U;
         if (retire != 0U) {
             for (uint32_t slot = 0; slot < sharedOutputLanes_; ++slot)
@@ -195,7 +204,9 @@ private:
             // MTE3_V protects Vector, not MTE2. Bridge only first-use reclamation
             // through Vector before this DMA overwrites any inherited output.
             SetFlag<HardEvent::V_MTE2>(lane);
+            if (timer_) timer_->Start(LlStageTimer::CombineDataWait);
             WaitFlag<HardEvent::V_MTE2>(lane);
+            if (timer_) timer_->End(LlStageTimer::CombineDataWait);
             retiredOutputs_ |= retire;
         }
         DataCopy(inputs_[finalLayout_.inputOffsets[lane] / 2U], result_[(uint64_t(token) * k_ + k) * packetBytes_ / 2U],
@@ -212,7 +223,9 @@ private:
         for (uint32_t k = 0U; k < k_; ++k)
             if (!enableDedup_ || ((mask >> k) & 1U)) {
                 const uint32_t lane = (inputSequence_ + member) % inputLanes_;
+                if (timer_) timer_->Start(LlStageTimer::CombineDataWait);
                 WaitFlag<HardEvent::MTE2_V>(lane);
+                if (timer_) timer_->End(LlStageTimer::CombineDataWait);
                 Cast(cast_, inputs_[finalLayout_.inputOffsets[lane] / 2U].template ReinterpretCast<T>(),
                      RoundMode::CAST_NONE, h_);
                 SetFlag<HardEvent::V_MTE2>(lane);
@@ -232,15 +245,20 @@ private:
             }
         inputSequence_ += member;
         const uint32_t outputLane = finalLayout_.outputSlots[completed % outputLanes_];
+        if (timer_) timer_->Start(LlStageTimer::CombineDataWait);
         WaitFlag<HardEvent::MTE3_V>(outputLane);
+        if (timer_) timer_->End(LlStageTimer::CombineDataWait);
         auto output = outputs_[outputLane * outputBytes_ / 2U];
         Cast(output.template ReinterpretCast<T>(), sum_, RoundMode::CAST_RINT, h_);
         SetFlag<HardEvent::V_MTE3>(outputLane);
+        if (timer_) timer_->Start(LlStageTimer::CombineDataWait);
         WaitFlag<HardEvent::V_MTE3>(outputLane);
+        if (timer_) timer_->End(LlStageTimer::CombineDataWait);
         DataCopyPad(output_[uint64_t(token) * h_], output, {1U, h_ * 2U, 0U, 0U, 0U});
         SetFlag<HardEvent::MTE3_V>(outputLane);
     }
 
+    LlStageTimer::DeviceTimer* timer_ = nullptr;
     bool enableDedup_ = false;
     bool uncached_ = false;
     LocalTensor<uint8_t> scratch_;

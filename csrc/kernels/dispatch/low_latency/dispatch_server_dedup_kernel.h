@@ -53,9 +53,7 @@ public:
         if (timer_) timer_->End(LlStageTimer::CountSend);
 
         if (core_ < sendCores_) {
-            if (timer_) timer_->Start(LlStageTimer::Sender);
             sender_.Process(counts_.ScratchPool(), counts_.ReservedBytes(), timer_);
-            if (timer_) timer_->End(LlStageTimer::Sender);
 
         } else {
             if (timer_) timer_->Start(LlStageTimer::CountReceive);
@@ -71,9 +69,7 @@ public:
             // Retire that stage before receiver resets the pipe and reloads GM.
             PipeBarrier<PIPE_ALL>();
             if (timer_) timer_->End(LlStageTimer::CountPublish);
-            if (timer_) timer_->Start(LlStageTimer::Receiver);
             receiver_.Process(timer_);
-            if (timer_) timer_->End(LlStageTimer::Receiver);
         }
 
         if (timer_) timer_->Start(LlStageTimer::CountFinish);

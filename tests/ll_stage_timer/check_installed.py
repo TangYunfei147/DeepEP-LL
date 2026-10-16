@@ -11,12 +11,12 @@ helpers['_import_installed_deep_ep']()
 import torch
 import torch_npu
 from deep_ep._native import require_native
-from deep_ep.utils.ll_stage_timer import StageTrace, STAGES, SLOTS, FIELDS, SCHEMA
+from deep_ep.utils.ll_stage_timer import StageTrace, STAGES, SLOTS, FIELDS, SCHEMA, event_layout
 torch.npu.set_device(0)
 native=require_native('LL timer schema validation')
 assert native.low_latency_stage_timer_enabled
 assert native.low_latency_core_protocol==5
-assert native.low_latency_stage_timer_layout()==dict(schema=SCHEMA,slots=SLOTS,fields=FIELDS,stages=list(STAGES))
+assert native.low_latency_stage_timer_layout()==event_layout()
 trace=StageTrace(object(),'dispatch')
 cfg=native.low_latency_core_config()
 assert tuple(trace.tensor.shape)==(cfg['active_aiv'],SLOTS,FIELDS)

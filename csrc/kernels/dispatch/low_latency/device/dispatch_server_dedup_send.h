@@ -143,12 +143,10 @@ public:
         PipeBarrier<PIPE_V>();
 
         if (timer_) timer_->End(LlStageTimer::SendPrepare);
-        if (timer_) timer_->Start(LlStageTimer::SendPayload);
         if (enableDedup_)
             SendWithDedup(input);
         else
             SendWithoutDedup(input);
-        if (timer_) timer_->End(LlStageTimer::SendPayload);
         if (timer_) timer_->Start(LlStageTimer::SendMetadata);
 
         // 6. 等待所有发送 lane 归还后，把本核 sourceMask 和 sourceWeights 写回 GM。
@@ -310,7 +308,11 @@ private:
     // 摘要：统计原始展平路由中 index 之前指向该专家的条数，作为槽内序号 q；首 token 按当前约定返回 0。
     __aicore__ inline uint32_t CalTokenSendExpertCnt(uint32_t expert, uint32_t index)
     {
-        if (index < k_) return 0U;
+        if (timer_) timer_->Start(LlStageTimer::SendRoute);
+        if (index < k_) {
+            if (timer_) timer_->End(LlStageTimer::SendRoute);
+            return 0U;
+        }
         // Memory's prefix reduction over the complete original route sequence.
         auto dst = qDstBuf_.Get<int32_t>();
         auto sub = qSubBuf_.Get<int32_t>();
@@ -326,7 +328,9 @@ private:
         PipeBarrier<PIPE_V>();
         ReduceSum<float>(output, input, qWorkBuf_.Get<float>(), index);
         Sync<HardEvent::V_S>();
-        return index - uint32_t(dst.GetValue(0));
+        const uint32_t result = index - uint32_t(dst.GetValue(0));
+        if (timer_) timer_->End(LlStageTimer::SendRoute);
+        return result;
     }
     template <class Fp8Type>
     // 摘要：以每 32 元素为一组生成 MXFP8 scale 和量化数据，复用 q 计算的临时 UB。
@@ -378,7 +382,6 @@ private:
     __aicore__ inline void SendPacket(TQue<QuePosition::VECIN, 1>& input, uint32_t token, uint32_t firstK,
                                       uint32_t expert, uint32_t q, uint32_t mask)
     {
-        if (timer_) timer_->Start(LlStageTimer::SendPack);
         const uint32_t tokenId = token, destination = expert / localExperts_;
         if (timer_) timer_->Start(LlStageTimer::SendInputGmToUb);
         auto x = input.template AllocTensor<XType>();
@@ -437,8 +440,6 @@ private:
         if constexpr (!NeedQuantize) input.template FreeTensor<XType>(x);
         SetFlag<HardEvent::V_MTE3>(lane);
         WaitFlag<HardEvent::V_MTE3>(lane);
-        if (timer_) timer_->End(LlStageTimer::SendPack);
-        if (timer_) timer_->Start(LlStageTimer::SendIssue);
         // Count each protocol handoff once at its initiating core, not at receive.
         if (timer_) timer_->CountData(uint32_t(args_->rank), destination,
 #ifdef DEEPEP_LL_NO_COMM
@@ -452,7 +453,6 @@ private:
                 expert % localExperts_, q, args_->rankSize, localExperts_, bs_), out, uint32_t(data_.tokenStride), 7U, timer_);
         SetFlag<HardEvent::MTE3_V>(lane);
         ++packets_;
-        if (timer_) timer_->End(LlStageTimer::SendIssue);
     }
 
     const __gm__ DispatchDedup::CommArgs* args_ = nullptr;

@@ -71,13 +71,13 @@ def test_deferred_context_preserves_records_until_complete(monkeypatch):
     buffer=object()
     trace=SimpleNamespace(buffer=buffer, operation='dispatch', mode='observe', frequency_hz=1e9,
                           launches=0, tensor=SimpleNamespace(device='npu:0'), complete=lambda: copied.append(True))
-    with timer.capture(buffer, 'dispatch', prepared=trace, defer_complete=True):
+    with timer.capture(buffer, 'dispatch', mode='observe', prepared=trace, defer_complete=True):
         timer.attach(buffer, {'input': SimpleNamespace(device='npu:0')}, 'dispatch')
     assert copied==[] and not timer._state.active
     trace.complete()
     assert copied==[True]
     with pytest.raises(ValueError, match='unused'):
-        with timer.capture(buffer, 'dispatch', prepared=trace, defer_complete=True): pass
+        with timer.capture(buffer, 'dispatch', mode='observe', prepared=trace, defer_complete=True): pass
 
 
 @pytest.mark.parametrize('skip_perf', [False, True])

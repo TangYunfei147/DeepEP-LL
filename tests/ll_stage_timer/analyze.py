@@ -27,24 +27,21 @@ def bandwidth_sample(report, metadata):
     duration_ticks = max(spans)
     frequency = report['frequency_hz']
     duration_us = duration_ticks*1e6/frequency if frequency is not None else None
-    available = report['traffic_available']
     totals = {name: dict(bytes=0, operations=0, read_bytes=0, read_operations=0)
               for name in timer.TRAFFIC_CLASSES}
     flags = 0
-    if available:
-        for row in report['traffic']:
-            flags |= row['flags']
-            for field in totals[row['category']]:
-                totals[row['category']][field] += row[field]
-        if metadata['world_size']==16 and any(totals[name][field]
-                for name in ('interhost_first','interhost_forward') for field in totals[name]):
-            raise ValueError('EP16 has nonzero interhost traffic')
+    for row in report['traffic']:
+        flags |= row['flags']
+        for field in totals[row['category']]:
+            totals[row['category']][field] += row[field]
+    if metadata['world_size']==16 and any(totals[name][field]
+            for name in ('interhost_first','interhost_forward') for field in totals[name]):
+        raise ValueError('EP16 has nonzero interhost traffic')
     totals['intrahost_total'] = {field: totals['intrahost_first'][field]+totals['intrahost_forward'][field]
                                for field in totals['local']}
     rows = []
     for category, values in totals.items():
-        if not available: status = 'counters_unavailable'
-        elif flags & 1: status = 'nonstandard_skip_communication'
+        if flags & 1: status = 'nonstandard_skip_communication'
         elif metadata['world_size'] != 16: status = 'unsupported_ep'
         elif category == 'local': status = 'local_not_link_bandwidth'
         elif category.startswith('interhost'): status = 'not_applicable_ep16'
@@ -52,9 +49,9 @@ def bandwidth_sample(report, metadata):
         elif duration_ticks <= 0: status = 'zero_duration'
         else: status = 'ok'
         rows.append(dict(operation=report['operation'],rank=metadata['rank'],iteration=metadata['iteration'],
-            category=category, **(values if available else {key:None for key in values}),
+            category=category, **values,
             duration_kind='max_core_kernel',duration_ticks=duration_ticks,duration_us=duration_us,
-            frequency_hz=frequency,flags=flags if available else None,status=status,
+            frequency_hz=frequency,flags=flags,status=status,
             effective_GBps=values['bytes']/(duration_us*1000) if status=='ok' else None))
     return rows
 
@@ -90,35 +87,29 @@ def diagnostic_sample(report, metadata):
                 core=slow['core'], role=slow['role'], duration=elapsed * factor, stages=stages)
 
 
-RECV_STAGES = ('recv_prepare', 'recv_wait', 'recv_consume', 'recv_lane_wait', 'recv_gm_to_ub',
-               'recv_load_wait', 'recv_metadata', 'recv_output_wait', 'recv_output_write',
-               'recv_forward', 'recv_cleanup')
+RECV_STAGES = tuple(name for name in timer.STAGES if name.startswith('recv_'))
 
 
 def receiver_samples(report, metadata):
     if report['operation'] != 'dispatch':
         return []
-    factor = 1e6/report['frequency_hz'] if report['frequency_hz'] is not None else 1
+    factor=1e6/report['frequency_hz'] if report['frequency_hz'] is not None else 1
     result=[]
-    for core in range(report['active_aiv']//2, report['active_aiv']):
+    for core in range(report['active_aiv']//2,report['active_aiv']):
         stages={row['stage']:row for row in report['records'] if row['core']==core}
-        parent=stages.get('recv_consume')
-        traffic=[row for row in report['traffic'] or [] if row['core']==core
-                 and row['category'] in ('intrahost_forward','interhost_forward')]
+        kernel=stages['kernel']['total_ticks']
+        traffic=[row for row in report['traffic'] if row['core']==core and row['category'] in ('intrahost_forward','interhost_forward')]
         for name in RECV_STAGES:
             row=stages.get(name)
-            share=None
-            if row and parent and name not in ('recv_prepare','recv_wait','recv_cleanup'):
-                if (parent['total_ticks']>0 and parent['first_tick']<=row['first_tick']<=row['last_tick']<=parent['last_tick']
-                        and row['total_ticks']<=parent['total_ticks']):
-                    share=row['total_ticks']/parent['total_ticks']
             result.append(dict(rank=metadata['rank'],iteration=metadata['iteration'],core=core,stage=name,
                 unit='us' if report['frequency_hz'] is not None else 'ticks',present=row is not None,
                 duration=row['total_ticks']*factor if row else None,calls=row['calls'] if row else None,
-                per_call=row['total_ticks']*factor/row['calls'] if row else None,consume_fraction=share,
-                forward_bytes=sum(item['bytes'] for item in traffic) if name=='recv_consume' and report['traffic_available'] else None,
-                forward_operations=sum(item['operations'] for item in traffic) if name=='recv_consume' and report['traffic_available'] else None,
-                flags=next((item['flags'] for item in traffic),0) if report['traffic_available'] else None))
+                segments=row['segments'] if row else None,
+                per_call=row['total_ticks']*factor/row['calls'] if row else None,
+                kernel_fraction=row['total_ticks']/kernel if row and kernel>0 else None,
+                forward_bytes=sum(item['bytes'] for item in traffic) if name=='recv_forward' else None,
+                forward_operations=sum(item['operations'] for item in traffic) if name=='recv_forward' else None,
+                flags=next((item['flags'] for item in traffic),0)))
     return result
 
 
@@ -134,7 +125,7 @@ def receiver_summary(rows):
             weighted_per_call=sum(row['duration'] for row in present)/sum(row['calls'] for row in present) if present else None,
             **{field:stats([row[field] for row in values if row[field] is not None])
                if any(row[field] is not None for row in values) else None
-               for field in ('duration','calls','per_call','consume_fraction','forward_bytes','forward_operations')}))
+               for field in ('duration','calls','per_call','kernel_fraction','forward_bytes','forward_operations')}))
     return result
 
 
@@ -183,11 +174,11 @@ def render_bottleneck_report(report):
              '本报告分析本次诊断尾段，不能替代未插桩 profiler 基线。每个rank的耗时代理为最长单核kernel跨度；不是全局端到端时延，也不代表该核必然是因果关键路径。', '',
              '## 数据与口径', '',
              '- 输入已通过正确性标记、rank/轮次完整性及配置一致性检查；不同shape/case分别分析。',
-             '- 阶段占比先在同rank/同轮/同核计算，再统计；父子阶段可能嵌套，不能相加。未执行阶段不补零。',
+             '- 阶段占比先在同rank/同轮/同核计算，再统计；执行与等待片段互斥，kernel总区间独立展示。未执行阶段不补零。',
              '- 多个核同样长时选择编号最小的核展示；其他核仍见stages.csv。慢核位置可以随轮次变化。',
              '- 无物理拓扑、逐peer字节和逐包到达时间，不能证明多对一拥塞，也不计算峰值带宽达成率。', '']
-    if report['boundary_mode'] == 'drain':
-        lines += ['**drain主动串行化阶段边界：等待位置和重叠已被改变，不能据此判断observe生产路径瓶颈。**', '']
+    if report['boundary_mode'] in ('drain','mega'):
+        lines += ['**drain主动串行化阶段边界（mega对非依赖等待阶段排空）：等待位置和重叠已被改变，不能据此判断observe生产路径瓶颈。**', '']
     if any(row.get('flags', 0) for row in report['bandwidth']):
         lines += ['**存在跳过通信的非标准诊断标记：不生成带宽，也不能据此推断正常通信瓶颈。**', '']
     if report['frequency_hz'] is None:
@@ -214,60 +205,42 @@ def render_bottleneck_report(report):
         if slow['samples'] < 10:
             lines += ['采样少于10轮：分位数和波动估计仅供定位，不能据此断言稳定性能差异。']
         lines += ['', '### 慢rank的最长核及阶段线索', '',
-                  '仅展示平均耗时最慢的3个rank。占比是阶段累计时间/该轮该核kernel跨度；均值仅覆盖该阶段有记录的轮次。以下各行可能互相包含，不能求和。', '']
+                  '仅展示平均耗时最慢的3个rank。占比是阶段累计时间/该轮该核kernel跨度；均值仅覆盖该阶段有记录的轮次。以下任务片段互斥；kernel总区间不参与任务求和。', '']
         for rank in [row['rank'] for row in rank_rows[:3]]:
             counts = [row for row in diag['longest_core_counts'] if row['operation']==operation and row['rank']==rank]
             lines += [f"rank {rank} 最长核出现次数：" + '；'.join(f"AIV {row['core']}：{row['samples']}轮" for row in counts) + '。', '']
             candidates = [row for row in diag['longest_core_stages'] if row['operation']==operation and row['rank']==rank]
             # Omit outer wrappers; show useful internal phases without summing nested children.
-            candidates = [row for row in candidates if row['stage'] not in ('sender','receiver','send_payload')]
             candidates.sort(key=lambda row: -row['duration']['mean'])
             lines += table(['阶段', '有记录轮数', f'累计时间均值 ({unit})', '占比有效轮数', '同核占比均值'],
                            [(row['stage'], row['observed_samples'], number(row['duration']['mean']),
                              row['fraction']['samples'] if row['fraction'] else 0,
                              number(row['fraction']['mean']*100)+'%' if row['fraction'] else '不可用') for row in candidates[:8]])
             hints = {'recv_wait': '接收等待较多；核对发送准备/首跳转发是否推迟数据到达，不能单凭等待证明链路拥塞。',
-                     'send_pack': '封包路径较重；结合输入搬入、量化和lane等待子阶段区分数据处理与流水复用成本。',
-                     'send_issue': '发送调用较重；observe下MTE下发不是完成时间，RDMA路径还包含提交和quiet等待。',
-                     'recv_consume': '接收处理较重；结合metadata、输出写回与forward子阶段检查，避免将整个区间当成通信。',
                      'recv_forward': '转发路径占比较高；对照转发字节与轮次变化，尚不能推断目标端拥塞。',
                      'combine_wait_ready': 'combine准备等待较多；检查组内贡献准备与同步进度。',
-                     'combine_partial': 'partial阶段混合了贡献读取、计算和回传，现有粒度不能独立判定哪一项受限。',
-                     'combine_direct': 'DIRECT阶段混合了输入、打包、回传及排空，需避免等同纯传输耗时。',
-                     'combine_aggregate': '最终聚合较重；既可能等待返回结果，也包含读取和归约计算。'}
+                     'combine_reduce_task': '归约任务执行片段较重；数据依赖等待已单列，需继续区分准备/计算/回传发起成本。',
+                     'combine_return_task': '单个返回任务执行较重；依赖等待已切分，不能等同纯传输耗时。',
+                     'combine_output_task': '输出token归约任务执行较重；结果到达等待及流水等待已单列。'}
             for row in candidates:
                 flagged = any(item.get('flags', 0) for item in report['bandwidth'] if item['operation']==operation)
                 if not flagged and row['stage'] in hints and row['fraction'] and row['fraction']['mean'] >= .30:
                     lines += ['', '待验证线索（同核占比≥30%的启发式）：' + hints[row['stage']]]
             lines += ['']
         if operation == 'dispatch':
-            lines += ['### recv_consume专项：慢rank的全部接收核', '',
-                      '以下覆盖最慢3个rank的全部后半AIV，不再只选最长核。时间均值只覆盖有该阶段记录的轮次，缺失显示不可用；计数均值覆盖所有有效计数轮次。',
-                      'recv_consume.calls是消费批次，不是包数；recv_forward.calls是转发区间次数，不是转发包数；output_write可能每包调用多次。每次成本按该阶段自身calls计算。',
-                      '跨卡转发B/次数来自独立字节计数，不含本卡移交。schema1/2没有这些计数。', '']
+            lines += ['### 接收任务：全部接收核', '',
+                      '表内均为实际任务执行或独立等待；calls是逻辑task数，segments是等待切分后的片段数。', '']
             for rank in [row['rank'] for row in rank_rows[:3]]:
                 receiver=[row for row in report['receiver_summary'] if row['rank']==rank]
-                cores=sorted({row['core'] for row in receiver})
-                lookup={(row['core'],row['stage']):row for row in receiver}
-                def mean(core,stage,field):
-                    value=lookup[(core,stage)][field]
-                    return number(value['mean']) if value else '不可用'
-                lines += [f'#### rank {rank} 接收核概览', '']
-                lines += table(['AIV','consume有记录轮/总轮',f'consume均值({unit})','批次/有记录轮',
-                                f'consume每次均值({unit})','跨卡转发B/轮','跨卡转发次数/轮'],
-                    [(core,f"{lookup[(core,'recv_consume')]['observed_samples']}/{lookup[(core,'recv_consume')]['samples']}",
-                      mean(core,'recv_consume','duration'),mean(core,'recv_consume','calls'),
-                      mean(core,'recv_consume','per_call'),mean(core,'recv_consume','forward_bytes'),
-                      mean(core,'recv_consume','forward_operations')) for core in cores])
-                lines += ['', f'所有子阶段累计时间均值（{unit}）；各行是同一核，不能将各列求和：', '']
-                details=[name for name in RECV_STAGES if name!='recv_consume']
-                lines += table(['AIV']+list(details),[(core,)+tuple(mean(core,name,'duration') for name in details) for core in cores])
-                lines += ['', f'所有子阶段每次成本均值（{unit}/该阶段调用）；先逐轮duration/calls再取均值：', '']
-                lines += table(['AIV']+list(details),[(core,)+tuple(mean(core,name,'per_call') for name in details) for core in cores])
+                lines += [f'#### rank {rank}', '']
+                lines += table(['AIV','任务类型','有记录轮数',f'时间均值({unit})','task数/轮',f'每task均值({unit})','核内占比','跨卡转发B/轮'],
+                    [(row['core'],row['stage'],row['observed_samples'],number(row['duration']['mean']) if row['duration'] else '不可用',
+                      number(row['calls']['mean']) if row['calls'] else '不可用',
+                      number(row['per_call']['mean']) if row['per_call'] else '不可用',
+                      number(row['kernel_fraction']['mean']*100)+'%' if row['kernel_fraction'] else '不可用',
+                      number(row['forward_bytes']['mean']) if row['forward_bytes'] else '—') for row in receiver])
                 lines += ['']
-            lines += ['逐轮时间、调用次数、每次成本及同核consume占比见recv_core_samples.csv；全部rank的汇总见summary.json的receiver_summary。转发计数仅附在每核每轮的recv_consume行，避免按阶段重复计数。weighted_per_call另提供总时间/总calls，与逐轮均值分开。',
-                      '未覆盖区间：当前只有重复阶段的首尾包络与累计值，无法恢复逐次区间并集；不计算consume减子阶段之和，不把差额命名为固定开销。循环调度、任务表更新和插桩边界等成本仍需更细打点才能归属。',
-                      '诊断方向：先比较consume批次数及转发量是否偏斜，再比较相同阶段的每次成本。高load_wait/lane_wait提示检查预取及lane复用；高metadata提示检查索引处理；高output_wait提示检查输出复用；高forward需结合转发次数。各项都不是已证明的硬件瓶颈。', '']
+            lines += ['recv_core_samples.csv覆盖所有rank/轮/接收核/任务；转发计数只附recv_forward行。任务之间的未打点空隙不解释成固定开销。', '']
         lines += ['### 数据搬运及有效带宽', '',
                   '字节来自本次记录，不按固定hidden或包大小推算。跨卡带宽分子为机内首发+转发；read是总量子集，本卡不计入。是发起端读+写吞吐，不是纯TX或线速。', '']
         traffic_rows = []
@@ -295,7 +268,7 @@ def render_bottleneck_report(report):
         lines += ['## 专家投递热点线索', '', '仅按已有专家记录的平均投递次数排序，不将共享转发/等待成本分摊给专家。', '']
         lines += table(['执行rank','expert','平均投递次数/有记录轮'], [(row['executing_rank'],row['expert_id'],number(row['mean_calls'])) for row in packets])
     lines += ['', '## 建议的下一步', '',
-              '1. 先按上述慢rank和同核阶段定位，再查看stages.csv及trace.json中的子阶段；重复区间是包络，不是逐包时间线。',
+              '1. 先按上述慢rank和同核阶段定位，再查看stages.csv及trace.json中的子阶段；trace为逐次实测事件；外层阶段仍可能真实嵌套。',
               '2. 对相同shape/seed做单变量A/B。shape改变时分别报告，不直接将耗时或带宽变化当成优化收益。',
               '3. 若怀疑多对一或共享链路竞争，补充源→目标通信矩阵、实际拓扑及对应链路计数器；当前汇总无法确认。',
               '4. 优化收益以timer OFF的正式task性能及正确性为准；本报告未混入profiler、Event或API时间。', '',
@@ -391,7 +364,8 @@ def expert_reports(paths, frequency_hz):
         if payload['experts'] != meta['config'].get('num_experts',payload['experts']):
             raise ValueError('Expert count differs from case configuration')
         report=expert.parse_records(**payload, frequency_hz=frequency_hz)
-        if report['active_aiv'] != len(saved['raw']) or report['boundary_mode'] != ('observe' if saved['raw'][0][0][5]==1 else 'drain'):
+        stage_report=timer.parse_records(saved['raw'],saved['operation'],frequency_hz)
+        if report['active_aiv'] != stage_report['active_aiv'] or report['boundary_mode'] != stage_report['boundary_mode']:
             raise ValueError('Expert/stage core count or boundary mode mismatch')
         per_sample={}
         for row in report['records']:
@@ -416,7 +390,7 @@ def expert_reports(paths, frequency_hz):
     return rows,summaries
 
 
-def process_directory(source, output, frequency_hz, trace_iteration, lane_layout='core', show_repeated=False):
+def process_directory(source, output, frequency_hz, trace_iteration, lane_layout='core'):
     paths = sorted(source.rglob('sample_*.json'))
     report = analyze(paths, frequency_hz)
     selected = []
@@ -426,7 +400,7 @@ def process_directory(source, output, frequency_hz, trace_iteration, lane_layout
             selected.append(item)
     if not selected:
         raise ValueError(f'No diagnostic iteration {trace_iteration} in {source}')
-    trace = timer.chrome_trace(selected, frequency_hz, lane_layout, show_repeated) if report['frequency_hz'] is not None else None
+    trace = timer.chrome_trace(selected, frequency_hz, lane_layout) if report['frequency_hz'] is not None else None
     expert_rows, expert_summary = expert_reports(paths, report['frequency_hz'])
     report['per_expert']=expert_summary
     report['expert_interpretation']='Per executing rank and expert; core durations are summed work, not latency. Packet stage counts deliveries only. Shared FIRST_HOP preparation and batch waiting are not assigned. Only samples with executed records enter stage statistics.'
@@ -442,6 +416,17 @@ def process_directory(source, output, frequency_hz, trace_iteration, lane_layout
     with (output/'bandwidth.csv').open('w', newline='') as stream:
         writer=csv.DictWriter(stream,fieldnames=list(report['bandwidth'][0]))
         writer.writeheader();writer.writerows(report['bandwidth'])
+    with (output/'events.csv').open('w',newline='') as stream:
+        fields=['operation','rank','iteration','core','stage','index','task_id','first_tick','last_tick','total_ticks','total_us']
+        writer=csv.DictWriter(stream,fieldnames=fields)
+        writer.writeheader()
+        for path in paths:
+            saved=json.loads(path.read_text())
+            parsed=timer.parse_records(saved['raw'],saved['operation'],report['frequency_hz'])
+            for event in parsed['events']:
+                writer.writerow(dict(operation=parsed['operation'],rank=saved['metadata']['rank'],
+                                     iteration=saved['metadata']['iteration'],
+                                     **{key:event.get(key) for key in fields[3:]}))
     if report['receiver_samples']:
         with (output/'recv_core_samples.csv').open('w',newline='') as stream:
             writer=csv.DictWriter(stream,fieldnames=list(report['receiver_samples'][0]))
@@ -462,7 +447,6 @@ def main():
                         help='Override recorded counter frequency; missing frequency retains ticks without rates or trace')
     parser.add_argument('--trace-iteration',type=int,default=0,help='Timeline iteration; statistics always include all iterations')
     parser.add_argument('--lane-layout',choices=('core','stage'),default='core',help='One track per AIV (default), or separate stage tracks')
-    parser.add_argument('--show-repeated',action='store_true',help='Restore the six repeated sender envelopes (statistics are always retained)')
     parser.add_argument('--output-dir',type=Path,help='Default: stage-analysis under selected source; existing reports rejected')
     args=parser.parse_args()
     source=args.directory if args.directory.is_absolute() else ROOT/args.directory
@@ -473,7 +457,7 @@ def main():
     documents = []
     for directory in directories:
         destination = output if len(directories)==1 else output/directory.relative_to(source)
-        process_directory(directory, destination, args.frequency_hz, args.trace_iteration, args.lane_layout, args.show_repeated)
+        process_directory(directory, destination, args.frequency_hz, args.trace_iteration, args.lane_layout)
         documents.append((directory.relative_to(source), (destination/'bottleneck_summary.md').relative_to(output)))
     if len(documents) > 1:
         from urllib.parse import quote

@@ -1,6 +1,6 @@
 # ABI 4 混合通信验证记录
 
-> 历史验证；当前ABI5专家诊断尚待目标机编译及设备验收，见[专家诊断记录](../ll_stage_timer/EXPERT_VALIDATION.md)。
+> 历史验证；当前ABI5专家诊断尚待目标机编译及设备验收，见[当前分支诊断说明](../ll_stage_timer/README.md)。
 
 实现基于 `kernel/ll-ndr-hns1825` 的 `1f62860`，仅修改该分支；泛化+打点分支 `kernel/ll-configurable-groups` 保持 `5b76f57`。
 

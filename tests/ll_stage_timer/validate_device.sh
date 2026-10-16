@@ -14,6 +14,6 @@ for enabled in 0 1; do
     "${FLAGS[@]}" "${INC[@]}" -c "$HERE/timer_smoke.cpp" -o "$OUT/timer-$enabled.o"
   bisheng -O2 -std=c++17 "${INC[@]}" "$HERE/timer_smoke_host.cpp" "$OUT/timer-$enabled.o" \
     --cce-fatobj-link -L"$ASCEND_HOME_PATH/lib64" -lascendcl -lruntime -o "$OUT/timer-$enabled"
-  for mode in 1 2; do "$OUT/timer-$enabled" "$OUT/raw-$enabled-$mode.json" "$mode" "$enabled"; done
+  for mode in 1 2 3; do "$OUT/timer-$enabled" "$OUT/raw-$enabled-$mode.json" "$mode" "$enabled"; done
 done
 python3 "$HERE/check_device.py" "$OUT"

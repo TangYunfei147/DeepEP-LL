@@ -65,7 +65,7 @@ uint8_t* stage_timer(py::dict tensors, uint32_t cores, uint32_t& mode)
     if (!tensors.contains("ll_stage_timer") || tensors["ll_stage_timer"].is_none()) return nullptr;
     if (!deepep_ll_stage_timer_enabled()) throw std::invalid_argument("Rebuild with DEEPEP_LL_STAGE_TIMER=ON");
     if (tensors.contains("ll_stage_timer_mode")) mode = tensors["ll_stage_timer_mode"].cast<uint32_t>();
-    if (mode != 1U && mode != 2U) throw std::invalid_argument("Invalid LL timer mode");
+    if (mode != 1U && mode != 2U && mode != 3U) throw std::invalid_argument("Invalid LL timer mode");
     auto timer = py::reinterpret_borrow<py::object>(tensors["ll_stage_timer"]);
     auto device = timer.attr("device");
     if (device.attr("type").cast<std::string>() != "npu" ||
@@ -157,6 +157,8 @@ void bind_low_latency(py::module_& module)
     if (deepep_ll_rdma_enabled()) throw std::runtime_error("LL Host/device RDMA build mismatch; rebuild complete wheel");
     module.attr("low_latency_rdma_enabled") = false;
 #endif
+    if (deepep_ll_stage_timer_schema() != LlStageTimer::kSchema)
+        throw std::runtime_error("LL event timer Host/device schema mismatch; rebuild the complete wheel");
     module.attr("low_latency_stage_timer_enabled") = bool(deepep_ll_stage_timer_enabled());
     module.def("low_latency_expert_timer_layout", []() {
         py::dict result;
@@ -173,6 +175,11 @@ void bind_low_latency(py::module_& module)
         result["schema"] = LlStageTimer::kSchema;
         result["slots"] = LlStageTimer::kSlots;
         result["fields"] = LlStageTimer::kFields;
+        result["event_fields"] = LlStageTimer::kEventFields;
+        std::vector<uint32_t> capacities;
+        for (uint32_t stage = 1U; stage < LlStageTimer::StageCount; ++stage)
+            capacities.push_back(LlStageTimer::EventCapacity(stage));
+        result["capacities"] = capacities;
         std::vector<std::string> names;
         for (const auto* name : LlStageTimer::kNames) names.emplace_back(name);
         result["stages"] = names;

@@ -22,7 +22,7 @@ def parse_records(raw, rank, world, experts, frequency_hz=1e9):
         if any(type(v) is not int or not 0 <= v < 1<<63 for row in rows for v in row):
             raise ValueError('Invalid expert timer word')
         header=rows[0]; mode=header[5]
-        if header != [MAGIC,SCHEMA,rank,core,experts,mode,1,len(STAGES)] or mode not in (1,2):
+        if header != [MAGIC,SCHEMA,rank,core,experts,mode,1,len(STAGES)] or mode not in (1,2,3):
             raise ValueError('Incomplete or mismatched expert timer header')
         if any(v for row in rows[1:HEADER_ROWS] for v in row):
             raise ValueError('Nonzero expert header padding')
@@ -55,5 +55,5 @@ def parse_records(raw, rank, world, experts, frequency_hz=1e9):
                 records.append(row)
     if len(modes)!=1: raise ValueError('Mixed expert boundary modes')
     return dict(schema=SCHEMA, rank=rank, world_size=world, experts=experts, active_aiv=cores,
-                boundary_mode='observe' if modes=={1} else 'drain', records=records,
+                boundary_mode={1:'observe',2:'drain',3:'mega'}[next(iter(modes))], records=records,
                 interpretation='Receiver-side code intervals only. Shared FIRST_HOP preparation and batch waiting are unassigned. Cross-core sums are work, not elapsed latency; packet records count deliveries, not unique input tokens.')

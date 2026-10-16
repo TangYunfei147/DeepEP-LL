@@ -58,3 +58,4 @@ extern "C" uint32_t deepep_ll_core_protocol_version();
 extern "C" uint32_t deepep_ll_rdma_enabled();
 extern "C" uint32_t deepep_ll_ranks_per_group(uint32_t world);
 extern "C" uint32_t deepep_ll_stage_timer_enabled();
+extern "C" uint32_t deepep_ll_stage_timer_schema();

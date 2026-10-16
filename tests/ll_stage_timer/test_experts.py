@@ -30,15 +30,15 @@ def data(rank=0, world=16, experts=16):
     return raw
 
 
+from event_fixtures import raw as event_raw, set_events
+
+
 def stage_raw(rank):
-    raw=[[[0]*8 for _ in range(32)] for _ in range(16)]
-    for core,rows in enumerate(raw):
-        rows[0]=[timer.MAGIC,1,1,16,core,1,1,len(timer.LEGACY_STAGES)]
-        rows[1]=[90,220,130,1,90,0,0,0]
-        for name in timer.NOISY_SEND_ENVELOPES:
-            index=timer.LEGACY_STAGES.index(name) if name in timer.LEGACY_STAGES else None
-            if index is not None: rows[index]=[100,210,20,2,200,0,0,0]
-    return raw
+    result=event_raw()
+    for core in range(16):
+        set_events(result,core,'kernel',[[90,220]])
+        set_events(result,core,'send_route',[[100,110],[200,210]])
+    return result
 
 
 def saved(rank=0, world=16, experts=16):
@@ -84,14 +84,12 @@ def test_cross_core_sum_is_distinct_from_span(tmp_path):
     assert not any(r['stage']=='shared_prepare' for r in rows)
 
 
-def test_noisy_envelopes_hidden_only_from_trace():
+def test_all_occurrences_are_visible():
     sample=saved()
-    visible=timer.chrome_trace([sample],show_repeated=True)
-    compact=timer.chrome_trace([sample])
-    names=lambda trace:{e['args']['stage'] for e in trace['traceEvents'] if e['ph']=='X'}
-    assert 'send_issue' in names(visible) and 'send_issue' not in names(compact)
-    assert 'send_issue' in {r['stage'] for r in timer.parse_records(sample['raw'],'dispatch')['records']}
-    assert 'kernel' in names(compact)
+    trace=timer.chrome_trace([sample])
+    issues=[event for event in trace['traceEvents'] if event.get('name')=='send_route' and event['ph']=='X']
+    assert len(issues)==32
+    assert all(event['args']['interval_kind']=='actual occurrence' for event in issues)
 
 
 def test_full_offline_export_after_move(tmp_path):
@@ -132,23 +130,20 @@ def test_expert_capture_allocates_attaches_and_saves_after_completion(monkeypatc
         def tolist(self):return self.raw
     torch=SimpleNamespace(int64=0,zeros=lambda *a,**k:Tensor())
     native=SimpleNamespace(low_latency_stage_timer_enabled=True, low_latency_core_protocol=5,
-        low_latency_stage_timer_layout=lambda:dict(schema=timer.SCHEMA,slots=32,fields=8,stages=list(timer.STAGES)),
+        low_latency_stage_timer_layout=lambda:timer.event_layout(),
         low_latency_core_config=lambda:dict(active_aiv=16,device=0,runtime_device_queried=True),
         low_latency_expert_timer_layout=lambda:dict(schema=1,header_rows=8,fields=8,stages=list(expert.STAGES)))
     monkeypatch.setitem(sys.modules,'torch',torch)
     monkeypatch.setitem(sys.modules,'deep_ep._native',SimpleNamespace(require_native=lambda _:native))
     module=load('deep_ep.utils.ll_stage_timer','deep_ep/utils/ll_stage_timer.py')
     buffer=object()
-    trace=module.StageTrace(buffer,'dispatch',expert_config=dict(rank=0,world=16,experts=16))
+    trace=module.StageTrace(buffer,'dispatch',mode='observe',expert_config=dict(rank=0,world=16,experts=16))
     assert trace.expert_tensor.shape==(16,72,8) and trace.expert_tensor.data_ptr()%512==0
     raw=stage_raw(0)
-    for core,rows in enumerate(raw):
-        rows[:]=[[0]*8 for _ in range(32)]
-        rows[0]=[timer.MAGIC,2,1,16,core,1,1,len(timer.STAGES)]
-        rows[1]=[90,220,130,1,0,0,0,0]
+    monkeypatch.setattr(module,'compact_device_tensor',lambda cpu:cpu.raw)
     trace.tensor.raw=raw;trace.expert_tensor.raw=data()
     tensors={'input':SimpleNamespace(device='npu:0')}
-    with module.capture(buffer,'dispatch',prepared=trace,defer_complete=True):
+    with module.capture(buffer,'dispatch',mode='observe',prepared=trace,defer_complete=True):
         module.attach(buffer,tensors,'dispatch')
     assert tensors['ll_expert_timer'] is trace.expert_tensor and copies==[]
     trace.complete();assert len(copies)==2

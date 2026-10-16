@@ -17,7 +17,7 @@ int main(int argc, char** argv)
         if (argc != 4) throw std::runtime_error("output-json mode enabled");
         const auto mode = std::stoul(argv[2]);
         const bool enabled = std::stoul(argv[3]) != 0;
-        if (mode != 1 && mode != 2) throw std::runtime_error("invalid mode");
+        if (mode != 1 && mode != 2 && mode != 3) throw std::runtime_error("invalid mode");
         const char* visible = std::getenv("ASCEND_RT_VISIBLE_DEVICES");
         if (!visible || std::string(visible) != "0,1") throw std::runtime_error("A5 validation requires visible 0,1");
         check(aclInit(nullptr));
@@ -43,26 +43,48 @@ int main(int argc, char** argv)
                 const auto* row = data.data() + c * LlStageTimer::kWordsPerCore;
                 if (row[0] != LlStageTimer::kMagic || row[4] != c || row[6] != 1 || row[5] != mode)
                     throw std::runtime_error("header mismatch");
-                if (row[LlStageTimer::StageOffset(LlStageTimer::RecvWait) + 3] != 3) throw std::runtime_error("repeat count mismatch");
+                if (row[LlStageTimer::ControlOffset(LlStageTimer::RecvWait)] != 3) throw std::runtime_error("repeat count mismatch");
             }
         std::ofstream file(argv[1]);
         if (!file) throw std::runtime_error("cannot create output");
-        file << "[";
+        file << "{\"schema\":4,\"cores\":[";
         for (size_t c = 0; c < 16; ++c) {
+            const auto* row = data.data() + c * LlStageTimer::kWordsPerCore;
             if (c) file << ",";
-            file << "[";
-            for (size_t s = 0; s < LlStageTimer::kSlots; ++s) {
-                if (s) file << ",";
+            file << "{\"header\":[";
+            for (size_t i = 0; i < 8; ++i) { if (i) file << ","; file << row[i]; }
+            file << "],\"counts\":[";
+            for (uint32_t stage = 1; stage < LlStageTimer::StageCount; ++stage) {
+                if (stage > 1) file << ",";
+                file << row[LlStageTimer::ControlOffset(stage)];
+            }
+            file << "],\"traffic\":[";
+            for (size_t bucket = 0; bucket < 5; ++bucket) {
+                if (bucket) file << ",";
                 file << "[";
-                for (size_t f = 0; f < 8; ++f) {
-                    if (f) file << ",";
-                    file << data[c * LlStageTimer::kWordsPerCore + s * 8 + f];
+                for (size_t i = 0; i < 4; ++i) { if (i) file << ","; file << row[LlStageTimer::kDataCounterOffset+bucket*4+i]; }
+                file << "]";
+            }
+            file << "],\"flags\":" << row[LlStageTimer::kDataFlagsOffset]
+                 << ",\"errors\":" << row[LlStageTimer::kEventErrorOffset] << ",\"events\":{";
+            bool first = true;
+            for (uint32_t stage = 1; stage < LlStageTimer::StageCount; ++stage) {
+                const auto count = row[LlStageTimer::ControlOffset(stage)];
+                if (!count) continue;
+                if (count > LlStageTimer::EventCapacity(stage)) throw std::runtime_error("event overflow");
+                if (!first) file << ",";
+                first = false;
+                file << "\"" << LlStageTimer::kNames[stage] << "\":[";
+                for (uint32_t index = 0; index < count; ++index) {
+                    if (index) file << ",";
+                    const auto offset = LlStageTimer::EventOffset(stage,index);
+                    file << "[" << row[offset] << "," << row[offset+1] << "," << row[offset+2] << "]";
                 }
                 file << "]";
             }
-            file << "]";
+            file << "}}";
         }
-        file << "]";
+        file << "]}";
         check(aclrtFree(output));
         check(aclrtDestroyStream(stream));
         check(aclrtResetDevice(0));

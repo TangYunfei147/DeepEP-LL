@@ -128,26 +128,18 @@ public:
                 if (timer_) timer_->Start(LlStageTimer::CombineWaitReady);
                 WaitServerReady();
                 if (timer_) timer_->End(LlStageTimer::CombineWaitReady);
-                if (timer_) timer_->Start(LlStageTimer::CombinePartial);
                 ReturnPartialTokens();
-                if (timer_) timer_->End(LlStageTimer::CombinePartial);
-                if (timer_) timer_->Start(LlStageTimer::CombineAggregate);
                 const uint32_t retiredOutputs = AggregateSourceTokens();
-                if (timer_) timer_->End(LlStageTimer::CombineAggregate);
                 if (timer_) timer_->Start(LlStageTimer::CombineDrain);
                 DrainSharedOutputs(retiredOutputs);
                 if (timer_) timer_->End(LlStageTimer::CombineDrain);
             } else {
-                if (timer_) timer_->Start(LlStageTimer::CombineAggregate);
                 AggregateSourceTokensM6();
-                if (timer_) timer_->End(LlStageTimer::CombineAggregate);
             }
         } else {
-            if (timer_) timer_->Start(LlStageTimer::CombineDirect);
             ReturnDirectTokens();
             // Retain the full drain after direct-return DMA completion.
             PipeBarrier<PIPE_ALL>();
-            if (timer_) timer_->End(LlStageTimer::CombineDirect);
         }
         // Retires prepare publication, both zero sources and server notification;
         // no arena/pipe reset or exit may precede completion of their DMA reads.
@@ -160,6 +152,7 @@ private:
     __aicore__ inline void AggregateSourceTokensM6()
     {
         ServerDedupSourceAggregate aggregate;
+        aggregate.SetTimer(timer_);
         // Count DMA has retired. Auto uses the same final-stage scratch view as
         // M5, but owns its output events because M4 did not run on this launch.
         aggregate.InitDirectShared(
@@ -173,6 +166,7 @@ private:
     __aicore__ inline uint32_t AggregateSourceTokens()
     {
         ServerDedupSourceAggregate aggregate;
+        aggregate.SetTimer(timer_);
         aggregate.Init(arena_.Get<uint8_t>()[kEpServerDedupCombineResidentUbBytes],
                        args_->peerMems[args_->rank] + window_ + COMBINE_DEDUP_EP_SERVER_DEDUP_SHARED_DATA_OFFSET,
                        masksAddr_, weightsAddr_, outputAddr_, bs_, h_, topK_, dtype_,
@@ -352,6 +346,7 @@ private:
             const uint32_t first = ServerDedupFirstOwned(core_, owner, sendCores_);
             owner = (owner + count) % sendCores_;
             for (uint32_t task = first; task < count; task += sendCores_) {
+                if (timer_) timer_->Start(LlStageTimer::CombineReturnTask);
                 const uint32_t row = uint32_t(indexUb_.GetValue(task));
                 // Only owned rows reload a routing triple. The persistent rank
                 // and original-row arrays are untouched between server rounds.
@@ -362,14 +357,20 @@ private:
                 const uint32_t topk = uint32_t(tableUb_.GetValue(2U));
                 const uint32_t lane = sendSequence++ % lanes_;
                 // Input lifetime ends after Vector has consumed its last block.
+                if (timer_) timer_->Start(LlStageTimer::CombineDataWait);
                 WaitFlag<HardEvent::V_MTE2>(lane);
+                if (timer_) timer_->End(LlStageTimer::CombineDataWait);
                 auto input = payloadUb_[lane * laneBytes_ / 2U];
                 DataCopyPad(input, expert_[uint64_t(row) * h_], {1U, h_ * 2U, 0U, 0U, 0U},
                             {false, 0U, 0U, uint16_t(0)});
                 SetFlag<HardEvent::MTE2_V>(lane);
+                if (timer_) timer_->Start(LlStageTimer::CombineDataWait);
                 WaitFlag<HardEvent::MTE2_V>(lane);
+                if (timer_) timer_->End(LlStageTimer::CombineDataWait);
                 // Output lifetime ends only after the previous send has read it.
+                if (timer_) timer_->Start(LlStageTimer::CombineDataWait);
                 WaitFlag<HardEvent::MTE3_V>(lane);
+                if (timer_) timer_->End(LlStageTimer::CombineDataWait);
                 auto output = resultUb_[lane * resultStride_];
                 auto dstWords = output.ReinterpretCast<int32_t>();
                 auto srcWords = input.ReinterpretCast<int32_t>();
@@ -379,11 +380,14 @@ private:
                 Copy(dstWords[64U], srcWords[64U], uint64_t(56U), uint8_t(blocks_), {1U, 1U, 16U, 15U});
                 SetFlag<HardEvent::V_MTE2>(lane);
                 SetFlag<HardEvent::V_MTE3>(lane);
+                if (timer_) timer_->Start(LlStageTimer::CombineDataWait);
                 WaitFlag<HardEvent::V_MTE3>(lane);
+                if (timer_) timer_->End(LlStageTimer::CombineDataWait);
                 if (timer_) timer_->CountData(uint32_t(args_->rank), source, resultStride_, false);
                 LlTransport::Packet(args_, source, window_ + COMBINE_DEDUP_EP_SERVER_DEDUP_SHARED_DATA_OFFSET +
-                    (uint64_t(token) * topK_ + topk) * resultStride_, output, resultStride_);
+                    (uint64_t(token) * topK_ + topk) * resultStride_, output, resultStride_, 7U, nullptr, timer_);
                 SetFlag<HardEvent::MTE3_V>(lane);
+                if (timer_) timer_->End(LlStageTimer::CombineReturnTask);
             }
             // No server fence: the next scan can overlap pending output DMA.
         }

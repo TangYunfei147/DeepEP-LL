@@ -13,33 +13,29 @@ analyzer = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(analyzer)
 
 
-def saved(rank=0, iteration=0, operation='dispatch', hidden=3584, schema=3, frequency=1e9, mode=1, flags=0):
-    raw = []
-    for core in range(16):
-        # Clock offsets deliberately differ; only per-core spans are comparable.
-        start = rank*1000000 + core*10000
-        slow = core == 10 + iteration % 2
-        duration = (1000 + rank*10) * (iteration+1) * (4 if slow else 1)
-        words = [0]*256
-        words[:8] = [analyzer.timer.MAGIC, schema, 1 if operation=='dispatch' else 2,
-                     16, core, mode, 1, len(analyzer.timer.STAGES)]
-        words[8:12] = [start, start+duration, duration, 1]
+from event_fixtures import raw as event_raw, set_events
+
+
+def saved(rank=0, iteration=0, operation='dispatch', hidden=3584, frequency=1e9, mode=1, flags=0):
+    data=event_raw(operation,mode)
+    for core,entry in enumerate(data['cores']):
+        start=rank*1000000+core*10000
+        slow=core==10+iteration%2
+        duration=(1000+rank*10)*(iteration+1)*(4 if slow else 1)
+        set_events(data,core,'kernel',[[start,start+duration]])
         if slow:
-            stages = {'recv_wait': .5, 'recv_consume': .6, 'recv_forward': .4} if operation=='dispatch' else {'combine_partial': .6}
-            for stage, fraction in stages.items():
-                offset = 8 + (analyzer.timer.STAGES.index(stage)-1)*4
-                elapsed = int(duration*fraction)
-                words[offset:offset+4] = [start+5, start+5+elapsed, elapsed, 1]
-        if schema==3:
-            words[208:212] = [hidden, 1, 0, 0]
-            words[212:216] = [hidden*2, 2, hidden, 1]
-            words[216:220] = [hidden, 1, 0, 0]
-            words[228] = flags
-        raw.append([words[n:n+8] for n in range(0,256,8)])
-    return dict(raw=raw, operation=operation, frequency_hz=frequency,
-                metadata=dict(rank=rank, world_size=16, iteration=iteration, correctness='passed',
-                              run_id='synthetic-test', case_id=0, seed=7,
-                              config=dict(hidden=hidden, num_tokens=256, num_topk=8, dtype='fp8'),
+            stages={'recv_wait':.5,'recv_metadata':.3,'recv_forward':.1} if operation=='dispatch' else {'combine_output_task':.6}
+            cursor=start+5
+            for stage,fraction in stages.items():
+                elapsed=int(duration*fraction)
+                set_events(data,core,stage,[[cursor,cursor+elapsed]])
+                cursor+=elapsed
+        entry['traffic']=[[hidden,1,0,0],[hidden*2,2,hidden,1],[hidden,1,0,0],[0]*4,[0]*4]
+        entry['flags']=flags
+    return dict(raw=data,operation=operation,frequency_hz=frequency,
+                metadata=dict(rank=rank,world_size=16,iteration=iteration,correctness='passed',
+                              run_id='synthetic-test',case_id=0,seed=7,
+                              config=dict(hidden=hidden,num_tokens=256,num_topk=8,dtype='fp8'),
                               sampling=dict(diagnostic_iters=3)))
 
 
@@ -68,12 +64,12 @@ def test_slow_core_ratios_are_same_sample_not_nested_sums(tmp_path):
     document=analyzer.render_bottleneck_report(report)
     assert '## dispatch' in document and '## combine' in document
     assert '3584' in document and 'rank 15' in document
-    assert '不能相加' in document and '不能单凭等待证明链路拥塞' in document
+    assert '片段互斥' in document and '不能单凭等待证明链路拥塞' in document
     assert '33.33%' in document  # forwarding / (first+forward), reads not double counted
 
 
 @pytest.mark.parametrize('kwargs,text', [
-    ({'schema':2},'counters_unavailable'), ({'frequency':None},'frequency_unavailable'),
+    ({'frequency':None},'frequency_unavailable'),
     ({'flags':1},'nonstandard_skip_communication'), ({'mode':2},'drain主动串行化'),
 ])
 def test_limitations_not_fabricated_measurements(tmp_path,kwargs,text):
@@ -86,15 +82,11 @@ def test_limitations_not_fabricated_measurements(tmp_path,kwargs,text):
         assert '累计时间均值 (ticks)' in document
 
 
-def test_outside_kernel_stage_has_no_share():
+def test_outside_kernel_stage_is_rejected():
     sample=saved()
-    words=[word for row in sample['raw'][10] for word in row]
-    offset=8+(analyzer.timer.STAGES.index('recv_wait')-1)*4
-    words[offset:offset+4]=[200000,202000,2000,1]
-    sample['raw'][10]=[words[n:n+8] for n in range(0,256,8)]
-    report=analyzer.timer.parse_records(sample['raw'],'dispatch',1e9)
-    result=analyzer.diagnostic_sample(report,sample['metadata'])
-    assert next(row for row in result['stages'] if row['stage']=='recv_wait')['fraction'] is None
+    set_events(sample['raw'],10,'recv_wait',[[200000,202000]])
+    with pytest.raises(ValueError,match='outside'):
+        analyzer.timer.parse_records(sample['raw'],'dispatch',1e9)
 
 
 def test_fraction_averages_per_round_and_missing_stage_is_not_zero():
@@ -102,20 +94,16 @@ def test_fraction_averages_per_round_and_missing_stage_is_not_zero():
     for iteration in range(3):
         sample=saved(iteration=iteration)
         core=10+iteration%2
-        words=[word for slot in sample['raw'][core] for word in slot]
-        offset=8+(analyzer.timer.STAGES.index('recv_wait')-1)*4
         if iteration==1:
-            words[offset+1]=words[offset]+1600
-            words[offset+2]=1600  # 20% of an 8000-tick kernel
+            start=sample['raw']['cores'][core]['events']['recv_wait'][0][0]
+            set_events(sample['raw'],core,'recv_wait',[[start,start+1600]])
         if iteration==2:
-            words[offset:offset+4]=[0]*4
-        sample['raw'][core]=[words[n:n+8] for n in range(0,256,8)]
+            set_events(sample['raw'],core,'recv_wait',[])
         parsed=analyzer.timer.parse_records(sample['raw'],'dispatch',1e9)
         samples.append(analyzer.diagnostic_sample(parsed,sample['metadata']))
-    report=analyzer.diagnostic_summary(samples)
-    wait=next(row for row in report['longest_core_stages'] if row['stage']=='recv_wait')
+    wait=next(row for row in analyzer.diagnostic_summary(samples)['longest_core_stages'] if row['stage']=='recv_wait')
     assert wait['observed_samples']==2 and wait['fraction']['samples']==2
-    assert wait['fraction']['mean']==pytest.approx(.35)  # (.5 + .2)/2, not 3600/12000 or missing=0
+    assert wait['fraction']['mean']==pytest.approx(.35)
 
 
 def test_multiple_shapes_cli_documents_and_index(tmp_path):
@@ -131,7 +119,7 @@ def test_multiple_shapes_cli_documents_and_index(tmp_path):
         destination=output/f'case_{number:05d}'/'normal'/'ll_stage_timer'
         document=(destination/'bottleneck_summary.md').read_text(encoding='utf-8')
         assert str(hidden) in document
-        assert 'recv_consume专项' in document and 'recv_load_wait' in document
+        assert '接收任务' in document and 'recv_load_wait' in document
         assert (destination/'recv_core_samples.csv').is_file()
         assert json.loads((destination/'summary.json').read_text())['configurations']['dispatch']['hidden']==hidden
     before=(output/'REPORT_INDEX.md').read_bytes()
@@ -143,27 +131,23 @@ def test_multiple_shapes_cli_documents_and_index(tmp_path):
 
 def test_receiver_includes_noncritical_and_unobserved_cores():
     sample=saved()
-    words=[value for row in sample['raw'][12] for value in row]
-    offset=8+(analyzer.timer.STAGES.index('recv_consume')-1)*4
-    words[offset:offset+4]=[120005,120705,700,2]
-    sample['raw'][12]=[words[n:n+8] for n in range(0,256,8)]
+    set_events(sample['raw'],12,'recv_metadata',[[120005,120305],[120305,120705]])
     report=analyzer.timer.parse_records(sample['raw'],'dispatch',1e9)
     rows=analyzer.receiver_samples(report,sample['metadata'])
     assert {row['core'] for row in rows}==set(range(8,16))
-    assert next(row for row in rows if row['core']==12 and row['stage']=='recv_consume')['per_call']==pytest.approx(.35)
-    absent=next(row for row in rows if row['core']==13 and row['stage']=='recv_consume')
+    assert next(row for row in rows if row['core']==12 and row['stage']=='recv_metadata')['per_call']==pytest.approx(.35)
+    absent=next(row for row in rows if row['core']==13 and row['stage']=='recv_metadata')
     assert absent['present'] is False and absent['duration'] is None
     assert sum(row['forward_bytes'] or 0 for row in rows)==8*3584  # no repeated count per stage
 
 
-def test_receiver_call_weighting_missing_and_legacy_counts():
+def test_receiver_call_weighting_missing_and_zero_counts():
     all_rows=[]
     for iteration,(duration,calls) in enumerate(((10,2),(90,3),(None,None))):
-        report=dict(operation='dispatch',active_aiv=16,frequency_hz=1e6,traffic_available=False,traffic=None,
-                    records=[] if duration is None else [dict(core=8,stage='recv_consume',first_tick=0,last_tick=100,
-                                                              total_ticks=duration,calls=calls)])
+        report=dict(operation='dispatch',active_aiv=16,frequency_hz=1e6,traffic=[],
+                    records=[dict(core=core,stage='kernel',total_ticks=100) for core in range(8,16)]+([] if duration is None else [dict(core=8,stage='recv_metadata',first_tick=0,last_tick=100,total_ticks=duration,calls=calls,segments=calls)]))
         all_rows.extend(analyzer.receiver_samples(report,dict(rank=0,iteration=iteration)))
-    entry=next(row for row in analyzer.receiver_summary(all_rows) if row['core']==8 and row['stage']=='recv_consume')
+    entry=next(row for row in analyzer.receiver_summary(all_rows) if row['core']==8 and row['stage']=='recv_metadata')
     assert entry['samples']==3 and entry['observed_samples']==2
     assert entry['per_call']['mean']==17.5  # (10/2+90/3)/2
     assert entry['weighted_per_call']==20  # (10+90)/(2+3), separate metric

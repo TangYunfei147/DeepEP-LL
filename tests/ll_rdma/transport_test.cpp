@@ -39,8 +39,8 @@ int main() {
                     for(auto stage : {LlStageTimer::SendRdmaStage, LlStageTimer::SendRdmaBodyPost,
                          LlStageTimer::SendRdmaBodyWait, LlStageTimer::SendRdmaFlagPost,
                          LlStageTimer::SendRdmaFlagWait, LlStageTimer::SendRdmaRestore})
-                        assert(counters[LlStageTimer::StageOffset(stage)+3U]==1U);
-                    assert(counters[LlStageTimer::StageOffset(LlStageTimer::SendMteWrite)+3U]==0U);
+                        assert(counters[LlStageTimer::ControlOffset(stage)]==1U);
+                    assert(counters[LlStageTimer::ControlOffset(LlStageTimer::SendMteWrite)]==0U);
 #else
                     LlTransport::Packet(&a,16,0,{packet.data()},bytes);
 #endif

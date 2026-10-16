@@ -139,7 +139,6 @@ public:
                 if (probe.readyMask == 0U) scan += count;
             } while (probe.readyMask == 0U);
             if (timer) timer->End(LlStageTimer::RecvWait);
-            if (timer) timer->Start(LlStageTimer::RecvConsume);
 
             // Load and consume the immutable snapshot in the same descending
             // order. Higher-index removals cannot change lower pending entries.
@@ -164,7 +163,6 @@ public:
                 tasks_.RemovePending(scan + index);
                 ++consumed;
             }
-            if (timer) timer->End(LlStageTimer::RecvConsume);
         }
         if (timer) timer->Start(LlStageTimer::RecvCleanup);
         // 5. pending 清空后，等待各 lane 在途写入，随后统一清除本核所有槽位的块标记。
@@ -331,11 +329,11 @@ private:
             if (timer_) timer_->Start(LlStageTimer::RecvOutputWrite);
             DataCopyPad(relayReadIndex_[uint64_t(row) * k_ * 2U], tail.ReadIndex(), {1U, k_ * 8U, 0U, 0U, 0U});
             if (timer_) timer_->End(LlStageTimer::RecvOutputWrite);
-            if (timer_) timer_->Start(LlStageTimer::RecvForward);
             const uint32_t sourceRank = tail.Header().GetValue(0U);
             const uint32_t ranks = uint32_t(args_->rankSize);
             const uint32_t members = tail.ReadIndex().GetValue(0U);
             for (uint32_t i = 0U; i < members; ++i) {
+                if (timer_) timer_->Start(LlStageTimer::RecvForward);
                 const uint32_t index = tail.Entry(i).GetValue(0U);
                 const uint32_t expertId = index & 0xffffU;
                 const uint32_t q = index >> 16U;
@@ -345,12 +343,12 @@ private:
                     uint64_t(data_.tokenStride), true);
                 LlTransport::Packet(args_, destinationRank,
                     DispatchServerDedupDispatchOffset(data_, sourceRank, destinationRank,
-                        expertId % localExperts_, q, ranks, localExperts_, bs_), wire, uint32_t(data_.tokenStride), lane);
+                        expertId % localExperts_, q, ranks, localExperts_, bs_), wire, uint32_t(data_.tokenStride), lane, nullptr, timer_);
                 if (expertTimer_) expertTimer_->End(expertId, LlExpertTimer::Forward);
+                if (timer_) timer_->End(LlStageTimer::RecvForward);
                 // SDK CQ polling uses MTE2_S. This lane's event was consumed at
                 // entry; other prefetched lanes (including 7) still own theirs.
             }
-            if (timer_) timer_->End(LlStageTimer::RecvForward);
         }
         SetFlag<HardEvent::MTE3_MTE2>(lane);
     }

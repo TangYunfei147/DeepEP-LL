@@ -83,6 +83,7 @@ public:
             const uint32_t count = SelectServer(ServerDedupHalfOrder(servers, ownServer, step - 1U), owner, step == 1U);
             for (uint32_t task = 0; task < count; ++task) {
                 const uint32_t row = uint32_t(rows_.GetValue(task));
+                if (timer_) timer_->Start(LlStageTimer::CombineReduceTask);
                 LoadTask(row);
                 const uint32_t source = uint32_t(table2Ub_.GetValue(0U));
                 const uint32_t token = uint32_t(table2Ub_.GetValue(1U));
@@ -97,6 +98,7 @@ public:
                 else
                     Aggregate<bfloat16_t>(row, source, members + 1U);
                 Send(completed % outputLanes_, source, token, topk);
+                if (timer_) timer_->End(LlStageTimer::CombineReduceTask);
                 ++completed;
             }
             // Reuse phase scratch with its Vector dependency, not an MTE3 drain.
@@ -193,7 +195,9 @@ private:
     __aicore__ inline void Load(uint32_t row, uint32_t source, uint32_t member)
     {
         const uint32_t lane = (inputSequence_ + member) % inputLanes_;
+        if (timer_) timer_->Start(LlStageTimer::CombineDataWait);
         WaitFlag<HardEvent::V_MTE2>(lane);
+        if (timer_) timer_->End(LlStageTimer::CombineDataWait);
         GlobalTensor<uint16_t> data;
         if (member == 0U) {
             data = expert_[uint64_t(row) * h_];
@@ -222,7 +226,9 @@ private:
         for (uint32_t member = 0; member < contributions; ++member) {
             const uint32_t lane = (inputSequence_ + member) % inputLanes_;
             const float weight = weights.GetValue(member * 2U + 1U);
+            if (timer_) timer_->Start(LlStageTimer::CombineDataWait);
             WaitFlag<HardEvent::MTE2_V>(lane);
+            if (timer_) timer_->End(LlStageTimer::CombineDataWait);
             Cast(cast_, inputs_[lane * inputBytes_ / 2U].template ReinterpretCast<T>(), RoundMode::CAST_NONE, h_);
             SetFlag<HardEvent::V_MTE2>(lane);
             // Prefetch may reuse this input after Cast, independent of weighted
@@ -245,18 +251,22 @@ private:
     __aicore__ inline void Send(uint32_t lane, uint32_t source, uint32_t token, uint32_t topk)
     {
         // Only output-lane reuse waits for MTE3; aggregation entry never does.
+        if (timer_) timer_->Start(LlStageTimer::CombineDataWait);
         WaitFlag<HardEvent::MTE3_V>(lane);
+        if (timer_) timer_->End(LlStageTimer::CombineDataWait);
         auto output = outputs_[lane * packetBytes_];
         auto dst = output.ReinterpretCast<int32_t>();
         auto src = low_.ReinterpretCast<int32_t>();
         Copy(dst, src, uint64_t(64U), uint8_t(blocks_), {1U, 1U, 16U, 15U});
         Copy(dst[64U], src[64U], uint64_t(56U), uint8_t(blocks_), {1U, 1U, 16U, 15U});
         SetFlag<HardEvent::V_MTE3>(lane);
+        if (timer_) timer_->Start(LlStageTimer::CombineDataWait);
         WaitFlag<HardEvent::V_MTE3>(lane);
+        if (timer_) timer_->End(LlStageTimer::CombineDataWait);
         // A reduced result is a forwarding hop, not a byte-for-byte relay.
         if (timer_) timer_->CountData(uint32_t(args_->rank), source, packetBytes_, true);
         LlTransport::Packet(args_, source, window_ + COMBINE_DEDUP_EP_SERVER_DEDUP_SHARED_DATA_OFFSET +
-            (uint64_t(token) * k_ + topk) * packetBytes_, output, packetBytes_);
+            (uint64_t(token) * k_ + topk) * packetBytes_, output, packetBytes_, 7U, nullptr, timer_);
         SetFlag<HardEvent::MTE3_V>(lane);
     }
 

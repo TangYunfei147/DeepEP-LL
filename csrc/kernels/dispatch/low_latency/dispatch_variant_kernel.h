@@ -72,7 +72,6 @@ extern "C" [[bisheng::core_ratio(0, 1)]] __global__ __aicore__ void DEEPEP_LL_VA
     const uint8_t expandXOutDtype = tiling->expandXOutDtype;
     const auto inputMode = static_cast<DispatchDedup::EpServerDedupInputMode>(tiling->inputMode);
     AscendC::TPipe pipe;
-    timer.Start(LlStageTimer::WorkerInit);
     // Host chooses the specialization without reading device memory. Verify the
     // uploaded tiling still agrees before executing the unchanged algorithm.
     if (DispatchDedup::LlDispatchVariantForTiling(dtype, quantMode, expandXOutDtype,
@@ -86,7 +85,6 @@ extern "C" [[bisheng::core_ratio(0, 1)]] __global__ __aicore__ void DEEPEP_LL_VA
         kernel.Init(commArgs, x, expertIds, expertScales, expandXOut, dynamicScalesOut, expertTokenNumsOut, sendCountsOut,
                     tokenTypeOut, destinationIndexOut, relayReadIndexOut, sourceMaskOut, expertScalesOut, bs, h, topK,
                     moeExpertNum, expertTokenNumsType, &pipe, inputScales, enableDedup, &timer, &expert);
-        timer.End(LlStageTimer::WorkerInit);
         kernel.Process();
     }
     timer.End(LlStageTimer::Kernel);

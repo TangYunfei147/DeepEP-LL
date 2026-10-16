@@ -1,8 +1,4 @@
-"""Optional, separate LL device-stage diagnostics. No Torch import for parsing.
-
-Raw values are GetSystemCycle ticks. Supply that counter's frequency explicitly
-to convert to microseconds; do not substitute the AIV compute clock.
-"""
+"""Bounded per-occurrence LL timing. Durations are derived offline from events only."""
 from contextlib import contextmanager
 import json
 import math
@@ -10,175 +6,167 @@ from pathlib import Path
 import threading
 
 MAGIC = 0x4C4C5431
-SCHEMA = 3
-DEFAULT_FREQUENCY_HZ = 1_000_000_000  # Target-confirmed: time_us = ticks / 1000.
-SLOTS, FIELDS = 32, 8
-STAGES = ('header', 'kernel', 'magic', 'worker_init', 'count_init', 'count_send', 'sender',
-          'send_prepare', 'send_payload', 'send_metadata', 'count_receive', 'count_prefix',
-          'count_publish', 'receiver', 'recv_prepare', 'recv_wait', 'recv_consume', 'recv_cleanup',
-          'count_finish', 'combine_prepare', 'combine_notify', 'combine_wait_ready',
-          'combine_direct', 'combine_partial', 'combine_aggregate', 'combine_drain', 'combine_final_drain',
-          'send_classify', 'send_pack', 'send_issue')
-LEGACY_STAGES = STAGES
-STAGES += ('recv_lane_wait', 'recv_gm_to_ub', 'recv_load_wait', 'recv_metadata',
-           'recv_output_wait', 'recv_output_write', 'recv_forward',
-           'send_input_gm_to_ub', 'send_input_wait', 'send_tail', 'send_lane_wait',
-           'send_mte_write', 'send_rdma_stage', 'send_rdma_body_post', 'send_rdma_body_wait',
-           'send_rdma_flag_post', 'send_rdma_flag_wait', 'send_rdma_restore')
-TRAFFIC_CLASSES = ('local', 'intrahost_first', 'intrahost_forward',
-                   'interhost_first', 'interhost_forward')
-TRAFFIC_OFFSET, TRAFFIC_FLAGS_OFFSET = 208, 228
-ACTIVE = 1 << 62
-NOISY_SEND_ENVELOPES = frozenset(('send_input_gm_to_ub', 'send_input_wait', 'send_tail',
-                                 'send_lane_wait', 'send_issue', 'send_mte_write'))
+SCHEMA, FIELDS = 4, 8
+DEFAULT_FREQUENCY_HZ = 1_000_000_000
+STAGES = ('header', 'kernel', 'magic', 'count_init', 'count_send', 'send_prepare', 'send_metadata', 'count_receive', 'count_prefix', 'count_publish', 'recv_prepare', 'recv_wait', 'recv_cleanup', 'count_finish', 'combine_prepare', 'combine_notify', 'combine_wait_ready', 'combine_drain', 'combine_final_drain', 'send_classify', 'send_route', 'recv_lane_wait', 'recv_gm_to_ub', 'recv_load_wait', 'recv_metadata', 'recv_output_wait', 'recv_output_write', 'recv_forward', 'send_input_gm_to_ub', 'send_input_wait', 'send_tail', 'send_lane_wait', 'send_mte_write', 'send_rdma_stage', 'send_rdma_body_post', 'send_rdma_body_wait', 'send_rdma_flag_post', 'send_rdma_flag_wait', 'send_rdma_restore', 'combine_return_task', 'combine_reduce_task', 'combine_output_task', 'combine_data_wait', 'combine_wait_result')
+TRAFFIC_CLASSES = ('local', 'intrahost_first', 'intrahost_forward', 'interhost_first', 'interhost_forward')
+MODES = {1:'observe', 2:'drain', 3:'mega'}
+MAX_DYNAMIC_EVENTS = 4096
+CAPACITIES = tuple(4 if name == "recv_prepare" else 1 if name in ('kernel', 'magic', 'count_init', 'count_send', 'send_prepare', 'send_metadata', 'count_receive', 'count_prefix', 'count_publish', 'recv_cleanup', 'count_finish', 'combine_prepare', 'combine_notify', 'combine_wait_ready', 'combine_drain', 'combine_final_drain') else MAX_DYNAMIC_EVENTS for name in STAGES[1:])
+EVENT_OFFSETS = []
+_event_end = 128
+for _capacity in CAPACITIES:
+    EVENT_OFFSETS.append(_event_end)
+    _event_end += _capacity * 3
+EVENT_WORDS = (_event_end + 63)//64*64
+SLOTS = EVENT_WORDS // FIELDS
 _state = threading.local()
 
 
+def event_layout():
+    return dict(schema=SCHEMA, slots=SLOTS, fields=FIELDS, stages=list(STAGES), capacities=list(CAPACITIES),event_fields=3)
+
+
+def compact_device_tensor(cpu_tensor):
+    """Extract written slots, rather than serializing the entire zero-filled arena."""
+    values=cpu_tensor.view(cpu_tensor.shape[0], EVENT_WORDS)
+    cores=[]
+    for core in range(cpu_tensor.shape[0]):
+        base=values[core,:128].tolist()
+        if base[85] or any(base[8+len(CAPACITIES):64]) or any(base[86:]):
+            raise ValueError(f'Event overflow/boundary error or reserved storage modified on core {core}: flags={base[85]}')
+        counts=base[8:8+len(CAPACITIES)]
+        events={}
+        for stage,(count,capacity) in enumerate(zip(counts,CAPACITIES),1):
+            if count>capacity:
+                raise ValueError(f'Event unfinished/capacity exceeded: core={core}, stage={STAGES[stage]}, count={count}, capacity={capacity}')
+            if count:
+                offset=EVENT_OFFSETS[stage-1]
+                events[STAGES[stage]]=values[core,offset:offset+count*3].view(count,3).tolist()
+        cores.append(dict(header=base[:8],counts=counts,
+                          traffic=[base[n:n+4] for n in range(64,84,4)],flags=base[84],errors=base[85],events=events))
+    return dict(schema=SCHEMA,cores=cores)
+
+
 def parse_records(raw, operation, frequency_hz=None):
-    if operation not in ('dispatch', 'combine'):
+    if operation not in ('dispatch','combine'):
         raise ValueError('Expected dispatch or combine')
-    if frequency_hz is not None and (not math.isfinite(frequency_hz) or frequency_hz <= 0):
+    if frequency_hz is not None and (not math.isfinite(frequency_hz) or frequency_hz<=0):
         raise ValueError('Counter frequency must be finite and positive')
-    cores = len(raw)
-    if not 16 <= cores <= 72 or cores % 2:
+    if not isinstance(raw,dict) or raw.get('schema')!=SCHEMA or not isinstance(raw.get('cores'),list):
+        raise ValueError('This branch requires per-occurrence event schema 4; recollect with its matching wheel')
+    cores=len(raw['cores'])
+    if not 16<=cores<=72 or cores%2:
         raise ValueError('Expected actual even AIV count in [16,72]')
-    op = 1 if operation == 'dispatch' else 2
-    records, traffic, modes, schemas = [], [], set(), set()
-    for core, slots in enumerate(raw):
-        if len(slots) != SLOTS or any(len(row) != FIELDS for row in slots):
-            raise ValueError('Timer shape mismatch')
-        header = slots[0]
-        schema = header[1]
-        if schema not in (1, 2, 3):
-            raise ValueError('Unsupported timer schema')
-        names = LEGACY_STAGES if schema == 1 else STAGES
-        schemas.add(schema)
-        if any(type(value) is not int or value < 0 for value in header):
-            raise ValueError("Invalid timer header word")
-        if header[:5] != [MAGIC, schema, op, cores, core] or header[6:] != [1, len(names)]:
-            raise ValueError(f'Incomplete or mismatched timer header on core {core}')
-        if header[5] not in (1, 2):
-            raise ValueError('Unknown boundary mode')
+    records,events,traffic,modes,flags=[],[],[],set(),set()
+    def word(value):
+        return type(value) is int and 0<=value<1<<63
+    for core,entry in enumerate(raw['cores']):
+        header=entry.get('header');counts=entry.get('counts');ledger=entry.get('traffic');pairs=entry.get('events')
+        if (not isinstance(header,list) or len(header)!=8 or not all(word(value) for value in header)
+                or header[:5]!=[MAGIC,SCHEMA,1 if operation=='dispatch' else 2,cores,core]
+                or header[5] not in MODES or header[6:]!=[1,len(STAGES)]):
+            raise ValueError(f'Incomplete/mismatched event header: core={core}')
         modes.add(header[5])
-        if schema in (2, 3):
-            words = [value for row in slots for value in row]
-            if any(type(value) is not int or not 0 <= value < (1 << 63) for value in words):
-                raise ValueError('Invalid raw timer word')
-            stage_end = 8 + (len(names)-1)*4
-            if schema == 3:
-                if any(words[stage_end:TRAFFIC_OFFSET]) or any(words[TRAFFIC_FLAGS_OFFSET+1:]):
-                    raise ValueError('Nonzero reserved traffic words')
-                flags = words[TRAFFIC_FLAGS_OFFSET]
-                if flags & ~1:
-                    raise ValueError('Unknown traffic flags')
-                for index, category in enumerate(TRAFFIC_CLASSES):
-                    offset = TRAFFIC_OFFSET + index*4
-                    byte_count, operations, read_bytes, read_operations = words[offset:offset+4]
-                    if read_bytes > byte_count or read_operations > operations:
-                        raise ValueError('Traffic reads must be a subset of total traffic')
-                    traffic.append(dict(core=core, category=category, bytes=byte_count,
-                                        operations=operations, read_bytes=read_bytes,
-                                        read_operations=read_operations, flags=flags))
-            normalized = [header]
-            for offset in range(8, stage_end if schema == 3 else SLOTS * FIELDS, 4):
-                first, last, total, count = words[offset:offset+4]
-                normalized.append([first, last, total, count & ~ACTIVE, first, int(bool(count & ACTIVE)), 0, 0])
-            slots = normalized
-        if slots[1][3] != 1:
-            raise ValueError('Exactly one completed kernel interval is required')
-        for stage, row in enumerate(slots[1:], 1):
-            if any(type(value) is not int or value < 0 for value in row):
-                raise ValueError('Invalid raw timer word')
-            if stage >= len(names):
-                if any(row):
-                    raise ValueError('Unknown stage data')
-                continue
-            first, last, total, count, active_start, active, reserved0, reserved1 = row
-            if active or reserved0 or reserved1:
-                raise ValueError(f'Unclosed or invalid stage {STAGES[stage]} on core {core}')
+        if not word(entry.get('errors')) or entry['errors']:
+            raise ValueError(f'Event overflow or unmatched boundaries on core {core}; no truncated trace is accepted')
+        if not word(entry.get('flags')) or entry['flags'] & ~1:
+            raise ValueError('Unknown diagnostic traffic flags')
+        flags.add(entry['flags'])
+        if not isinstance(counts,list) or len(counts)!=len(CAPACITIES) or not all(word(value) for value in counts):
+            raise ValueError('Invalid event counts')
+        if not isinstance(pairs,dict) or set(pairs)!={STAGES[n+1] for n,count in enumerate(counts) if count}:
+            raise ValueError('Event types differ from actual counts')
+        if not isinstance(ledger,list) or len(ledger)!=5 or any(not isinstance(row,list) or len(row)!=4 for row in ledger):
+            raise ValueError('Invalid byte counter shape')
+        for category,row in zip(TRAFFIC_CLASSES,ledger):
+            if not all(word(value) for value in row) or row[2]>row[0] or row[3]>row[1]:
+                raise ValueError('Read counters must be a subset of total counters')
+            traffic.append(dict(core=core,category=category,bytes=row[0],operations=row[1],
+                                read_bytes=row[2],read_operations=row[3],flags=entry['flags']))
+        if counts[0]!=1:
+            raise ValueError('Exactly one kernel event is required per core')
+        for stage,(count,capacity) in enumerate(zip(counts,CAPACITIES),1):
+            if count>capacity:
+                raise ValueError(f'Event capacity exceeded or unclosed: core={core}, stage={STAGES[stage]}')
             if not count:
-                if any(row):
-                    raise ValueError('Unfinished stage')
                 continue
-            if last < first or active_start < first or active_start > last or total > last-first:
-                raise ValueError('Invalid timestamp order or accumulated interval')
-            record = dict(core=core, role='send' if core < cores//2 else 'receive',
-                          stage=names[stage], first_tick=first, last_tick=last,
-                          total_ticks=total, calls=count, average_ticks=total/count)
+            values=pairs[STAGES[stage]]
+            if not isinstance(values,list) or len(values)!=count:
+                raise ValueError('Event count mismatch')
+            total=0;previous=None
+            for index,pair in enumerate(values):
+                if (not isinstance(pair,list) or len(pair)!=3 or not all(word(value) for value in pair)
+                        or pair[1]<pair[0] or (previous is not None and pair[0]<previous)):
+                    raise ValueError('Invalid event timestamps/order')
+                first,last,task=pair;previous=last;total+=last-first
+                if (stage==1 and task!=0) or (stage!=1 and task==0):
+                    raise ValueError("Invalid task identity")
+                event=dict(core=core,role='send' if core<cores//2 else 'receive',stage=STAGES[stage],
+                           index=index,task_id=task,first_tick=first,last_tick=last,total_ticks=last-first,calls=1)
+                if frequency_hz is not None:
+                    event['total_us']=(last-first)*1e6/frequency_hz
+                events.append(event)
+            record=dict(core=core,role='send' if core<cores//2 else 'receive',stage=STAGES[stage],
+                        first_tick=values[0][0],last_tick=values[-1][1],total_ticks=total,calls=len({pair[2] for pair in values}),segments=count,average_ticks=total/len({pair[2] for pair in values}))
             if frequency_hz is not None:
-                record['total_us'] = total*1e6/frequency_hz
-                record['average_us'] = total*1e6/frequency_hz/count
+                record.update(total_us=total*1e6/frequency_hz,average_us=total*1e6/frequency_hz/len({pair[2] for pair in values}))
             records.append(record)
-    if len(modes) != 1:
-        raise ValueError('Mixed boundary modes')
-    if len(schemas) != 1:
-        raise ValueError('Mixed timer schemas')
-    return dict(schema=schema, operation=operation, active_aiv=cores,
-                boundary_mode='observe' if modes == {1} else 'drain', frequency_hz=frequency_hz,
-                clock='AscendC::GetSystemCycle; no cross-rank clock alignment assumed', records=records,
-                traffic_available=schema == 3, traffic=traffic if schema == 3 else None,
-                interpretation='Nested and overlapping stages must not be summed; repeated-stage totals exclude gaps.')
+        work=sorted((row for row in events if row['core']==core and row['stage']!='kernel' and row['total_ticks']>0),key=lambda row:row['first_tick'])
+        if any(a['last_tick']>b['first_tick'] for a,b in zip(work,work[1:])):
+            raise ValueError('Overlapping execution/wait tasks; nested parent timing is unsupported')
+        kernel=pairs['kernel'][0]
+        if any(first<kernel[0] or last>kernel[1] for values in pairs.values() for first,last,task in values):
+            raise ValueError('Stage event outside its core kernel event')
+    if len(modes)!=1 or len(flags)!=1:
+        raise ValueError('Mixed event modes or diagnostic flags')
+    return dict(schema=SCHEMA,operation=operation,active_aiv=cores,boundary_mode=MODES[next(iter(modes))],
+                frequency_hz=frequency_hz,records=records,events=events,traffic=traffic,
+                interpretation='All timing statistics are derived from actual per-occurrence events. Execution/wait fragments are exclusive; kernel is a separate duration overview.')
 
 
-def chrome_trace(saved_records, frequency_hz=None, lane_layout='core', show_repeated=False):
-    """Export rank/sample-local timelines; schema 1 cannot reconstruct repeated calls."""
-    if lane_layout not in ('core', 'stage'):
+def chrome_trace(saved_records, frequency_hz=None, lane_layout='core'):
+    if lane_layout not in ('core','stage'):
         raise ValueError('Expected core or stage lane layout')
-    events, identities = [], set()
-    for pid, saved in enumerate(saved_records, 1):
-        frequency = frequency_hz if frequency_hz is not None else saved.get('frequency_hz')
+    output=[];identities=set()
+    for pid,saved in enumerate(saved_records,1):
+        frequency=frequency_hz if frequency_hz is not None else saved.get('frequency_hz')
         if frequency is None:
             raise ValueError('Chrome trace requires explicit GetSystemCycle frequency_hz')
-        report = parse_records(saved['raw'], saved['operation'], frequency)
-        meta = saved.get('metadata', {})
-        rank, iteration = meta.get('rank', 'unknown'), meta.get('iteration', pid - 1)
-        identity = (meta.get('run_id'), meta.get('case_id'), report['operation'], rank, iteration)
+        report=parse_records(saved['raw'],saved['operation'],frequency)
+        meta=saved.get('metadata',{})
+        rank,iteration=meta.get('rank','unknown'),meta.get('iteration',pid-1)
+        identity=(meta.get('run_id'),meta.get('case_id'),report['operation'],rank,iteration)
         if identity in identities:
             raise ValueError('Duplicate rank/operation/sample trace')
         identities.add(identity)
-        origin = min(row['first_tick'] for row in report['records'])
-        name = f"{report['operation']} rank {rank} sample {iteration} ({report['boundary_mode']}; independent origin)"
-        events.append(dict(ph='M', name='process_name', pid=pid, tid=0, args={'name': name}))
-        lanes = set()
-        # Parents first at equal starts, so viewers can nest complete events.
-        records = sorted(report['records'], key=lambda row: (row['core'], row['first_tick'], -row['last_tick']))
-        for row in records:
-            if not show_repeated and row['calls'] > 1 and row['stage'] in NOISY_SEND_ENVELOPES:
-                continue
-            tid = row['core'] if lane_layout == 'core' else row['core'] * 64 + STAGES.index(row['stage'])
-            lane = f"AIV {row['core']:02d} {row['role']}"
-            if lane_layout == 'stage':
-                lane += f" / {row['stage']}"
+        origin=min(row['first_tick'] for row in report['events'])
+        output.append(dict(ph='M',name='process_name',pid=pid,tid=0,
+                           args={'name':f"{report['operation']} rank {rank} sample {iteration} ({report['boundary_mode']})"}))
+        lanes=set()
+        for row in sorted(report['events'],key=lambda row:(row['core'],row['first_tick'],-row['last_tick'])):
+            tid=10000+row['core'] if row['stage']=='kernel' else (row['core'] if lane_layout=='core' else row['core']*64+STAGES.index(row['stage']))
             if tid not in lanes:
-                events.append(dict(ph='M', name='thread_name', pid=pid, tid=tid, args={'name': lane}))
-                events.append(dict(ph='M', name='thread_sort_index', pid=pid, tid=tid, args={'sort_index': tid}))
                 lanes.add(tid)
-            repeated = row['calls'] > 1
-            span = row['last_tick'] - row['first_tick']
-            args = dict(row, rank=rank, iteration=iteration, operation=report['operation'],
-                        sampling=meta.get('sampling'),
-                        boundary_mode=report['boundary_mode'], frequency_hz=frequency,
-                        origin_tick=origin, span_ticks=span, gap_ticks=span-row['total_ticks'],
-                        interval_kind='repeated envelope' if repeated else 'single interval',
-                        clock_alignment='Independent origin per rank/operation/sample; not profiler aligned')
-            events.append(dict(ph='X', cat='LL.stage.envelope' if repeated else 'LL.stage',
-                               name=row['stage'] + (f" [envelope x{row['calls']}]" if repeated else ''),
-                               pid=pid, tid=tid, ts=(row['first_tick']-origin)*1e6/frequency,
-                               dur=span*1e6/frequency, args=args))
+                label=(f"Kernel overview AIV {row['core']:02d}" if row['stage']=='kernel' else f"AIV {row['core']:02d} {row['role']}") + (f" / {row['stage']}" if lane_layout=='stage' else '')
+                output.append(dict(ph='M',name='thread_name',pid=pid,tid=tid,args={'name':label}))
+                output.append(dict(ph='M',name='thread_sort_index',pid=pid,tid=tid,args={'sort_index':tid}))
+            output.append(dict(ph='X',cat='LL.event',name=row['stage'],pid=pid,tid=tid,
+                               ts=(row['first_tick']-origin)*1e6/frequency,dur=row['total_us'],
+                               args=dict(row,rank=rank,iteration=iteration,interval_kind='actual occurrence',
+                                         origin_tick=origin,frequency_hz=frequency,boundary_mode=report['boundary_mode'],
+                                         clock_alignment='Independent origin per rank/operation/sample')))
     if not identities:
-        raise ValueError('No LL stage records')
-    # Chrome Trace Event ts/dur are microseconds. displayTimeUnit is a viewer
-    # preference with a different enum; Chrome tracing rejects 'us'. Omit it.
-    return dict(traceEvents=events,
-                metadata={'format': 'LL stage Chrome trace (schemas 1/2/3)', 'lane_layout': lane_layout,
-                          'hidden_repeated_send_envelopes': not show_repeated,
-                          'interpretation': 'Repeated events show envelopes including gaps; args.total_us is accumulated active time. Independent rank/sample origins; no cross-rank or profiler clock alignment.'})
+        raise ValueError('No LL stage events')
+    return dict(traceEvents=output,metadata={'format':'LL per-occurrence events schema 4','lane_layout':lane_layout,
+                                           'interpretation':'Exclusive task execution/wait intervals; per-core kernel duration uses a separate overview lane. No cross-rank clock alignment.'})
+
 
 
 class StageTrace:
-    def __init__(self, buffer, operation, mode='observe', frequency_hz=DEFAULT_FREQUENCY_HZ,
+    def __init__(self, buffer, operation, mode='mega', frequency_hz=DEFAULT_FREQUENCY_HZ,
                  expert_config=None):
-        if operation not in ('dispatch', 'combine') or mode not in ('observe', 'drain'):
+        if operation not in ('dispatch', 'combine') or mode not in ('observe', 'drain', 'mega'):
             raise ValueError('Invalid LL stage diagnostic configuration')
         if frequency_hz is not None and (not math.isfinite(frequency_hz) or frequency_hz <= 0):
             raise ValueError('Counter frequency must be finite and positive')
@@ -188,12 +176,12 @@ class StageTrace:
         if not getattr(native, 'low_latency_stage_timer_enabled', False):
             raise RuntimeError('Rebuild the full wheel with DEEPEP_LL_STAGE_TIMER=ON')
         schema = native.low_latency_stage_timer_layout()
-        if schema != dict(schema=SCHEMA, slots=SLOTS, fields=FIELDS, stages=list(STAGES)):
+        if schema != event_layout():
             raise RuntimeError('LL timer Python/native schema mismatch')
         cfg = native.low_latency_core_config()
         if not cfg['runtime_device_queried']:
             raise RuntimeError('Bind the actual NPU before allocating a timer')
-        words = cfg['active_aiv'] * SLOTS * FIELDS
+        words = cfg['active_aiv'] * EVENT_WORDS
         storage = torch.zeros(words + 63, dtype=torch.int64, device=f"npu:{cfg['device']}")
         # Align the view to 512B even if an allocator returns only 8B alignment.
         offset = (-storage.data_ptr()) % 512 // 8
@@ -222,8 +210,9 @@ class StageTrace:
         if self.launches != 1:
             raise RuntimeError('A diagnostic context must contain exactly one LL operation')
         # Public LL calls establish a current-stream dependency on completion.
-        self.raw = self.tensor.cpu().tolist()
+        self.raw = compact_device_tensor(self.tensor.cpu())
         self.report = parse_records(self.raw, self.operation, self.frequency_hz)
+        self.report.pop("events", None)
         if self.expert_tensor is not None:
             from .ll_expert_timer import parse_records as parse_experts
             self.expert_raw=self.expert_tensor.cpu().tolist()
@@ -238,7 +227,7 @@ class StageTrace:
         if not path.is_absolute():
             raise ValueError('Resolve trace output from your project root and pass an absolute path')
         path.parent.mkdir(parents=True, exist_ok=True)
-        saved=dict(**self.report, metadata=metadata or {}, raw=self.raw)
+        saved=dict(schema=SCHEMA,operation=self.operation,frequency_hz=self.frequency_hz,metadata=metadata or {},raw=self.raw)
         if getattr(self, 'expert_raw', None) is not None:
             saved['expert']=dict(raw=self.expert_raw, **self.expert_config)
         with path.open('x', encoding='utf-8') as stream:
@@ -253,7 +242,7 @@ class StageTrace:
 
 
 @contextmanager
-def capture(buffer, operation, mode='observe', frequency_hz=DEFAULT_FREQUENCY_HZ,
+def capture(buffer, operation, mode='mega', frequency_hz=DEFAULT_FREQUENCY_HZ,
             *, prepared=None, defer_complete=False):
     """Capture exactly one payload LL call; use independently of profiler loops."""
     active = getattr(_state, 'active', {})
@@ -289,4 +278,4 @@ def attach(buffer, tensors, operation):
     if getattr(trace, 'expert_tensor', None) is not None:
         tensors['ll_expert_timer'] = trace.expert_tensor
     # The native binding derives mode from this CPU scalar, not an NPU read.
-    tensors['ll_stage_timer_mode'] = 1 if trace.mode == 'observe' else 2
+    tensors['ll_stage_timer_mode'] = {'observe':1,'drain':2,'mega':3}[trace.mode]

@@ -68,7 +68,7 @@ __aicore__ inline void Quiet(uint32_t peer, LocalTensor<uint8_t> scratch, uint32
 // its completion and WQE costs must be measured before introducing a ring.
 __aicore__ inline void Packet(const __gm__ Args* a, uint32_t peer, uint64_t offset,
                               LocalTensor<uint8_t> packet, uint32_t bytes, uint32_t syncId=7U,
-                              LlStageTimer::DeviceTimer* timer=nullptr) {
+                              LlStageTimer::DeviceTimer* timer=nullptr, LlStageTimer::DeviceTimer* taskTimer=nullptr) {
     Check(a, peer, offset, bytes);
     auto dst = Address(a, peer, offset);
     if (!RemoteWrite(a, peer)) {
@@ -88,13 +88,17 @@ __aicore__ inline void Packet(const __gm__ Args* a, uint32_t peer, uint64_t offs
     for (uint32_t b = 0; b < bytes; b += 512U) Put(a, peer, dst + b, stage + b, 480U, packet, syncId);
     if (timer) timer->End(LlStageTimer::SendRdmaBodyPost);
     if (timer) timer->Start(LlStageTimer::SendRdmaBodyWait);
+    if (taskTimer) taskTimer->Start(LlStageTimer::SendRdmaBodyWait);
     Quiet(peer, packet, syncId);
+    if (taskTimer) taskTimer->End(LlStageTimer::SendRdmaBodyWait);
     if (timer) timer->End(LlStageTimer::SendRdmaBodyWait);
     if (timer) timer->Start(LlStageTimer::SendRdmaFlagPost);
     for (uint32_t b = 0; b < bytes; b += 512U) Put(a, peer, dst + b + 480U, stage + b + 480U, 32U, packet, syncId);
     if (timer) timer->End(LlStageTimer::SendRdmaFlagPost);
     if (timer) timer->Start(LlStageTimer::SendRdmaFlagWait);
+    if (taskTimer) taskTimer->Start(LlStageTimer::SendRdmaFlagWait);
     Quiet(peer, packet, syncId);
+    if (taskTimer) taskTimer->End(LlStageTimer::SendRdmaFlagWait);
     if (timer) timer->End(LlStageTimer::SendRdmaFlagWait);
     if (timer) timer->Start(LlStageTimer::SendRdmaRestore);
     // SDK workspace borrows the first 128B after staging. Restore it because

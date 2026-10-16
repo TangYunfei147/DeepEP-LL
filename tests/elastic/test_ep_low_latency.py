@@ -31,8 +31,8 @@ def validate_stage_timer_capability(requested, capability):
         return
     if not capability["stage_timer"]:
         raise RuntimeError("All ranks must install a DEEPEP_LL_STAGE_TIMER=ON wheel")
-    if capability["stage_timer_schema"] != 3:
-        raise RuntimeError("LL byte diagnostics require timer schema 3; rebuild/install the matching wheel on every rank")
+    if capability["stage_timer_schema"] != 4:
+        raise RuntimeError("LL byte diagnostics require timer schema 4; rebuild/install the matching wheel on every rank")
 
 
 MATRIX_FIELDS = ("num_tokens", "dtype", "num_experts", "hidden", "num_topk", "do_cpu_sync", "fp8_scale_dtype")
@@ -192,7 +192,7 @@ def make_parser():
     parser.add_argument("--ll-stage-timer", action="store_true", help="Separate device-stage diagnostic calls; requires timer-enabled wheel")
     parser.add_argument('--ll-expert-timer', action='store_true', help='Opt-in dispatch per-expert receive work; implies stage capture, requires ABI 5')
     parser.add_argument("--ll-timer-iters", type=int, default=5)
-    parser.add_argument("--ll-timer-mode", choices=("observe", "drain"), default="observe")
+    parser.add_argument("--ll-timer-mode", choices=("observe", "drain", "mega"), default="mega")
     parser.add_argument("--ll-timer-frequency-hz", type=float, default=1_000_000_000, help="GetSystemCycle frequency; default 1GHz (ticks/1000 us)")
     parser.add_argument("--dispatch-only", action="store_true")
     parser.add_argument("--repeat-combine", type=int, default=2)

@@ -13,14 +13,13 @@ spec.loader.exec_module(timer)
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('source', type=Path, help='Raw sample JSON or directory; partial ranks supported')
-    parser.add_argument('--frequency-hz', type=float, default=timer.DEFAULT_FREQUENCY_HZ,
-                        help='GetSystemCycle frequency, default 1GHz (ticks/1000 us)')
+    parser.add_argument('--frequency-hz', type=float, default=None,
+                        help='Override recorded GetSystemCycle frequency')
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--rank', type=int, help='Select one rank')
     parser.add_argument('--iteration', type=int, help='Select one diagnostic iteration')
     parser.add_argument('--operation', choices=('dispatch', 'combine'))
     parser.add_argument('--lane-layout', choices=('core', 'stage'), default='core')
-    parser.add_argument('--show-repeated', action='store_true')
     args = parser.parse_args()
     source = args.source if args.source.is_absolute() else ROOT / args.source
     output = args.output if args.output.is_absolute() else ROOT / args.output
@@ -36,7 +35,7 @@ def main():
         if args.operation is not None and record['operation'] != args.operation:
             continue
         saved.append(record)
-    trace = timer.chrome_trace(saved, args.frequency_hz, args.lane_layout, args.show_repeated)
+    trace = timer.chrome_trace(saved, args.frequency_hz, args.lane_layout)
     output.parent.mkdir(parents=True, exist_ok=True)
     with output.open('x', encoding='utf-8') as stream:
         json.dump(trace, stream)

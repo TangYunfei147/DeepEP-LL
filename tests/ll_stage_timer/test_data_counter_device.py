@@ -10,9 +10,9 @@ COMMON = ROOT / "csrc/kernels/dispatch/low_latency/common"
 def test_counter_source_contract():
     layout = (COMMON / "ll_stage_timer_layout.h").read_text()
     device = (COMMON / "ll_stage_timer_device.h").read_text()
-    assert "kSchema = 3U" in layout
-    assert "kDataCounterOffset = 208U" in layout
-    assert "kDataFlagsOffset = 228U" in layout
+    assert "kSchema = 4U" in layout
+    assert "kDataCounterOffset = 64U" in layout
+    assert "kDataFlagsOffset = 84U" in layout
     assert "#if defined(__CCE__) && defined(__CCE_IS_AICORE__)\n__aicore__ inline" in layout
     body = device.split("inline void CountData(", 1)[1].split("inline void Finish", 1)[0]
     assert "#ifdef DEEPEP_LL_STAGE_TIMER" in body and "if (!address_) return" in body
@@ -71,12 +71,12 @@ using AscendC::PIPE_ALL;
 #include <cassert>
 using namespace LlStageTimer;
 int main() {
- static_assert(kWordsPerCore*8==2048);
+ static_assert(kWordsPerCore*8%512==0);
  static_assert(DataBucket(0,0,false)==0 && DataBucket(0,0,true)==0);
  static_assert(DataBucket(0,15,false)==1 && DataBucket(0,15,true)==2);
  static_assert(DataBucket(0,16,false)==3 && DataBucket(0,16,true)==4);
  static_assert(DataBucket(15,16,false)==3 && DataBucket(16,31,false)==1);
- uint64_t data[kWordsPerCore]={};
+ static uint64_t data[kWordsPerCore]={};
  DeviceTimer timer;
  timer.Init(reinterpret_cast<uint8_t*>(data),2,2);
  timer.CountData(0,0,64,false,true);
@@ -87,15 +87,15 @@ int main() {
  timer.CountData(0,17,2048,true,true);
  assert(AscendC::barriers==0);
 #ifdef DEEPEP_LL_STAGE_TIMER
- assert(data[208]==64 && data[209]==1 && data[210]==64 && data[211]==1);
- assert(data[212]==640 && data[213]==2 && data[214]==128 && data[215]==1);
- assert(data[216]==1024 && data[217]==1 && data[218]==0 && data[219]==0);
- assert(data[220]==1536 && data[221]==1);
- assert(data[224]==2048 && data[225]==1 && data[226]==2048 && data[227]==1);
+ assert(data[64]==64 && data[65]==1 && data[66]==64 && data[67]==1);
+ assert(data[68]==640 && data[69]==2 && data[70]==128 && data[71]==1);
+ assert(data[72]==1024 && data[73]==1 && data[74]==0 && data[75]==0);
+ assert(data[76]==1536 && data[77]==1);
+ assert(data[80]==2048 && data[81]==1 && data[82]==2048 && data[83]==1);
  #ifdef DEEPEP_LL_NO_COMM
- assert(data[228]==1);
+ assert(data[84]==1);
  #else
- assert(data[228]==0);
+ assert(data[84]==0);
  #endif
 #else
  for (auto v:data) assert(v==0);
