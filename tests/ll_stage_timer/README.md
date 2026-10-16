@@ -6,6 +6,8 @@
 
 现有 `--ll-stage-timer` 命令现在自动记录五类数据搬运字节和次数，无额外flag。全rank更新并重新安装匹配timer ON wheel、重新采样；此功能不要求重建已通过身份校验的SDK。EP16分析输出 `bandwidth.csv`，`summary.json` 增加逐轮及每rank汇总。带宽为跨卡首发与转发计数字节除以 `max_core_kernel` 时长代理，不是NIC线速；本卡计数不进入分子，读取计数是总计数的子集。旧schema1/2、NO_COMM试验或缺失频率不产生带宽。详细定义、重建命令和结果解读见 [BANDWIDTH.md](BANDWIDTH.md)。
 
+当前NDR去重dispatch已加入源卡/发送核的发送错峰；适用于M>32，含原EP16、M256场景。实现范围、基线提交及目标A/B步骤见[发送错峰](SEND_STAGGER.md)。
+
 ## 从克隆仓库到执行
 
 以下步骤在**用户目标机**执行。每台参与节点都需准备同一分支、同一提交和匹配wheel；单机EP16，两机EP32，每机16个连续rank。原生LL不支持EP2/4/8。

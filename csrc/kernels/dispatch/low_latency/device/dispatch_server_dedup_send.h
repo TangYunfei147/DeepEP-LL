@@ -13,7 +13,7 @@
 #include "dispatch_dedup_mxfp8_quant.h"
 #include "../common/ep_memory_server_dedup_data_layout.h"
 #include "../common/ep_memory_server_dedup_protocol.h"
-#include "../../../common/ep_server_order.h"
+#include "../common/ll_send_order.h"
 #include "../../../common/ep_packet_receive_layout.h"
 
 namespace DispatchDedup {
@@ -171,6 +171,8 @@ public:
         // 以组内最小 k 对应专家作为首跳目标，把其他成员的路由信息放入包尾，
         // 由目标接收端继续转发。所有首跳优先发出，尽早启动远端 relay。
 
+        const uint32_t rankInGroup = uint32_t(args_->rank) % Group;
+        const uint32_t sendCore = GetBlockIdx();
         for (uint32_t token = 0; token < count_; ++token) {
             uint32_t directMask = 0, firstHopCount = 0;
             if (timer_) timer_->Start(LlStageTimer::SendClassify);
@@ -178,7 +180,9 @@ public:
             if (timer_) timer_->End(LlStageTimer::SendClassify);
             sourceMasks_.SetValue(token, 0U);
             for (uint32_t group = 0; group < firstHopCount; ++group) {
-                const uint32_t mask = firstHopMasks_.GetValue(group);
+                const uint32_t scheduled = LlFirstHopOrder(firstHopCount, rankInGroup, sendCore,
+                                                          start_ + token, group);
+                const uint32_t mask = firstHopMasks_.GetValue(scheduled);
                 uint32_t firstK = 0;
                 while ((mask & (uint32_t(1) << firstK)) == 0U) ++firstK;
                 const uint32_t index = (start_ + token) * k_ + firstK;
@@ -203,7 +207,8 @@ public:
                 }
         }
 
-        // 5. 第二遍按目标 server 稳定扫描 DIRECT：256P+ 半区交替，小规模保留全环顺序。
+        // 5. Rotate the existing DIRECT group order by source card and send core.
+        // Stable scans within each group retain q, token/k ordering and ownership.
         // 首跳和 DIRECT 共用 packets_ 序号及 lane 环；阶段之间不额外等待全部包发完。
 
         // Stable per-server scans retain the original q and token/k order.
@@ -213,7 +218,7 @@ public:
         const uint32_t expertsPerServer = localExperts_ * Group;
         const uint32_t ownServer = args_->rank / Group;
         for (uint32_t step = 0; step < serverNum; ++step) {
-            const uint32_t server = EpServerOrder::ServerDedupDispatchDirectOrder(serverNum, ownServer, step);
+            const uint32_t server = LlDirectGroupOrder(serverNum, ownServer, rankInGroup, sendCore, step);
             const uint32_t firstExpert = server * expertsPerServer;
             for (uint32_t task = 0; task < directCount_; ++task) {
                 const uint32_t expert = directTasks_.GetValue(task * 4U + 2U);
