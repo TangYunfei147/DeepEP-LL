@@ -13,6 +13,7 @@ import subprocess
 import sys
 import sysconfig
 import warnings
+from scripts.shmem_sdk_identity import validate_build_identity
 
 from setuptools.command.build_ext import build_ext
 from setuptools.command.build import build
@@ -130,6 +131,7 @@ def validate_shmem_sdk(root, expected):
     if not manifest.is_file():
         raise RuntimeError("SHMEM SDK needs deepep-sdk.json; see scripts/record_shmem_sdk.py")
     sdk = json.loads(manifest.read_text(encoding="utf-8"))
+    validate_build_identity(sdk.get("build") if isinstance(sdk, dict) else None)
     if sdk.get("revision") != expected["revision"]:
         raise RuntimeError("SHMEM SDK source revision differs from dependencies.lock.json")
     for relative, digest in expected["header_sha256_lf"].items():
@@ -221,6 +223,7 @@ def build_configuration(environment=None):
         sdk = json.loads(manifest.read_text(encoding="utf-8"))
         if not isinstance(sdk, dict):
             raise ValueError("Invalid SHMEM SDK manifest")
+        validate_build_identity(sdk.get("build") if isinstance(sdk, dict) else None)
         if sdk.get("revision") != lock["shmem"]["revision"]:
             raise RuntimeError("SHMEM SDK source revision differs from dependencies.lock.json")
         for relative, expected in lock["shmem"]["header_sha256_lf"].items():
@@ -243,6 +246,7 @@ def build_configuration(environment=None):
             raise
         warnings.warn(f"{exc}; continuing with SHMEM_ROOT={manifest.parent}", RuntimeWarning, stacklevel=2)
     library = manifest.parent / "lib/libshmem.so"
+    validate_build_identity(sdk.get("build") if isinstance(sdk, dict) else None)
     if not library.is_file():
         raise RuntimeError(f"SHMEM SDK is missing {library}")
     files = sorted(

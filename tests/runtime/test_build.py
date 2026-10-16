@@ -105,6 +105,7 @@ def test_sdk_identity_warning(build, monkeypatch, tmp_path, fault):
     monkeypatch.setitem(sys.modules, "pybind11", SimpleNamespace(__version__=lock["python_build"]["pybind11"]))
     identity = {
         "revision": lock["shmem"]["revision"],
+        "build": {"cann_version": "test", "cann_timestamp": "test", "target": "Ascend950", "source_patches": []},
         "sha256": {
             str(path.relative_to(sdk).as_posix()): hashlib.sha256(path.read_bytes()).hexdigest()
             for path in files
@@ -137,6 +138,10 @@ def test_sdk_identity_warning(build, monkeypatch, tmp_path, fault):
         warnings.simplefilter("always")
         if fault in ("missing_library", "missing_device_header"):
             with pytest.raises(RuntimeError, match="missing"):
+                build.build_configuration(env)
+            return
+        if fault in ("missing", "json", "list"):
+            with pytest.raises(RuntimeError, match="identity"):
                 build.build_configuration(env)
             return
         result = build.build_configuration(env)
@@ -403,6 +408,7 @@ def test_compiler_symlink_keeps_invocation_name(build, monkeypatch, tmp_path):
     monkeypatch.setattr(build, "ROOT", source)
     manifest = {
         "revision": lock["shmem"]["revision"],
+        "build": {"cann_version": "test", "cann_timestamp": "test", "target": "Ascend950", "source_patches": []},
         "sha256": {
             str(path.relative_to(sdk)): hashlib.sha256(data.encode()).hexdigest()
             for path, data in files.items()

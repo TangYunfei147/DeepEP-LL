@@ -44,7 +44,8 @@ python -m pip install -r requirements-build.txt
 ```
 
 主构建默认查找 `third-party/shmem/install/shmem`；MegaMoE 启用时默认查找 `third-party/catlass`。
-准备脚本默认要求 SHMEM 源码干净且提交与锁文件一致；已有 build/install 时要求显式 `--rebuild`（会再生成这些构建产物）。
+准备脚本默认要求 SHMEM 源码干净且提交与锁文件一致；已有匹配 SDK 经完整身份校验后复用，身份不一致时要求显式 `--rebuild`。不再应用或接受 ROCE QP 扩容补丁，旧扩容 SDK 不能复用；更新源码不会自动删除或重建现有 SDK 产物。
+旧 QP 扩容 SDK 的精确撤销、Git 更新及显式重建步骤见 [原生 SHMEM 迁移](NATIVE_SHMEM_MIGRATION.md)。
 更换 SDK 前停止使用它的作业，之后重建 wheel。完整边界及离线依赖见 [第三方依赖](../third-party/README.md)。
 
 已有外部 SDK 时，加载 CANN 环境、设置 `DEEPEP_NPU_ARCH=Ascend950` 并安装 `requirements-build.txt` 后，跳过子模块准备和 SHMEM 构建，改用：
@@ -53,9 +54,8 @@ python -m pip install -r requirements-build.txt
 export SHMEM_ROOT=/path/to/pinned/shmem-sdk
 source "$SHMEM_ROOT/set_env.sh"
 export LD_LIBRARY_PATH="$SHMEM_ROOT/lib:${LD_LIBRARY_PATH:-}"
-# 仅未登记身份的 SDK 运行一次；不能改 manifest 来绕过源码/二进制检查。
-python scripts/record_shmem_sdk.py --sdk "$SHMEM_ROOT" \
-  --revision "$(python -c 'import json; print(json.load(open("dependencies.lock.json"))["shmem"]["revision"])')"
+# 外部 SDK 必须已由匹配构建流程生成完整身份；只验证，不补写或改写 manifest。
+python scripts/record_shmem_sdk.py --sdk "$SHMEM_ROOT" --check
 # 启用 MegaMoE 且不用仓内子模块时，再设置 CATLASS_ROOT=/path/to/pinned/catlass。
 ```
 
@@ -171,3 +171,5 @@ python scripts/validate_package.py --output /path/to/another-new-directory \
 当前仓库未配置自动 CI 流水线。请手动运行 pre-commit，并按变更范围运行 CPU API、参考、运行时和构建预检。CPU fault-injection 使用 Linux/g++，不等于 CANN ABI 或 NPU 测试。检查命令见[开发指南](development.md#提交前检查与-ci)。
 
 在具备 CANN、SHMEM、框架与已分配 NPU 的环境执行本页验证命令。保留 `source-tests.xml`、`installed-tests.xml`、`validation.json` 和逐 rank 输出，wheel/sdist 作为独立产物归档。安装成功、CPU 通过和设备算子通过分别记录，不互相替代。
+
+SDK 身份包含 CANN 版本/时间戳、目标、源码修改指纹及可选的已知 RDMA 能力。未登记或身份不完整的 SDK 应由 `scripts/build_shmem.py` 构建和记录；仅提供 revision 无法证明这些信息，登记器会在写入前拒绝。显式许可并记录的其他本地源码修改仍受支持。

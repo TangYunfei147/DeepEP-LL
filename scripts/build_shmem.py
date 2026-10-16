@@ -15,7 +15,7 @@ import subprocess
 import tempfile
 
 from record_shmem_sdk import record
-from shmem_sdk_reuse import is_managed_hns_source, mte_compatible
+from shmem_sdk_reuse import mte_compatible
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -71,8 +71,7 @@ def prepare(root=ROOT, *, rebuild=False, if_needed=True, allow_local_changes=Fal
     if revision != lock["shmem"]["revision"]:
         raise RuntimeError("SHMEM revision differs from dependencies.lock.json; do not build a moving branch")
     patches = source_patches(source)
-    managed_hns = bool(patches) and is_managed_hns_source(source)
-    if patches and not allow_local_changes and not managed_hns:
+    if patches and not allow_local_changes:
         raise RuntimeError(
             "SHMEM has local changes; pass --allow-local-changes to build them explicitly "
             "(cluster launcher: --allow-local-shmem)"
@@ -97,7 +96,7 @@ def prepare(root=ROOT, *, rebuild=False, if_needed=True, allow_local_changes=Fal
             "target": lock["target"],
             "source_patches": patches,
         }
-        if not mte_compatible(identity, revision, expected_build, managed_hns=managed_hns):
+        if not mte_compatible(identity, revision, expected_build):
             raise RuntimeError(
                 "Existing SHMEM build identity changed; stop SDK users and rebuild explicitly "
                 "with --rebuild (cluster launcher: --rebuild-shmem)"
@@ -116,8 +115,6 @@ def prepare(root=ROOT, *, rebuild=False, if_needed=True, allow_local_changes=Fal
             "SHMEM build/install already exists; reuse its SDK, or stop users of that SDK "
             "and pass --rebuild to regenerate it (then rebuild dependent wheels)"
         )
-    if managed_hns and not allow_local_changes:
-        raise RuntimeError("Recognized HNS SDK sources can be reused, but rebuilding their edits requires --allow-local-changes")
     print(f"[SHMEM] source={revision} CANN={version['Version']} target={lock['target']}", flush=True)
     if patches:
         print(f"[SHMEM] Building local source modifications: {json.dumps(patches)}", flush=True)
