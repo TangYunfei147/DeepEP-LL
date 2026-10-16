@@ -33,9 +33,10 @@ def compact_device_tensor(cpu_tensor):
     cores=[]
     for core in range(cpu_tensor.shape[0]):
         base=values[core,:128].tolist()
-        if base[85] or any(base[8+len(CAPACITIES):64]) or any(base[86:]):
-            raise ValueError(f'Event overflow/boundary error or reserved storage modified on core {core}: flags={base[85]}')
         counts=base[8:8+len(CAPACITIES)]
+        if base[85] or any(base[8+len(CAPACITIES):64]) or any(base[86:]):
+            excess=', '.join(f'{STAGES[n+1]}={count}>{CAPACITIES[n]}' for n,count in enumerate(counts) if count>CAPACITIES[n])
+            raise ValueError(f'Event overflow/boundary error or reserved storage modified on core {core}: flags={base[85]}; {excess}')
         events={}
         for stage,(count,capacity) in enumerate(zip(counts,CAPACITIES),1):
             if count>capacity:

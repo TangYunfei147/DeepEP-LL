@@ -125,7 +125,7 @@ def receiver_summary(rows):
             weighted_per_call=sum(row['duration'] for row in present)/sum(row['calls'] for row in present) if present else None,
             **{field:stats([row[field] for row in values if row[field] is not None])
                if any(row[field] is not None for row in values) else None
-               for field in ('duration','calls','per_call','kernel_fraction','forward_bytes','forward_operations')}))
+               for field in ('duration','calls','segments','per_call','kernel_fraction','forward_bytes','forward_operations')}))
     return result
 
 
@@ -233,9 +233,10 @@ def render_bottleneck_report(report):
             for rank in [row['rank'] for row in rank_rows[:3]]:
                 receiver=[row for row in report['receiver_summary'] if row['rank']==rank]
                 lines += [f'#### rank {rank}', '']
-                lines += table(['AIV','任务类型','有记录轮数',f'时间均值({unit})','task数/轮',f'每task均值({unit})','核内占比','跨卡转发B/轮'],
+                lines += table(['AIV','任务类型','有记录轮数',f'时间均值({unit})','task数/轮','片段数/轮',f'每task均值({unit})','核内占比','跨卡转发B/轮'],
                     [(row['core'],row['stage'],row['observed_samples'],number(row['duration']['mean']) if row['duration'] else '不可用',
                       number(row['calls']['mean']) if row['calls'] else '不可用',
+                      number(row['segments']['mean']) if row['segments'] else '不可用',
                       number(row['per_call']['mean']) if row['per_call'] else '不可用',
                       number(row['kernel_fraction']['mean']*100)+'%' if row['kernel_fraction'] else '不可用',
                       number(row['forward_bytes']['mean']) if row['forward_bytes'] else '—') for row in receiver])
@@ -268,7 +269,7 @@ def render_bottleneck_report(report):
         lines += ['## 专家投递热点线索', '', '仅按已有专家记录的平均投递次数排序，不将共享转发/等待成本分摊给专家。', '']
         lines += table(['执行rank','expert','平均投递次数/有记录轮'], [(row['executing_rank'],row['expert_id'],number(row['mean_calls'])) for row in packets])
     lines += ['', '## 建议的下一步', '',
-              '1. 先按上述慢rank和同核阶段定位，再查看stages.csv及trace.json中的子阶段；trace为逐次实测事件；外层阶段仍可能真实嵌套。',
+              '1. 先按上述慢rank和同核阶段定位，再查看stages.csv及trace.json中的任务片段；trace显示互斥执行/等待，kernel在独立概览轨道。',
               '2. 对相同shape/seed做单变量A/B。shape改变时分别报告，不直接将耗时或带宽变化当成优化收益。',
               '3. 若怀疑多对一或共享链路竞争，补充源→目标通信矩阵、实际拓扑及对应链路计数器；当前汇总无法确认。',
               '4. 优化收益以timer OFF的正式task性能及正确性为准；本报告未混入profiler、Event或API时间。', '',
@@ -300,7 +301,7 @@ def analyze(paths, frequency_hz=None):
         for row in report['records']:
             key=(op,rank,row['core'],row['role'],row['stage'])
             duration=row['total_us'] if unit=='us' else row['total_ticks']
-            groups.setdefault(key,[]).append((duration,row['calls']))
+            groups.setdefault(key,[]).append((duration,row['calls'],row['segments']))
             stage_key=(op,rank,row['stage'])
             per_iteration=stage_max.setdefault(stage_key,{})
             per_iteration[iteration]=max(per_iteration.get(iteration,0),duration)
@@ -318,7 +319,8 @@ def analyze(paths, frequency_hz=None):
     rows=[]
     for (op,rank,core,role,stage), values in sorted(groups.items()):
         rows.append(dict(operation=op,rank=rank,core=core,role=role,stage=stage,unit=unit,
-                         **stats([v for v,n in values]),mean_calls=statistics.mean(n for v,n in values)))
+                         **stats([v for v,n,s in values]),mean_calls=statistics.mean(n for v,n,s in values),
+                         mean_segments=statistics.mean(s for v,n,s in values)))
     return dict(schema=identity[9],world_size=identity[0],boundary_mode=identity[3],frequency_hz=identity[4],comparison=identity[10],
                 run_id=identity[5],case_id=identity[7],seed=identity[6],sample_count=len(diagnostics),
                 configurations=configurations,sampling=identity[8],per_rank_core_stage=rows,

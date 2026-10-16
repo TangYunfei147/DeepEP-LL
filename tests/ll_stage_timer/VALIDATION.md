@@ -10,4 +10,7 @@ python -m pytest tests/ll_stage_timer tests/ll_rdma/test_dispatch_variants.py te
 
 A3仅允许编译与CPU检查，不运行设备。编译入口compile_validation.sh使用当前显式CANN环境及SHMEM_ROOT指向的已识别SDK，构建timer ON完整wheel和timer OFF设备对象，不安装/重建SDK，不安装wheel，不修改驱动或系统依赖。日志及产物位于当前工程内。普通任务执行与依赖等待互斥，kernel单独概览；等待前后使用同一task ID，没有旧父阶段插桩。
 
-目前尚未完成本次A3编译；不得将CPU模型通过标为CANN或设备验证通过。没有目标机正确性或性能结论。所有同步模式均有插桩开销，默认mega主动排空普通阶段；正式基线使用timer OFF。
+A3源码提交471f8b90ee823eb1857791cead5884d011560b73：CPU/G++ 115项全部通过，包括等待切分/同task ID续记、容量错误、实际Host分发夹具和异步通信协议模型。timer ON完整wheel构建通过；timer OFF独立设备构建21个对象通过；smoke Host源文件G++语法编译通过。该验证对应最终相同的C++源码；后续仅补充文档和Python错误消息。没有初始化或运行NPU。没有目标机正确性或性能结论。所有同步模式均有插桩开销，默认mega主动排空普通阶段；正式基线使用timer OFF。
+A3工作区：/home/tyf/Q4_remote_test/DeepEP-LL-event-timer，独立Git worktree，使用Git bundle取得同一分支。复用原cold工程内已识别的原生HNS_1825 SDK，无source_patches，未重建SDK或安装wheel。生产架构保持Ascend950，未为A3改目标。
+
+日志：.logs/event-validation/{cpu,wheel,off}.log；产物：.artifacts/event-wheels/ascend_deepep-0.1.0.dev5-cp314-cp314-linux_aarch64.whl。此wheel只对应A3 Python环境，不作为用户目标环境的通用安装包。目标机仍通过Git更新并重建匹配wheel。

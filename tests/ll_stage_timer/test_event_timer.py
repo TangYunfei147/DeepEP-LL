@@ -123,3 +123,17 @@ def test_compact_extraction_reads_only_written_slots():
     compact=timer.compact_device_tensor(Dense())
     assert compact==data
     assert timer.parse_records(compact,'dispatch')['records']
+
+
+def test_compact_overflow_reports_actual_count():
+    base=[0]*128
+    base[8+timer.STAGES.index('recv_metadata')-1]=4097
+    base[85]=1
+    class Slice:
+        def tolist(self):return base
+    class Dense:
+        shape=(16,timer.SLOTS,8)
+        def view(self,*args):return self
+        def __getitem__(self,key):return Slice()
+    with pytest.raises(ValueError,match='recv_metadata=4097>4096'):
+        timer.compact_device_tensor(Dense())
