@@ -10,7 +10,7 @@ from pathlib import Path
 import threading
 
 MAGIC = 0x4C4C5431
-SCHEMA = 2
+SCHEMA = 3
 DEFAULT_FREQUENCY_HZ = 1_000_000_000  # Target-confirmed: time_us = ticks / 1000.
 SLOTS, FIELDS = 32, 8
 STAGES = ('header', 'kernel', 'magic', 'worker_init', 'count_init', 'count_send', 'sender',
@@ -25,6 +25,9 @@ STAGES += ('recv_lane_wait', 'recv_gm_to_ub', 'recv_load_wait', 'recv_metadata',
            'send_input_gm_to_ub', 'send_input_wait', 'send_tail', 'send_lane_wait',
            'send_mte_write', 'send_rdma_stage', 'send_rdma_body_post', 'send_rdma_body_wait',
            'send_rdma_flag_post', 'send_rdma_flag_wait', 'send_rdma_restore')
+TRAFFIC_CLASSES = ('local', 'intrahost_first', 'intrahost_forward',
+                   'interhost_first', 'interhost_forward')
+TRAFFIC_OFFSET, TRAFFIC_FLAGS_OFFSET = 208, 228
 ACTIVE = 1 << 62
 NOISY_SEND_ENVELOPES = frozenset(('send_input_gm_to_ub', 'send_input_wait', 'send_tail',
                                  'send_lane_wait', 'send_issue', 'send_mte_write'))
@@ -40,13 +43,13 @@ def parse_records(raw, operation, frequency_hz=None):
     if not 16 <= cores <= 72 or cores % 2:
         raise ValueError('Expected actual even AIV count in [16,72]')
     op = 1 if operation == 'dispatch' else 2
-    records, modes, schemas = [], set(), set()
+    records, traffic, modes, schemas = [], [], set(), set()
     for core, slots in enumerate(raw):
         if len(slots) != SLOTS or any(len(row) != FIELDS for row in slots):
             raise ValueError('Timer shape mismatch')
         header = slots[0]
         schema = header[1]
-        if schema not in (1, 2):
+        if schema not in (1, 2, 3):
             raise ValueError('Unsupported timer schema')
         names = LEGACY_STAGES if schema == 1 else STAGES
         schemas.add(schema)
@@ -57,12 +60,27 @@ def parse_records(raw, operation, frequency_hz=None):
         if header[5] not in (1, 2):
             raise ValueError('Unknown boundary mode')
         modes.add(header[5])
-        if schema == 2:
+        if schema in (2, 3):
             words = [value for row in slots for value in row]
             if any(type(value) is not int or not 0 <= value < (1 << 63) for value in words):
                 raise ValueError('Invalid raw timer word')
+            stage_end = 8 + (len(names)-1)*4
+            if schema == 3:
+                if any(words[stage_end:TRAFFIC_OFFSET]) or any(words[TRAFFIC_FLAGS_OFFSET+1:]):
+                    raise ValueError('Nonzero reserved traffic words')
+                flags = words[TRAFFIC_FLAGS_OFFSET]
+                if flags & ~1:
+                    raise ValueError('Unknown traffic flags')
+                for index, category in enumerate(TRAFFIC_CLASSES):
+                    offset = TRAFFIC_OFFSET + index*4
+                    byte_count, operations, read_bytes, read_operations = words[offset:offset+4]
+                    if read_bytes > byte_count or read_operations > operations:
+                        raise ValueError('Traffic reads must be a subset of total traffic')
+                    traffic.append(dict(core=core, category=category, bytes=byte_count,
+                                        operations=operations, read_bytes=read_bytes,
+                                        read_operations=read_operations, flags=flags))
             normalized = [header]
-            for offset in range(8, SLOTS * FIELDS, 4):
+            for offset in range(8, stage_end if schema == 3 else SLOTS * FIELDS, 4):
                 first, last, total, count = words[offset:offset+4]
                 normalized.append([first, last, total, count & ~ACTIVE, first, int(bool(count & ACTIVE)), 0, 0])
             slots = normalized
@@ -98,6 +116,7 @@ def parse_records(raw, operation, frequency_hz=None):
     return dict(schema=schema, operation=operation, active_aiv=cores,
                 boundary_mode='observe' if modes == {1} else 'drain', frequency_hz=frequency_hz,
                 clock='AscendC::GetSystemCycle; no cross-rank clock alignment assumed', records=records,
+                traffic_available=schema == 3, traffic=traffic if schema == 3 else None,
                 interpretation='Nested and overlapping stages must not be summed; repeated-stage totals exclude gaps.')
 
 
@@ -151,7 +170,7 @@ def chrome_trace(saved_records, frequency_hz=None, lane_layout='core', show_repe
     # Chrome Trace Event ts/dur are microseconds. displayTimeUnit is a viewer
     # preference with a different enum; Chrome tracing rejects 'us'. Omit it.
     return dict(traceEvents=events,
-                metadata={'format': 'LL stage Chrome trace (schemas 1/2)', 'lane_layout': lane_layout,
+                metadata={'format': 'LL stage Chrome trace (schemas 1/2/3)', 'lane_layout': lane_layout,
                           'hidden_repeated_send_envelopes': not show_repeated,
                           'interpretation': 'Repeated events show envelopes including gaps; args.total_us is accumulated active time. Independent rank/sample origins; no cross-rank or profiler clock alignment.'})
 

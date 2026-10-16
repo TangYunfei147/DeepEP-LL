@@ -341,6 +341,8 @@ private:
                 const uint32_t q = index >> 16U;
                 const uint32_t destinationRank = expertId / localExperts_;
                 if (expertTimer_) expertTimer_->Start(expertId, LlExpertTimer::Forward);
+                if (timer_) timer_->CountData(uint32_t(args_->rank), destinationRank,
+                    uint64_t(data_.tokenStride), true);
                 LlTransport::Packet(args_, destinationRank,
                     DispatchServerDedupDispatchOffset(data_, sourceRank, destinationRank,
                         expertId % localExperts_, q, ranks, localExperts_, bs_), wire, uint32_t(data_.tokenStride), lane);

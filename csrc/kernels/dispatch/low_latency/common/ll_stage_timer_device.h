@@ -24,6 +24,12 @@ public:
         data_(5) = mode;
         data_(6) = 0;
         data_(7) = StageCount;
+        for (uint32_t word = kDataCounterOffset; word < kDataFlagsOffset; ++word) data_(word) = 0U;
+#ifdef DEEPEP_LL_NO_COMM
+        data_(kDataFlagsOffset) = kDataNoComm;
+#else
+        data_(kDataFlagsOffset) = 0U;
+#endif
 #endif
     }
     __aicore__ inline void Start(Stage stage)
@@ -49,6 +55,22 @@ public:
         data_(row + 1U) = cycle;
         data_(row + 2U) = data_(row + 2U) + cycle - start;
         data_(row + 3U) = (data_(row + 3U) & ~kActive) + 1U;
+#endif
+    }
+    // Count once at the protocol DMA initiator, not again at local consumption.
+    // Read counters are a subset of total counters; no synchronization is added.
+    __aicore__ inline void CountData(uint32_t rank, uint32_t peer, uint64_t bytes,
+                                   bool forwarding, bool read = false)
+    {
+#ifdef DEEPEP_LL_STAGE_TIMER
+        if (!address_) return;
+        const uint32_t row = kDataCounterOffset + DataBucket(rank, peer, forwarding) * kDataCounterFields;
+        data_(row) = data_(row) + bytes;
+        data_(row + 1U) = data_(row + 1U) + 1U;
+        if (read) {
+            data_(row + 2U) = data_(row + 2U) + bytes;
+            data_(row + 3U) = data_(row + 3U) + 1U;
+        }
 #endif
     }
     __aicore__ inline void Finish()

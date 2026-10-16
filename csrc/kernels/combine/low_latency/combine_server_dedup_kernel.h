@@ -380,6 +380,7 @@ private:
                 SetFlag<HardEvent::V_MTE2>(lane);
                 SetFlag<HardEvent::V_MTE3>(lane);
                 WaitFlag<HardEvent::V_MTE3>(lane);
+                if (timer_) timer_->CountData(uint32_t(args_->rank), source, resultStride_, false);
                 LlTransport::Packet(args_, source, window_ + COMBINE_DEDUP_EP_SERVER_DEDUP_SHARED_DATA_OFFSET +
                     (uint64_t(token) * topK_ + topk) * resultStride_, output, resultStride_);
                 SetFlag<HardEvent::MTE3_V>(lane);
@@ -404,7 +405,7 @@ private:
         ServerDedupPartial<Group> partial;
         partial.Init(args_, &pipe_, arena_.Get<uint8_t>()[kEpServerDedupCombineResidentUbBytes], expertAddr_,
                      tableAddr_, relayAddr_, typesAddr_, tokens_, bs_, h_, topK_, experts_, dtype_, window_,
-                     workspace_);
+                     workspace_, timer_);
         partialTasks_ = partial.Process();
         // Retire only input and Vector users before scalar metadata reuse.
         // M4 output slots and MTE3_V events stay live for M5's per-slot waits.

@@ -26,6 +26,15 @@ __test__ = False
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
+def validate_stage_timer_capability(requested, capability):
+    if not requested:
+        return
+    if not capability["stage_timer"]:
+        raise RuntimeError("All ranks must install a DEEPEP_LL_STAGE_TIMER=ON wheel")
+    if capability["stage_timer_schema"] != 3:
+        raise RuntimeError("LL byte diagnostics require timer schema 3; rebuild/install the matching wheel on every rank")
+
+
 MATRIX_FIELDS = ("num_tokens", "dtype", "num_experts", "hidden", "num_topk", "do_cpu_sync", "fp8_scale_dtype")
 
 
@@ -1070,10 +1079,7 @@ def worker(local_rank, args):
             raise RuntimeError('Installed wheel belongs to a different kernel branch')
         if capability['transport']=='rdma' and not capability['rdma_compiled']:
             raise RuntimeError('Requested RDMA is not compiled in this wheel; no MTE fallback')
-        if args.ll_stage_timer and not capability["stage_timer"]:
-            raise RuntimeError("All ranks must install a DEEPEP_LL_STAGE_TIMER=ON wheel")
-        if args.ll_stage_timer and capability['stage_timer_schema'] != 2:
-            raise RuntimeError('Detailed LL diagnostics require timer schema 2; rebuild/install the matching wheel on every rank')
+        validate_stage_timer_capability(args.ll_stage_timer, capability)
         if args.ll_expert_timer and capability['core_protocol'] != 5:
             raise RuntimeError('Expert diagnostics require ABI 5 on every rank')
         args.ll_stage_timer_capabilities = capabilities

@@ -1,8 +1,8 @@
 # 两个 kernel 分支的共同实验与对比
 
 本指南同时适用于kernel/ll-configurable-groups与kernel/ll-ndr-hns1825。
-统一启动入口tests/ll_stage_timer/run.py，统一ST、采样、timer/专家格式和分析脚本。
-两边核心启动ABI5、阶段schema2、专家schema1；implementation字段会拒绝混用不同分支wheel。
+统一启动入口tests/ll_stage_timer/run.py及ST/稳定尾段采样协议。
+两边核心启动ABI5、专家schema1；NDR当前阶段schema3带数据字节计数，泛化阶段schema2无该计数。implementation字段会拒绝混用不同分支wheel。
 同一ABI号不意味着可以在一个作业内混用两个分支。
 
 ## 必须匹配的条件
@@ -106,7 +106,7 @@ python tests/ll_stage_timer/compare.py results/mte/stage-analysis/summary.json r
 多case分析输出位于stage-analysis下各case/路由相对目录，逐case选择对应summary.json。
 专家跨核累计是工作量，不是端到端时延；跨rank时间戳不对齐，不能相减。
 
-可使用`python tests/ll_stage_timer/verify_shared.py ../另一个checkout`核验共享文件一致性。
+shared_files.json保留上次共同实现的核验清单。NDR新增schema3计数后，verify_shared.py会报告timer布局/实现、parser、analyze及相关文档/fixture的预期差异，不再声称这些文件字节一致；本次不修改泛化分支。NDR分析器可离线读取schema2，但不会伪造带宽。新增计数开销使两分支timer ON不再是等插桩成本对照，性能比较仍用两边timer OFF，并用当前NDR compare.py：仅当两边timer都编译关闭且无stage/expert capture时忽略无效的schema号差异；timer ON的schema差异仍明确拒绝对比。
 当前只在本地做CPU/路径/配置回归，未进行本次CANN编译或目标机设备验收。
 
 配置维护原则与本次验证见[CONFIGURATION_NOTES.md](CONFIGURATION_NOTES.md)。

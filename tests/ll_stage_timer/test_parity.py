@@ -111,3 +111,15 @@ def test_portable_launcher_plan_and_backend_guard(tmp_path,implementation,rdma):
     assert (result.returncode==0)==rdma
     overridden=configured+['--backend','mte']
     subprocess.run(overridden,cwd=tmp_path,env=env,capture_output=True,text=True,check=True)
+
+
+def test_schema_difference_only_allowed_with_both_timers_compiled_off():
+    left, right = identity(), identity()
+    left['stage_timer_schema'], right['stage_timer_schema'] = 2, 3
+    for record in (left, right):
+        record.update(stage_timer=False, stage_capture=False, expert_capture=False)
+    comparison.check_identity(left, right)
+    for record in (left, right):
+        record['stage_timer'] = True
+    with pytest.raises(ValueError, match='stage_timer_schema'):
+        comparison.check_identity(left, right)

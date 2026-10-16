@@ -19,7 +19,12 @@ def check_identity(left,right):
         if item['comparison_schema']!=1 or any(type(item[key]) is not int or item[key]<=0
                                                for key in ('world_size','logical_group','active_aiv','core_protocol')):
             raise ValueError('Unknown or invalid runtime comparison identity')
-    mismatches=[key for key in sorted(left.keys()|right.keys()) if key not in DIFFERENCES and left.get(key)!=right.get(key)]
+    differences = set(DIFFERENCES)
+    # Schema-only diagnostic additions cannot affect a build with timer compiled OFF.
+    if all(item['stage_timer'] is False and item['stage_capture'] is False
+           and item['expert_capture'] is False for item in (left, right)):
+        differences.add('stage_timer_schema')
+    mismatches=[key for key in sorted(left.keys()|right.keys()) if key not in differences and left.get(key)!=right.get(key)]
     if mismatches: raise ValueError('Incomparable settings: '+', '.join(mismatches))
 
 

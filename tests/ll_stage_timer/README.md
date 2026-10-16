@@ -2,6 +2,10 @@
 
 维护分支：`kernel/ll-ndr-hns1825`。本功能保持纯AIV、实际核数查询和1:1收发分工，不改变逻辑组配置及EP准入条件。
 
+## EP16通信量与有效带宽（schema 3）
+
+现有 `--ll-stage-timer` 命令现在自动记录五类数据搬运字节和次数，无额外flag。全rank更新并重新安装匹配timer ON wheel、重新采样；此功能不要求重建已通过身份校验的SDK。EP16分析输出 `bandwidth.csv`，`summary.json` 增加逐轮及每rank汇总。带宽为跨卡首发与转发计数字节除以 `max_core_kernel` 时长代理，不是NIC线速；本卡计数不进入分子，读取计数是总计数的子集。旧schema1/2、NO_COMM试验或缺失频率不产生带宽。详细定义、重建命令和结果解读见 [BANDWIDTH.md](BANDWIDTH.md)。
+
 ## 从克隆仓库到执行
 
 以下步骤在**用户目标机**执行。每台参与节点都需准备同一分支、同一提交和匹配wheel；单机EP16，两机EP32，每机16个连续rank。原生LL不支持EP2/4/8。
@@ -179,9 +183,9 @@ M决定去重：`M>32`启用，`M<=32`关闭。若对比两条路径，在满足
   ...
 ```
 
-每文件包含原始`[实际AIV数,32,8]` int64数组和每核/阶段解析值。第0槽记录magic/schema/操作/核数/核号/模式/完成标志；schema 2阶段记录采用4个int64：first、start_or_last_end、累计ticks、count|active(bit62)，从第8个word开始紧凑排列；不是每阶段独占一行。schema 1旧文件仍按8字段解析。分配器创建512B对齐视图，Host拒绝未对齐的直接传入指针；每核独占2048B，避免跨核cache-line写回冲突，当前支持16..72偶数核。每轮新建零缓冲，不覆盖前一轮；未执行阶段保持零值，不冒充零成本样本。
+每文件包含原始`[实际AIV数,32,8]` int64数组和每核/阶段解析值。第0槽记录magic/schema/操作/核数/核号/模式/完成标志；schema 2/3阶段记录采用4个int64：first、start_or_last_end、累计ticks、count|active(bit62)，从第8个word开始紧凑排列；不是每阶段独占一行。schema 1旧文件仍按8字段解析。分配器创建512B对齐视图，Host拒绝未对齐的直接传入指针；每核独占2048B，避免跨核cache-line写回冲突，当前支持16..72偶数核。每轮新建零缓冲，不覆盖前一轮；未执行阶段保持零值，不冒充零成本样本。
 
-**目标计数器换算已由用户确认：`time_us = ticks / 1000`。** 测试及命令行分析默认1GHz，原始ticks仍保留；可用frequency参数显式覆盖其他已确认环境。
+**目标计数器换算已由用户确认：`time_us = ticks / 1000`。** 测试采集默认1GHz，analyze.py默认读取sample中保存的频率，原始ticks仍保留；缺失频率时只统计ticks，可用--frequency-hz显式指定其他已确认环境。
 
 收齐所有rank的同一case目录后，在仓库根目录执行：
 
@@ -237,7 +241,7 @@ python tests/ll_stage_timer/export_trace.py \
 - 单次阶段显示首次到末次真实区间；重复阶段标为`[envelope xN]`，宽度是首尾包络，
   **包括中间空隙，不是累计执行时间**。点击事件查看`total_us/total_ticks`累计耗时、
   `average_us`、`calls`、`gap_ticks`及原始起止ticks。
-- schema 1/2都没有保存每次重复调用的起止点，无法从现有数据还原Mega_Moe式逐次动态事件；
+- schema 1/2/3都没有保存每次重复调用的起止点，无法从现有数据还原Mega_Moe式逐次动态事件；
   不伪造连续片段。父子阶段/并行阶段不可直接相加，drain数据也不是未插桩性能基线。
 
 ## 推荐：一个命令完成统计和tracing导出
@@ -307,9 +311,9 @@ DEEPEP_LL_STAGE_TIMER=ON，执行既有pip重装命令。
 
 ## dispatch细分阶段（timer schema 2）
 
-阶段细分引入时核心通信ABI为4；当前专家诊断使用核心ABI5，阶段timer schema保持2，原始张量形状仍为[实际AIV,32,8]，
+阶段细分引入时核心通信ABI为4；当前专家诊断使用核心ABI5；细分阶段最初使用schema2，当前字节计数使用schema3，原始张量形状仍为[实际AIV,32,8]，
 每核仍2048B、512B对齐。设备和Host/Python必须全rank重建安装匹配wheel，入口会互检timer schema。
-解析器兼容旧schema 1文件，但一次统计不混用不同schema；旧文件没有新阶段，必须重新采集才能获得细分。
+解析器兼容旧schema 1/2文件，但一次统计不混用不同schema；旧文件没有新阶段，必须重新采集才能获得细分。
 
 | 父区间 | 子阶段 | 边界含义 |
 |---|---|---|
@@ -357,7 +361,7 @@ DEEPEP_LL_STAGE_TIMER=ON，重新完整构建安装wheel，然后使用原测试
 原stage缓冲保持每核2048B；专家统计使用额外512B对齐缓冲，每次调用占用
 `实际AIV数 × (8 + 全局专家数 × 4) × 8 × 8`字节。
 仅dispatch分配专家缓冲，combine维持原阶段打点；5轮采样会保留5份。
-新增缓冲指针使核心ABI升为5，所有rank必须重建完整匹配wheel；阶段schema仍为2，专家schema为1。
+新增缓冲指针使核心ABI升为5，所有rank必须重建完整匹配wheel；当前阶段schema为3（新增通信计数），专家schema为1。
 
 统计按执行rank/AIV/全局expert ID归属：
 

@@ -434,6 +434,14 @@ private:
         WaitFlag<HardEvent::V_MTE3>(lane);
         if (timer_) timer_->End(LlStageTimer::SendPack);
         if (timer_) timer_->Start(LlStageTimer::SendIssue);
+        // Count each protocol handoff once at its initiating core, not at receive.
+        if (timer_) timer_->CountData(uint32_t(args_->rank), destination,
+#ifdef DEEPEP_LL_NO_COMM
+            uint64_t(data_.blockCount) * 32U,
+#else
+            uint64_t(data_.tokenStride),
+#endif
+            false);
         LlTransport::Packet(args_, destination,
             DispatchServerDedupDispatchOffset(data_, args_->rank, destination,
                 expert % localExperts_, q, args_->rankSize, localExperts_, bs_), out, uint32_t(data_.tokenStride), 7U, timer_);

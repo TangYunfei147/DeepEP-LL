@@ -20,13 +20,66 @@ def stats(values):
                 p50=q(.5),p90=q(.9),p99=q(.99))
 
 
+
+def bandwidth_sample(report, metadata):
+    """Per-rank effective byte rate; max core interval is a duration proxy, not NIC time."""
+    spans = [row['last_tick']-row['first_tick'] for row in report['records'] if row['stage']=='kernel']
+    duration_ticks = max(spans)
+    frequency = report['frequency_hz']
+    duration_us = duration_ticks*1e6/frequency if frequency is not None else None
+    available = report['traffic_available']
+    totals = {name: dict(bytes=0, operations=0, read_bytes=0, read_operations=0)
+              for name in timer.TRAFFIC_CLASSES}
+    flags = 0
+    if available:
+        for row in report['traffic']:
+            flags |= row['flags']
+            for field in totals[row['category']]:
+                totals[row['category']][field] += row[field]
+        if metadata['world_size']==16 and any(totals[name][field]
+                for name in ('interhost_first','interhost_forward') for field in totals[name]):
+            raise ValueError('EP16 has nonzero interhost traffic')
+    totals['intrahost_total'] = {field: totals['intrahost_first'][field]+totals['intrahost_forward'][field]
+                               for field in totals['local']}
+    rows = []
+    for category, values in totals.items():
+        if not available: status = 'counters_unavailable'
+        elif flags & 1: status = 'nonstandard_skip_communication'
+        elif metadata['world_size'] != 16: status = 'unsupported_ep'
+        elif category == 'local': status = 'local_not_link_bandwidth'
+        elif category.startswith('interhost'): status = 'not_applicable_ep16'
+        elif frequency is None: status = 'frequency_unavailable'
+        elif duration_ticks <= 0: status = 'zero_duration'
+        else: status = 'ok'
+        rows.append(dict(operation=report['operation'],rank=metadata['rank'],iteration=metadata['iteration'],
+            category=category, **(values if available else {key:None for key in values}),
+            duration_kind='max_core_kernel',duration_ticks=duration_ticks,duration_us=duration_us,
+            frequency_hz=frequency,flags=flags if available else None,status=status,
+            effective_GBps=values['bytes']/(duration_us*1000) if status=='ok' else None))
+    return rows
+
+
+def bandwidth_summary(rows):
+    groups = {}
+    for row in rows:
+        groups.setdefault((row['operation'],row['rank'],row['category']),[]).append(row)
+    result = []
+    for (operation,rank,category), samples in sorted(groups.items()):
+        result.append(dict(operation=operation,rank=rank,category=category,samples=len(samples),
+            statuses=sorted({sample['status'] for sample in samples}),
+            **{field:stats([sample[field] for sample in samples if sample[field] is not None])
+               if any(sample[field] is not None for sample in samples) else None
+               for field in ('bytes','operations','read_bytes','read_operations','duration_ticks','duration_us','effective_GBps')}))
+    return result
+
+
 def analyze(paths, frequency_hz=None):
-    configurations={};ranks={};groups={};identity=None;stage_max={}
+    configurations={};ranks={};groups={};identity=None;stage_max={};bandwidth=[]
     for path in paths:
         saved=json.loads(path.read_text())
         meta=saved['metadata']
         if meta.get('correctness')!='passed':raise ValueError('Missing instrumented correctness evidence')
-        report=timer.parse_records(saved['raw'],saved['operation'],frequency_hz if frequency_hz is not None else saved['frequency_hz'])
+        report=timer.parse_records(saved['raw'],saved['operation'],frequency_hz if frequency_hz is not None else saved.get('frequency_hz'))
         common=(meta['world_size'],meta['config'],report['active_aiv'],report['boundary_mode'],report['frequency_hz'],
                 meta.get('run_id'),meta.get('seed'),meta.get('case_id'),meta.get('sampling'),report['schema'],meta.get('comparison'))
         if identity is not None and common!=identity:raise ValueError('Mixed configurations or timer modes')
@@ -37,6 +90,7 @@ def analyze(paths, frequency_hz=None):
         if iteration in ranks.setdefault(key,set()):raise ValueError('Duplicate rank/iteration')
         ranks[key].add(iteration)
         configurations[op]=meta['config']
+        bandwidth.extend(bandwidth_sample(report,meta))
         unit='us' if report['frequency_hz'] is not None else 'ticks'
         for row in report['records']:
             key=(op,rank,row['core'],row['role'],row['stage'])
@@ -62,6 +116,8 @@ def analyze(paths, frequency_hz=None):
                          **stats([v for v,n in values]),mean_calls=statistics.mean(n for v,n in values)))
     return dict(schema=identity[9],world_size=identity[0],boundary_mode=identity[3],frequency_hz=identity[4],comparison=identity[10],
                 configurations=configurations,sampling=identity[8],per_rank_core_stage=rows,
+                bandwidth=bandwidth,per_rank_bandwidth=bandwidth_summary(bandwidth),
+                bandwidth_interpretation='Effective counted bytes / max_core_kernel duration proxy, not link peak utilization or isolated NIC service time. Each iteration is divided before statistics. Counts represent rank-initiated read plus write data transfers, not pure rank TX or physical wire bytes. Reads are included in totals; write_bytes = bytes - read_bytes. Local bytes are not link traffic; intrahost_total includes first and forward. No cross-rank clock alignment.',
                 per_rank_stage_max=[dict(operation=op,rank=rank,stage=stage,unit=unit,**stats(list(values.values())))
                                     for (op,rank,stage),values in sorted(stage_max.items())],
                 note='Per-call diagnostic stage totals; nested/parallel stages cannot be added. No cross-rank timestamp subtraction.')
@@ -135,8 +191,8 @@ def process_directory(source, output, frequency_hz, trace_iteration, lane_layout
             selected.append(item)
     if not selected:
         raise ValueError(f'No diagnostic iteration {trace_iteration} in {source}')
-    trace = timer.chrome_trace(selected, frequency_hz, lane_layout, show_repeated)
-    expert_rows, expert_summary = expert_reports(paths, frequency_hz)
+    trace = timer.chrome_trace(selected, frequency_hz, lane_layout, show_repeated) if report['frequency_hz'] is not None else None
+    expert_rows, expert_summary = expert_reports(paths, report['frequency_hz'])
     report['per_expert']=expert_summary
     report['expert_interpretation']='Per executing rank and expert; core durations are summed work, not latency. Packet stage counts deliveries only. Shared FIRST_HOP preparation and batch waiting are not assigned. Only samples with executed records enter stage statistics.'
     output.mkdir(parents=True, exist_ok=False)
@@ -145,7 +201,11 @@ def process_directory(source, output, frequency_hz, trace_iteration, lane_layout
     with (output/'stages.csv').open('w', newline='') as stream:
         writer = csv.DictWriter(stream, fieldnames=list(rows[0]))
         writer.writeheader(); writer.writerows(rows)
-    (output/'trace.json').write_text(json.dumps(trace))
+    if trace is not None:
+        (output/'trace.json').write_text(json.dumps(trace))
+    with (output/'bandwidth.csv').open('w', newline='') as stream:
+        writer=csv.DictWriter(stream,fieldnames=list(report['bandwidth'][0]))
+        writer.writeheader();writer.writerows(report['bandwidth'])
     for filename,values in (('experts.csv',expert_summary),('expert_cores.csv',expert_rows)):
         if values:
             with (output/filename).open('w',newline='') as stream:
@@ -158,8 +218,8 @@ def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('directory',type=Path,help='Timer directory, case, run, or run parent; every rank required per case')
     parser.add_argument('--latest',action='store_true',help='Select newest child run by cases.json creation mtime')
-    parser.add_argument('--frequency-hz',type=float,default=timer.DEFAULT_FREQUENCY_HZ,
-                        help='Default 1GHz: ticks/1000 us')
+    parser.add_argument('--frequency-hz',type=float,default=None,
+                        help='Override recorded counter frequency; missing frequency retains ticks without rates or trace')
     parser.add_argument('--trace-iteration',type=int,default=0,help='Timeline iteration; statistics always include all iterations')
     parser.add_argument('--lane-layout',choices=('core','stage'),default='core',help='One track per AIV (default), or separate stage tracks')
     parser.add_argument('--show-repeated',action='store_true',help='Restore the six repeated sender envelopes (statistics are always retained)')
