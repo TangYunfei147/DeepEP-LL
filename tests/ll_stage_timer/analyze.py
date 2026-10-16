@@ -81,7 +81,7 @@ def discover(source, latest=False):
     return source, directories
 
 
-def process_directory(source, output, frequency_hz, trace_iteration):
+def process_directory(source, output, frequency_hz, trace_iteration, lane_layout='core'):
     paths = sorted(source.rglob('sample_*.json'))
     report = analyze(paths, frequency_hz)
     selected = []
@@ -91,7 +91,7 @@ def process_directory(source, output, frequency_hz, trace_iteration):
             selected.append(item)
     if not selected:
         raise ValueError(f'No diagnostic iteration {trace_iteration} in {source}')
-    trace = timer.chrome_trace(selected, frequency_hz)
+    trace = timer.chrome_trace(selected, frequency_hz, lane_layout)
     output.mkdir(parents=True, exist_ok=False)
     (output/'summary.json').write_text(json.dumps(report, indent=2))
     rows = report['per_rank_core_stage']
@@ -109,6 +109,7 @@ def main():
     parser.add_argument('--frequency-hz',type=float,default=timer.DEFAULT_FREQUENCY_HZ,
                         help='Default 1GHz: ticks/1000 us')
     parser.add_argument('--trace-iteration',type=int,default=0,help='Timeline iteration; statistics always include all iterations')
+    parser.add_argument('--lane-layout',choices=('core','stage'),default='core',help='One track per AIV (default), or separate stage tracks')
     parser.add_argument('--output-dir',type=Path,help='Default: stage-analysis under selected source; existing reports rejected')
     args=parser.parse_args()
     source=args.directory if args.directory.is_absolute() else ROOT/args.directory
@@ -116,7 +117,7 @@ def main():
     output = (args.output_dir if args.output_dir.is_absolute() else ROOT/args.output_dir) if args.output_dir else source/'stage-analysis'
     for directory in directories:
         destination = output if len(directories)==1 else output/directory.relative_to(source)
-        process_directory(directory, destination, args.frequency_hz, args.trace_iteration)
+        process_directory(directory, destination, args.frequency_hz, args.trace_iteration, args.lane_layout)
 
 
 if __name__=='__main__':main()

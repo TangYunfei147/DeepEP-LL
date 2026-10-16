@@ -167,7 +167,7 @@ python tests/ll_stage_timer/export_trace.py \
 
 - 每个rank/operation/sample为独立进程轨道，分别以本次最早内部时间戳归零。
   核间保留本设备计数器相对时间；不同rank/不同调用不对齐，不与外部profiler合并。
-- AIV core/role/stage各有具名轨道，避免非严格嵌套阶段在viewer中相互遮蔽。
+- 默认每个AIV core只有一条具名轨道，所有阶段使用同一tid，父子区间显示嵌套。重叠或重复包络可能仍有嵌套层级；不改变真实起止点。加`--lane-layout stage`可恢复分阶段轨道排查重叠。
 - 单次阶段显示首次到末次真实区间；重复阶段标为`[envelope xN]`，宽度是首尾包络，
   **包括中间空隙，不是累计执行时间**。点击事件查看`total_us/total_ticks`累计耗时、
   `average_us`、`calls`、`gap_ticks`及原始起止ticks。
@@ -237,3 +237,4 @@ timer缓冲在采样前分配，采集循环只执行前处理、LL调用及设�
 新流程修改了Python capture接口，所有节点须安装匹配版本wheel：更新Git后保持
 DEEPEP_LL_RDMA=ON、DEEPEP_LL_STAGE_TIMER=ON，执行既有pip重装命令。
 SDK、C++ kernel和ABI4未变，不需仅为本次更新重建SHMEM。
+默认单AIV轨道适用于自动trace、analyze.py及export_trace.py。更新Git后对已有raw sample重新分析即可，无需重新采集；核间起始偏移保持原样，不做逐核归零。

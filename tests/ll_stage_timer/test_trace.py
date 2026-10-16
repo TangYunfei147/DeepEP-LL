@@ -37,7 +37,21 @@ def test_exact_ticks_envelope_and_independent_clocks():
         assert wait['args']['total_us']==pytest.approx(.03)
         assert wait['args']['gap_ticks']==40
         assert wait['args']['interval_kind']=='repeated envelope'
-    assert len({(e['pid'], e['tid']) for e in events})==64
+    assert len({(e['pid'], e['tid']) for e in events})==32
+    lanes=[e for e in trace['traceEvents'] if e['name']=='thread_name']
+    assert len(lanes)==32 and all('/' not in e['args']['name'] for e in lanes)
+
+
+def test_core_lanes_preserve_every_interval():
+    core=timer.chrome_trace([sample()])
+    stage=timer.chrome_trace([sample()], lane_layout='stage')
+    def intervals(trace):
+        return sorted((e['name'], e['ts'], e['dur'], e['args']['core'], e['args']['total_ticks'])
+                      for e in trace['traceEvents'] if e['ph']=='X')
+    assert intervals(core)==intervals(stage)
+    assert len([e for e in stage['traceEvents'] if e['name']=='thread_name'])==32
+    with pytest.raises(ValueError, match='lane layout'):
+        timer.chrome_trace([sample()], lane_layout='unknown')
 
 
 @pytest.mark.parametrize('frequency', [None, 0, -1, float('nan'), float('inf')])

@@ -76,8 +76,10 @@ def parse_records(raw, operation, frequency_hz=None):
                 interpretation='Nested and overlapping stages must not be summed; repeated-stage totals exclude gaps.')
 
 
-def chrome_trace(saved_records, frequency_hz=None):
+def chrome_trace(saved_records, frequency_hz=None, lane_layout='core'):
     """Export rank/sample-local timelines; schema 1 cannot reconstruct repeated calls."""
+    if lane_layout not in ('core', 'stage'):
+        raise ValueError('Expected core or stage lane layout')
     events, identities = [], set()
     for pid, saved in enumerate(saved_records, 1):
         frequency = frequency_hz if frequency_hz is not None else saved.get('frequency_hz')
@@ -93,12 +95,18 @@ def chrome_trace(saved_records, frequency_hz=None):
         origin = min(row['first_tick'] for row in report['records'])
         name = f"{report['operation']} rank {rank} sample {iteration} ({report['boundary_mode']}; independent origin)"
         events.append(dict(ph='M', name='process_name', pid=pid, tid=0, args={'name': name}))
-        for row in report['records']:
-            # Separate stage lanes preserve overlapping/non-nested ranges in viewers.
-            tid = row['core'] * SLOTS + STAGES.index(row['stage'])
-            lane = f"AIV {row['core']:02d} {row['role']} / {row['stage']}"
-            events.append(dict(ph='M', name='thread_name', pid=pid, tid=tid, args={'name': lane}))
-            events.append(dict(ph='M', name='thread_sort_index', pid=pid, tid=tid, args={'sort_index': tid}))
+        lanes = set()
+        # Parents first at equal starts, so viewers can nest complete events.
+        records = sorted(report['records'], key=lambda row: (row['core'], row['first_tick'], -row['last_tick']))
+        for row in records:
+            tid = row['core'] if lane_layout == 'core' else row['core'] * SLOTS + STAGES.index(row['stage'])
+            lane = f"AIV {row['core']:02d} {row['role']}"
+            if lane_layout == 'stage':
+                lane += f" / {row['stage']}"
+            if tid not in lanes:
+                events.append(dict(ph='M', name='thread_name', pid=pid, tid=tid, args={'name': lane}))
+                events.append(dict(ph='M', name='thread_sort_index', pid=pid, tid=tid, args={'sort_index': tid}))
+                lanes.add(tid)
             repeated = row['calls'] > 1
             span = row['last_tick'] - row['first_tick']
             args = dict(row, rank=rank, iteration=iteration, operation=report['operation'],
@@ -116,7 +124,7 @@ def chrome_trace(saved_records, frequency_hz=None):
     # Chrome Trace Event ts/dur are microseconds. displayTimeUnit is a viewer
     # preference with a different enum; Chrome tracing rejects 'us'. Omit it.
     return dict(traceEvents=events,
-                metadata={'format': 'LL stage schema 1 Chrome trace',
+                metadata={'format': 'LL stage schema 1 Chrome trace', 'lane_layout': lane_layout,
                           'interpretation': 'Repeated events show envelopes including gaps; args.total_us is accumulated active time. Independent rank/sample origins; no cross-rank or profiler clock alignment.'})
 
 
