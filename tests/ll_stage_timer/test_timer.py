@@ -141,3 +141,37 @@ def test_moved_checkout_with_spaces_and_other_cwd(tmp_path):
     actual=subprocess.check_output(['bash','-c','source "$1"; printf "%s" "$LL_TIMER_ROOT"','bash',
                                     str(moved/'scripts/ll_timer_env.sh')],cwd=away,env=env,text=True)
     assert Path(actual)==moved
+
+
+@pytest.mark.parametrize("operation", ["dispatch", "combine"])
+@pytest.mark.parametrize("mode", ["observe", "drain"])
+@pytest.mark.parametrize("world,group", [(16, 4), (32, 16)])
+def test_diagnostic_world_metadata(monkeypatch, tmp_path, operation, mode, world, group):
+    from contextlib import contextmanager
+    from tests.elastic import test_ep_low_latency as st
+    from deep_ep import _native
+    from deep_ep.utils import ll_stage_timer
+    import torch.distributed as dist
+    saved = []
+    monkeypatch.setattr(dist, "get_world_size", lambda: world)
+    monkeypatch.setattr(_native, "require_native", lambda _: SimpleNamespace(low_latency_ranks_per_group=group))
+    @contextmanager
+    def capture(buffer, op, boundary, frequency):
+        assert (op, boundary) == (operation, mode)
+        yield SimpleNamespace(save=lambda path, meta: saved.append((path, meta)))
+    monkeypatch.setattr(ll_stage_timer, "capture", capture)
+    monkeypatch.setattr(st, "completion_boundary", lambda *a: None)
+    monkeypatch.setattr(st, "agree_check", lambda action, *a: action())
+    monkeypatch.setattr(st, "case_config", lambda *a: {"B": 32})
+    args = SimpleNamespace(run_directory=str(tmp_path), case_id=0, ll_timer_iters=2,
+        ll_timer_mode=mode, ll_timer_frequency_hz=None, seed=0)
+    event = SimpleNamespace(current_stream_wait=lambda: None)
+    st.diagnostic_calls(object(), lambda: (event,), lambda output: None,
+                        args, operation, 0, 256, "normal")
+    assert len(saved) == 2
+    for iteration, (path, meta) in enumerate(saved):
+        assert meta["world_size"] == world
+        assert meta["config"]["logical_group_size"] == group
+        assert meta["iteration"] == iteration
+        assert meta["correctness"] == "passed"
+        assert path.name == f"sample_{iteration:04d}.json"

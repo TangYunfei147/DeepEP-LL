@@ -128,3 +128,7 @@ python tests/ll_stage_timer/analyze.py \
 - `bash tests/ll_stage_timer/validate_device.sh`：专用A5入口，强制卡0/1，仅在卡0启动独立timer验证核；验证开/关、两种模式、每核记录及guard，不建立伪造LL域。
 - `tests/ll_stage_timer/check_installed.py`：A5卡0验证完整wheel的ABI、查询核数和timer分配，不执行LL通信。
 - 完整dispatch/combine的精度、阶段曲线、跨机同步及实际性能必须由用户在合法目标EP上验证。
+
+## 2026-10-16 diagnostic metadata修复
+
+修复独立capture采集结束后写metadata时`world`未定义的问题：从已初始化的进程组读取`dist.get_world_size()`。保留本分支ABI 2及逻辑组属性接口；仅此Python修复无需重新编译wheel，须同步所有节点测试脚本。CPU回归覆盖dispatch/combine、observe/drain、EP16/32元数据及多轮保存；不代表目标设备通信验证。
