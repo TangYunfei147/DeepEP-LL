@@ -8,6 +8,26 @@
 
 当前NDR去重dispatch已加入源卡/发送核的发送错峰；适用于M>32，含原EP16、M256场景。实现范围、基线提交及目标A/B步骤见[发送错峰](SEND_STAGGER.md)。
 
+## 每次运行自动生成瓶颈总结
+
+采样命令保持不变。分析器从每次raw sample读取真实B/M/H/top-k/专家数/dtype等配置，支持修改hidden等shape后分别分析；不按固定包大小推算通信量。本次只更新离线分析脚本，已有schema1/2/3数据可直接重新分析，不需要为了生成文档重装wheel或重采；旧schema没有字节计数，带宽明确不可用。
+
+```bash
+# 分析整个run，自动发现各case和路由；在仓库根目录执行。
+python tests/ll_stage_timer/analyze.py "results/$CASE_NAME/qwe" \
+  --output-dir "results/$CASE_NAME/analyze-report"
+# 也可以沿用单case输入：
+# results/$CASE_NAME/qwe/case_00000/normal/ll_stage_timer
+```
+
+单case输出 `analyze-report/bottleneck_summary.md`。多个case/路由各自输出该文档，并在输出根生成 `REPORT_INDEX.md` 索引；不同shape不合并统计。使用新的输出目录，已有报告不会覆盖。`--latest`仍支持按run父目录选最新采样。
+
+总结包含配置、逐rank最长单核kernel耗时统计、逐轮rank最大/中位比、慢rank的最长核及同核阶段占比、机内首发/转发/读取计数和有效带宽；采集了专家打点时附专家投递热点。机器可读依据在 `summary.json` 的 `diagnostics` 字段中，已有CSV/trace继续输出。
+
+报告把实测现象和待验证线索分开：阶段占比在同rank/同轮/同核求比再统计，未执行阶段不补零，嵌套阶段不相加。最长核可能随轮次变化，它不等于已证明的因果关键路径；父阶段与子阶段同时出现不能看成百分比饼图。阶段占比30%和rank最大/中位比1.25只是明确标注的启发式提示阈值，不是硬件瓶颈判定标准。5轮数据会提示样本少。
+
+observe MTE下发区间不等于传输完成，drain会改变重叠与等待位置。没有逐peer/逐包数据和物理拓扑，无法仅凭低带宽或高recv_wait证明多对一拥塞。非标准跳过通信数据不生成正常通信瓶颈提示；无频率保留ticks。总结不混用profiler task、Event、API时间，性能收益仍需timer OFF验证。
+
 ## 从克隆仓库到执行
 
 以下步骤在**用户目标机**执行。每台参与节点都需准备同一分支、同一提交和匹配wheel；单机EP16，两机EP32，每机16个连续rank。原生LL不支持EP2/4/8。
