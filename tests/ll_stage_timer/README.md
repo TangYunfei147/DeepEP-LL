@@ -4,7 +4,7 @@
 
 ## 构建与接口
 
-打点默认编译关闭，使用`DEEPEP_LL_STAGE_TIMER=ON`开启。打点最初引入核心协议版本2；当前混合通信/tiling key语义已将协议升为4。所有rank必须重建并安装同一版本完整wheel，不能混搭旧设备库。RDMA协议见[审计说明](../ll_rdma/AUDIT.md)。
+打点默认编译关闭，使用`DEEPEP_LL_STAGE_TIMER=ON`开启。打点最初引入核心协议版本2；混合通信/tiling key使用协议4；当前可选专家诊断缓冲使核心协议升为5。所有rank必须重建并安装同一版本完整wheel，不能混搭旧设备库。RDMA协议见[审计说明](../ll_rdma/AUDIT.md)。
 
 在仓库根目录执行，外部CANN位置由当前环境提供：
 
@@ -236,12 +236,12 @@ timer缓冲在采样前分配，采集循环只执行前处理、LL调用及设�
 
 新流程修改了Python capture接口，所有节点须安装匹配版本wheel：更新Git后保持
 DEEPEP_LL_RDMA=ON、DEEPEP_LL_STAGE_TIMER=ON，执行既有pip重装命令。
-SDK、C++ kernel和ABI4未变，不需仅为本次更新重建SHMEM。
+以上稳定尾段采样本身不改变SDK；当前专家诊断新增dispatch参数，须使用ABI5完整wheel，SDK配置不变时无需重建SHMEM。
 默认单AIV轨道适用于自动trace、analyze.py及export_trace.py。更新Git后对已有raw sample重新分析即可，无需重新采集；核间起始偏移保持原样，不做逐核归零。
 
 ## dispatch细分阶段（timer schema 2）
 
-核心通信ABI仍为4；timer schema升为2，原始张量形状仍为[实际AIV,32,8]，
+阶段细分引入时核心通信ABI为4；当前专家诊断使用核心ABI5，阶段timer schema保持2，原始张量形状仍为[实际AIV,32,8]，
 每核仍2048B、512B对齐。设备和Host/Python必须全rank重建安装匹配wheel，入口会互检timer schema。
 解析器兼容旧schema 1文件，但一次统计不混用不同schema；旧文件没有新阶段，必须重新采集才能获得细分。
 
@@ -278,3 +278,49 @@ drain会在每个子阶段Start/End继续加入PIPE_ALL，可能将后续等待�
 目标机更新后沿用原SDK（本次未改变SDK），保持DEEPEP_LL_RDMA=ON、
 DEEPEP_LL_STAGE_TIMER=ON，重新完整构建安装wheel，然后使用原测试命令重新采集。
 分析仍只需一个analyze.py命令，CSV及trace自动包含新阶段。
+## 可选接收侧专家统计（ABI 5，本地修改待设备验收）
+
+在原测试命令上增加`--ll-stage-timer --ll-expert-timer`；建议先使用observe。
+例如既有目标启动命令末尾使用：
+
+```bash
+--ll-stage-timer --ll-expert-timer --ll-timer-mode observe --ll-timer-iters 5 \
+  --output-dir results/ll-expert --run-name expert-001
+```
+
+原stage缓冲保持每核2048B；专家统计使用额外512B对齐缓冲，每次调用占用
+`实际AIV数 × (8 + 全局专家数 × 4) × 8 × 8`字节。
+仅dispatch分配专家缓冲，combine维持原阶段打点；5轮采样会保留5份。
+新增缓冲指针使核心ABI升为5，所有rank必须重建完整匹配wheel；阶段schema仍为2，专家schema为1。
+
+统计按执行rank/AIV/全局expert ID归属：
+
+- `packets`：本地专家消费的接收packet数（展开投递数，不是全域去重后的唯一输入token数）；仅计数，时间列留空。
+- `metadata`：本地专家包尾解码和type/destination构造。
+- `output_write`：本地专家token、scale、type和destination写回代码区间。
+- `forward`：FIRST_HOP逐目标专家的Packet调用；执行rank可能不同于专家所属rank。
+
+共享首跳发送、FIRST_HOP共享准备及relayReadIndex写回、批量recv_wait不分摊给单个专家，
+它们继续由原阶段统计表示。不能把多个专家的值相加当作整算子延时。
+observe记录下发/代码边界，drain含额外排空；这些都不等同于专家FFN/GEMM时间或网络端到端时间。
+
+收齐所有rank后一个命令完成统计及trace：
+
+```bash
+python tests/ll_stage_timer/analyze.py results/ll-expert/expert-001
+```
+
+新增`experts.csv`（按执行rank/专家/阶段，先跨核累加每轮工作量，再做轮次统计）和
+`expert_cores.csv`（逐轮逐核原始解析记录）；summary.json含per_expert。
+`mean`是执行过该阶段轮次的累计工作时间均值，`mean_span`是同一执行rank内该阶段的首尾包络均值，
+两者不同；不做跨rank时间戳对齐。没有执行的阶段不补零耗时样本。
+只改变数据导出时，可用已有raw重新分析；新增专家数据必须用新wheel重新采集。
+
+### 默认隐藏六类重复发送包络
+
+send_input_gm_to_ub、send_input_wait、send_tail、send_lane_wait、send_issue、send_mte_write
+在calls>1时不再默认绘制首尾包络，累计值仍完整保留在stages.csv。calls=1时保留真实单次区间。
+需要恢复包络时，analyze.py或export_trace.py增加`--show-repeated`。
+
+本次远端环境已回收，仅完成本地CPU验证，尚未进行CANN编译和设备运行。
+请先重建并用小case验证正确性，再进行目标性能采集；不要将历史A5验证记录视为ABI5的验收。

@@ -1,5 +1,7 @@
 # dispatch细分打点验证（2026-10-16）
 
+> 以下是ABI4历史记录，不覆盖当前ABI5专家诊断；本次状态见[EXPERT_VALIDATION.md](EXPERT_VALIDATION.md)。
+
 分支：`kernel/ll-ndr-hns1825`，基于`91b083b`。核心通信ABI保持4，timer schema升为2。
 新增18个阶段，原阶段ID保留。张量仍为`[实际AIV,32,8]`，每核2048B、512B对齐；
 阶段采用4-word紧凑记录，解析器兼容schema 1旧文件。

@@ -150,6 +150,7 @@ def make_parser():
     parser.add_argument("--warmup", type=int, default=10)
     parser.add_argument("--num-iters", type=int, default=100)
     parser.add_argument("--ll-stage-timer", action="store_true", help="Separate device-stage diagnostic calls; requires timer-enabled wheel")
+    parser.add_argument('--ll-expert-timer', action='store_true', help='Opt-in dispatch per-expert receive work; requires --ll-stage-timer and ABI 5')
     parser.add_argument("--ll-timer-iters", type=int, default=5)
     parser.add_argument("--ll-timer-mode", choices=("observe", "drain"), default="observe")
     parser.add_argument("--ll-timer-frequency-hz", type=float, default=1_000_000_000, help="GetSystemCycle frequency; default 1GHz (ticks/1000 us)")
@@ -401,6 +402,8 @@ def validate_args(args, world):
         raise ValueError("Timer counter frequency must be positive and finite")
     if args.ll_stage_timer and args.skip_check:
         raise ValueError("Stage diagnostics require correctness checks")
+    if args.ll_expert_timer and not args.ll_stage_timer:
+        raise ValueError('--ll-expert-timer requires --ll-stage-timer')
     if args.warmup < 0 or args.num_iters < 1 or args.repeat_combine < 2:
         raise ValueError("Require warmup>=0, num-iters>=1 and repeat-combine>=2")
     if not 1 <= args.num_cpu_timeout_secs <= 300:
@@ -718,6 +721,15 @@ def create_run_directory(parent, name=None):
     return str(selected)
 
 
+def new_stage_trace(buffer, operation, args, rank):
+    from deep_ep.utils.ll_stage_timer import StageTrace
+    if getattr(args, 'll_expert_timer', False) and operation == 'dispatch':
+        import torch.distributed as dist
+        return StageTrace(buffer, operation, args.ll_timer_mode, args.ll_timer_frequency_hz,
+                          expert_config=dict(rank=rank,world=dist.get_world_size(),experts=args.num_experts))
+    return StageTrace(buffer, operation, args.ll_timer_mode, args.ll_timer_frequency_hz)
+
+
 def diagnostic_calls(buffer, invoke, check, args, operation, rank, m, mode,
                      *, prepared=None, prelude_buffers=None):
     """Sample a stabilized tail, retaining outputs/timers until all launches finish."""
@@ -732,7 +744,7 @@ def diagnostic_calls(buffer, invoke, check, args, operation, rank, m, mode,
         prepared = []
         def allocate():
             for _ in range(args.ll_timer_iters):
-                prepared.append(StageTrace(buffer, operation, args.ll_timer_mode, args.ll_timer_frequency_hz))
+                prepared.append(new_stage_trace(buffer, operation, args, rank))
         agree_check(allocate, args, rank)
     after_perf = prelude_buffers is not None
     if not after_perf:
@@ -768,7 +780,8 @@ def diagnostic_calls(buffer, invoke, check, args, operation, rank, m, mode,
                         protocol="stabilized diagnostic tail; Exp+scalar all_reduce; deferred validation/export; excluded from profiler",
                         sampling=dict(after_perf=after_perf, warmup=args.warmup, settle_iters=args.num_iters,
                                       diagnostic_iters=args.ll_timer_iters, delay_rows=args.delay_rows,
-                                      delay_cols=args.delay_cols, group_backend=args.group_backend))
+                                      delay_cols=args.delay_cols, group_backend=args.group_backend,
+                                      expert_timer=bool(getattr(args,'ll_expert_timer',False))))
         agree_check(lambda: trace.save(directory / f"sample_{iteration:04d}.json", metadata), args, rank)
 
 
@@ -780,7 +793,7 @@ def sample_operation(buffer, invoke, check, args, operation, rank, m, mode, prog
         prepared = []
         def allocate():
             for _ in range(args.ll_timer_iters):
-                prepared.append(StageTrace(buffer, operation, args.ll_timer_mode, args.ll_timer_frequency_hz))
+                prepared.append(new_stage_trace(buffer, operation, args, rank))
         agree_check(allocate, args, rank)
     def diagnostic(delay=None, alignment=None):
         diagnostic_calls(buffer, invoke, check, args, operation, rank, m, mode, prepared=prepared,
@@ -1004,7 +1017,8 @@ def worker(local_rank, args):
                       "logical_group": native.low_latency_ranks_per_group(world),
                       "core_protocol": native.low_latency_core_protocol,
                       "stage_timer": bool(getattr(native, "low_latency_stage_timer_enabled", False)),
-                      "stage_timer_schema": native.low_latency_stage_timer_layout()["schema"]}
+                      "stage_timer_schema": native.low_latency_stage_timer_layout()["schema"],
+                      "expert_timer_requested": bool(args.ll_expert_timer)}
         capabilities = [None] * world
         dist.all_gather_object(capabilities, capability)
         if any(item != capabilities[0] for item in capabilities):
@@ -1013,6 +1027,8 @@ def worker(local_rank, args):
             raise RuntimeError("All ranks must install a DEEPEP_LL_STAGE_TIMER=ON wheel")
         if args.ll_stage_timer and capability['stage_timer_schema'] != 2:
             raise RuntimeError('Detailed LL diagnostics require timer schema 2; rebuild/install the matching wheel on every rank')
+        if args.ll_expert_timer and capability['core_protocol'] != 5:
+            raise RuntimeError('Expert diagnostics require ABI 5 on every rank')
         args.ll_stage_timer_capabilities = capabilities
         run_directory = [None]
 

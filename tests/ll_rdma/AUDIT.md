@@ -1,4 +1,4 @@
-# LL 混合 MTE / NDR 协议审计（ABI 4）
+# LL 混合 MTE / NDR 协议审计（ABI 5）
 
 分支 `kernel/ll-ndr-hns1825`。NDR 指 HNS_1825 NPU Direct RDMA。此版本把原全 peer RDMA 改为：**机内 MTE，跨机 RDMA put，禁止跨机 get**。
 
@@ -35,7 +35,7 @@
 - RDMA 写仍传本地对称地址，由 SDK 转换远端地址；不会把 MTE 映射传给 RDMA。原 rank bias=1024B、8GiB 公开数据布局、2MiB guard 保留；跨机作业增加每实际核 128KiB 暂存，总量向 2MiB 对齐。
 - CommArgs 的 `reserved0` 表示物理每机 rank 数（生产为 16）；`localRank/localRankSize` 表示选定逻辑组。原保留尾部继续保存 RDMA 对称基址、暂存、backend/QP。
 - dispatch 32B tiling 的 byte 21、combine 16B tiling 的 byte 15 保存 key。Host UB 预算也按选定 G 计算。ready 控制容量仍按最大 G=16 保留，不等同于当前逻辑组。
-- 核心协议升为 **4**。Host/device 检查两个 key 的选择一致性；测试入口在所有 rank 比较实际 AIV、选定 G、ABI 和构建开关。必须全 rank 重建匹配 wheel。
+- 核心协议升为 **5**（增加可选专家诊断缓冲；传输策略保持不变）。Host/device 检查两个 key 的选择一致性；测试入口在所有 rank 比较实际 AIV、选定 G、ABI 和构建开关。必须全 rank 重建匹配 wheel。
 - kernel 名字保持不变，profiling task 匹配与 stage timer 入口保留；打点 metadata 根据通信域记录实际 G。
 
 ## 写入顺序、复用和事件

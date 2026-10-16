@@ -10,6 +10,7 @@
 #include "runtime/ll_core_config.hpp"
 #include "../kernels/dispatch/low_latency/common/ll_rdma_layout.h"
 #include "../kernels/dispatch/low_latency/common/ll_stage_timer_layout.h"
+#include "../kernels/dispatch/low_latency/common/ll_expert_timer_layout.h"
 #include "host/mem/shmem_host_heap.h"
 #include "host/data_plane/shmem_host_rma.h"
 #include "host/data_plane/shmem_host_p2p_sync.h"
@@ -74,6 +75,22 @@ uint8_t* stage_timer(py::dict tensors, uint32_t cores, uint32_t& mode)
         throw std::invalid_argument("LL timer requires 512-byte alignment for independent core writeback");
     return pointer;
 }
+uint8_t* expert_timer(py::dict tensors, uint32_t cores, uint32_t experts, uint8_t* stage)
+{
+    if (!tensors.contains("ll_expert_timer") || tensors["ll_expert_timer"].is_none()) return nullptr;
+    if (!stage || !deepep_ll_stage_timer_enabled())
+        throw std::invalid_argument("Expert diagnostics require stage capture and timer ON");
+    auto value=py::reinterpret_borrow<py::object>(tensors["ll_expert_timer"]);
+    auto device=value.attr("device");
+    if (device.attr("type").cast<std::string>() != "npu" ||
+        !device.attr("__eq__")(tensors["input"].attr("device")).cast<bool>())
+        throw std::invalid_argument("Expert timer must be on the input NPU");
+    auto* pointer=tensor(value, {cores, LlExpertTimer::kHeaderRows + experts*LlExpertTimer::StageCount,
+                                LlExpertTimer::kFields}, "int64");
+    if (reinterpret_cast<uintptr_t>(pointer)%512U)
+        throw std::invalid_argument("Expert timer requires 512-byte alignment");
+    return pointer;
+}
 DispatchDedup::EpMemoryServerDedupLayout layout(int p, int b, int h, int k, int e, bool fp8)
 {
     const uint32_t coreNum = query_ll_core_config().active;
@@ -115,6 +132,16 @@ void bind_low_latency(py::module_& module)
     module.attr("low_latency_rdma_enabled") = false;
 #endif
     module.attr("low_latency_stage_timer_enabled") = bool(deepep_ll_stage_timer_enabled());
+    module.def("low_latency_expert_timer_layout", []() {
+        py::dict result;
+        result["schema"]=LlExpertTimer::kSchema;
+        result["header_rows"]=LlExpertTimer::kHeaderRows;
+        result["fields"]=LlExpertTimer::kFields;
+        std::vector<std::string> names;
+        for (const auto* name : LlExpertTimer::kNames) names.emplace_back(name);
+        result["stages"]=names;
+        return result;
+    });
     module.def("low_latency_stage_timer_layout", []() {
         py::dict result;
         result["schema"] = LlStageTimer::kSchema;
@@ -232,6 +259,7 @@ void bind_low_latency(py::module_& module)
         deepep::EpServerDedupKernelArgs args{};
         args.coreNum = pin_session_cores(session);
         args.stageTimer = stage_timer(tensors, args.coreNum, args.timerMode);
+        args.expertTimer = expert_timer(tensors, args.coreNum, e, args.stageTimer);
         args.commArgs = get("comm_args", {sizeof(DispatchDedup::CommArgs)}, "uint8");
         args.x = get("input", {b, h}, dtype.c_str());
         args.expertIds = get("indices", {b, k}, "int32");

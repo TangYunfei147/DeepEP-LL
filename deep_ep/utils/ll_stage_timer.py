@@ -26,6 +26,8 @@ STAGES += ('recv_lane_wait', 'recv_gm_to_ub', 'recv_load_wait', 'recv_metadata',
            'send_mte_write', 'send_rdma_stage', 'send_rdma_body_post', 'send_rdma_body_wait',
            'send_rdma_flag_post', 'send_rdma_flag_wait', 'send_rdma_restore')
 ACTIVE = 1 << 62
+NOISY_SEND_ENVELOPES = frozenset(('send_input_gm_to_ub', 'send_input_wait', 'send_tail',
+                                 'send_lane_wait', 'send_issue', 'send_mte_write'))
 _state = threading.local()
 
 
@@ -99,7 +101,7 @@ def parse_records(raw, operation, frequency_hz=None):
                 interpretation='Nested and overlapping stages must not be summed; repeated-stage totals exclude gaps.')
 
 
-def chrome_trace(saved_records, frequency_hz=None, lane_layout='core'):
+def chrome_trace(saved_records, frequency_hz=None, lane_layout='core', show_repeated=False):
     """Export rank/sample-local timelines; schema 1 cannot reconstruct repeated calls."""
     if lane_layout not in ('core', 'stage'):
         raise ValueError('Expected core or stage lane layout')
@@ -122,6 +124,8 @@ def chrome_trace(saved_records, frequency_hz=None, lane_layout='core'):
         # Parents first at equal starts, so viewers can nest complete events.
         records = sorted(report['records'], key=lambda row: (row['core'], row['first_tick'], -row['last_tick']))
         for row in records:
+            if not show_repeated and row['calls'] > 1 and row['stage'] in NOISY_SEND_ENVELOPES:
+                continue
             tid = row['core'] if lane_layout == 'core' else row['core'] * 64 + STAGES.index(row['stage'])
             lane = f"AIV {row['core']:02d} {row['role']}"
             if lane_layout == 'stage':
@@ -148,11 +152,13 @@ def chrome_trace(saved_records, frequency_hz=None, lane_layout='core'):
     # preference with a different enum; Chrome tracing rejects 'us'. Omit it.
     return dict(traceEvents=events,
                 metadata={'format': 'LL stage Chrome trace (schemas 1/2)', 'lane_layout': lane_layout,
+                          'hidden_repeated_send_envelopes': not show_repeated,
                           'interpretation': 'Repeated events show envelopes including gaps; args.total_us is accumulated active time. Independent rank/sample origins; no cross-rank or profiler clock alignment.'})
 
 
 class StageTrace:
-    def __init__(self, buffer, operation, mode='observe', frequency_hz=DEFAULT_FREQUENCY_HZ):
+    def __init__(self, buffer, operation, mode='observe', frequency_hz=DEFAULT_FREQUENCY_HZ,
+                 expert_config=None):
         if operation not in ('dispatch', 'combine') or mode not in ('observe', 'drain'):
             raise ValueError('Invalid LL stage diagnostic configuration')
         if frequency_hz is not None and (not math.isfinite(frequency_hz) or frequency_hz <= 0):
@@ -173,6 +179,23 @@ class StageTrace:
         # Align the view to 512B even if an allocator returns only 8B alignment.
         offset = (-storage.data_ptr()) % 512 // 8
         self.tensor = storage.narrow(0, offset, words).view(cfg['active_aiv'], SLOTS, FIELDS)
+        self.expert_tensor, self.expert_raw, self.expert_config = None, None, expert_config
+        if expert_config is not None:
+            from . import ll_expert_timer as expert
+            rank, world, count = (expert_config[key] for key in ('rank','world','experts'))
+            if (operation != 'dispatch' or any(type(v) is not int for v in (rank,world,count)) or
+                    not (0 <= rank < world <= count <= 1024 and world >= 16 and world%16==0 and count%world==0)):
+                raise ValueError('Expert capture requires a valid dispatch expert configuration')
+            if native.low_latency_core_protocol != 5 or not hasattr(native, 'low_latency_expert_timer_layout'):
+                raise RuntimeError('Expert diagnostics require the matching ABI 5 wheel on every rank')
+            if native.low_latency_expert_timer_layout() != dict(schema=expert.SCHEMA, header_rows=expert.HEADER_ROWS,
+                                                               fields=expert.FIELDS, stages=list(expert.STAGES)):
+                raise RuntimeError('Expert timer Python/native schema mismatch')
+            rows=expert.HEADER_ROWS+count*len(expert.STAGES)
+            expert_words=cfg['active_aiv']*rows*expert.FIELDS
+            backing=torch.zeros(expert_words+63,dtype=torch.int64,device=f"npu:{cfg['device']}")
+            offset=(-backing.data_ptr())%512//8
+            self.expert_tensor=backing.narrow(0,offset,expert_words).view(cfg['active_aiv'],rows,expert.FIELDS)
         self.buffer, self.operation, self.mode = buffer, operation, mode
         self.frequency_hz, self.launches, self.raw, self.report = frequency_hz, 0, None, None
 
@@ -182,6 +205,12 @@ class StageTrace:
         # Public LL calls establish a current-stream dependency on completion.
         self.raw = self.tensor.cpu().tolist()
         self.report = parse_records(self.raw, self.operation, self.frequency_hz)
+        if self.expert_tensor is not None:
+            from .ll_expert_timer import parse_records as parse_experts
+            self.expert_raw=self.expert_tensor.cpu().tolist()
+            report=parse_experts(self.expert_raw, **self.expert_config, frequency_hz=self.frequency_hz)
+            if report['boundary_mode'] != self.mode:
+                raise RuntimeError('Expert/stage timer mode mismatch')
 
     def save(self, path, metadata=None):
         if self.report is None:
@@ -190,8 +219,11 @@ class StageTrace:
         if not path.is_absolute():
             raise ValueError('Resolve trace output from your project root and pass an absolute path')
         path.parent.mkdir(parents=True, exist_ok=True)
+        saved=dict(**self.report, metadata=metadata or {}, raw=self.raw)
+        if getattr(self, 'expert_raw', None) is not None:
+            saved['expert']=dict(raw=self.expert_raw, **self.expert_config)
         with path.open('x', encoding='utf-8') as stream:
-            json.dump(dict(**self.report, metadata=metadata or {}, raw=self.raw), stream, indent=2)
+            json.dump(saved, stream, indent=2)
         if self.frequency_hz is not None:
             # Prefix avoids the analyzer's sample_*.json raw-record glob.
             trace_path = path.with_name('trace_' + path.name)
@@ -235,5 +267,7 @@ def attach(buffer, tensors, operation):
         raise ValueError('Timer and LL input must be on the same NPU')
     trace.launches += 1
     tensors['ll_stage_timer'] = trace.tensor
+    if getattr(trace, 'expert_tensor', None) is not None:
+        tensors['ll_expert_timer'] = trace.expert_tensor
     # The native binding derives mode from this CPU scalar, not an NPU read.
     tensors['ll_stage_timer_mode'] = 1 if trace.mode == 'observe' else 2

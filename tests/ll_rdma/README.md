@@ -1,4 +1,4 @@
-# HNS_1825 混合 MTE / NDR LL（ABI 4）
+# HNS_1825 混合 MTE / NDR LL（ABI 5）
 
 维护分支：`kernel/ll-ndr-hns1825`。原泛化/打点分支 `kernel/ll-configurable-groups` 不包含此改动。
 
@@ -22,7 +22,7 @@ python -m pip install -v --force-reinstall --no-build-isolation --no-deps .
 bash tests/ll_rdma/build_smoke.sh
 ```
 
-已有相同 SDK 可用 `--if-needed --rdma-backend HNS_1825`；身份不一致时先停止使用该 SDK 的任务，再显式 `--rebuild`。仅使用仓内 `third-party/shmem/install/shmem`。全 rank 必须匹配 ABI 4；移除旧的 `DEEPEP_LL_RANKS_PER_GROUP` 编译定义，G 不再通过编辑全局宏设置。
+已有相同 SDK 可用 `--if-needed --rdma-backend HNS_1825`；身份不一致时先停止使用该 SDK 的任务，再显式 `--rebuild`。仅使用仓内 `third-party/shmem/install/shmem`。全 rank 必须匹配 ABI 5；移除旧的 `DEEPEP_LL_RANKS_PER_GROUP` 编译定义，G 不再通过编辑全局宏设置。
 
 环境脚本不默认选卡，runner 要显式 `--devices`，日志/缓存/临时文件保持工程内。后续代码、脚本和指南通过 Git 更新，原始数据与构建产物不提交。
 

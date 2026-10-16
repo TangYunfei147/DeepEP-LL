@@ -20,6 +20,7 @@ def main():
     parser.add_argument('--iteration', type=int, help='Select one diagnostic iteration')
     parser.add_argument('--operation', choices=('dispatch', 'combine'))
     parser.add_argument('--lane-layout', choices=('core', 'stage'), default='core')
+    parser.add_argument('--show-repeated', action='store_true')
     args = parser.parse_args()
     source = args.source if args.source.is_absolute() else ROOT / args.source
     output = args.output if args.output.is_absolute() else ROOT / args.output
@@ -35,7 +36,7 @@ def main():
         if args.operation is not None and record['operation'] != args.operation:
             continue
         saved.append(record)
-    trace = timer.chrome_trace(saved, args.frequency_hz, args.lane_layout)
+    trace = timer.chrome_trace(saved, args.frequency_hz, args.lane_layout, args.show_repeated)
     output.parent.mkdir(parents=True, exist_ok=True)
     with output.open('x', encoding='utf-8') as stream:
         json.dump(trace, stream)
