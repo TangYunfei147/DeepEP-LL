@@ -57,15 +57,20 @@ def test_diagnostic_metadata_uses_selected_group(monkeypatch, tmp_path):
     monkeypatch.setattr(_native, "require_native", lambda _: SimpleNamespace(low_latency_ranks_per_group=lambda p: 4 if p<=16 else 16))
     @contextmanager
     def capture(*a, **k):
-        yield SimpleNamespace(save=lambda path, meta: saved.append(meta))
+        yield k['prepared']
     monkeypatch.setattr(ll_stage_timer, "capture", capture)
+    monkeypatch.setattr(ll_stage_timer, 'StageTrace', lambda *a: SimpleNamespace(
+        complete=lambda: None, save=lambda path, meta: saved.append(meta)))
+    monkeypatch.setattr(st, 'sampling_prelude', lambda *a: None)
     monkeypatch.setattr(st, "completion_boundary", lambda *a: None)
     monkeypatch.setattr(st, "agree_check", lambda action, *a: action())
     monkeypatch.setattr(st, "case_config", lambda *a: {"B": 32})
     args = SimpleNamespace(run_directory=str(tmp_path), case_id=0, ll_timer_iters=1,
-        ll_timer_mode="observe", ll_timer_frequency_hz=None, seed=0)
+        ll_timer_mode="observe", ll_timer_frequency_hz=None, seed=0,
+        warmup=0, num_iters=0, delay_rows=1, delay_cols=1, group_backend='hccl')
     event = SimpleNamespace(current_stream_wait=lambda: None)
-    st.diagnostic_calls(object(), lambda: (event,), lambda output: None, args, "dispatch", 0, 256, "normal")
+    st.diagnostic_calls(object(), lambda: (event,), lambda output: None, args, "dispatch", 0, 256, "normal",
+                        prelude_buffers=(object(), object()))
     assert saved[0]["world_size"] == 16 and saved[0]["config"]["logical_group_size"] == 4
 
 

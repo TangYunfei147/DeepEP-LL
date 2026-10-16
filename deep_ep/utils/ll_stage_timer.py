@@ -102,6 +102,7 @@ def chrome_trace(saved_records, frequency_hz=None):
             repeated = row['calls'] > 1
             span = row['last_tick'] - row['first_tick']
             args = dict(row, rank=rank, iteration=iteration, operation=report['operation'],
+                        sampling=meta.get('sampling'),
                         boundary_mode=report['boundary_mode'], frequency_hz=frequency,
                         origin_tick=origin, span_ticks=span, gap_ticks=span-row['total_ticks'],
                         interval_kind='repeated envelope' if repeated else 'single interval',
@@ -170,17 +171,24 @@ class StageTrace:
 
 
 @contextmanager
-def capture(buffer, operation, mode='observe', frequency_hz=DEFAULT_FREQUENCY_HZ):
+def capture(buffer, operation, mode='observe', frequency_hz=DEFAULT_FREQUENCY_HZ,
+            *, prepared=None, defer_complete=False):
     """Capture exactly one payload LL call; use independently of profiler loops."""
     active = getattr(_state, 'active', {})
     if id(buffer) in active:
         raise RuntimeError('Nested timer contexts for the same buffer are unsupported')
-    trace = StageTrace(buffer, operation, mode, frequency_hz)
+    trace = prepared if prepared is not None else StageTrace(buffer, operation, mode, frequency_hz)
+    if prepared is not None and (trace.buffer is not buffer or trace.operation != operation or
+                                 trace.mode != mode or trace.frequency_hz != frequency_hz or trace.launches):
+        raise ValueError('Prepared trace must be unused and match this capture')
     _state.active = active
     active[id(buffer)] = trace
     try:
         yield trace
-        trace.complete()
+        if trace.launches != 1:
+            raise RuntimeError('A diagnostic context must contain exactly one LL operation')
+        if not defer_complete:
+            trace.complete()
     finally:
         active.pop(id(buffer), None)
 

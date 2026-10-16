@@ -129,3 +129,14 @@ def test_named_run_no_overwrite_or_escape(tmp_path):
     with pytest.raises(FileExistsError): st.create_run_directory(tmp_path, args.run_name)
     for bad in ('', '.', '..', '../escape', '/absolute', 'a\\b'):
         with pytest.raises(ValueError): st.create_run_directory(tmp_path, bad)
+
+
+def test_declared_diagnostic_tail_must_be_complete(tmp_path):
+    spec=importlib.util.spec_from_file_location('tail_analyzer', ROOT/'tests/ll_stage_timer/analyze.py')
+    analyzer=importlib.util.module_from_spec(spec); spec.loader.exec_module(analyzer)
+    saved=sample()
+    saved['metadata'].update(world_size=1, config={'B':32}, correctness='passed',
+                             sampling={'diagnostic_iters':2})
+    path=tmp_path/'sample_0000.json'; path.write_text(json.dumps(saved))
+    with pytest.raises(ValueError, match='Incomplete diagnostic tail'):
+        analyzer.analyze([path], 1e9)

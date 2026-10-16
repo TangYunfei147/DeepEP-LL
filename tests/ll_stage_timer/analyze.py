@@ -28,7 +28,7 @@ def analyze(paths, frequency_hz=None):
         if meta.get('correctness')!='passed':raise ValueError('Missing instrumented correctness evidence')
         report=timer.parse_records(saved['raw'],saved['operation'],frequency_hz if frequency_hz is not None else saved['frequency_hz'])
         common=(meta['world_size'],meta['config'],report['active_aiv'],report['boundary_mode'],report['frequency_hz'],
-                meta.get('run_id'),meta.get('seed'),meta.get('case_id'))
+                meta.get('run_id'),meta.get('seed'),meta.get('case_id'),meta.get('sampling'))
         if identity is not None and common!=identity:raise ValueError('Mixed configurations or timer modes')
         identity=common
         op=report['operation'];rank=meta['rank'];iteration=meta['iteration']
@@ -52,12 +52,16 @@ def analyze(paths, frequency_hz=None):
         reference=ranks[(op,0)]
         if reference!=set(range(len(reference))) or any(ranks[(op,r)]!=reference for r in range(identity[0])):
             raise ValueError('Missing or misaligned diagnostic iterations')
+        if identity[8] is not None:
+            expected = identity[8].get('diagnostic_iters')
+            if type(expected) is not int or expected < 1 or reference != set(range(expected)):
+                raise ValueError('Incomplete diagnostic tail')
     rows=[]
     for (op,rank,core,role,stage), values in sorted(groups.items()):
         rows.append(dict(operation=op,rank=rank,core=core,role=role,stage=stage,unit=unit,
                          **stats([v for v,n in values]),mean_calls=statistics.mean(n for v,n in values)))
     return dict(schema=timer.SCHEMA,world_size=identity[0],boundary_mode=identity[3],frequency_hz=identity[4],
-                configurations=configurations,per_rank_core_stage=rows,
+                configurations=configurations,sampling=identity[8],per_rank_core_stage=rows,
                 per_rank_stage_max=[dict(operation=op,rank=rank,stage=stage,unit=unit,**stats(list(values.values())))
                                     for (op,rank,stage),values in sorted(stage_max.items())],
                 note='Per-call diagnostic stage totals; nested/parallel stages cannot be added. No cross-rank timestamp subtraction.')

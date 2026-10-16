@@ -67,9 +67,9 @@ python tests/elastic/test_ep_low_latency.py \
   --skip-perf-test --output-dir "$PWD/results/ll-stage-001"
 ```
 
-这是独立诊断调用，每次先执行完成边界，再逐次校验输出后保存timer，不重试失败实验；这里不执行大Exp扰动，warmup/num-iters/perf-tail只控制另行运行的profiler采样。`--plan`仅打印CPU计划；A5不可执行上面的16卡命令。
+这是稳定运行后的独立诊断尾段。跳过perf时，先执行warmup次预热、num-iters次未打点稳定调用，再执行ll-timer-iters次打点；稳定和打点调用前均执行Exp+scalar all_reduce。所有打点轮次结束后才复制、校验和保存，不重试失败实验。`--plan`仅打印CPU计划；A5不可执行上面的16卡命令。
 
-去掉`--skip-perf-test`会另外进行原有profiler采样：10预热、100次采集，每次Exp+scalar all_reduce，统计最后50条。timer诊断和profiler样本不混合。旧delay-exp-before/after参数仅接受1/0；不要沿用首调用后1000次Exp的旧配置。`--dispatch-only`只诊断/测量dispatch；正常默认同时覆盖dispatch和combine。
+去掉`--skip-perf-test`后，每个操作先完成原有profiler采样（10预热、100次采集、每次Exp+scalar all_reduce、统计最后50条），关闭profiler后复用同一Exp缓冲追加打点轮次，再解析性能数据。profiler结束可能包含导出开销，不保证诊断与最后一条性能样本无间隙。timer诊断和profiler样本不混合。旧delay-exp-before/after参数仅接受1/0；不要沿用首调用后1000次Exp的旧配置。`--dispatch-only`只诊断/测量dispatch；正常默认同时覆盖dispatch和combine。
 
 M决定去重：`M>32`启用，`M<=32`关闭。若对比两条路径，在满足`B<=M`的前提下分别测量并保留独立输出目录。
 
@@ -207,3 +207,33 @@ python tests/ll_stage_timer/analyze.py results/ll-stage-001 --latest
 
 已有报告不覆盖；再次分析使用`--output-dir results/ll-stage-summary-002`。
 无需另跑export_trace.py；该入口仅保留给单rank/部分数据浏览及细粒度筛选。
+
+## 稳定尾段采样参数（2026-10-16）
+
+以下两种模式采用相同前处理；参数加到原目标机测试命令中：
+
+```bash
+# 无外部profiler：10次预热 + 100次稳定调用 + 5次内部打点
+--skip-perf-test --ll-stage-timer --warmup 10 --num-iters 100 \
+  --ll-timer-iters 5 --ll-timer-mode observe
+
+# 外部profiler：10次预热 + 100次性能采集 + 5次内部打点
+--ll-stage-timer --warmup 10 --num-iters 100 --perf-tail 50 \
+  --ll-timer-iters 5 --ll-timer-mode observe
+```
+
+需要drain时将observe改成drain。内部打点仍编号0..4，最后一轮分析使用
+`analyze.py ... --trace-iteration 4`。perf-tail只控制性能统计，不改变打点数量。
+
+timer缓冲在采样前分配，采集循环只执行前处理、LL调用及设备流依赖；
+不逐轮复制到CPU、执行正确性collective或写文件。所有轮次的输出和handle保持存活，
+结束后统一完成边界，再逐轮校验、导出。失败不自动重试；analyze会校验新metadata声明的
+完整诊断轮数，拒绝中断后只留下部分轮次的结果。
+
+显存注意：非perf打点现在同样使用默认118260×30720 FP32 Exp缓冲（约13.53GiB/卡），
+并同时保留N轮输出/handle及timer（每轮每实际AIV 2048B加对齐空间）。N增大会增加峰值显存；
+建议先保持默认5轮。A5仅双卡原语或CPU验证，不运行原生LL；小Exp不能代表目标参考负载。
+
+新流程修改了Python capture接口，所有节点须安装匹配版本wheel：更新Git后保持
+DEEPEP_LL_RDMA=ON、DEEPEP_LL_STAGE_TIMER=ON，执行既有pip重装命令。
+SDK、C++ kernel和ABI4未变，不需仅为本次更新重建SHMEM。

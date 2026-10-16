@@ -84,7 +84,8 @@ def test_context_is_thread_local_and_rejects_extra_calls(monkeypatch):
     assert list(ordinary)==['input']
 
 
-def test_native_st_reference_schedule(monkeypatch,tmp_path):
+@pytest.mark.parametrize('with_tail', [False, True])
+def test_native_st_reference_schedule(monkeypatch,tmp_path,with_tail):
     import sys
     st=load('ll_stage_st',ROOT/'tests/elastic/test_ep_low_latency.py')
     calls=[]
@@ -92,7 +93,7 @@ def test_native_st_reference_schedule(monkeypatch,tmp_path):
         def fill_(self,value):calls.append('fill')
     class Profiler:
         def __enter__(self):return self
-        def __exit__(self,*args):pass
+        def __exit__(self,*args):calls.append('profile_closed')
         def step(self):calls.append('step')
     def profile(**kwargs):
         assert kwargs['schedule']==dict(wait=0,warmup=1,active=1,repeat=1,skip_first=0)
@@ -111,11 +112,12 @@ def test_native_st_reference_schedule(monkeypatch,tmp_path):
     st.completion_boundary=lambda args:None
     st.agree_check=lambda fn,*args:fn()
     st.trace_call=lambda args,label,fn,*a,**kw:fn(*a,**kw)
-    st.kernel_durations=lambda *args:[1.0]*100
+    st.kernel_durations=lambda *args:calls.append('parse') or [1.0]*100
     args=st.parse_args([])
     assert (args.warmup,args.num_iters,args.perf_tail)==(10,100,50)
-    st.measure(lambda:calls.append('invoke'),args,'dispatch',tmp_path)
-    assert calls==['reduce']+['invoke']*10+['sync','step']+['exp','fill','reduce','invoke']*100+['barrier','sync','step']
+    tail=(lambda delay,alignment:calls.append('tail')) if with_tail else None
+    st.measure(lambda:calls.append('invoke'),args,'dispatch',tmp_path,after_profile=tail)
+    assert calls==['reduce']+['invoke']*10+['sync','step']+['exp','fill','reduce','invoke']*100+['barrier','sync','step','profile_closed']+(['tail'] if with_tail else [])+['parse']
 
 
 def test_moved_checkout_with_spaces_and_other_cwd(tmp_path):

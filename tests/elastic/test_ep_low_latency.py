@@ -642,7 +642,18 @@ def record_case_progress(args, rank, m, mode, phase, error=None):
         print("[LL ST] " + json.dumps(entry, ensure_ascii=False), flush=True)
 
 
-def measure(invoke, args, operation, profile_dir, progress=None):
+def sampling_prelude(delay, alignment, args):
+    """The same Exp + scalar collective before normal and diagnostic samples."""
+    import torch
+    import torch.distributed as dist
+    torch.exp(delay, out=delay)
+    alignment.fill_(1)
+    if args.group_backend == 'gloo':
+        torch.npu.synchronize()
+    dist.all_reduce(alignment, op=dist.ReduceOp.SUM, async_op=False)
+
+
+def measure(invoke, args, operation, profile_dir, progress=None, after_profile=None):
     """Measure exported device kernel tasks; never substitute Host wall time."""
     import torch
     import torch.distributed as dist
@@ -671,15 +682,14 @@ def measure(invoke, args, operation, profile_dir, progress=None):
         torch.npu.synchronize()
         profiler.step()
         for _ in range(args.num_iters):
-            torch.exp(delay, out=delay)
-            alignment.fill_(1)
-            if args.group_backend == "gloo":
-                torch.npu.synchronize()
-            dist.all_reduce(alignment, op=dist.ReduceOp.SUM, async_op=False)
+            sampling_prelude(delay, alignment, args)
             output = invoke()
         dist.barrier()
         torch.npu.synchronize()
         profiler.step()
+    if after_profile is not None:
+        # Append diagnostics only after profiler closes, before parsing/filesystem work.
+        after_profile(delay, alignment)
     del output, delay, alignment
     if progress:
         progress(f"{operation}.read_profile")
@@ -708,27 +718,81 @@ def create_run_directory(parent, name=None):
     return str(selected)
 
 
-def diagnostic_calls(buffer, invoke, check, args, operation, rank, m, mode):
-    """Run separately from profiler; verify each instrumented operation before saving."""
-    from deep_ep.utils.ll_stage_timer import capture
+def diagnostic_calls(buffer, invoke, check, args, operation, rank, m, mode,
+                     *, prepared=None, prelude_buffers=None):
+    """Sample a stabilized tail, retaining outputs/timers until all launches finish."""
+    from deep_ep.utils.ll_stage_timer import capture, StageTrace
     from deep_ep._native import require_native
+    import torch
     import torch.distributed as dist
     world = dist.get_world_size()
     logical_group = require_native("LL timer").low_latency_ranks_per_group(world)
     directory = Path(args.run_directory) / f"case_{args.case_id:05d}" / mode / "ll_stage_timer" / operation / f"rank_{rank:03d}"
-    for iteration in range(args.ll_timer_iters):
+    if prepared is None:
+        prepared = []
+        def allocate():
+            for _ in range(args.ll_timer_iters):
+                prepared.append(StageTrace(buffer, operation, args.ll_timer_mode, args.ll_timer_frequency_hz))
+        agree_check(allocate, args, rank)
+    after_perf = prelude_buffers is not None
+    if not after_perf:
         completion_boundary(args)
-        with capture(buffer, operation, args.ll_timer_mode, args.ll_timer_frequency_hz) as trace:
+        delay = torch.zeros(args.delay_rows, args.delay_cols, dtype=torch.float32, device='npu')
+        alignment = torch.ones(1, dtype=torch.float32, device=control_device(args, torch))
+        dist.all_reduce(alignment, op=dist.ReduceOp.SUM, async_op=False)
+        for _ in range(args.warmup):
+            output = invoke()
+        torch.npu.synchronize()
+        for _ in range(args.num_iters):
+            sampling_prelude(delay, alignment, args)
+            output = invoke()
+    else:
+        delay, alignment = prelude_buffers
+    pending = []
+    for iteration, trace in enumerate(prepared):
+        sampling_prelude(delay, alignment, args)
+        with capture(buffer, operation, args.ll_timer_mode, args.ll_timer_frequency_hz,
+                     prepared=trace, defer_complete=True):
             output = invoke()
             output[-1].current_stream_wait()
+        pending.append((iteration, trace, output))
+    # No CPU copy, correctness collective or filesystem operation in the sample loop.
+    completion_boundary(args)
+    for iteration, trace, output in pending:
+        agree_check(trace.complete, args, rank)
         agree_check(lambda: check(output), args, rank)
         metadata = dict(rank=rank, world_size=world, iteration=iteration,
                         run_id=Path(args.run_directory).name, seed=args.seed, case_id=args.case_id,
                         correctness="passed", config={**case_config(args, m),
                         "logical_group_size": logical_group},
-                        protocol="separate diagnostic; completion boundary but no Exp prelude; not the profiler sample set")
+                        protocol="stabilized diagnostic tail; Exp+scalar all_reduce; deferred validation/export; excluded from profiler",
+                        sampling=dict(after_perf=after_perf, warmup=args.warmup, settle_iters=args.num_iters,
+                                      diagnostic_iters=args.ll_timer_iters, delay_rows=args.delay_rows,
+                                      delay_cols=args.delay_cols, group_backend=args.group_backend))
         agree_check(lambda: trace.save(directory / f"sample_{iteration:04d}.json", metadata), args, rank)
-        del output
+
+
+def sample_operation(buffer, invoke, check, args, operation, rank, m, mode, progress):
+    """Keep the diagnostic tail identical with and without external profiling."""
+    prepared = None
+    if args.ll_stage_timer:
+        from deep_ep.utils.ll_stage_timer import StageTrace
+        prepared = []
+        def allocate():
+            for _ in range(args.ll_timer_iters):
+                prepared.append(StageTrace(buffer, operation, args.ll_timer_mode, args.ll_timer_frequency_hz))
+        agree_check(allocate, args, rank)
+    def diagnostic(delay=None, alignment=None):
+        diagnostic_calls(buffer, invoke, check, args, operation, rank, m, mode, prepared=prepared,
+                         prelude_buffers=None if delay is None else (delay, alignment))
+    if args.skip_perf_test:
+        if args.ll_stage_timer:
+            progress(f'{operation}.diagnostic')
+            diagnostic()
+        return None
+    profile = Path(args.run_directory) / f'case_{args.case_id:05d}' / mode / operation / f'rank_{rank:03d}'
+    return measure(invoke, args, operation, profile, progress,
+                   after_profile=diagnostic if args.ll_stage_timer else None)
 
 
 def run_case(buffer, args, rank, world, m, mode):
@@ -810,15 +874,6 @@ def run_case(buffer, args, rank, world, m, mode):
             event.current_stream_wait()
             torch.npu.synchronize()
             agree_check(lambda: verify_dispatch(recv, handle, entries, args, world, m), args, rank)
-    if args.ll_stage_timer:
-        diagnostic_calls(buffer, dispatch,
-                         lambda output: verify_dispatch(output[0], output[3], entries, args, world, m),
-                         args, "dispatch", rank, m, mode)
-        # Reestablish matching fresh handle/output before expert preparation.
-        completion_boundary(args)
-        recv, recv_idx, recv_weights, handle, event = dispatch()
-        event.current_stream_wait()
-        torch.npu.synchronize()
     if args.dispatch_only:
         result = {
             "case_id": args.case_id,
@@ -828,11 +883,11 @@ def run_case(buffer, args, rank, world, m, mode):
             "config": case_config(args, m),
             "tested_operations": ["dispatch"],
         }
-        if not args.skip_perf_test:
-            profile = Path(args.run_directory) / f"case_{args.case_id:05d}" / mode
-            result["dispatch"] = measure(
-                dispatch, args, "dispatch", profile / "dispatch" / f"rank_{rank:03d}", progress
-            )
+        perf = sample_operation(buffer, dispatch,
+            lambda output: verify_dispatch(output[0], output[3], entries, args, world, m),
+            args, 'dispatch', rank, m, mode, progress)
+        if perf is not None:
+            result['dispatch'] = perf
         if rank == 0:
             print(json.dumps(result, ensure_ascii=False), flush=True)
         completion_boundary(args)
@@ -871,15 +926,12 @@ def run_case(buffer, args, rank, world, m, mode):
                 )
 
         agree_check(check_combine, args, rank)
-    if args.ll_stage_timer:
-        def check_timed_combine(output):
-            if output[1] is not None or tuple(output[0].shape) != (args.num_tokens, args.hidden):
-                raise AssertionError("Instrumented combine output contract differs")
-            torch.testing.assert_close(output[0].cpu(), expected,
-                                       rtol=0.003 if args.dtype == "fp16" else 0.01,
-                                       atol=0.004 if args.dtype == "fp16" else 0.03125)
-        diagnostic_calls(buffer, lambda: buffer.combine(expert_output, handle, topk_weights=None),
-                         check_timed_combine, args, "combine", rank, m, mode)
+    def check_timed_combine(output):
+        if output[1] is not None or tuple(output[0].shape) != (args.num_tokens, args.hidden):
+            raise AssertionError("Instrumented combine output contract differs")
+        torch.testing.assert_close(output[0].cpu(), expected,
+                                   rtol=0.003 if args.dtype == "fp16" else 0.01,
+                                   atol=0.004 if args.dtype == "fp16" else 0.03125)
     result = {
         "case_id": args.case_id,
         "route": mode,
@@ -887,12 +939,14 @@ def run_case(buffer, args, rank, world, m, mode):
         "backend": "ll",
         "config": case_config(args, m),
     }
-    if not args.skip_perf_test:
+    if not args.skip_perf_test or args.ll_stage_timer:
         if rank == 0:
             print(f"[LL ST] timing dispatch/combine: warmup={args.warmup}, iterations={args.num_iters}", flush=True)
-        profile = Path(args.run_directory) / f"case_{args.case_id:05d}" / mode
-        rank_directory = f"rank_{rank:03d}"
-        result["dispatch"] = measure(dispatch, args, "dispatch", profile / "dispatch" / rank_directory, progress)
+        perf = sample_operation(buffer, dispatch,
+            lambda output: verify_dispatch(output[0], output[3], entries, args, world, m),
+            args, 'dispatch', rank, m, mode, progress)
+        if perf is not None:
+            result['dispatch'] = perf
         # Prepare fresh matching metadata and expert output outside the combine capture.
         progress("dispatch.refresh")
         completion_boundary(args)
@@ -900,13 +954,11 @@ def run_case(buffer, args, rank, world, m, mode):
         trace_call(args, "dispatch.event.wait", event.current_stream_wait)
         trace_call(args, "device.synchronize", torch.npu.synchronize)
         expert_output = prepare_experts(recv, counts, rank, args.num_experts, world, expert_dtype)
-        result["combine"] = measure(
+        perf = sample_operation(buffer,
             lambda: buffer.combine(expert_output, handle, topk_weights=None),
-            args,
-            "combine",
-            profile / "combine" / rank_directory,
-            progress,
-        )
+            check_timed_combine, args, 'combine', rank, m, mode, progress)
+        if perf is not None:
+            result['combine'] = perf
     if rank == 0:
         print(json.dumps(result, ensure_ascii=False), flush=True)
     completion_boundary(args)
