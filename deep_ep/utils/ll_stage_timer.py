@@ -75,6 +75,47 @@ def parse_records(raw, operation, frequency_hz=None):
                 interpretation='Nested and overlapping stages must not be summed; repeated-stage totals exclude gaps.')
 
 
+def chrome_trace(saved_records, frequency_hz=None):
+    """Export rank/sample-local timelines; schema 1 cannot reconstruct repeated calls."""
+    events, identities = [], set()
+    for pid, saved in enumerate(saved_records, 1):
+        frequency = frequency_hz if frequency_hz is not None else saved.get('frequency_hz')
+        if frequency is None:
+            raise ValueError('Chrome trace requires explicit GetSystemCycle frequency_hz')
+        report = parse_records(saved['raw'], saved['operation'], frequency)
+        meta = saved.get('metadata', {})
+        rank, iteration = meta.get('rank', 'unknown'), meta.get('iteration', pid - 1)
+        identity = (meta.get('run_id'), meta.get('case_id'), report['operation'], rank, iteration)
+        if identity in identities:
+            raise ValueError('Duplicate rank/operation/sample trace')
+        identities.add(identity)
+        origin = min(row['first_tick'] for row in report['records'])
+        name = f"{report['operation']} rank {rank} sample {iteration} ({report['boundary_mode']}; independent origin)"
+        events.append(dict(ph='M', name='process_name', pid=pid, tid=0, args={'name': name}))
+        for row in report['records']:
+            # Separate stage lanes preserve overlapping/non-nested ranges in viewers.
+            tid = row['core'] * SLOTS + STAGES.index(row['stage'])
+            lane = f"AIV {row['core']:02d} {row['role']} / {row['stage']}"
+            events.append(dict(ph='M', name='thread_name', pid=pid, tid=tid, args={'name': lane}))
+            events.append(dict(ph='M', name='thread_sort_index', pid=pid, tid=tid, args={'sort_index': tid}))
+            repeated = row['calls'] > 1
+            span = row['last_tick'] - row['first_tick']
+            args = dict(row, rank=rank, iteration=iteration, operation=report['operation'],
+                        boundary_mode=report['boundary_mode'], frequency_hz=frequency,
+                        origin_tick=origin, span_ticks=span, gap_ticks=span-row['total_ticks'],
+                        interval_kind='repeated envelope' if repeated else 'single interval',
+                        clock_alignment='Independent origin per rank/operation/sample; not profiler aligned')
+            events.append(dict(ph='X', cat='LL.stage.envelope' if repeated else 'LL.stage',
+                               name=row['stage'] + (f" [envelope x{row['calls']}]" if repeated else ''),
+                               pid=pid, tid=tid, ts=(row['first_tick']-origin)*1e6/frequency,
+                               dur=span*1e6/frequency, args=args))
+    if not identities:
+        raise ValueError('No LL stage records')
+    return dict(traceEvents=events, displayTimeUnit='us',
+                metadata={'format': 'LL stage schema 1 Chrome trace',
+                          'interpretation': 'Repeated events show envelopes including gaps; args.total_us is accumulated active time. Independent rank/sample origins; no cross-rank or profiler clock alignment.'})
+
+
 class StageTrace:
     def __init__(self, buffer, operation, mode='observe', frequency_hz=None):
         if operation not in ('dispatch', 'combine') or mode not in ('observe', 'drain'):
@@ -116,6 +157,13 @@ class StageTrace:
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open('x', encoding='utf-8') as stream:
             json.dump(dict(**self.report, metadata=metadata or {}, raw=self.raw), stream, indent=2)
+        if self.frequency_hz is not None:
+            # Prefix avoids the analyzer's sample_*.json raw-record glob.
+            trace_path = path.with_name('trace_' + path.name)
+            saved = dict(raw=self.raw, operation=self.operation,
+                         frequency_hz=self.frequency_hz, metadata=metadata or {})
+            with trace_path.open('x', encoding='utf-8') as stream:
+                json.dump(chrome_trace([saved]), stream)
 
 
 @contextmanager

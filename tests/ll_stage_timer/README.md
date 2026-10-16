@@ -133,3 +133,44 @@ python tests/ll_stage_timer/analyze.py \
 - `bash tests/ll_stage_timer/validate_device.sh`：专用A5入口，强制卡0/1，仅在卡0启动独立timer验证核；验证开/关、两种模式、每核记录及guard，不建立伪造LL域。
 - `tests/ll_stage_timer/check_installed.py`：A5卡0验证完整wheel的ABI、查询核数和timer分配，不执行LL通信。
 - 完整dispatch/combine的精度、阶段曲线、跨机同步及实际性能必须由用户在合法目标EP上验证。
+
+## Chrome tracing / Perfetto 时间线（NDR，2026-10-16）
+
+参考 Mega_Moe 的 Chrome Trace Event JSON 导出格式，支持将内部阶段导入
+`chrome://tracing`（Load）或 Perfetto（Open trace file）查看。无需修改设备kernel、SDK或ABI。
+
+### 新采集自动输出
+
+构建仍使用 `DEEPEP_LL_STAGE_TIMER=ON`，测试保留
+`--ll-stage-timer --ll-timer-mode drain`。显式提供已确认的系统计数器频率，
+例如**仅在确认1GHz时**增加 `--ll-timer-frequency-hz 1000000000`。
+每份 `sample_0000.json` 旁自动生成 `trace_sample_0000.json`，可直接加载。
+不提供频率时只保存原始数据，不能把ticks冒充微秒。
+Python导出代码位于wheel中，更新后重新安装wheel以启用自动导出；离线转换不需重编。
+
+### 已有数据离线转换（不需重新采集）
+
+在仓库根目录执行，替换实际run路径；所有相对输入输出均按脚本定位的工程根解析：
+
+```bash
+python tests/ll_stage_timer/export_trace.py \
+  results/ndr-drain-ep32/<run>/case_00000/normal/ll_stage_timer \
+  --frequency-hz 1000000000 \
+  --rank 0 --operation dispatch --iteration 0 \
+  --output results/trace-dispatch-rank0-sample0.json
+```
+
+上例频率仍须确认；原始数据已记录频率时可省略该参数。也可传单个raw sample文件。
+去掉rank/operation/iteration筛选可导出多份采集，允许单机的部分rank数据；此转换器
+用于浏览，不替代analyze.py对完整rank/轮次的验收。输出文件已存在会报错，避免覆盖。
+
+### 时间线口径
+
+- 每个rank/operation/sample为独立进程轨道，分别以本次最早内部时间戳归零。
+  核间保留本设备计数器相对时间；不同rank/不同调用不对齐，不与外部profiler合并。
+- AIV core/role/stage各有具名轨道，避免非严格嵌套阶段在viewer中相互遮蔽。
+- 单次阶段显示首次到末次真实区间；重复阶段标为`[envelope xN]`，宽度是首尾包络，
+  **包括中间空隙，不是累计执行时间**。点击事件查看`total_us/total_ticks`累计耗时、
+  `average_us`、`calls`、`gap_ticks`及原始起止ticks。
+- schema 1没有保存每次重复调用的起止点，无法从现有数据还原Mega_Moe式逐次动态事件；
+  不伪造连续片段。父子阶段/并行阶段不可直接相加，drain数据也不是未插桩性能基线。
