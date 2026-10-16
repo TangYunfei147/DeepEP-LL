@@ -7,7 +7,7 @@ from environment import environment
 
 ROOT = Path(__file__).resolve().parents[2]
 parser = argparse.ArgumentParser(description=__doc__)
-parser.add_argument("--rdma", type=int, choices=(0, 1), required=True)
+parser.add_argument("--rdma", type=int, choices=(1,), default=1, help="Compatibility argument; NDR always includes RDMA")
 parser.add_argument("--timer", type=int, choices=(0, 1), default=0)
 args = parser.parse_args()
 os.environ.update(environment())
@@ -31,12 +31,4 @@ except ValueError as exc:
     assert "must be mte or rdma" in str(exc)
 else:
     raise AssertionError("Invalid selector was accepted")
-if not args.rdma:
-    os.environ["DEEPEP_LL_BACKEND"] = "rdma"
-    try:
-        native.Runtime(0, 2, 2 << 20, "tcp://127.0.0.1:1", 1)
-    except RuntimeError as exc:
-        assert "no MTE fallback" in str(exc)
-    else:
-        raise AssertionError("Disabled RDMA was accepted")
-print(f"PASS installed {package.__file__}: ABI=4 RDMA={args.rdma} timer={args.timer}; Host negative checks only")
+print(f"PASS installed {package.__file__}: ABI=5 RDMA=1 timer={args.timer}; Host negative checks only")

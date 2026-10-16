@@ -13,17 +13,17 @@
 source tests/ll_rdma/env.sh
 git submodule update --init --recursive --depth 1
 unset SHMEM_ROOT CATLASS_ROOT
-python scripts/build_shmem.py --if-needed --rdma-backend HNS_1825
-export DEEPEP_LL_RDMA=ON
+python scripts/build_shmem.py
 export DEEPEP_NPU_ARCH=Ascend950
 export DEEPEP_LL_STAGE_TIMER=ON
-export DEEPEP_LL_BACKEND=rdma
 export LD_LIBRARY_PATH="$PWD/third-party/shmem/install/shmem/lib:${LD_LIBRARY_PATH:-}"
 python -m pip install -r requirements-build.txt
 python -m pip install -v --force-reinstall --no-build-isolation --no-deps .
 ```
 
 使用工程内Python虚拟环境；脚本将缓存、临时文件和日志定向工程内，不设置设备可见性。此分支在保留9.2版本声明的同时接受用户确认的CANN 9.3.0，SDK身份中继续记录实际版本。
+
+NDR 固定编入 HNS_1825 能力；SDK 默认安全复用匹配产物，只有身份改变才要求停止 SDK 使用者后显式 `--rebuild`。不需要重复设置 RDMA 编译/运行环境变量。
 
 已有业务代码可以对单次LL调用使用以下独立诊断上下文，公开dispatch/combine参数不变：
 
@@ -41,12 +41,13 @@ trace.save(output_dir / "dispatch-stage.json", metadata={"rank": rank})
 
 ## 目标机运行
 
+共同入口按分支选择默认后端；仅需 MTE 对照时增加 `--backend mte`。本机 rank 数从明确的 `--devices` 列表推断；配置文件或命令行显式给出的 `num_processes` 保留并校验。`--use-1g-huge-pages` 默认 0。旧 `tests/ll_rdma/run_ll.py` 已委托共同入口。
+
 下例为每机16卡。所有节点配置相同参数和可达地址，`NODE_RANK`从0开始。单机EP16设置`NNODES=1`；两机EP32设置`NNODES=2`。本分支按通信域自动选择tiling key：EP16为G=4，EP32及以上为G=16；物理每机16卡独立于逻辑组。
 
 ```bash
 # 在目标机仓库根目录执行。先激活匹配wheel的Python环境。
 source tests/ll_rdma/env.sh
-export DEEPEP_LL_BACKEND=rdma
 export ASCEND_RT_VISIBLE_DEVICES=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15
 export ASCEND_VISIBLE_DEVICES="$ASCEND_RT_VISIBLE_DEVICES"
 export CUDA_VISIBLE_DEVICES="$ASCEND_RT_VISIBLE_DEVICES"
@@ -58,12 +59,12 @@ MASTER_PORT=29500
 SHMEM_PORT=29501
 unset RANK WORLD_SIZE LOCAL_RANK
 
-python tests/elastic/test_ep_low_latency.py \
-  --num-processes 16 --num-nodes "$NNODES" --node-rank "$NODE_RANK" \
+python tests/ll_stage_timer/run.py --devices "$ASCEND_RT_VISIBLE_DEVICES" \
+  --num-nodes "$NNODES" --node-rank "$NODE_RANK" \
   --master-addr "$MASTER_ADDR" --master-port "$MASTER_PORT" --shmem-port "$SHMEM_PORT" \
   --num-tokens 32 --num-max-tokens-per-rank 256 \
   --hidden 7168 --num-topk 6 --num-experts 256 --dtype bf16 --do-cpu-sync 0 \
-  --use-1g-huge-pages 0 --ll-stage-timer --ll-timer-iters 5 --ll-timer-mode observe \
+  --ll-stage-timer --ll-timer-iters 5 --ll-timer-mode observe \
   --skip-perf-test --output-dir "$PWD/results/ll-stage-001"
 ```
 
@@ -235,7 +236,7 @@ timer缓冲在采样前分配，采集循环只执行前处理、LL调用及设�
 建议先保持默认5轮。A5仅双卡原语或CPU验证，不运行原生LL；小Exp不能代表目标参考负载。
 
 新流程修改了Python capture接口，所有节点须安装匹配版本wheel：更新Git后保持
-DEEPEP_LL_RDMA=ON、DEEPEP_LL_STAGE_TIMER=ON，执行既有pip重装命令。
+DEEPEP_LL_STAGE_TIMER=ON，执行既有pip重装命令。
 以上稳定尾段采样本身不改变SDK；当前专家诊断新增dispatch参数，须使用ABI5完整wheel，SDK配置不变时无需重建SHMEM。
 默认单AIV轨道适用于自动trace、analyze.py及export_trace.py。更新Git后对已有raw sample重新分析即可，无需重新采集；核间起始偏移保持原样，不做逐核归零。
 
@@ -275,16 +276,16 @@ drain会在每个子阶段Start/End继续加入PIPE_ALL，可能将后续等待�
 子阶段之和不保证等于父区间（还有边界和插桩开销）。重复区间仍只提供包络与累计值，
 不会伪造每次调用的时间点。详细插桩增加开销，正式基线保持timer OFF。
 
-目标机更新后沿用原SDK（本次未改变SDK），保持DEEPEP_LL_RDMA=ON、
+目标机更新后沿用原SDK（本次未改变SDK），保持
 DEEPEP_LL_STAGE_TIMER=ON，重新完整构建安装wheel，然后使用原测试命令重新采集。
 分析仍只需一个analyze.py命令，CSV及trace自动包含新阶段。
 ## 可选接收侧专家统计（ABI 5，本地修改待设备验收）
 
-在原测试命令上增加`--ll-stage-timer --ll-expert-timer`；建议先使用observe。
+在原测试命令上增加`--ll-expert-timer`，它隐含阶段 capture，无需再加 `--ll-stage-timer`；建议先使用observe。
 例如既有目标启动命令末尾使用：
 
 ```bash
---ll-stage-timer --ll-expert-timer --ll-timer-mode observe --ll-timer-iters 5 \
+--ll-expert-timer --ll-timer-mode observe --ll-timer-iters 5 \
   --output-dir results/ll-expert --run-name expert-001
 ```
 

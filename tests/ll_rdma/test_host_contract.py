@@ -65,7 +65,8 @@ def test_qp_patch_is_idempotent_and_preserves_udma_and_user_edits(tmp_path):
 def test_moved_checkout_plan_and_environment(tmp_path):
     moved = tmp_path / "new project with spaces"
     relatives = ["tests/elastic/test_ep_low_latency.py", "tests/ll_rdma/run_ll.py", "tests/ll_rdma/run_smoke.py",
-                 "tests/ll_rdma/environment.py", "tests/ll_rdma/target16.json", "tests/ll_rdma/target32.json"]
+                 "tests/ll_rdma/environment.py", "tests/ll_rdma/target16.json", "tests/ll_rdma/target32.json",
+                 "tests/ll_stage_timer/run.py", "tests/ll_stage_timer/branch.json"]
     for relative in relatives:
         dst = moved / relative; dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(ROOT / relative, dst)

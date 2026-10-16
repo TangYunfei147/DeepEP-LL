@@ -115,6 +115,7 @@ def make_parser():
     parser.add_argument("--plan", action="store_true", help="Print the case matrix without importing Torch")
     parser.add_argument("--output-dir", default="benchmark-runs", help="Parent for a unique run directory and traces")
     parser.add_argument("--run-name", help="Optional fixed child directory name; existing directory is rejected")
+    parser.add_argument('--backend',choices=('mte','rdma'),help='Optional override; default is determined by the installed kernel branch')
     parser.add_argument(
         "--perf-tail",
         type=int,
@@ -180,14 +181,14 @@ def make_parser():
     parser.add_argument("--warmup", type=int, default=10)
     parser.add_argument("--num-iters", type=int, default=100)
     parser.add_argument("--ll-stage-timer", action="store_true", help="Separate device-stage diagnostic calls; requires timer-enabled wheel")
-    parser.add_argument('--ll-expert-timer', action='store_true', help='Opt-in dispatch per-expert receive work; requires --ll-stage-timer and ABI 5')
+    parser.add_argument('--ll-expert-timer', action='store_true', help='Opt-in dispatch per-expert receive work; implies stage capture, requires ABI 5')
     parser.add_argument("--ll-timer-iters", type=int, default=5)
     parser.add_argument("--ll-timer-mode", choices=("observe", "drain"), default="observe")
     parser.add_argument("--ll-timer-frequency-hz", type=float, default=1_000_000_000, help="GetSystemCycle frequency; default 1GHz (ticks/1000 us)")
     parser.add_argument("--dispatch-only", action="store_true")
     parser.add_argument("--repeat-combine", type=int, default=2)
     parser.add_argument("--correctness-repeats", type=int, default=3, help="Fresh routes on the same Buffer; outside profiling")
-    parser.add_argument("--use-1g-huge-pages", type=int, choices=(0, 1), default=None, help="RDMA requires 0; use the same page policy for MTE comparison")
+    parser.add_argument("--use-1g-huge-pages", type=int, choices=(0, 1), default=0, help="LL defaults to 0; explicit 1 is MTE-only")
     parser.add_argument("--output", help="New rank-0 JSON result file (will not overwrite)")
     return parser
 
@@ -361,6 +362,7 @@ def parse_args(argv=None):
                     ]
                 )
     args = make_parser().parse_args(configured + argv)
+    if args.ll_expert_timer: args.ll_stage_timer=True
     for name in ("output_dir", "output"):
         value = getattr(args, name)
         if value:
@@ -432,10 +434,9 @@ def validate_args(args, world):
         raise ValueError("ll-timer-iters must be 1..1000")
     if args.ll_timer_frequency_hz is not None and (not math.isfinite(args.ll_timer_frequency_hz) or args.ll_timer_frequency_hz <= 0):
         raise ValueError("Timer counter frequency must be positive and finite")
+    if args.ll_expert_timer: args.ll_stage_timer=True
     if args.ll_stage_timer and args.skip_check:
         raise ValueError("Stage diagnostics require correctness checks")
-    if args.ll_expert_timer and not args.ll_stage_timer:
-        raise ValueError('--ll-expert-timer requires --ll-stage-timer')
     if args.warmup < 0 or args.num_iters < 1 or args.repeat_combine < 2:
         raise ValueError("Require warmup>=0, num-iters>=1 and repeat-combine>=2")
     if not 1 <= args.num_cpu_timeout_secs <= 300:
@@ -1044,11 +1045,16 @@ def worker(local_rank, args):
     try:
         # Agree before creating a SHMEM Session or launching an instrumented kernel.
         core_config = native.low_latency_core_config()
+        implementation=getattr(native,'low_latency_implementation','unknown')
+        backend=args.backend or ('rdma' if implementation=='ndr-hns1825' else 'mte')
+        # One CLI choice drives Python and native initialization; stale shell state
+        # does not change the selected branch's default in this experiment entry.
+        os.environ['DEEPEP_LL_BACKEND']=backend
         capability = {"active_aiv": core_config["active_aiv"],
-                      "transport": os.environ.get("DEEPEP_LL_BACKEND", "mte"),
+                      "transport": backend,
                       "rdma_compiled": bool(getattr(native, "low_latency_rdma_enabled", False)),
                       "logical_group": compiled_group(native,world),
-                      "implementation": getattr(native,'low_latency_implementation','unknown'),
+                      "implementation": implementation,
                       "core_protocol": native.low_latency_core_protocol,
                       "stage_timer": bool(getattr(native, "low_latency_stage_timer_enabled", False)),
                       "stage_timer_schema": native.low_latency_stage_timer_layout()["schema"],

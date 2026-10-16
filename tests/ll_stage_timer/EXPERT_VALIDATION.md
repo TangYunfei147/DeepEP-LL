@@ -18,13 +18,12 @@ git pull --ff-only origin kernel/ll-ndr-hns1825
 source tests/ll_rdma/env.sh
 unset SHMEM_ROOT CATLASS_ROOT
 export DEEPEP_NPU_ARCH=Ascend950
-export DEEPEP_LL_RDMA=ON
 export DEEPEP_LL_STAGE_TIMER=ON
 python -m pip install -r requirements-build.txt
 python -m pip install -v --force-reinstall --no-build-isolation --no-deps .
 ```
 
-原完整LL启动命令增加`--ll-stage-timer --ll-expert-timer`；先用新run名的小case完成正确性检查，
+原完整LL启动命令增加`--ll-expert-timer`（隐含阶段 capture，无需再加 `--ll-stage-timer`）；先用新run名的小case完成正确性检查，
 例如保持原拓扑/网络配置，将B设为1、M设为256、ll-timer-iters设为1，再扩展到正常case和5轮。
 observe优先用于定位下发与等待，drain用于对照排空后的成本；不能混算为未插桩基线。
 不支持用EP2/4/8冒充原生LL验证，也不能用本地CPU测试声称设备正确性。

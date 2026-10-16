@@ -24,5 +24,6 @@
   "tests/ll_stage_timer/test_sampling.py",
   "tests/ll_stage_timer/test_details.py",
   "tests/ll_stage_timer/test_experts.py",
-  "tests/ll_stage_timer/test_parity.py"
+  "tests/ll_stage_timer/test_parity.py",
+  "tests/ll_stage_timer/CONFIGURATION_NOTES.md"
 ]

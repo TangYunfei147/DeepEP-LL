@@ -40,6 +40,19 @@ def enabled(name, environment=None):
     return value in {"ON", "1", "TRUE"}
 
 
+def ndr_rdma_enabled(environment=None):
+    """NDR has one binary capability; MTE is a runtime selection."""
+    env = os.environ if environment is None else environment
+    if "DEEPEP_LL_RDMA" in env and env["DEEPEP_LL_RDMA"].upper() not in {"ON", "1", "TRUE"}:
+        warnings.warn(
+            "DEEPEP_LL_RDMA is deprecated and ignored: NDR always compiles HNS_1825 support. "
+            "Select --backend mte at runtime, or use kernel/ll-configurable-groups "
+            "for a build without RDMA.",
+            FutureWarning, stacklevel=2,
+        )
+    return True
+
+
 class ConfiguredBuild(build):
     def finalize_options(self):
         default_lib = (
@@ -200,7 +213,7 @@ def build_configuration(environment=None):
     default_shmem = ROOT / "third-party/shmem/install/shmem"
 
     result["ll_stage_timer"] = enabled("DEEPEP_LL_STAGE_TIMER", env)
-    result["ll_rdma"] = enabled("DEEPEP_LL_RDMA", env)
+    result["ll_rdma"] = ndr_rdma_enabled(env)
     result["build_type"] = env.get("DEEPEP_BUILD_TYPE", "RelWithDebInfo" if lineinfo else "Release")
     if result["build_type"] not in {"Release", "RelWithDebInfo", "Debug"}:
         raise RuntimeError("DEEPEP_BUILD_TYPE must be Release, RelWithDebInfo or Debug")
@@ -246,7 +259,7 @@ def build_configuration(environment=None):
     library = manifest.parent / "lib/libshmem.so"
     if result["ll_rdma"] and (sdk.get("build", {}).get("rdma_backend") != "HNS_1825"
                               or sdk.get("build", {}).get("rdma_patch") != "deepep-roce-72-v1"):
-        raise RuntimeError("RDMA wheel requires SDK built with scripts/build_shmem.py --rdma-backend HNS_1825")
+        raise RuntimeError("NDR wheel requires an HNS_1825 SDK; run python scripts/build_shmem.py")
     if not library.is_file():
         raise RuntimeError(f"SHMEM SDK is missing {library}")
     files = sorted(
@@ -397,7 +410,6 @@ class CMakeBuild(build_ext):
             f"-DCMAKE_BUILD_TYPE={configuration['build_type']}",
             f"-DDEEPEP_DEVICE_JOBS={jobs}",
             f"-DDEEPEP_LL_STAGE_TIMER={'ON' if configuration.get('ll_stage_timer', False) else 'OFF'}",
-            f"-DDEEPEP_LL_RDMA={'ON' if configuration.get('ll_rdma', False) else 'OFF'}",
             f"-DPython_EXECUTABLE={sys.executable}",
             f"-Dpybind11_DIR={pybind11.get_cmake_dir()}",
             f"-DCMAKE_CXX_COMPILER={configuration['compiler_path']}",

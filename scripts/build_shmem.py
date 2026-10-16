@@ -1,7 +1,7 @@
 # Copyright (c) 2026, Lu Lu
 # Modified by huangxiaolan 2026
 
-"""Explicitly build the pinned SHMEM submodule; pip/wheel never invokes this script."""
+"""Build or safely reuse the pinned NDR HNS_1825 SDK; pip never invokes this script."""
 
 import argparse
 import hashlib
@@ -50,12 +50,14 @@ def source_patches(source):
     return [{"kind": "local-worktree", "sha256": digest.hexdigest()}]
 
 
-def prepare(root=ROOT, *, rebuild=False, if_needed=False, allow_local_changes=False, rdma_backend=None):
+def prepare(root=ROOT, *, rebuild=False, if_needed=True, allow_local_changes=False, rdma_backend="HNS_1825"):
     if platform.system() != "Linux":
         raise RuntimeError("SHMEM compilation requires Linux and the pinned CANN SDK")
     root = Path(root).resolve()
-    if rdma_backend not in (None, "HNS_1825"):
-        raise ValueError("RDMA backend must be HNS_1825 or omitted")
+    # None from older launchers means use the branch default, not a MTE SDK.
+    rdma_backend = rdma_backend or "HNS_1825"
+    if rdma_backend != "HNS_1825":
+        raise ValueError("NDR requires the HNS_1825 SDK")
     lock = json.loads((root / "dependencies.lock.json").read_text(encoding="utf-8"))
     source = root / "third-party/shmem"
     if not (source / ".git").exists() or not (source / "scripts/build.sh").is_file():
@@ -102,7 +104,7 @@ def prepare(root=ROOT, *, rebuild=False, if_needed=False, allow_local_changes=Fa
         if path.resolve() != path:
             raise RuntimeError(f"Refusing SHMEM build through a symlink: {path}")
     manifest = source / "install/shmem/deepep-sdk.json"
-    if if_needed and not rebuild and manifest.is_file():
+    if not rebuild and manifest.is_file():
         identity = json.loads(manifest.read_text(encoding="utf-8"))
         expected_build = {
             "cann_version": version["Version"],
@@ -137,7 +139,9 @@ def prepare(root=ROOT, *, rebuild=False, if_needed=False, allow_local_changes=Fa
     if git_executable is None:
         raise RuntimeError("Git is required to prepare SHMEM dependencies")
     # 上游脚本会调用 Git 下载 json 等依赖；只隔离 Git 的库路径，保留编译器所需的 CANN 环境。
-    with tempfile.TemporaryDirectory(prefix="deepep-shmem-git-") as git_dir:
+    temporary_root = root / ".cache" / "tmp"
+    temporary_root.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="deepep-shmem-git-", dir=temporary_root) as git_dir:
         wrapper = Path(git_dir) / "git"
         wrapper.write_text(
             "#!/bin/sh\nunset LD_LIBRARY_PATH LD_PRELOAD\n"
@@ -176,8 +180,8 @@ def prepare(root=ROOT, *, rebuild=False, if_needed=False, allow_local_changes=Fa
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--rebuild", action="store_true", help="Regenerate this submodule's build/install artifacts")
-    parser.add_argument("--if-needed", action="store_true", help="Reuse a verified SDK from this CANN build")
-    parser.add_argument("--rdma-backend", choices=["HNS_1825"], help="Explicitly enable ROCE and the 72-QP host patch")
+    parser.add_argument("--if-needed", action="store_true", help="Compatibility alias: verified SDK reuse is now the default")
+    parser.add_argument("--rdma-backend", choices=["HNS_1825"], default="HNS_1825", help="Compatibility option: NDR always builds HNS_1825 with the 72-QP host patch")
     parser.add_argument(
         "--allow-local-changes",
         action="store_true",

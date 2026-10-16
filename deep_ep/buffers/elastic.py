@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Optional, Tuple, Union
 
 from .._native import _unavailable, npu_api, require_native
 from .._runtime import Runtime, rank_and_world, runtime_of, warn_unclosed
+from ..utils.ll_backend import elastic_backend_options
 from ._elastic_layout import (
     combine_layout,
     dispatch_layout,
@@ -188,10 +189,10 @@ class ElasticBuffer:
         world_size: Optional[int] = None,
         bootstrap: str = "default",
         combine_only: bool = False,
-        use_1g_huge_pages: bool = True,
+        use_1g_huge_pages: Optional[bool] = None,
         debug_collectives: bool = False,
     ):
-        """Initialize MTE+URMA using a group or explicit rank/world_size.
+        """Initialize LL hybrid or MTE+URMA resources with a group or explicit identity.
 
         Explicit identities bootstrap SHMEM directly and only validate locally.
         bootstrap="mpi" uses MPI_COMM_WORLD under MPICH instead of Config Store.
@@ -202,7 +203,8 @@ class ElasticBuffer:
         debug_collectives=True requires a group and enables HT preflight collectives.
         Otherwise HT checks parameters locally; the caller handles job-wide failure.
         num_bytes is the entire symmetric workspace, cleared at construction.
-        The workspace uses 1 GiB pages by default; allocation failure does not fall back to smaller pages.
+        Page size follows the selected backend: ordinary pages for RDMA, otherwise
+        1 GiB pages. Allocation failure does not fall back to smaller pages.
         Dispatch validates exactly 8 GiB when selecting LL; no extra allocation.
         """
         require_native("ElasticBuffer.__init__")
@@ -237,9 +239,11 @@ class ElasticBuffer:
         self.hidden = hidden
         self.num_topk = num_topk
         self._handle_token = object()
-        rdma = os.environ.get("DEEPEP_LL_BACKEND", "mte") == "rdma"
-        if rdma and (use_1g_huge_pages or combine_only):
-            raise ValueError("RDMA LL requires use_1g_huge_pages=False and combine_only=False")
+        backend, use_1g_huge_pages = elastic_backend_options(
+            os.environ.get("DEEPEP_LL_BACKEND"),
+            combine_only=combine_only, huge_pages=use_1g_huge_pages,
+        )
+        rdma = backend == "rdma"
         self._runtime = Runtime(
             group,
             num_bytes,
