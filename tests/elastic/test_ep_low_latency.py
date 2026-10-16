@@ -84,6 +84,7 @@ def make_parser():
     parser.add_argument("--config", help="JSON settings and Cartesian matrix")
     parser.add_argument("--plan", action="store_true", help="Print the case matrix without importing Torch")
     parser.add_argument("--output-dir", default="benchmark-runs", help="Parent for a unique run directory and traces")
+    parser.add_argument("--run-name", help="Optional fixed child directory name; existing directory is rejected")
     parser.add_argument(
         "--perf-tail",
         type=int,
@@ -151,7 +152,7 @@ def make_parser():
     parser.add_argument("--ll-stage-timer", action="store_true", help="Separate device-stage diagnostic calls; requires timer-enabled wheel")
     parser.add_argument("--ll-timer-iters", type=int, default=5)
     parser.add_argument("--ll-timer-mode", choices=("observe", "drain"), default="observe")
-    parser.add_argument("--ll-timer-frequency-hz", type=float, default=None, help="GetSystemCycle counter frequency; omit to retain raw ticks")
+    parser.add_argument("--ll-timer-frequency-hz", type=float, default=1_000_000_000, help="GetSystemCycle frequency; default 1GHz (ticks/1000 us)")
     parser.add_argument("--dispatch-only", action="store_true")
     parser.add_argument("--repeat-combine", type=int, default=2)
     parser.add_argument("--correctness-repeats", type=int, default=3, help="Fresh routes on the same Buffer; outside profiling")
@@ -695,6 +696,18 @@ def measure(invoke, args, operation, profile_dir, progress=None):
     return summarize_kernel(gathered, kernel, args.perf_tail)
 
 
+def create_run_directory(parent, name=None):
+    parent = Path(parent).absolute()
+    if name is not None and (not name or name in ('.', '..') or '/' in name or '\\' in name):
+        raise ValueError('--run-name must be a single nonempty directory name')
+    parent.mkdir(parents=True, exist_ok=True)
+    if name is None:
+        return tempfile.mkdtemp(prefix=datetime.now().strftime('%m%d%H%M_'), dir=parent)
+    selected = parent / name
+    selected.mkdir(exist_ok=False)
+    return str(selected)
+
+
 def diagnostic_calls(buffer, invoke, check, args, operation, rank, m, mode):
     """Run separately from profiler; verify each instrumented operation before saving."""
     from deep_ep.utils.ll_stage_timer import capture
@@ -950,9 +963,7 @@ def worker(local_rank, args):
 
         def reserve_directory():
             if rank == 0:
-                parent = Path(args.output_dir).absolute()
-                parent.mkdir(parents=True, exist_ok=True)
-                run_directory[0] = tempfile.mkdtemp(prefix=datetime.now().strftime("%m%d%H%M_"), dir=parent)
+                run_directory[0] = create_run_directory(args.output_dir, args.run_name)
 
         agree_check(reserve_directory, args, rank)
         dist.broadcast_object_list(run_directory, src=0)

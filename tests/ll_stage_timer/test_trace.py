@@ -83,3 +83,48 @@ def test_offline_moved_checkout_filters_and_no_overwrite(tmp_path):
     before=output.read_bytes()
     assert subprocess.run(command, cwd=tmp_path, capture_output=True).returncode!=0
     assert output.read_bytes()==before
+
+
+def test_unified_analysis_latest_and_all_samples(tmp_path):
+    import os
+    spec = importlib.util.spec_from_file_location('unified_analyzer', ROOT/'tests/ll_stage_timer/analyze.py')
+    analyzer = importlib.util.module_from_spec(spec); spec.loader.exec_module(analyzer)
+    for name, stamp in (('old', 100), ('new', 200)):
+        run = tmp_path/name; run.mkdir()
+        (run/'cases.json').write_text('{}')
+        os.utime(run/'cases.json', (stamp, stamp))
+    run = tmp_path/'new'
+    for case in (0, 1):
+        directory=run/f'case_{case:05d}'/'normal'/'ll_stage_timer'; directory.mkdir(parents=True)
+        for iteration in (0, 1):
+            saved=sample(); saved['frequency_hz']=None
+            saved['metadata'].update(world_size=1, correctness='passed', config={'B':32},
+                                     case_id=case, iteration=iteration)
+            (directory/f'sample_{iteration}.json').write_text(json.dumps(saved))
+    selected, directories=analyzer.discover(tmp_path, latest=True)
+    assert selected == run and len(directories)==2
+    for directory in directories:
+        output=run/'stage-analysis'/directory.relative_to(run)
+        analyzer.process_directory(directory, output, 1e9, 1)
+        report=json.loads((output/'summary.json').read_text())
+        assert report['per_rank_core_stage'][0]['samples']==2
+        assert report['per_rank_core_stage'][0]['unit']=='us'
+        trace=json.loads((output/'trace.json').read_text())
+        assert {e['args']['iteration'] for e in trace['traceEvents'] if e['ph']=='X'}=={1}
+    assert analyzer.discover(tmp_path, latest=True)[0] == run
+    # Partial latest run must fail, never silently fall back to older data.
+    victim=directories[0]/'sample_0.json'
+    saved=json.loads(victim.read_text()); saved['metadata']['world_size']=2
+    victim.write_text(json.dumps(saved))
+    with pytest.raises(ValueError): analyzer.process_directory(directories[0], run/'bad', 1e9, 0)
+
+
+def test_named_run_no_overwrite_or_escape(tmp_path):
+    from tests.elastic import test_ep_low_latency as st
+    args=st.parse_args(['--run-name', 'drain-001'])
+    assert args.ll_timer_frequency_hz==1e9
+    output=Path(st.create_run_directory(tmp_path, args.run_name))
+    assert output==tmp_path/'drain-001'
+    with pytest.raises(FileExistsError): st.create_run_directory(tmp_path, args.run_name)
+    for bad in ('', '.', '..', '../escape', '/absolute', 'a\\b'):
+        with pytest.raises(ValueError): st.create_run_directory(tmp_path, bad)

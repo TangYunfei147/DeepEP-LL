@@ -11,6 +11,7 @@ import threading
 
 MAGIC = 0x4C4C5431
 SCHEMA = 1
+DEFAULT_FREQUENCY_HZ = 1_000_000_000  # Target-confirmed: time_us = ticks / 1000.
 SLOTS, FIELDS = 32, 8
 STAGES = ('header', 'kernel', 'magic', 'worker_init', 'count_init', 'count_send', 'sender',
           'send_prepare', 'send_payload', 'send_metadata', 'count_receive', 'count_prefix',
@@ -117,7 +118,7 @@ def chrome_trace(saved_records, frequency_hz=None):
 
 
 class StageTrace:
-    def __init__(self, buffer, operation, mode='observe', frequency_hz=None):
+    def __init__(self, buffer, operation, mode='observe', frequency_hz=DEFAULT_FREQUENCY_HZ):
         if operation not in ('dispatch', 'combine') or mode not in ('observe', 'drain'):
             raise ValueError('Invalid LL stage diagnostic configuration')
         if frequency_hz is not None and (not math.isfinite(frequency_hz) or frequency_hz <= 0):
@@ -167,7 +168,7 @@ class StageTrace:
 
 
 @contextmanager
-def capture(buffer, operation, mode='observe', frequency_hz=None):
+def capture(buffer, operation, mode='observe', frequency_hz=DEFAULT_FREQUENCY_HZ):
     """Capture exactly one payload LL call; use independently of profiler loops."""
     active = getattr(_state, 'active', {})
     if id(buffer) in active:

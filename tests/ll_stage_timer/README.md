@@ -115,7 +115,7 @@ M决定去重：`M>32`启用，`M<=32`关闭。若对比两条路径，在满足
 
 每文件包含原始`[实际AIV数,32,8]` int64数组和每核/阶段解析值。第0槽记录magic/schema/操作/核数/核号/模式/完成标志；阶段槽记录first/last/累计ticks/次数及活动状态。分配器创建512B对齐视图，Host拒绝未对齐的直接传入指针；每核独占2048B，避免跨核cache-line写回冲突，当前支持16..72偶数核。每轮新建零缓冲，不覆盖前一轮；未执行阶段保持零值，不冒充零成本样本。
 
-**默认单位是GetSystemCycle ticks，不猜测频率。** 仓内MegaMoE解析器采用`cycles/1000`的换算，相当于1GHz；确认目标机同一计数器采用该频率后，可显式加`--ll-timer-frequency-hz 1000000000`，或在离线解析时加`--frequency-hz`。不能用AIV计算频率替代系统计数器频率。
+**目标计数器换算已由用户确认：`time_us = ticks / 1000`。** 测试及命令行分析默认1GHz，原始ticks仍保留；可用frequency参数显式覆盖其他已确认环境。
 
 收齐所有rank的同一case目录后，在仓库根目录执行：
 
@@ -142,11 +142,10 @@ python tests/ll_stage_timer/analyze.py \
 ### 新采集自动输出
 
 构建仍使用 `DEEPEP_LL_STAGE_TIMER=ON`，测试保留
-`--ll-stage-timer --ll-timer-mode drain`。显式提供已确认的系统计数器频率，
-例如**仅在确认1GHz时**增加 `--ll-timer-frequency-hz 1000000000`。
+`--ll-stage-timer --ll-timer-mode drain`，默认使用用户已确认的1GHz计数器（ticks/1000 us）。
 每份 `sample_0000.json` 旁自动生成 `trace_sample_0000.json`，可直接加载。
-不提供频率时只保存原始数据，不能把ticks冒充微秒。
-Python导出代码位于wheel中，更新后重新安装wheel以启用自动导出；离线转换不需重编。
+原始ticks始终保留。Python导出代码位于wheel中，更新后重新安装wheel以启用自动导出；
+离线转换不需重编。
 
 ### 已有数据离线转换（不需重新采集）
 
@@ -160,7 +159,7 @@ python tests/ll_stage_timer/export_trace.py \
   --output results/trace-dispatch-rank0-sample0.json
 ```
 
-上例频率仍须确认；原始数据已记录频率时可省略该参数。也可传单个raw sample文件。
+上例频率可省略，默认1GHz。也可传单个raw sample文件。
 去掉rank/operation/iteration筛选可导出多份采集，允许单机的部分rank数据；此转换器
 用于浏览，不替代analyze.py对完整rank/轮次的验收。输出文件已存在会报错，避免覆盖。
 
@@ -174,3 +173,37 @@ python tests/ll_stage_timer/export_trace.py \
   `average_us`、`calls`、`gap_ticks`及原始起止ticks。
 - schema 1没有保存每次重复调用的起止点，无法从现有数据还原Mega_Moe式逐次动态事件；
   不伪造连续片段。父子阶段/并行阶段不可直接相加，drain数据也不是未插桩性能基线。
+
+## 推荐：一个命令完成统计和tracing导出
+
+运行用例时可以提前指定目录名（两台节点参数一致）：
+
+```bash
+# 加到原有测试命令末尾；新run名不得与已有目录重名。
+--output-dir results/ll-stage-001 --run-name drain-001
+```
+
+收齐同一run全部rank后执行：
+
+```bash
+python tests/ll_stage_timer/analyze.py results/ll-stage-001/drain-001
+```
+
+不指定run-name、仍使用自动随机目录时，无需查目录名：
+
+```bash
+python tests/ll_stage_timer/analyze.py results/ll-stage-001 --latest
+```
+
+`--latest`根据子目录的cases.json修改时间选最近创建的run，打印实际选择路径；
+复制多机数据时保留该manifest时间（或使用固定run-name路径）。不会因最新run缺rank而退回旧run。
+多机仍须先合并所有rank的原始数据；analyze会拒绝不完整或混配置样本。
+
+默认在选中目录的stage-analysis下生成summary.json、stages.csv、trace.json。
+多个case/路由各自输出到stage-analysis下对应相对目录，不混算配置。
+统计覆盖全部轮次；trace.json默认展示第0轮全部rank的dispatch/combine，
+可加`--trace-iteration 3`查看第3轮。各rank/操作独立归零，不代表真实跨rank同步。
+默认换算ticks/1000 us，原始ticks仍在样本和trace事件参数中保留。
+
+已有报告不覆盖；再次分析使用`--output-dir results/ll-stage-summary-002`。
+无需另跑export_trace.py；该入口仅保留给单rank/部分数据浏览及细粒度筛选。
