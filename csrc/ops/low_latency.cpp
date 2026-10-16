@@ -124,6 +124,7 @@ void bind_low_latency(py::module_& module)
     if (deepep_ll_core_protocol_version() != DispatchDedup::kLlCoreProtocolVersion)
         throw std::runtime_error("LL Host/device core protocol mismatch; rebuild and reinstall the complete wheel");
     module.attr("low_latency_core_protocol") = DispatchDedup::kLlCoreProtocolVersion;
+    module.attr("low_latency_implementation") = "ndr-hns1825";
 #ifdef DEEPEP_LL_RDMA
     if (!deepep_ll_rdma_enabled()) throw std::runtime_error("LL Host/device RDMA build mismatch; rebuild complete wheel");
     module.attr("low_latency_rdma_enabled") = true;

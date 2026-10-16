@@ -17,3 +17,5 @@
 | 可选设备打点 | `tests/ll_stage_timer/README.md`，默认 OFF、诊断单独采集 |
 
 UB payload 打包不能直接交给 RDMA；只修改 payload 不足以完成协议。计数、ready、partial 远端读取、flag 发布、缓存可见性及复用必须一起检查。
+
+跨分支共享实验入口：tests/ll_stage_timer/run.py；统计/trace：analyze.py；对比：compare.py；共享文件清单与核验：shared_files.json / verify_shared.py。

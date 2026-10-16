@@ -324,3 +324,6 @@ send_input_gm_to_ub、send_input_wait、send_tail、send_lane_wait、send_issue�
 
 本次远端环境已回收，仅完成本地CPU验证，尚未进行CANN编译和设备运行。
 请先重建并用小case验证正确性，再进行目标性能采集；不要将历史A5验证记录视为ABI5的验收。
+
+## 跨kernel分支的统一实验
+共同入口、构建和比较步骤见[PARITY.md](PARITY.md)。泛化分支默认G16与NDR的G4可直接作为变量对比，不强制一致；结果记录两边实际G。

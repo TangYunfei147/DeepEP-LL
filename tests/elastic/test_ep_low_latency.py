@@ -59,6 +59,36 @@ def case_config(args, m):
     }
 
 
+def compiled_group(native, world):
+    value=native.low_latency_ranks_per_group
+    group=value(world) if callable(value) else value
+    if type(group) is not int or not 1 <= group <= 16 or world%group:
+        raise RuntimeError('Invalid compiled LL logical group')
+    return group
+
+
+def comparison_metadata(args, world, m):
+    runtime=getattr(args,'runtime_identity',None)
+    if runtime is None: return None  # CPU fixtures / legacy custom callers.
+    return dict(**runtime, comparison_schema=1, sampling_protocol='exp-reduce-stable-tail-v2',
+                perf_enabled=not args.skip_perf_test, world_size=world,
+                local_world_size=int(os.environ.get('LOCAL_WORLD_SIZE',args.num_processes)),
+                case=case_config(args,m), route=args.route, seed=args.seed,
+                warmup=args.warmup, num_iters=args.num_iters, perf_tail=args.perf_tail,
+                delay_rows=args.delay_rows, delay_cols=args.delay_cols, group_backend=args.group_backend,
+                timer_mode=args.ll_timer_mode if args.ll_stage_timer else None,
+                timer_iters=args.ll_timer_iters if args.ll_stage_timer else 0,
+                frequency_hz=args.ll_timer_frequency_hz, stage_capture=args.ll_stage_timer,
+                expert_capture=args.ll_expert_timer, do_handle_copy=args.do_handle_copy,
+                correctness_repeats=args.correctness_repeats, repeat_combine=args.repeat_combine,
+                skip_check=args.skip_check, dispatch_only=args.dispatch_only,
+                fresh_buffer_per_case=args.fresh_buffer_per_case,
+                trace_ops=args.trace_ops, num_bytes=args.num_bytes,
+                use_1g_huge_pages=(runtime['transport']!='rdma' if args.use_1g_huge_pages is None else bool(args.use_1g_huge_pages)),
+                source_revision=os.environ.get('DEEPEP_LL_RUN_REVISION','unknown'),
+                source_dirty=os.environ.get('DEEPEP_LL_RUN_DIRTY','unknown'))
+
+
 def validate_native_cases(native, cases, world):
     """Host-only capability checks for every combination, before communication."""
     for case in cases:
@@ -249,7 +279,9 @@ def write_reports(directory, report):
             if operation not in result:
                 continue
             perf = result[operation]
-            base = {"case_id": result["case_id"], **result["config"], "route": result["route"], "operation": operation}
+            identity=result.get('comparison') or {}
+            base = {"case_id": result["case_id"], **result["config"], "route": result["route"], "operation": operation,
+                    **{key:identity.get(key) for key in ('implementation','transport','logical_group','active_aiv','core_protocol','source_revision')}}
             summaries.append(
                 {
                     **base,
@@ -738,7 +770,7 @@ def diagnostic_calls(buffer, invoke, check, args, operation, rank, m, mode,
     import torch
     import torch.distributed as dist
     world = dist.get_world_size()
-    logical_group = require_native("LL timer").low_latency_ranks_per_group(world)
+    logical_group = compiled_group(require_native("LL timer"),world)
     directory = Path(args.run_directory) / f"case_{args.case_id:05d}" / mode / "ll_stage_timer" / operation / f"rank_{rank:03d}"
     if prepared is None:
         prepared = []
@@ -774,6 +806,7 @@ def diagnostic_calls(buffer, invoke, check, args, operation, rank, m, mode,
         agree_check(trace.complete, args, rank)
         agree_check(lambda: check(output), args, rank)
         metadata = dict(rank=rank, world_size=world, iteration=iteration,
+                        comparison=comparison_metadata(args,world,m),
                         run_id=Path(args.run_directory).name, seed=args.seed, case_id=args.case_id,
                         correctness="passed", config={**case_config(args, m),
                         "logical_group_size": logical_group},
@@ -1014,7 +1047,8 @@ def worker(local_rank, args):
         capability = {"active_aiv": core_config["active_aiv"],
                       "transport": os.environ.get("DEEPEP_LL_BACKEND", "mte"),
                       "rdma_compiled": bool(getattr(native, "low_latency_rdma_enabled", False)),
-                      "logical_group": native.low_latency_ranks_per_group(world),
+                      "logical_group": compiled_group(native,world),
+                      "implementation": getattr(native,'low_latency_implementation','unknown'),
                       "core_protocol": native.low_latency_core_protocol,
                       "stage_timer": bool(getattr(native, "low_latency_stage_timer_enabled", False)),
                       "stage_timer_schema": native.low_latency_stage_timer_layout()["schema"],
@@ -1023,6 +1057,13 @@ def worker(local_rank, args):
         dist.all_gather_object(capabilities, capability)
         if any(item != capabilities[0] for item in capabilities):
             raise RuntimeError("LL AIV/group/protocol/timer build differs across ranks")
+        if capability['implementation'] not in ('ndr-hns1825','configurable-groups'):
+            raise RuntimeError('Rebuild the wheel with the shared experiment implementation identity')
+        requested_impl=os.environ.get('DEEPEP_LL_EXPECT_IMPLEMENTATION')
+        if requested_impl and capability['implementation']!=requested_impl:
+            raise RuntimeError('Installed wheel belongs to a different kernel branch')
+        if capability['transport']=='rdma' and not capability['rdma_compiled']:
+            raise RuntimeError('Requested RDMA is not compiled in this wheel; no MTE fallback')
         if args.ll_stage_timer and not capability["stage_timer"]:
             raise RuntimeError("All ranks must install a DEEPEP_LL_STAGE_TIMER=ON wheel")
         if args.ll_stage_timer and capability['stage_timer_schema'] != 2:
@@ -1083,6 +1124,7 @@ def worker(local_rank, args):
                 case_m = validate_args(case, world)
                 case.run_directory = args.run_directory
                 case.case_id = case_id
+                case.runtime_identity = capability
                 if args.fresh_buffer_per_case:
                     buffer = create_buffer(case)
                 for mode in modes:
@@ -1098,6 +1140,7 @@ def worker(local_rank, args):
                             )
                         raise
                     result["case_id"] = case_id
+                    result['comparison'] = comparison_metadata(case,world,case_m)
                     results.append(result)
 
                     def save_case():
