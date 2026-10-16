@@ -95,5 +95,19 @@ def test_portable_launcher_plan_and_backend_guard(tmp_path,implementation,rdma):
     result=subprocess.run(command,cwd=tmp_path,env=env,capture_output=True,text=True)
     assert (result.returncode==0)==rdma
     if not rdma:assert 'MTE-only' in result.stderr
+    # No backend/process-count options: branch default and explicit device list
+    # are sufficient; A5 --plan models 16 ranks without launching devices.
+    default=[sys.executable,str(moved/'tests/ll_stage_timer/run.py'),'--validation','--plan']
+    env['DEEPEP_LL_BACKEND']='rdma' if not rdma else 'mte'  # stale opposite-branch shell state
+    result=subprocess.run(default,cwd=tmp_path,env=env,capture_output=True,text=True,check=True)
+    assert json.loads(result.stdout)['world_size']==16
 
 
+
+    config=moved/'settings.json'
+    config.write_text(json.dumps({'backend':'rdma','num_processes':16}))
+    configured=[sys.executable,str(moved/'tests/ll_stage_timer/run.py'),'--validation','--plan','--config','settings.json']
+    result=subprocess.run(configured,cwd=tmp_path,env=env,capture_output=True,text=True)
+    assert (result.returncode==0)==rdma
+    overridden=configured+['--backend','mte']
+    subprocess.run(overridden,cwd=tmp_path,env=env,capture_output=True,text=True,check=True)

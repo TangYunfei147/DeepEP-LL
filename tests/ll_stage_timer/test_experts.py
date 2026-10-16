@@ -156,7 +156,8 @@ def test_expert_capture_allocates_attaches_and_saves_after_completion(monkeypatc
     assert json.loads((tmp_path/'sample_0.json').read_text())['expert']['experts']==16
 
 
-def test_expert_cli_requires_stage_capture():
+def test_expert_cli_implies_stage_capture():
     st=load('expert_cli','tests/elastic/test_ep_low_latency.py')
-    with pytest.raises(ValueError,match='requires --ll-stage-timer'):
-        st.validate_args(st.parse_args(['--ll-expert-timer']),16)
+    args=st.parse_args(['--ll-expert-timer'])
+    st.validate_args(args,16)
+    assert args.ll_stage_timer and args.use_1g_huge_pages==0

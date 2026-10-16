@@ -15,6 +15,7 @@ import subprocess
 import tempfile
 
 from record_shmem_sdk import record
+from shmem_sdk_reuse import is_managed_hns_source, mte_compatible
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -50,7 +51,7 @@ def source_patches(source):
     return [{"kind": "local-worktree", "sha256": digest.hexdigest()}]
 
 
-def prepare(root=ROOT, *, rebuild=False, if_needed=False, allow_local_changes=False):
+def prepare(root=ROOT, *, rebuild=False, if_needed=True, allow_local_changes=False):
     if platform.system() != "Linux":
         raise RuntimeError("SHMEM compilation requires Linux and the pinned CANN SDK")
     root = Path(root).resolve()
@@ -70,7 +71,8 @@ def prepare(root=ROOT, *, rebuild=False, if_needed=False, allow_local_changes=Fa
     if revision != lock["shmem"]["revision"]:
         raise RuntimeError("SHMEM revision differs from dependencies.lock.json; do not build a moving branch")
     patches = source_patches(source)
-    if patches and not allow_local_changes:
+    managed_hns = bool(patches) and is_managed_hns_source(source)
+    if patches and not allow_local_changes and not managed_hns:
         raise RuntimeError(
             "SHMEM has local changes; pass --allow-local-changes to build them explicitly "
             "(cluster launcher: --allow-local-shmem)"
@@ -87,7 +89,7 @@ def prepare(root=ROOT, *, rebuild=False, if_needed=False, allow_local_changes=Fa
         if path.resolve() != path:
             raise RuntimeError(f"Refusing SHMEM build through a symlink: {path}")
     manifest = source / "install/shmem/deepep-sdk.json"
-    if if_needed and not rebuild and manifest.is_file():
+    if not rebuild and manifest.is_file():
         identity = json.loads(manifest.read_text(encoding="utf-8"))
         expected_build = {
             "cann_version": version["Version"],
@@ -95,7 +97,7 @@ def prepare(root=ROOT, *, rebuild=False, if_needed=False, allow_local_changes=Fa
             "target": lock["target"],
             "source_patches": patches,
         }
-        if identity.get("revision") != revision or identity.get("build") != expected_build:
+        if not mte_compatible(identity, revision, expected_build, managed_hns=managed_hns):
             raise RuntimeError(
                 "Existing SHMEM build identity changed; stop SDK users and rebuild explicitly "
                 "with --rebuild (cluster launcher: --rebuild-shmem)"
@@ -114,6 +116,8 @@ def prepare(root=ROOT, *, rebuild=False, if_needed=False, allow_local_changes=Fa
             "SHMEM build/install already exists; reuse its SDK, or stop users of that SDK "
             "and pass --rebuild to regenerate it (then rebuild dependent wheels)"
         )
+    if managed_hns and not allow_local_changes:
+        raise RuntimeError("Recognized HNS SDK sources can be reused, but rebuilding their edits requires --allow-local-changes")
     print(f"[SHMEM] source={revision} CANN={version['Version']} target={lock['target']}", flush=True)
     if patches:
         print(f"[SHMEM] Building local source modifications: {json.dumps(patches)}", flush=True)
@@ -121,7 +125,9 @@ def prepare(root=ROOT, *, rebuild=False, if_needed=False, allow_local_changes=Fa
     if git_executable is None:
         raise RuntimeError("Git is required to prepare SHMEM dependencies")
     # 上游脚本会调用 Git 下载 json 等依赖；只隔离 Git 的库路径，保留编译器所需的 CANN 环境。
-    with tempfile.TemporaryDirectory(prefix="deepep-shmem-git-") as git_dir:
+    temporary_root = root / ".cache" / "tmp"
+    temporary_root.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="deepep-shmem-git-", dir=temporary_root) as git_dir:
         wrapper = Path(git_dir) / "git"
         wrapper.write_text(
             "#!/bin/sh\nunset LD_LIBRARY_PATH LD_PRELOAD\n"
@@ -158,7 +164,7 @@ def prepare(root=ROOT, *, rebuild=False, if_needed=False, allow_local_changes=Fa
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--rebuild", action="store_true", help="Regenerate this submodule's build/install artifacts")
-    parser.add_argument("--if-needed", action="store_true", help="Reuse a verified SDK from this CANN build")
+    parser.add_argument("--if-needed", action="store_true", help="Compatibility alias: verified SDK reuse is already the default")
     parser.add_argument(
         "--allow-local-changes",
         action="store_true",

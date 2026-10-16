@@ -29,19 +29,14 @@ export DEEPEP_NPU_ARCH=Ascend950
 export DEEPEP_LL_STAGE_TIMER=ON    # 正式未插桩性能改为OFF，两边一致
 ```
 
-泛化分支（保留原默认G=16，需要其他G时按原分支方法自行配置）：
+两边使用同一条SDK准备命令：
 
 ```bash
-unset DEEPEP_LL_RDMA
-python scripts/build_shmem.py --if-needed
+python scripts/build_shmem.py
 ```
 
-NDR分支：
-
-```bash
-export DEEPEP_LL_RDMA=ON
-python scripts/build_shmem.py --if-needed --rdma-backend HNS_1825
-```
+NDR自动准备HNS_1825能力；泛化默认MTE。已有SDK自动校验后复用，泛化也可复用身份匹配的HNS能力超集。
+无需重复传--if-needed、--rdma-backend或DEEPEP_LL_RDMA；旧参数保留兼容。
 
 两边随后均执行：
 
@@ -55,31 +50,32 @@ SDK身份变化须停止SDK用户后显式--rebuild；不得跨分支混用不�
 
 ## 同一条目标机启动命令
 
-在对应仓库/虚拟环境中执行。仅BACKEND和结果名称按分支改变。
+在对应仓库/虚拟环境中执行。后端由分支自动选择，按需改变结果名称。
 单机NNODES=1、NODE_RANK=0、MASTER_ADDR=127.0.0.1；双机NNODES=2，两节点分别0/1并同时执行。
 
 ```bash
 source scripts/ll_timer_env.sh
-BACKEND=mte               # 泛化分支mte；NDR分支rdma，也可显式mte做NDR自身对照
 NNODES=1
 NODE_RANK=0
 MASTER_ADDR=127.0.0.1      # 多机改为首节点可达地址
 python tests/ll_stage_timer/run.py \
-  --backend "$BACKEND" --devices 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 \
-  --num-processes 16 --num-nodes "$NNODES" --node-rank "$NODE_RANK" \
+  --devices 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 \
+  --num-nodes "$NNODES" --node-rank "$NODE_RANK" \
   --master-addr "$MASTER_ADDR" --master-port 29500 --shmem-port 29501 \
-  --use-1g-huge-pages 0 \
   --num-tokens 32 --num-max-tokens-per-rank 256 --hidden 7168 \
   --num-topk 6 --num-experts 256 --dtype bf16 --do-cpu-sync 0 \
   --warmup 10 --num-iters 100 --perf-tail 50 \
-  --ll-stage-timer --ll-expert-timer --ll-timer-mode observe --ll-timer-iters 5 \
+  --ll-expert-timer --ll-timer-mode observe --ll-timer-iters 5 \
   --output-dir results/compare --run-name run-001
 ```
+
+本地进程数从显式设备列表推断；配置文件或命令行显式进程数仍优先并校验。NDR自身MTE对照才加--backend mte。
+--ll-expert-timer自动启用阶段capture；只要阶段时改为--ll-stage-timer。
 
 只做阶段诊断时，两边都增加--skip-perf-test；也会执行10次预热和100次稳定调用后再采集5轮。
 正式性能则两边重建timer OFF，删除所有ll-stage-timer/ll-expert-timer参数，保留性能轮数设置。
 统一入口默认page policy为0，记录实际G但不要求跨分支一致；不会把泛化分支的rdma请求静默替换为mte。
-A5或纯CPU检查仅用`--validation --plan --num-processes 16`，四个可见性变量固定0,1，绝不启动EP16设备。
+A5或纯CPU检查仅用`--validation --plan`，四个可见性变量固定0,1，绝不启动EP16设备。
 
 ## 统一输出和对比
 
@@ -112,3 +108,5 @@ python tests/ll_stage_timer/compare.py results/mte/stage-analysis/summary.json r
 
 可使用`python tests/ll_stage_timer/verify_shared.py ../另一个checkout`核验共享文件一致性。
 当前只在本地做CPU/路径/配置回归，未进行本次CANN编译或目标机设备验收。
+
+配置维护原则与本次验证见[CONFIGURATION_NOTES.md](CONFIGURATION_NOTES.md)。

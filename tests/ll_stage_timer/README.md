@@ -11,7 +11,8 @@ G=16与G=4可以直接作为比较变量，工具记录实际G而不要求相同
 核心启动ABI5、阶段schema2、专家schema1；全rank重建同一分支的匹配wheel。
 每核阶段缓冲2048B、512B对齐；专家统计有独立可选缓冲。
 设置DEEPEP_LL_STAGE_TIMER=ON启用；仅阶段schema1旧数据也可离线解析。
-泛化分支SDK仍按原MTE流程构建，不能使用NDR分支的HNS专用构建作为隐式替代。
+泛化分支默认MTE构建；python scripts/build_shmem.py自动校验并复用已有SDK，包括身份匹配的HNS能力超集。
+无需重复--if-needed；不匹配时保留显式--rebuild保护。详见[CONFIGURATION_NOTES.md](CONFIGURATION_NOTES.md)。
 
 ## 采样
 
@@ -33,7 +34,7 @@ send_issue下的send_mte_write记录MTE写入下发。
 
 ## 专家统计
 
-增加--ll-expert-timer（需要--ll-stage-timer），记录执行rank/core/专家的packet计数、
+增加--ll-expert-timer（自动启用阶段capture），记录执行rank/core/专家的packet计数、
 metadata、output_write及按目标专家记录的FIRST_HOP forward。
 共享首跳准备、relayReadIndex和批量等待不分摊给各专家；不表示FFN/GEMM耗时。
 专家缓冲每轮字节数为实际AIV×(8+全局专家数×4)×8×8。
