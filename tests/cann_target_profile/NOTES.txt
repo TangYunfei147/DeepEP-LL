@@ -17,7 +17,7 @@ Combine uses synthetic BF16 expert output, not GEMM or numerical roundtrip valid
 Run on each target host:
  python test_moe_dispatch_v2_perf_2.py -c hosts.yaml --node-rank N
  python test_moe_combine_v2_perf_2.py -c hosts.yaml --node-rank N
-Keep moe_target_signature.py beside both scripts. N=0..7; eight local ranks per host.
+Both scripts are standalone; no moe_target_signature.py is required. N=0..7; eight local ranks per host.
 --hccl-buffsize defaults to 200 MiB and is set before communicator initialization.
 Warmup10/capture100 and Exp+scalar AllReduce are unchanged.
 Local syntax/mocked argument and metadata-forwarding checks passed. No NPU execution.
