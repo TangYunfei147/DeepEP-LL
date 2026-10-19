@@ -25,5 +25,5 @@ extern "C" [[bisheng::core_ratio(0, 1)]] __global__ __aicore__ void ll_timer_smo
 }
 extern "C" void ll_timer_smoke_do(void* stream, uint8_t* output, uint32_t mode)
 {
-    ll_timer_smoke<<<16, nullptr, stream>>>(output, mode);
+    ll_timer_smoke<<<DispatchDedup::kLlActiveCoreNum, nullptr, stream>>>(output, mode);
 }

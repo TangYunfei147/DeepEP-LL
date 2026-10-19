@@ -149,8 +149,8 @@ void bind_low_latency(py::module_& module)
         const auto cfg = query_ll_core_config();
         py::dict result;
         result["platform_aiv"] = cfg.platform; result["available_aiv"] = cfg.available;
-        result["active_aiv"] = cfg.active; result["send_cores"] = cfg.active / 2U;
-        result["recv_cores"] = cfg.active / 2U; result["device"] = cfg.device;
+        result["active_aiv"] = cfg.active; result["send_cores"] = DispatchDedup::kLlSendCoreNum;
+        result["recv_cores"] = DispatchDedup::kLlRecvCoreNum; result["device"] = cfg.device;
         result["runtime_device_queried"] = cfg.device >= 0;
         result["control_capacity_aiv"] = DispatchDedup::kLlMaxCoreNum;
         return result;

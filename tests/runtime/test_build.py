@@ -162,7 +162,8 @@ def test_metadata_no_sdk_or_framework(tmp_path):
     # Query in a copy so egg metadata does not alter the checkout.
     import shutil
 
-    for name in ("setup.py", "build_support.py", "VERSION"):
+    for name in ("setup.py", "build_support.py", "VERSION", "scripts/shmem_sdk_identity.py"):
+        (tmp_path / name).parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(ROOT / name, tmp_path / name)
     result = subprocess.run(
         [sys.executable, "setup.py", "--name"],

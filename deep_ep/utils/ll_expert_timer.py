@@ -6,13 +6,15 @@ SCHEMA, HEADER_ROWS, FIELDS = 1, 8, 8
 STAGES = ('packets', 'metadata', 'output_write', 'forward')
 
 
-def parse_records(raw, rank, world, experts, frequency_hz=1e9):
+def parse_records(raw, rank, world, experts, frequency_hz=1e9, send_cores=None):
     if not (type(rank) is int and type(world) is int and type(experts) is int and
             0 <= rank < world <= experts <= 1024 and experts % world == 0):
         raise ValueError('Invalid expert timer rank/world/expert configuration')
     if frequency_hz is not None and (not math.isfinite(frequency_hz) or frequency_hz <= 0):
         raise ValueError('Invalid counter frequency')
     cores=len(raw)
+    if send_cores is not None and (type(send_cores) is not int or not 0 < send_cores < cores):
+        raise ValueError("Invalid expert timer core split")
     if not 16 <= cores <= 72 or cores%2:
         raise ValueError('Invalid expert timer AIV count')
     records, modes = [], set()
@@ -35,7 +37,7 @@ def parse_records(raw, rank, world, experts, frequency_hz=1e9):
                 if not count:
                     if any((first,last,total,start)): raise ValueError('Unfinished expert interval')
                     continue
-                if core < cores//2: raise ValueError('Expert records on a sender core')
+                if core < (cores//2 if send_cores is None else send_cores): raise ValueError('Expert records on a sender core')
                 if last < first or total > last-first:
                     raise ValueError('Invalid expert interval order')
                 owner=expert//(experts//world)

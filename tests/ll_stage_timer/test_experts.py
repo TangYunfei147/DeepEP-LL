@@ -131,8 +131,8 @@ def test_expert_capture_allocates_attaches_and_saves_after_completion(monkeypatc
         def cpu(self):copies.append(self.shape);return self
         def tolist(self):return self.raw
     torch=SimpleNamespace(int64=0,zeros=lambda *a,**k:Tensor())
-    native=SimpleNamespace(low_latency_stage_timer_enabled=True, low_latency_core_protocol=5,
-        low_latency_stage_timer_layout=lambda:dict(schema=2,slots=32,fields=8,stages=list(timer.STAGES)),
+    native=SimpleNamespace(low_latency_stage_timer_enabled=True, low_latency_core_protocol=6008,
+        low_latency_stage_timer_layout=lambda:dict(schema=timer.SCHEMA,slots=32,fields=8,stages=list(timer.STAGES)),
         low_latency_core_config=lambda:dict(active_aiv=16,device=0,runtime_device_queried=True),
         low_latency_expert_timer_layout=lambda:dict(schema=1,header_rows=8,fields=8,stages=list(expert.STAGES)))
     monkeypatch.setitem(sys.modules,'torch',torch)

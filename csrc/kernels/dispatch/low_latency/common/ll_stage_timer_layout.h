@@ -2,13 +2,14 @@
 #include <cstdint>
 
 namespace LlStageTimer {
-constexpr uint32_t kSchema = 2U;
+constexpr uint32_t kSchema = 5U;
 constexpr uint64_t kMagic = 0x4c4c5431ULL;
 constexpr uint32_t kSlots = 32U;
 constexpr uint32_t kFields = 8U;
 constexpr uint32_t kWordsPerCore = kSlots * kFields;
 constexpr uint64_t kActive = uint64_t(1) << 62U;
-// Schema 2 packs each stage into first/start_or_end/sum/count|active (4 words).
+// Schema 5 also encodes send_cores in header[5] above the low-byte mode.
+// Schema 2/5 packs each stage into first/start_or_end/sum/count|active (4 words).
 // Header remains 8 words; the tensor shape and 2048B/core allocation are unchanged.
 constexpr uint32_t StageOffset(uint32_t stage) { return 8U + (stage - 1U) * 4U; }
 // 每核独占2048B，避免不同核对同一cache line写回。第0行是头，余下为阶段记录。

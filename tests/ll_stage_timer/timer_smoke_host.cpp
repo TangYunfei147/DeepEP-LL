@@ -1,3 +1,4 @@
+#include "../../csrc/kernels/dispatch/low_latency/common/ll_core_config.h"
 #include <acl/acl.h>
 #include <cstdio>
 #include <cstdlib>
@@ -24,7 +25,7 @@ int main(int argc, char** argv)
         check(aclrtSetDevice(0));
         aclrtStream stream;
         check(aclrtCreateStream(&stream));
-        const size_t words = 16 * LlStageTimer::kWordsPerCore, guard = 64;
+        const size_t words = DispatchDedup::kLlActiveCoreNum * LlStageTimer::kWordsPerCore, guard = 64;
         std::vector<uint64_t> data(words + guard, 0x12345678ULL);
         void* output;
         check(aclrtMalloc(&output, data.size() * 8, ACL_MEM_MALLOC_HUGE_FIRST));
@@ -39,16 +40,16 @@ int main(int argc, char** argv)
             for (size_t i = 0; i < words; ++i)
                 if (data[i]) throw std::runtime_error("disabled timer wrote output");
         if (enabled)
-            for (size_t c = 0; c < 16; ++c) {
+            for (size_t c = 0; c < DispatchDedup::kLlActiveCoreNum; ++c) {
                 const auto* row = data.data() + c * LlStageTimer::kWordsPerCore;
-                if (row[0] != LlStageTimer::kMagic || row[4] != c || row[6] != 1 || row[5] != mode)
+                if (row[0] != LlStageTimer::kMagic || row[4] != c || row[6] != 1 || row[5] != (mode | (uint64_t(DispatchDedup::kLlSendCoreNum) << 8U)))
                     throw std::runtime_error("header mismatch");
                 if (row[LlStageTimer::StageOffset(LlStageTimer::RecvWait) + 3] != 3) throw std::runtime_error("repeat count mismatch");
             }
         std::ofstream file(argv[1]);
         if (!file) throw std::runtime_error("cannot create output");
         file << "[";
-        for (size_t c = 0; c < 16; ++c) {
+        for (size_t c = 0; c < DispatchDedup::kLlActiveCoreNum; ++c) {
             if (c) file << ",";
             file << "[";
             for (size_t s = 0; s < LlStageTimer::kSlots; ++s) {

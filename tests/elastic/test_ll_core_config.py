@@ -1,20 +1,24 @@
 """CPU checks for queried LL core selection, ownership and resource boundaries."""
 from pathlib import Path
 import subprocess
+import shutil
+import pytest
 from tests.elastic.test_ll16_protocol import method
 
 ROOT = Path(__file__).resolve().parents[2]
 
 
-def compile_run(tmp_path, source, includes=()):
+def compile_run(tmp_path, source, includes=(), send=29):
+    if not shutil.which("g++"): pytest.skip("g++ required for real C++ layout checks")
     cpp=tmp_path/'check.cpp';cpp.write_text(source)
     executable=tmp_path/'check'
-    subprocess.run(['g++','-std=c++17','-O2',*[f'-I{p}' for p in includes],f'-I{ROOT}',
+    subprocess.run(['g++','-std=c++17','-O2',f'-DDEEPEP_LL_SEND_CORES={send}',f'-DDEEPEP_LL_RECV_CORES={58-send}',*[f'-I{p}' for p in includes],f'-I{ROOT}',
                     str(cpp),'-o',str(executable)],check=True)
     subprocess.run([str(executable)],check=True,timeout=30)
 
 
-def test_actual_count_partitions_and_layouts(tmp_path):
+@pytest.mark.parametrize("send", [1,20,29,40,57])
+def test_actual_count_partitions_and_layouts(tmp_path, send):
     counts=(ROOT/'csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_counts.h').read_text()
     compile_run(tmp_path,r'''
 #include <cassert>
@@ -28,12 +32,12 @@ struct Split {
 };
 int main() {
     Split split;
-    for(uint32_t cores: {16U,32U,48U,56U,60U,64U,72U}) {
+    for(uint32_t cores: {58U}) {
         assert(LlCoreCountValid(cores));
-        const uint32_t half=cores/2;
+        const uint32_t half=kLlRecvCoreNum;
         for(uint32_t total: {1U,16U,32U,63U,256U,1024U}) {
             // Both all-core counts and half-core route/receive work cover every item once.
-            for(uint32_t participants: {cores,half}) {
+            for(uint32_t participants: {cores,kLlSendCoreNum,kLlRecvCoreNum}) {
                 std::vector<unsigned> hits(total,0);
                 unsigned min=total,max=0;
                 for(uint32_t core=0;core<participants;++core) {
@@ -69,14 +73,14 @@ int main() {
         assert(CombineDedup::EpCombineM4TaskBytes(3072,half)>=(3072+half-1)/half*4);
         assert(CombineDedup::EpCombineM5TokenCount(32,half)>=(32+half-1)/half);
     }
-    for(uint32_t bad: {0U,1U,15U,55U,73U,80U}) {
+    for(uint32_t bad: {0U,1U,15U,55U,56U,60U,64U,72U,73U,80U}) {
         assert(!LlCoreCountValid(bad));
         EpMemoryServerDedupLayout d;CombineDedup::Layout c;
         assert(BuildDispatchServerDedupLayout(16,32,256,4,64,&d,false,bad)!=0);
         assert(!CombineDedup::BuildLayout(16,32,256,4,64,c,bad));
     }
 }
-''')
+''', send=send)
 
 
 def test_platform_and_current_device_selection(tmp_path):
@@ -104,14 +108,15 @@ struct PlatformAscendCManager {
 #include "csrc/runtime/ll_core_config.hpp"
 int main() {
     auto cfg=deepep::query_ll_core_config();
-    assert(cfg.platform==64 && cfg.available==56 && cfg.active==56 && cfg.device==0);
+    assert(cfg.platform==64 && cfg.available==56 && cfg.active==58 && cfg.device==0);
     platform_ascendc::reported=56;available=60;
-    assert(deepep::query_ll_core_config().active==56);
+    assert(deepep::query_ll_core_config().active==58);
     current_result=1;
     assert(deepep::query_ll_core_config().device==-1);
-    assert(deepep::query_ll_core_config().active==56);
+    assert(deepep::query_ll_core_config().active==58);
     current_result=0;available=55;
-    bool threw=false;try { deepep::query_ll_core_config(); } catch(...) {threw=true;} assert(threw);
+    assert(deepep::query_ll_core_config().active==58);
+    bool threw=false;
     available=56;info_result=1;threw=false;
     try { deepep::query_ll_core_config(); } catch(...) {threw=true;} assert(threw);
     info_result=0;platform_ascendc::missing=true;threw=false;

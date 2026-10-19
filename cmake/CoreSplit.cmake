@@ -1,0 +1,13 @@
+# Shared by Host and direct Device configuration.
+set(DEEPEP_LL_SEND_CORES 29 CACHE STRING "LL sender AIV count")
+set(DEEPEP_LL_RECV_CORES 29 CACHE STRING "LL receiver AIV count")
+foreach(_key DEEPEP_LL_SEND_CORES DEEPEP_LL_RECV_CORES)
+    if(NOT "${${_key}}" MATCHES "^[1-9][0-9]*$")
+        message(FATAL_ERROR "${_key} must be a positive integer")
+    endif()
+endforeach()
+math(EXPR _ll_total "${DEEPEP_LL_SEND_CORES}+${DEEPEP_LL_RECV_CORES}")
+if(NOT _ll_total EQUAL 58)
+    message(FATAL_ERROR "LL send + receive cores must equal 58")
+endif()
+add_compile_definitions(DEEPEP_LL_SEND_CORES=${DEEPEP_LL_SEND_CORES} DEEPEP_LL_RECV_CORES=${DEEPEP_LL_RECV_CORES})

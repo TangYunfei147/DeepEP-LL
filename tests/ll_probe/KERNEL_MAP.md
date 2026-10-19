@@ -17,3 +17,5 @@
 无生成snapshot需要手动编辑；保持生产算法与诊断的边界。
 
 本错峰候选只额外使用common/ll_send_order.h，由SendWithDedup调用；未引入NDR传输层。
+
+收发编译配置：common/ll_core_config.h、cmake/CoreSplit.cmake及build_support.py；固定总数58，默认29+29，详见../ll_stage_timer/CORE_SPLIT.md。

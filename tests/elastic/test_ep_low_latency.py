@@ -26,6 +26,14 @@ __test__ = False
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
+def validate_core_split_capability(capability):
+    send, recv = capability.get("send_cores"), capability.get("recv_cores")
+    if (type(send) is not int or type(recv) is not int or send <= 0 or recv <= 0
+            or send + recv != 58 or capability.get("active_aiv") != 58
+            or capability.get("core_protocol") != 6000 + send):
+        raise RuntimeError("Rebuild/install the matching configured 58-core split wheel on every rank")
+
+
 MATRIX_FIELDS = ("num_tokens", "dtype", "num_experts", "hidden", "num_topk", "do_cpu_sync", "fp8_scale_dtype")
 
 
@@ -181,7 +189,7 @@ def make_parser():
     parser.add_argument("--warmup", type=int, default=10)
     parser.add_argument("--num-iters", type=int, default=100)
     parser.add_argument("--ll-stage-timer", action="store_true", help="Separate device-stage diagnostic calls; requires timer-enabled wheel")
-    parser.add_argument('--ll-expert-timer', action='store_true', help='Opt-in dispatch per-expert receive work; implies stage capture, requires ABI 5')
+    parser.add_argument('--ll-expert-timer', action='store_true', help='Opt-in dispatch per-expert receive work; implies stage capture, requires a matching configured-split wheel')
     parser.add_argument("--ll-timer-iters", type=int, default=5)
     parser.add_argument("--ll-timer-mode", choices=("observe", "drain"), default="observe")
     parser.add_argument("--ll-timer-frequency-hz", type=float, default=1_000_000_000, help="GetSystemCycle frequency; default 1GHz (ticks/1000 us)")
@@ -282,7 +290,7 @@ def write_reports(directory, report):
             perf = result[operation]
             identity=result.get('comparison') or {}
             base = {"case_id": result["case_id"], **result["config"], "route": result["route"], "operation": operation,
-                    **{key:identity.get(key) for key in ('implementation','transport','logical_group','active_aiv','core_protocol','source_revision')}}
+                    **{key:identity.get(key) for key in ('implementation','transport','logical_group','active_aiv','send_cores','recv_cores','core_protocol','source_revision')}}
             summaries.append(
                 {
                     **base,
@@ -1051,6 +1059,7 @@ def worker(local_rank, args):
         # does not change the selected branch's default in this experiment entry.
         os.environ['DEEPEP_LL_BACKEND']=backend
         capability = {"active_aiv": core_config["active_aiv"],
+                      "send_cores": core_config["send_cores"], "recv_cores": core_config["recv_cores"],
                       "transport": backend,
                       "rdma_compiled": bool(getattr(native, "low_latency_rdma_enabled", False)),
                       "logical_group": compiled_group(native,world),
@@ -1063,6 +1072,7 @@ def worker(local_rank, args):
         dist.all_gather_object(capabilities, capability)
         if any(item != capabilities[0] for item in capabilities):
             raise RuntimeError("LL AIV/group/protocol/timer build differs across ranks")
+        validate_core_split_capability(capability)
         if capability['implementation'] not in ('ndr-hns1825','configurable-groups'):
             raise RuntimeError('Rebuild the wheel with the shared experiment implementation identity')
         requested_impl=os.environ.get('DEEPEP_LL_EXPECT_IMPLEMENTATION')
@@ -1072,10 +1082,10 @@ def worker(local_rank, args):
             raise RuntimeError('Requested RDMA is not compiled in this wheel; no MTE fallback')
         if args.ll_stage_timer and not capability["stage_timer"]:
             raise RuntimeError("All ranks must install a DEEPEP_LL_STAGE_TIMER=ON wheel")
-        if args.ll_stage_timer and capability['stage_timer_schema'] != 2:
-            raise RuntimeError('Detailed LL diagnostics require timer schema 2; rebuild/install the matching wheel on every rank')
-        if args.ll_expert_timer and capability['core_protocol'] != 5:
-            raise RuntimeError('Expert diagnostics require ABI 5 on every rank')
+        if args.ll_stage_timer and capability['stage_timer_schema'] != 5:
+            raise RuntimeError('Detailed LL diagnostics require timer schema 5; rebuild/install the matching wheel on every rank')
+        if args.ll_expert_timer and not 6001 <= capability['core_protocol'] <= 6057:
+            raise RuntimeError('Expert diagnostics require a matching configured-split wheel on every rank')
         args.ll_stage_timer_capabilities = capabilities
         run_directory = [None]
 
