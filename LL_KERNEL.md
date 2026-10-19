@@ -1,5 +1,7 @@
 # LL kernel configuration and branch
 
+This checkout is `kernel/ll-g4-stagger`, derived from the G4 configurable baseline at `3876de4`. Only deduplicated dispatch send ordering is changed; see [SEND_STAGGER.md](tests/ll_stage_timer/SEND_STAGGER.md).
+
 `kernel/ll-configurable-groups` is based on upstream-aligned `main` and contains
 LL dispatch/combine, required Host/runtime/build changes, and CPU protocol tests.
 `experiments/ll-four-layer-probes` merges that branch and adds experimental tooling.

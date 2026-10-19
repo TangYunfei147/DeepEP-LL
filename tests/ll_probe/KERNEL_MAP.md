@@ -15,3 +15,5 @@
 | 共同分析/对比 | tests/ll_stage_timer/analyze.py、compare.py、PARITY.md |
 
 无生成snapshot需要手动编辑；保持生产算法与诊断的边界。
+
+本错峰候选只额外使用common/ll_send_order.h，由SendWithDedup调用；未引入NDR传输层。

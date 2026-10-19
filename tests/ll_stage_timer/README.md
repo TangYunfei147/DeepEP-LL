@@ -1,6 +1,6 @@
 # LL阶段与专家诊断（泛化分支）
 
-维护分支kernel/ll-configurable-groups。实验、采样、解析与NDR分支共用同一套代码，
+维护分支kernel/ll-g4-stagger（从G4泛化基线派生）。实验、采样、解析与NDR分支共用同一套代码，
 推荐直接按[PARITY.md](PARITY.md)启动和对比。
 
 本分支保留MTE传输、原始静态分组默认G=4；不包含RDMA data plane，也不采用NDR的G4/16 tiling策略。
@@ -16,9 +16,9 @@ G=16与G=4可以直接作为比较变量，工具记录实际G而不要求相同
 在计划存放工程的父目录执行；两分支建议使用独立目录：
 
 ```bash
-git clone --branch kernel/ll-configurable-groups --single-branch \
-  https://github.com/TangYunfei147/DeepEP-LL.git DeepEP-LL-groups
-cd DeepEP-LL-groups
+git clone --branch kernel/ll-g4-stagger --single-branch \
+  https://github.com/TangYunfei147/DeepEP-LL.git DeepEP-LL-g4-stagger
+cd DeepEP-LL-g4-stagger
 git submodule update --init --recursive --depth 1
 git rev-parse HEAD
 ```
@@ -175,3 +175,5 @@ python -m pip install -v --force-reinstall --no-build-isolation --no-deps .
 ```
 
 错峰候选独立维护在kernel/ll-g4-stagger，基于本分支G4提交，仅移植NDR发送顺序轮转，不移植RDMA、缓存策略、分组tiling或timer schema3。基线与候选用独立checkout和匹配环境，在相同shape/seed/采样协议下比较timer OFF的完整task性能；ON仅供诊断。默认值修改本地83项CPU通过，2项C++执行因无编译器跳过，1项既有Bash环境检查未选；未做设备验收。
+
+当前候选已沿用NDR的FIRST_HOP/DIRECT顺序轮转，未穿插本组流量。基线提交、适用范围和完整A/B步骤见[SEND_STAGGER.md](SEND_STAGGER.md)。
