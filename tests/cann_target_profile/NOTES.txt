@@ -1,0 +1,10 @@
+Target signature update (2026-10-19)
+Run the two scripts with -c hosts.yaml --node-rank N on the existing EP64 target.
+The sibling moe_target_signature.py must stay next to both scripts.
+Default --quant-mode 4 uses MX; --quant-mode 5 selects MX clip. Shapes alone do not distinguish them.
+Both scripts validate seven dispatch outputs before profiling. On the inspected 3c86d19 extension,
+Ascend950 allocates ep_recv_counts[896], so that build will be rejected against target [131968].
+A matching target CANN/extension is needed; no padding or fabricated metadata is performed.
+Combine uses synthetic BF16 expert output; this is a communication benchmark, not a numerical roundtrip.
+Warmup10/capture100 and Exp+AllReduce remain unchanged. Local syntax and mocked contract checks passed.
+No NPU execution or target-signature acceptance has been performed.
