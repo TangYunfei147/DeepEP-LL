@@ -371,7 +371,11 @@ private:
             if (mask & (uint32_t(1) << k)) {
                 const uint32_t routeIndex = (start_ + token) * k_ + k;
                 const uint32_t expert = uint32_t(routeIds_.GetValue(routeIndex));
+                // q calculation owns SendRoute. Finish this tail-writing task
+                // before entering it; ordinary events must never nest.
+                if (timer_) timer_->End(LlStageTimer::SendTail);
                 const uint32_t q = CalTokenSendExpertCnt(expert, routeIndex);
+                if (timer_) timer_->Start(LlStageTimer::SendTail);
                 ++entries;
                 index.SetValue(entries * 2U, expert | (q << 16U));
                 weights.SetValue(entries * 2U + 1U, routeWeights_.GetValue(token * k_ + k));

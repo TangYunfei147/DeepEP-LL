@@ -50,6 +50,8 @@ mega参考MegaMoE的普通span及依赖wait区分。无额外屏障的等待阶�
 
 所有模式均保存逐次时间戳。相同核的metadata和output_write按实际区间显示；任务执行与依赖等待互斥；等待切断执行，结束后用同一task ID续记。kernel固定总区间放在独立概览轨道。每次实测区间的位置保留，跨rank仍独立时间原点，不伪造时钟对齐。
 
+首跳包尾部编码需要为额外成员计算q：先结束当前send_tail，再记录send_route，最后开始下一段send_tail，普通任务之间不嵌套。send_tail的calls因此表示尾部写入任务段数，不能当作包数。combine_return_task、combine_reduce_task和combine_output_task内部的依赖等待仍按同task ID暂停、续记。事件错误flags按位组合：1为容量溢出，2为重复/意外嵌套Start，4为不匹配End，16为退出时未闭合；flags=6属于配对问题，增加容量不能解决。
+
 ## 布局、内存与溢出
 
 每核独占512B对齐区域：8-word header、每阶段实际事件计数、5类通信字节计数、错误标志，然后按事件类型分区存放[start,end,task_id]。无设备端累计耗时、首尾包络或旧格式适配。
