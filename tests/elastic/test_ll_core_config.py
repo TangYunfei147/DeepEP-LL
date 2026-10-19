@@ -12,7 +12,7 @@ def compile_run(tmp_path, source, includes=(), send=29):
     if not shutil.which("g++"): pytest.skip("g++ required for real C++ layout checks")
     cpp=tmp_path/'check.cpp';cpp.write_text(source)
     executable=tmp_path/'check'
-    subprocess.run(['g++','-std=c++17','-O2',f'-DDEEPEP_LL_SEND_CORES={send}',f'-DDEEPEP_LL_RECV_CORES={58-send}',*[f'-I{p}' for p in includes],f'-I{ROOT}',
+    subprocess.run(['g++','-std=c++17','-O2','-Werror=unused-parameter',f'-DDEEPEP_LL_SEND_CORES={send}',f'-DDEEPEP_LL_RECV_CORES={58-send}',*[f'-I{p}' for p in includes],f'-I{ROOT}',
                     str(cpp),'-o',str(executable)],check=True)
     subprocess.run([str(executable)],check=True,timeout=30)
 

@@ -66,6 +66,7 @@ DISPATCH_DEDUP_EP_DEDUP_INLINE uint64_t DispatchServerDedupWindowOffset(int64_t 
 
 DISPATCH_DEDUP_EP_DEDUP_INLINE EpServerDedupCountLayout DispatchServerDedupCountLayout(uint32_t experts, uint32_t coreNum = kLlDefaultPlanCoreNum)
 {
+    (void)coreNum; // Retained for callers; the receive count is fixed by the build.
     EpServerDedupCountLayout layout{};
     const uint32_t recvCores = kLlRecvCoreNum;
     const uint64_t matrixBytes = uint64_t(recvCores) * recvCores * kEpServerDedupCountRecordBytes;
