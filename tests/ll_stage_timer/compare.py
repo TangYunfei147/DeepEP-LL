@@ -19,7 +19,14 @@ def check_identity(left,right):
         if item['comparison_schema']!=1 or any(type(item[key]) is not int or item[key]<=0
                                                for key in ('world_size','logical_group','active_aiv','core_protocol')):
             raise ValueError('Unknown or invalid runtime comparison identity')
-    mismatches=[key for key in sorted(left.keys()|right.keys()) if key not in DIFFERENCES and left.get(key)!=right.get(key)]
+    differences=set(DIFFERENCES)
+    if all(6001 <= item['core_protocol'] <= 6057 for item in (left,right)):
+        for item in (left,right):
+            if (item.get('send_cores',0)+item.get('recv_cores',0)!=58 or item['active_aiv']!=58
+                    or item['core_protocol']!=6000+item.get('send_cores',0)):
+                raise ValueError('Invalid configured core split identity')
+        differences.update(('send_cores','recv_cores','core_protocol'))
+    mismatches=[key for key in sorted(left.keys()|right.keys()) if key not in differences and left.get(key)!=right.get(key)]
     if mismatches: raise ValueError('Incomparable settings: '+', '.join(mismatches))
 
 
@@ -53,11 +60,18 @@ def compare(left,right,kind):
     for key in sorted(l.keys()|r.keys()):
         if key in l and key in r: check_identity(l[key][1],r[key][1])
         a=l[key][0] if key in l else None;b=r[key][0] if key in r else None
+        role_changed = (kind=='stage' and key in l and key in r
+                        and l[key][1].get('send_cores') is not None and r[key][1].get('send_cores') is not None
+                        and (key[2] < l[key][1]['send_cores']) != (key[2] < r[key][1]['send_cores']))
         rows.append(dict(key=json.dumps(key),baseline_mean_us=a,candidate_mean_us=b,
+                         baseline_send_cores=l[key][1].get("send_cores") if key in l else None,
+                         candidate_send_cores=r[key][1].get("send_cores") if key in r else None,
+                         baseline_recv_cores=l[key][1].get("recv_cores") if key in l else None,
+                         candidate_recv_cores=r[key][1].get("recv_cores") if key in r else None,
                          baseline_group=l[key][1]['logical_group'] if key in l else None,
                          candidate_group=r[key][1]['logical_group'] if key in r else None,
-                         candidate_over_baseline=b/a if a is not None and a>0 and b is not None else None,
-                         status='matched' if key in l and key in r else 'missing_on_one_side'))
+                         candidate_over_baseline=b/a if a is not None and a>0 and b is not None and not role_changed else None,
+                         status='role_changed' if role_changed else ('matched' if key in l and key in r else 'missing_on_one_side')))
     return rows
 
 

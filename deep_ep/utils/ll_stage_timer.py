@@ -10,7 +10,7 @@ from pathlib import Path
 import threading
 
 MAGIC = 0x4C4C5431
-SCHEMA = 2
+SCHEMA = 5
 DEFAULT_FREQUENCY_HZ = 1_000_000_000  # Target-confirmed: time_us = ticks / 1000.
 SLOTS, FIELDS = 32, 8
 STAGES = ('header', 'kernel', 'magic', 'worker_init', 'count_init', 'count_send', 'sender',
@@ -40,13 +40,13 @@ def parse_records(raw, operation, frequency_hz=None):
     if not 16 <= cores <= 72 or cores % 2:
         raise ValueError('Expected actual even AIV count in [16,72]')
     op = 1 if operation == 'dispatch' else 2
-    records, modes, schemas = [], set(), set()
+    records, modes, schemas, splits = [], set(), set(), set()
     for core, slots in enumerate(raw):
         if len(slots) != SLOTS or any(len(row) != FIELDS for row in slots):
             raise ValueError('Timer shape mismatch')
         header = slots[0]
         schema = header[1]
-        if schema not in (1, 2):
+        if schema not in (1, 2, 5):
             raise ValueError('Unsupported timer schema')
         names = LEGACY_STAGES if schema == 1 else STAGES
         schemas.add(schema)
@@ -54,10 +54,15 @@ def parse_records(raw, operation, frequency_hz=None):
             raise ValueError("Invalid timer header word")
         if header[:5] != [MAGIC, schema, op, cores, core] or header[6:] != [1, len(names)]:
             raise ValueError(f'Incomplete or mismatched timer header on core {core}')
-        if header[5] not in (1, 2):
+        mode = header[5] & 255 if schema == 5 else header[5]
+        send_cores = header[5] >> 8 if schema == 5 else cores//2
+        if schema == 5 and (cores != 58 or not 0 < send_cores < 58):
+            raise ValueError('Invalid configured 58-core split')
+        splits.add(send_cores)
+        if mode not in (1, 2):
             raise ValueError('Unknown boundary mode')
-        modes.add(header[5])
-        if schema == 2:
+        modes.add(mode)
+        if schema in (2, 5):
             words = [value for row in slots for value in row]
             if any(type(value) is not int or not 0 <= value < (1 << 63) for value in words):
                 raise ValueError('Invalid raw timer word')
@@ -84,7 +89,7 @@ def parse_records(raw, operation, frequency_hz=None):
                 continue
             if last < first or active_start < first or active_start > last or total > last-first:
                 raise ValueError('Invalid timestamp order or accumulated interval')
-            record = dict(core=core, role='send' if core < cores//2 else 'receive',
+            record = dict(core=core, role='send' if core < send_cores else 'receive',
                           stage=names[stage], first_tick=first, last_tick=last,
                           total_ticks=total, calls=count, average_ticks=total/count)
             if frequency_hz is not None:
@@ -93,9 +98,11 @@ def parse_records(raw, operation, frequency_hz=None):
             records.append(record)
     if len(modes) != 1:
         raise ValueError('Mixed boundary modes')
+    if len(splits) != 1:
+        raise ValueError('Mixed core splits')
     if len(schemas) != 1:
         raise ValueError('Mixed timer schemas')
-    return dict(schema=schema, operation=operation, active_aiv=cores,
+    return dict(schema=schema, operation=operation, active_aiv=cores, send_cores=send_cores, recv_cores=cores-send_cores,
                 boundary_mode='observe' if modes == {1} else 'drain', frequency_hz=frequency_hz,
                 clock='AscendC::GetSystemCycle; no cross-rank clock alignment assumed', records=records,
                 interpretation='Nested and overlapping stages must not be summed; repeated-stage totals exclude gaps.')
@@ -179,15 +186,15 @@ class StageTrace:
         # Align the view to 512B even if an allocator returns only 8B alignment.
         offset = (-storage.data_ptr()) % 512 // 8
         self.tensor = storage.narrow(0, offset, words).view(cfg['active_aiv'], SLOTS, FIELDS)
-        self.expert_tensor, self.expert_raw, self.expert_config = None, None, expert_config
+        self.expert_tensor, self.expert_raw, self.expert_config = None, None, (dict(expert_config, send_cores=cfg.get("send_cores", cfg["active_aiv"]//2)) if expert_config is not None else None)
         if expert_config is not None:
             from . import ll_expert_timer as expert
             rank, world, count = (expert_config[key] for key in ('rank','world','experts'))
             if (operation != 'dispatch' or any(type(v) is not int for v in (rank,world,count)) or
                     not (0 <= rank < world <= count <= 1024 and world >= 16 and world%16==0 and count%world==0)):
                 raise ValueError('Expert capture requires a valid dispatch expert configuration')
-            if native.low_latency_core_protocol != 5 or not hasattr(native, 'low_latency_expert_timer_layout'):
-                raise RuntimeError('Expert diagnostics require the matching ABI 5 wheel on every rank')
+            if not 6001 <= native.low_latency_core_protocol <= 6057 or not hasattr(native, 'low_latency_expert_timer_layout'):
+                raise RuntimeError('Expert diagnostics require the matching configured-split wheel on every rank')
             if native.low_latency_expert_timer_layout() != dict(schema=expert.SCHEMA, header_rows=expert.HEADER_ROWS,
                                                                fields=expert.FIELDS, stages=list(expert.STAGES)):
                 raise RuntimeError('Expert timer Python/native schema mismatch')

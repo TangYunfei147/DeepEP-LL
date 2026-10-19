@@ -31,7 +31,8 @@ public:
         epWorldSize_ = args_->rankSize;
         aivId_ = GetBlockIdx();
         coreNum_ = GetBlockNum();
-        aivUsedAllToAll_ = aivUsedCumSum_ = coreNum_ / 2U;
+        aivUsedAllToAll_ = kLlSendCoreNum;
+        aivUsedCumSum_ = kLlRecvCoreNum;
         axisBS_ = bs;
         axisK_ = topK;
         expertIdsCnt_ = bs * topK;

@@ -27,7 +27,7 @@ def analyze(paths, frequency_hz=None):
         meta=saved['metadata']
         if meta.get('correctness')!='passed':raise ValueError('Missing instrumented correctness evidence')
         report=timer.parse_records(saved['raw'],saved['operation'],frequency_hz if frequency_hz is not None else saved['frequency_hz'])
-        common=(meta['world_size'],meta['config'],report['active_aiv'],report['boundary_mode'],report['frequency_hz'],
+        common=(meta['world_size'],meta['config'],(report['active_aiv'],report['send_cores']),report['boundary_mode'],report['frequency_hz'],
                 meta.get('run_id'),meta.get('seed'),meta.get('case_id'),meta.get('sampling'),report['schema'],meta.get('comparison'))
         if identity is not None and common!=identity:raise ValueError('Mixed configurations or timer modes')
         identity=common
@@ -99,8 +99,12 @@ def expert_reports(paths, frequency_hz):
             raise ValueError('Expert sample identity mismatch')
         if payload['experts'] != meta['config'].get('num_experts',payload['experts']):
             raise ValueError('Expert count differs from case configuration')
+        header=saved['raw'][0][0]
+        expected_send=header[5] >> 8 if header[1]==5 else len(saved['raw'])//2
+        if (header[1]==5 and 'send_cores' not in payload) or payload.get('send_cores',expected_send)!=expected_send:
+            raise ValueError('Expert/stage core split mismatch')
         report=expert.parse_records(**payload, frequency_hz=frequency_hz)
-        if report['active_aiv'] != len(saved['raw']) or report['boundary_mode'] != ('observe' if saved['raw'][0][0][5]==1 else 'drain'):
+        if report['active_aiv'] != len(saved['raw']) or report['boundary_mode'] != ('observe' if (saved['raw'][0][0][5] & 255)==1 else 'drain'):
             raise ValueError('Expert/stage core count or boundary mode mismatch')
         per_sample={}
         for row in report['records']:

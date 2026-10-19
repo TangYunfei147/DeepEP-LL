@@ -32,8 +32,10 @@ public:
         timer_ = timer;
         core_ = GetBlockIdx();
         coreNum_ = GetBlockNum();
-        sendCores_ = recvCores_ = coreNum_ / 2U;
-        notifyBegin_ = coreNum_ - DispatchDedup::kLlNotifyCoreNum;
+        sendCores_ = DispatchDedup::kLlSendCoreNum;
+        recvCores_ = DispatchDedup::kLlRecvCoreNum;
+        notifyCores_ = recvCores_ < DispatchDedup::kLlNotifyCoreNum ? recvCores_ : DispatchDedup::kLlNotifyCoreNum;
+        notifyBegin_ = coreNum_ - notifyCores_;
         args_ = reinterpret_cast<const __gm__ DispatchDedup::CommArgs*>(commArgs);
         enableDedup_ = enableDedup;
         h_ = h;
@@ -245,10 +247,10 @@ private:
         for (uint32_t lane = 0; lane < lanes_; ++lane) WaitFlag<HardEvent::MTE3_MTE2>(lane);
         Duplicate<float>(preparePublish_, 0.0f, 64U);
         Sync<HardEvent::V_S>();
-        for (uint32_t j = 0; j < 8U; ++j) preparePublish_.SetValue(j * 8U, 1.0f);
+        for (uint32_t j = 0; j < notifyCores_; ++j) preparePublish_.SetValue(j * 8U, 1.0f);
         Sync<HardEvent::S_MTE3>();
         auto done = Control(args_->rank, COMBINE_DEDUP_EP_SERVER_DEDUP_COMBINE_PREPARE_DONE_OFFSET);
-        DataCopyPad(done[core_ * 8U], preparePublish_, {8U, 32U, 0U, kCombinePrepareRowBytes - 32U, 0U});
+        DataCopyPad(done[core_ * 8U], preparePublish_, {uint16_t(notifyCores_), 32U, 0U, kCombinePrepareRowBytes - 32U, 0U});
     }
     __aicore__ inline void CacheTableRows(uint32_t row, uint32_t start, uint32_t task, uint32_t count,
                                           uint32_t& cacheBegin, uint32_t& cacheEnd)
@@ -436,11 +438,11 @@ private:
         Sync<HardEvent::V_MTE3>();
         Sync<HardEvent::S_MTE3>();
         DataCopyPad(done, prepareZero_, {1U, kCombinePrepareRowBytes, 0U, 0U, 0U});
-        // Eight notification cores cover all peers in the logical group.
+        // Up to eight receiver cores cover all peers in the logical group.
         // Ready rows retain 512-byte capacity, independent of active group size.
         const uint32_t groupBase = uint32_t(args_->rank) / DispatchDedup::kLlRanksPerGroup *
                                    DispatchDedup::kLlRanksPerGroup;
-        for (uint32_t local = core_ - notifyBegin_; local < DispatchDedup::kLlRanksPerGroup; local += 8U) {
+        for (uint32_t local = core_ - notifyBegin_; local < DispatchDedup::kLlRanksPerGroup; local += notifyCores_) {
             auto ready = Control(groupBase + local, COMBINE_DEDUP_EP_SERVER_DEDUP_COMBINE_SERVER_READY_OFFSET);
             DataCopyPad(ready[(uint32_t(args_->rank) % DispatchDedup::kLlRanksPerGroup) * 8U], notifyUb_,
                         {uint16_t(kCombineNotifyRows), 32U, 0U, 480U, 0U});
@@ -458,7 +460,7 @@ private:
 
     EpCombineM45WorkspaceLayout workspace_{};
     uint32_t partialTasks_ = 0U;
-    uint32_t coreNum_ = 0, sendCores_ = 0, recvCores_ = 0, notifyBegin_ = 0;
+    uint32_t coreNum_ = 0, sendCores_ = 0, recvCores_ = 0, notifyBegin_ = 0, notifyCores_ = 0;
     TPipe pipe_;
     TBuf<> arena_;
     const __gm__ DispatchDedup::CommArgs* args_ = nullptr;

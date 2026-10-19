@@ -36,7 +36,8 @@ public:
                                 bool enableDedup = true, uint32_t coreNum = 0U)
     {
         args_ = args;
-        sendCores_ = (coreNum == 0U ? GetBlockNum() : coreNum) / 2U;
+        (void)coreNum; // The launch split is fixed by the build configuration.
+        sendCores_ = kLlSendCoreNum;
         pipe_ = pipe;
         enableDedup_ = enableDedup;
         bs_ = bs;

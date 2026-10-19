@@ -1,3 +1,4 @@
+include("${CMAKE_CURRENT_LIST_DIR}/CoreSplit.cmake")
 # Copyright (c) 2026, Lu Lu
 # Modified by lishaoxun 2026
 

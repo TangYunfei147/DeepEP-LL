@@ -27,7 +27,7 @@ public:
         timer_ = timer;
         args_ = reinterpret_cast<const __gm__ DispatchDedup::CommArgs*>(commArgs);
         core_ = GetBlockIdx();
-        sendCores_ = GetBlockNum() / 2U;
+        sendCores_ = kLlSendCoreNum;
         pipe_ = pipe;
         if (timer_) timer_->Start(LlStageTimer::Magic);
         const uint32_t magic = RotateDispatchServerDedupMagic(args_, core_, pipe);

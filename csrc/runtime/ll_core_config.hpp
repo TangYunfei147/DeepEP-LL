@@ -20,9 +20,9 @@ inline LlPlatformCores query_ll_core_config() {
     } else {
         device = -1; // Host-only planning: no current device is bound.
     }
-    const uint32_t active = std::min(total, available);
+    const uint32_t active = DispatchDedup::kLlActiveCoreNum;
     if (!DispatchDedup::LlCoreCountValid(active))
-        throw std::runtime_error("LL requires an even AIV count in [16,72] for its 1:1 core split");
+        throw std::runtime_error("LL requires the configured 58-core launch");
     return {total, available, active, device};
 }
 }

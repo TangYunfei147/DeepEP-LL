@@ -77,13 +77,13 @@ COMBINE_DEDUP_EP_COMBINE_CONSTEXPR uint32_t EpCombineM4ScanRows(uint32_t h, uint
     while (rows < 512U && EpCombineM4ScanBytes(rows * 2U) <= available) rows *= 2U;
     return rows;
 }
-COMBINE_DEDUP_EP_COMBINE_CONSTEXPR uint32_t EpCombineM4TaskBytes(uint32_t tokens, uint32_t recvCores = DispatchDedup::kLlDefaultPlanCoreNum / 2U)
+COMBINE_DEDUP_EP_COMBINE_CONSTEXPR uint32_t EpCombineM4TaskBytes(uint32_t tokens, uint32_t recvCores = DispatchDedup::kLlRecvCoreNum)
 {
     return EpCombineAlign(((tokens + recvCores - 1U) / recvCores) * 4U,
                           32U);
 }
 // M5 input events use IDs 0..6; MTE2_V(7) is reserved for probe.
-COMBINE_DEDUP_EP_COMBINE_CONSTEXPR uint32_t EpCombineM5TokenCount(uint32_t bs, uint32_t recvCores = DispatchDedup::kLlDefaultPlanCoreNum / 2U)
+COMBINE_DEDUP_EP_COMBINE_CONSTEXPR uint32_t EpCombineM5TokenCount(uint32_t bs, uint32_t recvCores = DispatchDedup::kLlRecvCoreNum)
 {
     return bs / recvCores + (bs % recvCores != 0U);
 }
@@ -108,7 +108,7 @@ struct EpCombineM45WorkspaceLayout {
     uint32_t totalBytes = 0U;
 };
 COMBINE_DEDUP_EP_COMBINE_CONSTEXPR EpCombineM45WorkspaceLayout EpCombineM45Layout(uint32_t tokens, uint32_t bs,
-                                                                                  uint32_t h, uint32_t k, uint32_t recvCores = DispatchDedup::kLlDefaultPlanCoreNum / 2U)
+                                                                                  uint32_t h, uint32_t k, uint32_t recvCores = DispatchDedup::kLlRecvCoreNum)
 {
     EpCombineM45WorkspaceLayout result{};
     if (recvCores == 0U || recvCores > DispatchDedup::kLlMaxRecvCoreNum || tokens > kEpServerDedupCombineMaxTokenNum || bs == 0U || h == 0U ||

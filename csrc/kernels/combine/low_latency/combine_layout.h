@@ -17,7 +17,7 @@ inline bool BuildLayout(int64_t p, int64_t b, int64_t h, int64_t k, int64_t e, L
         return false;
     const uint64_t capacity = p * b * (k < e / p ? k : e / p);
     const uint32_t peak = capacity < kEpServerDedupCombineMaxTokenNum ? capacity : kEpServerDedupCombineMaxTokenNum;
-    if (!EpCombinePayloadLaneCount(peak, h) || !EpCombineM45Layout(peak, b, h, k, coreNum / 2U).inputLanes) return false;
+    if (!EpCombinePayloadLaneCount(peak, h) || !EpCombineM45Layout(peak, b, h, k, DispatchDedup::kLlRecvCoreNum).inputLanes) return false;
     const uint64_t packet = (h * 2 + 479) / 480 * 512;
     const uint64_t bytes =
         COMBINE_DEDUP_EP_SERVER_DEDUP_SHARED_DATA_OFFSET + b * k * packet + e * b * ((h * 2 + 511) / 512 * 512);

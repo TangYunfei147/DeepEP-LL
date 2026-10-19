@@ -1,6 +1,7 @@
 #pragma once
 #include "kernel_operator.h"
 #include "ll_stage_timer_layout.h"
+#include "ll_core_config.h"
 
 namespace LlStageTimer {
 // 默认编译关闭。observe不插入额外流水屏障；drain显式串行化边界，只用于诊断。
@@ -21,7 +22,7 @@ public:
         data_(2) = operation;
         data_(3) = AscendC::GetBlockNum();
         data_(4) = core;
-        data_(5) = mode;
+        data_(5) = mode | (uint64_t(DispatchDedup::kLlSendCoreNum) << 8U);
         data_(6) = 0;
         data_(7) = StageCount;
 #endif

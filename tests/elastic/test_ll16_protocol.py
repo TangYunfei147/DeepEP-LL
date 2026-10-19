@@ -4,6 +4,7 @@ These checks exercise control-flow/addressing only, not NPU DMA ordering.
 """
 from pathlib import Path
 import subprocess
+import shutil
 import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -22,6 +23,7 @@ def method(text, name):
 
 @pytest.mark.parametrize("group", range(1, 17))
 def test_production_routing_and_ready_addresses(tmp_path, group):
+    if not shutil.which("g++"): pytest.skip("g++ required for production ready-protocol model")
     sender = (ROOT/'csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_send.h').read_text()
     combine = (ROOT/'csrc/kernels/combine/low_latency/combine_server_dedup_kernel.h').read_text()
     source = r'''
@@ -68,7 +70,7 @@ struct Ready {
     Args* args_;
     unsigned core_;
     std::vector<std::vector<float>>* gm;
-    unsigned coreNum_,sendCores_,notifyBegin_;
+    unsigned coreNum_,sendCores_,notifyBegin_,notifyCores_;
     uint64_t selected_=0;
     Tensor<float> preparePublish_{scratch+3072};
     float scratch[4096]{};
@@ -133,20 +135,20 @@ int main() {
             for(unsigned i=0;i<visited.size();++i) assert(visited[i]==i);
         }
         // Verify all allowed receiver counts, no missing/duplicate peer flags,
-        // and clearing across two rounds with active sizes 16..72.
-        for(unsigned total: {16U,32U,48U,56U,60U,64U,72U}) {
-            const unsigned receivers=total/2;
+        // and clearing across two rounds with 58 total cores and asymmetric splits.
+        for(unsigned send: {1U,20U,29U,40U,57U}) {
+            const unsigned total=58,receivers=58-send,notify=std::min(8U,receivers);
             modelActiveRecv=receivers;
             std::vector<std::vector<float>> memory(world,std::vector<float>(8192,0));
             for(unsigned round=0;round<2;++round) {
                 for(unsigned rank=0;rank<world;++rank) {
                     Args args{rank,world};
                     for(unsigned core=0;core<total;++core) {
-                        Ready publisher{&args,core,&memory,total,receivers,total-8};
+                        Ready publisher{&args,core,&memory,total,send,total-notify,notify};
                         publisher.Publish();
                     }
-                    for(unsigned slot=0;slot<8;++slot) {
-                        Ready ready{&args,total-8+slot,&memory,total,receivers,total-8};
+                    for(unsigned slot=0;slot<notify;++slot) {
+                        Ready ready{&args,total-notify+slot,&memory,total,send,total-notify,notify};
                         ready.NotifyServerCard();
                     }
                 }
@@ -155,7 +157,7 @@ int main() {
                     for(unsigned receiver=0;receiver<receivers;++receiver) {
                         for(unsigned peer=0;peer<G;++peer)
                             assert(memory[rank][COMBINE_DEDUP_EP_SERVER_DEDUP_COMBINE_SERVER_READY_OFFSET/4+receiver*128+peer*8]==1);
-                        Ready ready{&args,receivers+receiver,&memory,total,receivers,total-8};
+                        Ready ready{&args,send+receiver,&memory,total,send,total-notify,notify};
                         ready.WaitServerReady();
                     }
                     for(unsigned index=0;index<memory[rank].size();++index) {
@@ -171,7 +173,7 @@ int main() {
 }
 '''
     # Ready storage can reach 16 KiB + 48*512 bytes for alternate core splits.
-    source = source.replace('offset<32768', 'offset<40960').replace('vector<float>(8192,0)', 'vector<float>(10240,0)')
+    source = source.replace('offset<32768', 'offset<65536').replace('vector<float>(8192,0)', 'vector<float>(16384,0)')
     cpp = tmp_path/'protocol.cpp'
     cpp.write_text(source)
     binary = tmp_path/'protocol'
@@ -181,6 +183,7 @@ int main() {
 
 @pytest.mark.parametrize("group", [0, 17, -1])
 def test_invalid_group_size_rejected(tmp_path, group):
+    if not shutil.which("g++"): pytest.skip("g++ required for compile-time rejection test")
     cpp = tmp_path / "invalid.cpp"
     cpp.write_text('#include "csrc/kernels/dispatch/low_latency/common/ep_memory_server_dedup_protocol.h"\n')
     result = subprocess.run(['g++', '-std=c++17', f'-DDEEPEP_LL_RANKS_PER_GROUP={group}',
