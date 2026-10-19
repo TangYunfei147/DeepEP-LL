@@ -21,3 +21,7 @@ Both scripts are standalone; no moe_target_signature.py is required. N=0..7; eig
 --hccl-buffsize defaults to 200 MiB and is set before communicator initialization.
 Warmup10/capture100 and Exp+scalar AllReduce are unchanged.
 Local syntax/mocked argument and metadata-forwarding checks passed. No NPU execution.
+
+Routing update: each token samples 16 distinct experts uniformly with torch.randperm(896).
+Routing is generated once before profiling and reproducible using torch.manual_seed(rank).
+No artificial global balancing; all iterations reuse that rank's sampled routing.

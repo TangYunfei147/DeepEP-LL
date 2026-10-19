@@ -137,10 +137,10 @@ def worker(local_rank, args):
     x = (torch.randn(TOKENS, HIDDEN_DIM) * 0.05).to(
         device=device, dtype=torch.bfloat16,
     )
-    # Same balanced global routing as the reference, constructing this rank only.
-    route = torch.arange(rank * TOKENS * TOPK, (rank + 1) * TOKENS * TOPK)
-    ids = ((route % NUM_EXPERTS + route // NUM_EXPERTS) % NUM_EXPERTS)
-    ids = ids.reshape(TOKENS, TOPK).to(device=device, dtype=torch.int32)
+    # Uniform random experts without replacement within each token.
+    # Generated once outside profiling; torch.manual_seed(rank) makes it reproducible.
+    ids = torch.stack([torch.randperm(NUM_EXPERTS)[:TOPK] for _ in range(TOKENS)])
+    ids = ids.to(device=device, dtype=torch.int32)
 
     active = torch.ones(TOKENS, dtype=torch.bool, device=device)
     weights = torch.rand(TOKENS, TOPK, dtype=torch.float32, device=device)
