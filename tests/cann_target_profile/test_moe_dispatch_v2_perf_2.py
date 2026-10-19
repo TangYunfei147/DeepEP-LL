@@ -3,16 +3,12 @@
 
 On each machine (node-rank 0..7):
   python test_moe_dispatch_v2_perf_2.py -c hosts.yaml --node-rank 0
-Requires Ascend 950, matching CANN/ops-transformer and cann_ops_transformer.
-Kimi K3 routed-expert communication: H=3584, top-k=16, 896 experts,
-14 routed experts per rank at EP64, no shared experts; 8 tokens per rank.
-Profiler: original 10 warmup / 100 capture calls, with Exp + scalar AllReduce
-before every capture call; per-rank trace under --out-dir.
-Shape source: https://huggingface.co/moonshotai/Kimi-K3/blob/main/config.json
-Interface checked against ops-transformer 3c86d19c6c9e34bdfb790195ae43c7c9d041bdd4:
-  mc2/common/torch_extension/moe_distribute_buffer.py
-  mc2/common/docs/torchapi_low_latency_dispatch.md
-  mc2/common/docs/torchapi_low_latency_combine.md
+Requires Ascend 950 and matching torch_npu/CANN with MXFP8 v2 operators.
+EP64, eight hosts x eight NPUs, BS8/H3584/topk16/E896.
+Uses vllm-ascend TokenDispatcherWithMC2 group-name interfaces directly.
+Source: https://github.com/vllm-project/vllm-ascend/blob/main/vllm_ascend/ops/fused_moe/token_dispatcher.py
+Warmup10/capture100, Exp + scalar AllReduce per capture call.
+
 """
 import argparse
 import os
@@ -25,9 +21,6 @@ TOPK = 16
 NUM_EXPERTS = 896
 TOKENS = 8
 CAPTURE_STEPS = 100
-COMM_ALG = "fullmesh_v1"
-# at::ScalarType::Float8_e4m3fn; accepted by the extension's GetAclDataType.
-FP8_E4M3FN = 24
 
 
 def profile_operator(operator, args, rank, label):
@@ -75,41 +68,20 @@ def worker(local_rank, args):
     import torch
     import torch.distributed as dist
     import torch_npu
-    from cann_ops_transformer.ops import MoeDistributeBuffer
 
     rank = args.node_rank * LOCAL_WORLD_SIZE + local_rank
     torch_npu.npu.set_device(local_rank)
-    buffer_size_mib = MoeDistributeBuffer.get_low_latency_ccl_buffer_size(
-        world_size=WORLD_SIZE,
-        num_max_dispatch_tokens_per_rank=TOKENS,
-        hidden=HIDDEN_DIM, num_moe_expert=NUM_EXPERTS, topk=TOPK,
-        num_shared_expert=0, num_shared_expert_ranks=0, comm_alg=COMM_ALG,
-    )
-    # KFC obtains the real HCCL window; customCclBufferSize does not resize it.
-    # Configure before any communicator is initialized, including the EP group.
-    hccl_size_mib = max(200, buffer_size_mib, int(os.environ.get("HCCL_BUFFSIZE", "200")))
-    os.environ["HCCL_BUFFSIZE"] = str(hccl_size_mib)
+    # HCCL owns the operator window; no custom buffer/context extension.
+    os.environ["HCCL_BUFFSIZE"] = str(args.hccl_buffsize)
     dist.init_process_group(
         backend="hccl", rank=rank, world_size=WORLD_SIZE,
         init_method=f"tcp://{args.master_addr}:{args.master_port}",
     )
     # Dedicated EP group: dispatch/combine must use the same group.
     ep_group = dist.new_group(list(range(WORLD_SIZE)), backend="hccl")
-    # The extension queries with init_comm=False. Materialize the HCCL
-    # communicator before constructing its context (new_group is lazy).
-    if hasattr(ep_group, "get_hccl_comm_name"):
-        ep_group.get_hccl_comm_name(rank, init_comm=True)
-    else:
-        ep_group._get_backend(torch.device("npu")).get_hccl_comm_name(
-            rank, init_comm=True,
-        )
-    # The helper returns HCCL_BUFFSIZE in MiB (half the complete window).
-    # Ascend950 channel customCclBufferSize and operator ccl_buffer_size are bytes.
-    window_bytes = 2 * buffer_size_mib * 1024 * 1024
-    buffer = MoeDistributeBuffer(ep_group, ccl_buffer_size=window_bytes)
-    print(f"rank={rank} device={torch_npu.npu.get_device_name(local_rank)} "
-          f"BS={TOKENS} HCCL_BUFFSIZE={hccl_size_mib}MiB "
-          f"context_window={buffer.ccl_buffer_size}B", flush=True)
+    group_name = ep_group._get_backend(torch.device("npu")).get_hccl_comm_name(rank)
+    print(f"rank={rank} BS={TOKENS} HCCL_BUFFSIZE={args.hccl_buffsize}MiB "
+          f"comm_alg={args.comm_alg} dispatch_quant=4", flush=True)
     torch.manual_seed(rank)
     device = torch.device(f"npu:{local_rank}")
     x = (torch.randn(TOKENS, HIDDEN_DIM) * 0.05).to(
@@ -123,10 +95,10 @@ def worker(local_rank, args):
     from moe_target_signature import make_dispatch, check_dispatch, make_combine
     active = torch.ones(TOKENS, dtype=torch.bool, device=device)
     weights = torch.rand(TOKENS, TOPK, dtype=torch.float32, device=device)
-    dispatch = make_dispatch(torch, buffer, x, ids, weights, active, rank, args.quant_mode)
+    dispatch = make_dispatch(torch, torch_npu, group_name, x, ids, weights, active, rank, args.comm_alg)
     outputs = dispatch()
     torch_npu.npu.synchronize()
-    check_dispatch(torch, buffer.context, outputs)
+    check_dispatch(torch, outputs)
 
     outputs = profile_operator(dispatch, args, rank, 'moe_dispatch_v2_operator')
     torch_npu.npu.synchronize()
@@ -134,7 +106,6 @@ def worker(local_rank, args):
 
     dist.barrier()  # default group, separate from EP
     del dispatch
-    del buffer
     dist.destroy_process_group(ep_group)
     dist.destroy_process_group()
 
@@ -146,8 +117,12 @@ def main():
     parser.add_argument("-c", "--config", type=Path, required=True,
                         help="YAML ips: list of the eight machine addresses")
     parser.add_argument("--node-rank", type=int, required=True)
-    parser.add_argument('--quant-mode', type=int, choices=(4, 5), default=4,
-                        help='4=MX, 5=MX clip; both match target shapes/dtypes')
+    parser.add_argument('--comm-alg', choices=('', 'fullmesh', 'hierarchy', 'fullmesh_v2'),
+                        default='hierarchy', help='vLLM hierarchy path passes expert weights')
+    parser.add_argument('--combine-quant-mode', type=int, choices=(0, 2, 3, 4), default=0,
+                        help='0 for BF16 communication; W8A8MXFP vLLM path uses 4')
+    parser.add_argument('--hccl-buffsize', type=int, default=200,
+                        help='HCCL communication window setting in MiB')
     parser.add_argument("--master-port", type=int, default=29600)
     parser.add_argument("--out-dir", type=Path,
                         default=Path("moe_dispatch_fp8_profile_out"))

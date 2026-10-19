@@ -1,10 +1,23 @@
-Target signature update (2026-10-19)
-Run the two scripts with -c hosts.yaml --node-rank N on the existing EP64 target.
-The sibling moe_target_signature.py must stay next to both scripts.
-Default --quant-mode 4 uses MX; --quant-mode 5 selects MX clip. Shapes alone do not distinguish them.
-Both scripts validate seven dispatch outputs before profiling. On the inspected 3c86d19 extension,
-Ascend950 allocates ep_recv_counts[896], so that build will be rejected against target [131968].
-A matching target CANN/extension is needed; no padding or fabricated metadata is performed.
-Combine uses synthetic BF16 expert output; this is a communication benchmark, not a numerical roundtrip.
-Warmup10/capture100 and Exp+AllReduce remain unchanged. Local syntax and mocked contract checks passed.
-No NPU execution or target-signature acceptance has been performed.
+A5 vLLM MC2 interface replacement (2026-10-19)
+Source inspected: https://github.com/vllm-project/vllm-ascend/blob/main/vllm_ascend/ops/fused_moe/token_dispatcher.py
+TokenDispatcherWithMC2 calls torch_npu.npu_moe_distribute_dispatch_v2/combine_v2 via HCCL group names.
+No cann_ops_transformer, MoeDistributeBuffer, explicit context or legacy interface fallback remains.
+Dispatch: BF16 BS8/H3584, topk16/E896/EP64, quant_mode=4, y_dtype=torch.float8_e4m3fn,
+global_bs=0 with BOOL active mask, FLOAT expert weights, TP1, prefix expert counts(type0).
+Default comm_alg=hierarchy follows the vLLM branch that supplies expert_scales; the trace alone does not prove this attribute.
+Both operators use the same --comm-alg. Supported selections: hierarchy, fullmesh, fullmesh_v2, empty string.
+Combine communication quantization is not inferable from the BF16 input/output signature:
+--combine-quant-mode 0 (default) preserves BF16 communication; use 4 for vLLM W8A8MXFP behavior.
+The [4100] context is internal to torch_npu/CANN; scripts do not allocate or fake it.
+Seven output shapes/dtypes are checked before sampling, including ep_recv_counts[131968].
+E8M0 Python storage may be uint8; its ACL logical type is determined by quant_mode=4.
+The prior 896 restriction belonged to a different extension and is no longer asserted here.
+No guarantee of device acceptance until tested with target torch_npu/CANN.
+Combine uses synthetic BF16 expert output, not GEMM or numerical roundtrip validation.
+Run on each target host:
+ python test_moe_dispatch_v2_perf_2.py -c hosts.yaml --node-rank N
+ python test_moe_combine_v2_perf_2.py -c hosts.yaml --node-rank N
+Keep moe_target_signature.py beside both scripts. N=0..7; eight local ranks per host.
+--hccl-buffsize defaults to 200 MiB and is set before communicator initialization.
+Warmup10/capture100 and Exp+scalar AllReduce are unchanged.
+Local syntax/mocked argument and metadata-forwarding checks passed. No NPU execution.
