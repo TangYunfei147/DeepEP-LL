@@ -3,7 +3,7 @@
 维护分支kernel/ll-configurable-groups。实验、采样、解析与NDR分支共用同一套代码，
 推荐直接按[PARITY.md](PARITY.md)启动和对比。
 
-本分支保留MTE传输、原始静态分组默认G=16；不包含RDMA data plane，也不采用NDR的G4/16 tiling策略。
+本分支保留MTE传输、原始静态分组默认G=4；不包含RDMA data plane，也不采用NDR的G4/16 tiling策略。
 G=16与G=4可以直接作为比较变量，工具记录实际G而不要求相同。
 
 ## 从克隆仓库到执行
@@ -159,3 +159,19 @@ python tests/ll_stage_timer/analyze.py results/ll-stage-001 --latest --trace-ite
 新公共compare.py会记录不同G，不强制分组一致；步骤见PARITY.md。
 
 本次同步只完成本地CPU回归，尚未做CANN编译或目标设备验收。
+
+## G4基线与错峰候选（2026-10-19）
+
+本分支默认逻辑组已改为4，保持MTE、原发送顺序、阶段schema2/专家schema1。所有受支持EP均采用同一个编译期G，不引入NDR的按world选G策略。物理每机16rank的约定及原生EP准入保持不变。
+
+更新后全rank重装匹配wheel；仅改变逻辑G不要求重建已通过校验的SDK。若此前显式定义了DEEPEP_LL_RANKS_PER_GROUP，该值会覆盖新默认，比较前核对运行记录中的logical_group。不要在同一作业内混用G4和G16 wheel。
+
+```bash
+git pull --ff-only
+source scripts/ll_timer_env.sh
+export DEEPEP_NPU_ARCH=Ascend950
+export DEEPEP_LL_STAGE_TIMER=OFF
+python -m pip install -v --force-reinstall --no-build-isolation --no-deps .
+```
+
+错峰候选独立维护在kernel/ll-g4-stagger，基于本分支G4提交，仅移植NDR发送顺序轮转，不移植RDMA、缓存策略、分组tiling或timer schema3。基线与候选用独立checkout和匹配环境，在相同shape/seed/采样协议下比较timer OFF的完整task性能；ON仅供诊断。默认值修改本地83项CPU通过，2项C++执行因无编译器跳过，1项既有Bash环境检查未选；未做设备验收。

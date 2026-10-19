@@ -58,4 +58,4 @@ must be validated by the user on the target deployment.
 LL设备阶段打点：参见 [tests/ll_stage_timer/README.md](tests/ll_stage_timer/README.md)。默认关闭，通过独立诊断调用采集每rank/每AIV阶段累计ticks。
 
 ## Shared diagnostics update
-The experiment/capture interface is now ABI 5 with stage schema 2 and expert schema 1. Rebuild all ranks. MTE, the original group policy and default G=16 are retained. Shared launch and comparison instructions: [PARITY.md](tests/ll_stage_timer/PARITY.md). Different G values are permitted in cross-branch comparisons.
+The experiment/capture interface is now ABI 5 with stage schema 2 and expert schema 1. Rebuild all ranks. MTE, the original group policy and default G=4 are retained. Shared launch and comparison instructions: [PARITY.md](tests/ll_stage_timer/PARITY.md). Different G values are permitted in cross-branch comparisons.

@@ -9,7 +9,7 @@
 
 - 相同目标设备、每机16个连续rank、相同EP、实际AIV数、B/M/H/topK/专家数/dtype/路由/seed。
 - 相同编译timer开关、observe/drain、专家打点开关、预热/轮数/Exp尺寸及page policy。
-- G是用户选择的比较变量：泛化分支保留默认16，NDR EP16为4、EP32为16；允许直接比较不同G，不要求调整一致。
+- G是用户选择的比较变量：泛化分支保留默认4，NDR EP16为4、EP32为16；允许直接比较不同G，不要求调整一致。
 - perf仍为10预热、100采集，每次Exp+scalar all_reduce，最后50条独立统计；timer是之后追加的诊断尾段。
 - 正式性能对照用两边timer OFF；阶段对照用两边timer ON。不要交叉比较。
 
@@ -45,7 +45,7 @@ python -m pip install -r requirements-build.txt
 python -m pip install -v --force-reinstall --no-build-isolation --no-deps .
 ```
 
-泛化分支仍通过原DEEPEP_LL_RANKS_PER_GROUP宏配置G，本同步不改其默认值；改变G后自行重建Host和device。
+泛化分支仍通过原DEEPEP_LL_RANKS_PER_GROUP宏配置G，当前默认4；改变G后自行重建Host和device。
 SDK身份变化须停止SDK用户后显式--rebuild；不得跨分支混用不匹配SDK。
 
 ## 同一条目标机启动命令

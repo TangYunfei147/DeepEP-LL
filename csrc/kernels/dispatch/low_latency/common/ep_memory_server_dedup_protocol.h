@@ -11,7 +11,7 @@ namespace DispatchDedup {
 // Logical contiguous-rank routing group; independent of physical host/device count.
 // Edit this default and rebuild the complete wheel AND experimental snapshots.
 #ifndef DEEPEP_LL_RANKS_PER_GROUP
-#define DEEPEP_LL_RANKS_PER_GROUP 16
+#define DEEPEP_LL_RANKS_PER_GROUP 4
 #endif
 constexpr uint32_t kLlRanksPerGroup = DEEPEP_LL_RANKS_PER_GROUP;
 static_assert(kLlRanksPerGroup >= 1U && kLlRanksPerGroup <= 16U,

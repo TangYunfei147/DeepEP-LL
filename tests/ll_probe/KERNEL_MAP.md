@@ -1,6 +1,6 @@
 # 泛化分支生产LL路径
 
-该分支保留MTE传输和DEEPEP_LL_RANKS_PER_GROUP静态可配置分组，默认16。
+该分支保留MTE传输和DEEPEP_LL_RANKS_PER_GROUP静态可配置分组，默认4。
 不要复制NDR的Session、ll_transport或tiling-key策略来替代这里的实现。
 
 | 目的 | 源码 |
