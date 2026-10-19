@@ -44,16 +44,21 @@ def main():
     torch.manual_seed(0)
     x=(torch.randn(args.tokens,args.hidden)*0.05).to(device='npu:0',dtype=torch.bfloat16)
     def quant():
-        # This target's schema default dst_type=296 is E4M3FN; verify below.
+        # Explicit dtype: this target's default integer 296 selects packed FP4.
         return torch_npu.npu_dynamic_mx_quant(x,axis=-1,round_mode='rint',
-                                             dst_type=296,block_size=32,scale_alg=0)
+                                             dst_type=torch.float8_e4m3fn,block_size=32,scale_alg=0)
     for _ in range(50):
         y,scales=quant()
     torch_npu.npu.synchronize()
     assert tuple(y.shape)==(args.tokens,args.hidden) and y.dtype==torch.float8_e4m3fn,(y.shape,y.dtype)
     scale_columns=((args.hidden+31)//32+1)//2*2
-    assert tuple(scales.shape)==(args.tokens,scale_columns),(scales.shape,scale_columns)
+    assert tuple(scales.shape)==(args.tokens,scale_columns//2,2),(scales.shape,scale_columns)
     assert scales.dtype in (torch.uint8,getattr(torch,'float8_e8m0fnu',torch.uint8)),scales.dtype
+    assert scales.is_contiguous()
+    # E8M0 bytes are already contiguous: DeepEP's four-per-INT32 format needs
+    # only a zero-copy dtype/shape view, not another NPU conversion kernel.
+    packed_scales=scales.reshape(args.tokens,scale_columns).view(torch.int32)
+    assert packed_scales.data_ptr()==scales.data_ptr()
     trace=out/'profile'
     with torch_npu.profiler.profile(
         activities=[torch_npu.profiler.ProfilerActivity.CPU,torch_npu.profiler.ProfilerActivity.NPU],
@@ -82,6 +87,7 @@ def main():
     assert all(math.isfinite(v) and v>0 for v in values)
     result=dict(status='completed',input_shape=list(x.shape),input_dtype=str(x.dtype),
                 output_shape=list(y.shape),output_dtype=str(y.dtype),scale_shape=list(scales.shape),
+                logical_scale_shape=[args.tokens,scale_columns],deepep_packed_scale_shape=list(packed_scales.shape),
                 scale_storage_dtype=str(scales.dtype),scale_logical_dtype='E8M0',block_size=32,
                 operator='npu_dynamic_mx_quant',warmup=50,capture=100,tail=50,
                 protocol='quant operator only; no Exp, no collective; one synchronize at capture end',
