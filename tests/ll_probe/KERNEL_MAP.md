@@ -47,3 +47,7 @@ pending仍按原下标倒序删除。见 ../ll_stage_timer/RELAY_PRIORITY.md。
 Relay诊断：schema10追加RELAY_ISSUE/PRE_DRAIN/COMPLETE/PACKETS。
 普通observe无新同步；显式relay-complete在单组relay前后做本核MTE3_S，
 只允许dispatch独立诊断。分析区分下发、完成、前置排空，见 ../ll_stage_timer/RELAY_TIMING.md。
+
+纯CPU路由/分核报告：tests/elastic/inspect_dispatch_routes.py 复用ST路由生成，
+按静态接收和批内relay优先规则输出数量及因果顺序，不运行NPU。
+命令与统计口径见 ../elastic/CPU_DISPATCH_ROUTES.md。
