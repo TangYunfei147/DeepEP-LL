@@ -16,7 +16,7 @@ analyzer=load('stage_analyzer',Path(__file__).with_name('analyze.py'))
 
 
 def raw(cores=16):
-    result=[[[0]*8 for _ in range(timer.SLOTS)] for _ in range(cores)]
+    result=[[[0]*8 for _ in range(32)] for _ in range(cores)]
     for core,rows in enumerate(result):
         rows[0]=[timer.MAGIC,1,1,cores,core,1,1,len(timer.LEGACY_STAGES)]
         rows[1]=[100,200,100,1,100,0,0,0]
@@ -27,7 +27,7 @@ def raw(cores=16):
 def test_layout_names_and_units():
     header=(ROOT/'csrc/kernels/dispatch/low_latency/common/ll_stage_timer_layout.h').read_text(encoding='utf-8')
     names=re.search(r'kNames\[\] = \{(.*?)\};',header,re.S).group(1)
-    assert re.findall(r'"([a-z_]+)"',names)==list(timer.STAGES)
+    assert re.findall(r'"([A-Z_]+)"',names)==list(timer.STAGES)
     report=timer.parse_records(raw(),'dispatch',50_000_000)
     wait=[r for r in report['records'] if r['stage']=='recv_wait'][0]
     assert wait['total_ticks']==30 and wait['total_us']==pytest.approx(.6)

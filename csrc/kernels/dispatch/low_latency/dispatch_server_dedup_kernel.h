@@ -29,13 +29,9 @@ public:
         core_ = GetBlockIdx();
         sendCores_ = kLlSendCoreNum;
         pipe_ = pipe;
-        if (timer_) timer_->Start(LlStageTimer::Magic);
         const uint32_t magic = RotateDispatchServerDedupMagic(args_, core_, pipe);
-        if (timer_) timer_->End(LlStageTimer::Magic);
-        if (timer_) timer_->Start(LlStageTimer::CountInit);
         counts_.Init(commArgs, expertIds, expertTokenNumsOut, sendCountsOut, bs, topK, experts, expertTokenNumsType,
-                     magic, pipe);
-        if (timer_) timer_->End(LlStageTimer::CountInit);
+                     magic, pipe, timer);
         if (core_ < sendCores_)
             sender_.Init(args_, x, expertIds, expertScales, sourceMaskOut, expertScalesOut, bs, h, topK, experts, pipe,
                          magic, inputScales, enableDedup);
@@ -47,38 +43,29 @@ public:
     // Sender可与接收核的计数前缀准备重叠，不能把提取阶段耗时直接相加当作完整时延。
     __aicore__ inline void Process()
     {
-        if (timer_) timer_->Start(LlStageTimer::CountSend);
         counts_.SendCnt();
-        if (timer_) timer_->End(LlStageTimer::CountSend);
 
         if (core_ < sendCores_) {
-            if (timer_) timer_->Start(LlStageTimer::Sender);
             sender_.Process(counts_.ScratchPool(), counts_.ReservedBytes(), timer_);
-            if (timer_) timer_->End(LlStageTimer::Sender);
 
         } else {
-            if (timer_) timer_->Start(LlStageTimer::CountReceive);
+            LL_SEG_SCOPE(CAL_CUMSUM);
             counts_.RecvCnt();
-            if (timer_) timer_->End(LlStageTimer::CountReceive);
-            if (timer_) timer_->Start(LlStageTimer::CountPrefix);
             counts_.CalcCumsum();
-            if (timer_) timer_->End(LlStageTimer::CountPrefix);
         }
 
         // Every core joins receive after completing its own send or prefix work.
         // Prefix producers remain the original R cores. Each of the 56 consumers
         // has its own publication row and disjoint output/cleanup ownership.
-        if (timer_) timer_->Start(LlStageTimer::CountPublish);
         counts_.CompleteCumsum();
         PipeBarrier<PIPE_ALL>();
-        if (timer_) timer_->End(LlStageTimer::CountPublish);
-        if (timer_) timer_->Start(LlStageTimer::Receiver);
+        { LL_SEG_SCOPE(LOCAL_WINDOW_COPY);
         receiver_.Process(timer_);
-        if (timer_) timer_->End(LlStageTimer::Receiver);
+        }
 
-        if (timer_) timer_->Start(LlStageTimer::CountFinish);
+        { LL_SEG_SCOPE(FINAL_DRAIN);
         counts_.Finish();
-        if (timer_) timer_->End(LlStageTimer::CountFinish);
+        }
 
         // No shared work follows local completion. Same-stream kernel completion
         // orders the next launch after all cores finish their writes and cleanup.

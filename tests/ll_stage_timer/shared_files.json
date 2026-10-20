@@ -1,5 +1,6 @@
 [
   "deep_ep/utils/ll_stage_timer.py",
+  "deep_ep/utils/ll_stage_timer_legacy.py",
   "deep_ep/utils/ll_expert_timer.py",
   "tests/elastic/test_ep_low_latency.py",
   "scripts/ll_timer_env.sh",

@@ -14,7 +14,7 @@ def raw(send):
     result=[]
     for core in range(56):
         words=[0]*256
-        words[:8]=[timer.MAGIC,5,1,56,core,1|(send<<8),1,len(timer.STAGES)]
+        words[:8]=[timer.MAGIC,5,1,56,core,1|(send<<8),1,len(timer.legacy.STAGES)]
         words[8:12]=[10,20,10,1]
         result.append([words[n:n+8] for n in range(0,256,8)])
     return result
@@ -109,7 +109,7 @@ def test_expert_decoder_uses_supplied_receive_boundary():
 
 def test_perf_entry_rejects_stale_wheel_without_requesting_timer():
     st=load('split_entry','tests/elastic/test_ep_low_latency.py')
-    st.validate_core_split_capability(dict(active_aiv=56,send_cores=20,recv_cores=36,core_protocol=8020))
+    st.validate_core_split_capability(dict(active_aiv=56,send_cores=20,recv_cores=36,core_protocol=9020))
     for identity in (dict(active_aiv=58,send_cores=10,recv_cores=48,core_protocol=6010),
                      dict(active_aiv=56,send_cores=28,recv_cores=28,core_protocol=5),
                      dict(active_aiv=56,send_cores=20,recv_cores=36,core_protocol=7028)):

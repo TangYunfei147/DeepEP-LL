@@ -21,7 +21,7 @@ def stats(values):
 
 
 def analyze(paths, frequency_hz=None):
-    configurations={};ranks={};groups={};identity=None;stage_max={}
+    configurations={};ranks={};groups={};identity=None;stage_max={};measured={}
     for path in paths:
         saved=json.loads(path.read_text())
         meta=saved['metadata']
@@ -42,6 +42,8 @@ def analyze(paths, frequency_hz=None):
             key=(op,rank,row['core'],row['role'],row['stage'])
             duration=row['total_us'] if unit=='us' else row['total_ticks']
             groups.setdefault(key,[]).append((duration,row['calls']))
+            measured[key]=row.get('time_measured',True)
+            if not measured[key]: continue
             stage_key=(op,rank,row['stage'])
             per_iteration=stage_max.setdefault(stage_key,{})
             per_iteration[iteration]=max(per_iteration.get(iteration,0),duration)
@@ -59,7 +61,10 @@ def analyze(paths, frequency_hz=None):
     rows=[]
     for (op,rank,core,role,stage), values in sorted(groups.items()):
         rows.append(dict(operation=op,rank=rank,core=core,role=role,stage=stage,unit=unit,
-                         **stats([v for v,n in values]),mean_calls=statistics.mean(n for v,n in values)))
+                         **stats([v for v,n in values]),mean_calls=statistics.mean(n for v,n in values),
+                         time_measured=measured[(op,rank,core,role,stage)]))
+        if not rows[-1]['time_measured']:
+            for name in ('mean','minimum','maximum','p50','p90','p99'): rows[-1][name]=None
     return dict(schema=identity[9],world_size=identity[0],boundary_mode=identity[3],frequency_hz=identity[4],comparison=identity[10],
                 configurations=configurations,sampling=identity[8],per_rank_core_stage=rows,
                 per_rank_stage_max=[dict(operation=op,rank=rank,stage=stage,unit=unit,**stats(list(values.values())))
@@ -100,6 +105,7 @@ def expert_reports(paths, frequency_hz):
         if payload['experts'] != meta['config'].get('num_experts',payload['experts']):
             raise ValueError('Expert count differs from case configuration')
         header=saved['raw'][0][0]
+        if header[1]==7: raise ValueError('Segment capture cannot contain legacy expert instrumentation')
         expected_send=header[5] >> 8 if header[1] in (5,6) else len(saved['raw'])//2
         if (header[1] in (5,6) and 'send_cores' not in payload) or payload.get('send_cores',expected_send)!=expected_send:
             raise ValueError('Expert/stage core split mismatch')
@@ -152,6 +158,19 @@ def process_directory(source, output, frequency_hz, trace_iteration, lane_layout
         writer = csv.DictWriter(stream, fieldnames=list(rows[0]))
         writer.writeheader(); writer.writerows(rows)
     (output/'trace.json').write_text(json.dumps(trace))
+    segment_metrics, segment_intervals, segment_cores = [], [], []
+    for path in paths:
+        saved=json.loads(path.read_text());meta=saved['metadata']
+        decoded=timer.parse_records(saved['raw'],saved['operation'],frequency_hz)
+        if decoded['schema']!=timer.SCHEMA: continue
+        shared=dict(operation=saved['operation'],rank=meta['rank'],iteration=meta['iteration'])
+        segment_metrics.extend(dict(**shared,**row) for row in decoded['records'])
+        segment_intervals.extend(dict(**shared,**row) for row in decoded['intervals'])
+        segment_cores.extend(dict(**shared,**row) for row in decoded['cores'])
+    for filename,values in (('metrics.csv',segment_metrics),('intervals.csv',segment_intervals),('cores.csv',segment_cores)):
+        if values:
+            with (output/filename).open('w',newline='') as stream:
+                writer=csv.DictWriter(stream,fieldnames=list(values[0]));writer.writeheader();writer.writerows(values)
     for filename,values in (('experts.csv',expert_summary),('expert_cores.csv',expert_rows)):
         if values:
             with (output/filename).open('w',newline='') as stream:
@@ -168,7 +187,7 @@ def main():
                         help='Default 1GHz: ticks/1000 us')
     parser.add_argument('--trace-iteration',type=int,default=0,help='Timeline iteration; statistics always include all iterations')
     parser.add_argument('--lane-layout',choices=('core','stage'),default='core',help='One track per AIV (default), or separate stage tracks')
-    parser.add_argument('--show-repeated',action='store_true',help='Restore the six repeated sender envelopes (statistics are always retained)')
+    parser.add_argument('--show-repeated',action='store_true',help='Legacy envelope visibility only; segment samples are always shown')
     parser.add_argument('--output-dir',type=Path,help='Default: stage-analysis under selected source; existing reports rejected')
     args=parser.parse_args()
     source=args.directory if args.directory.is_absolute() else ROOT/args.directory

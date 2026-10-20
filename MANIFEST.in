@@ -19,3 +19,5 @@ recursive-include experiments/megamoe *.sh *.py *.cpp *.hpp *.cmake CMakeLists.t
 include experiments/__init__.py
 include experiments/ep_gmm_fused/tests/requirements.txt
 recursive-include experiments/ep_gmm_fused *.py *.cpp *.hpp *.h *.cmake CMakeLists.txt *.md *.json LICENSE
+
+include docs/licenses/CANN-Open-Software-License-2.0.txt

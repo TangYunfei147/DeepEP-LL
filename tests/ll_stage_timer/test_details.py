@@ -13,8 +13,8 @@ def packed():
     result = []
     for core in range(16):
         words = [0]*256
-        words[:8] = [timer.MAGIC, 2, 1, 16, core, 1, 1, len(timer.STAGES)]
-        for stage in range(1, len(timer.STAGES)):
+        words[:8] = [timer.MAGIC, 2, 1, 16, core, 1, 1, len(timer.legacy.STAGES)]
+        for stage in range(1, len(timer.legacy.STAGES)):
             offset = 8+(stage-1)*4
             words[offset:offset+4] = [100, 200, 100 if stage==1 else 30, 1 if stage==1 else 3]
         result.append([words[i:i+8] for i in range(0, 256, 8)])
@@ -26,8 +26,8 @@ def test_every_detail_fits_original_buffer_and_exports():
     report=timer.parse_records(raw, 'dispatch', 1e9)
     assert report['schema']==2
     assert len(raw[0])*len(raw[0][0])*8==2048
-    assert len(report['records'])==16*(len(timer.STAGES)-1)
-    assert {r['stage'] for r in report['records']}==set(timer.STAGES[1:])
+    assert len(report['records'])==16*(len(timer.legacy.STAGES)-1)
+    assert {r['stage'] for r in report['records']}==set(timer.legacy.STAGES[1:])
     saved=dict(raw=raw, operation='dispatch', frequency_hz=1e9)
     trace=timer.chrome_trace([saved], lane_layout='stage')
     lanes=[e for e in trace['traceEvents'] if e['name']=='thread_name']

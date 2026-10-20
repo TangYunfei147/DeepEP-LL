@@ -1,3 +1,5 @@
+> 本文保留原配置治理记录。当前共享接收分支打点已改为schema7，旧drain/逐专家在线采集不适用；当前入口见[SEGMENT_TIMER.md](SEGMENT_TIMER.md)。
+
 # 配置与冗余维护注意事项
 
 ## 当前默认行为

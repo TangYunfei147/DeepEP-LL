@@ -96,7 +96,7 @@ def test_noisy_envelopes_hidden_only_from_trace():
 
 def test_full_offline_export_after_move(tmp_path):
     moved=tmp_path/'project with spaces'
-    for name in ('deep_ep/utils/ll_stage_timer.py','deep_ep/utils/ll_expert_timer.py','tests/ll_stage_timer/analyze.py'):
+    for name in ('deep_ep/utils/ll_stage_timer.py','deep_ep/utils/ll_stage_timer_legacy.py','deep_ep/utils/ll_expert_timer.py','tests/ll_stage_timer/analyze.py'):
         path=moved/name;path.parent.mkdir(parents=True,exist_ok=True);shutil.copyfile(ROOT/name,path)
     root=moved/'data';root.mkdir()
     # One-rank synthetic parser fixture, not a device launch.
@@ -113,51 +113,12 @@ def test_missing_expert_payload_rejected(tmp_path):
     with pytest.raises(ValueError,match='Missing requested'): analyzer.expert_reports([path],1e9)
 
 
-def test_expert_capture_allocates_attaches_and_saves_after_completion(monkeypatch,tmp_path):
-    from types import ModuleType, SimpleNamespace
-    package=ModuleType('deep_ep');package.__path__=[]
-    utils=ModuleType('deep_ep.utils');utils.__path__=[];utils.ll_expert_timer=expert
-    monkeypatch.setitem(sys.modules,'deep_ep',package)
-    monkeypatch.setitem(sys.modules,'deep_ep.utils',utils)
-    monkeypatch.setitem(sys.modules,'deep_ep.utils.ll_expert_timer',expert)
-    copies=[]
-    class Tensor:
-        next_ptr=256
-        def __init__(self):
-            self.ptr=Tensor.next_ptr;Tensor.next_ptr+=1<<20;self.device='npu:0'
-        def data_ptr(self):return self.ptr
-        def narrow(self,dim,offset,count):self.ptr+=offset*8;return self
-        def view(self,*shape):self.shape=shape;return self
-        def cpu(self):copies.append(self.shape);return self
-        def tolist(self):return self.raw
-    torch=SimpleNamespace(int64=0,zeros=lambda *a,**k:Tensor())
-    native=SimpleNamespace(low_latency_stage_timer_enabled=True, low_latency_core_protocol=8008,
-        low_latency_stage_timer_layout=lambda:dict(schema=timer.SCHEMA,slots=32,fields=8,stages=list(timer.STAGES)),
-        low_latency_core_config=lambda:dict(active_aiv=16,device=0,runtime_device_queried=True),
-        low_latency_expert_timer_layout=lambda:dict(schema=1,header_rows=8,fields=8,stages=list(expert.STAGES)))
-    monkeypatch.setitem(sys.modules,'torch',torch)
-    monkeypatch.setitem(sys.modules,'deep_ep._native',SimpleNamespace(require_native=lambda _:native))
-    module=load('deep_ep.utils.ll_stage_timer','deep_ep/utils/ll_stage_timer.py')
-    buffer=object()
-    trace=module.StageTrace(buffer,'dispatch',expert_config=dict(rank=0,world=16,experts=16))
-    assert trace.expert_tensor.shape==(16,72,8) and trace.expert_tensor.data_ptr()%512==0
-    raw=stage_raw(0)
-    for core,rows in enumerate(raw):
-        rows[:]=[[0]*8 for _ in range(32)]
-        rows[0]=[timer.MAGIC,2,1,16,core,1,1,len(timer.STAGES)]
-        rows[1]=[90,220,130,1,0,0,0,0]
-    trace.tensor.raw=raw;trace.expert_tensor.raw=data()
-    tensors={'input':SimpleNamespace(device='npu:0')}
-    with module.capture(buffer,'dispatch',prepared=trace,defer_complete=True):
-        module.attach(buffer,tensors,'dispatch')
-    assert tensors['ll_expert_timer'] is trace.expert_tensor and copies==[]
-    trace.complete();assert len(copies)==2
-    trace.save(tmp_path/'sample_0.json')
-    assert json.loads((tmp_path/'sample_0.json').read_text())['expert']['experts']==16
+def test_reference_capture_rejects_legacy_expert_instrumentation():
+    with pytest.raises(ValueError,match='per-expert'):
+        timer.StageTrace(object(),'dispatch',expert_config=dict(rank=0,world=16,experts=16))
 
 
 def test_expert_cli_implies_stage_capture():
     st=load('expert_cli','tests/elastic/test_ep_low_latency.py')
     args=st.parse_args(['--ll-expert-timer'])
-    st.validate_args(args,16)
-    assert args.ll_stage_timer and args.use_1g_huge_pages==0
+    with pytest.raises(ValueError,match='per-expert'): st.validate_args(args,16)

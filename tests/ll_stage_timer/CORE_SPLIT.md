@@ -24,9 +24,9 @@ combine继续使用前S核direct、后R核partial/aggregate，局部编号仍为
 
 ## 安装一致性与结果
 
-全rank必须使用同一分支、同一S/R的完整wheel。Host/device协议标识改为`8000+S`，防止混装不同分工的库；测试入口跨rank同时检查send_cores/recv_cores。不同S/R试验可通过compare.py比较，结果附baseline/candidate收发核数；同一作业仍禁止混配。逐核阶段对照若该核从发送变为接收或相反，输出role_changed，不计算该行加速比。
+全rank必须使用同一分支、同一S/R的完整wheel。Host/device协议标识改为`9000+S`，防止混装不同分工的库；测试入口跨rank同时检查send_cores/recv_cores。不同S/R试验可通过compare.py比较，结果附baseline/candidate收发核数；同一作业仍禁止混配。逐核阶段对照若该核从发送变为接收或相反，输出role_changed，不计算该行加速比。
 
-打点仍是累计阶段格式，每核2048B，但schema升为6，header的mode字段高位保存发送核数。schema6把dispatch原发送核的整体角色标为send_receive，接收阶段标为receive；combine不变，旧schema1/2/5仍可离线读取。新打点需匹配ON wheel并重采，不能把旧1:1数据重新解释成新比例。专家schema1数据结构不变，采样元数据额外保存send_cores与shared_receive，并检查与阶段记录一致。
+当前打点为参考分段schema7，每核4608B；每阶段前两次保留实际区间，全量累计所有调用。发送后接收的核标为send_and_recv，前缀核标为cumsum；角色指初始职责，不限制后续接收。旧schema1/2/5/6仅离线解析。新模式拒绝drain和逐专家GM打点，详见[SEGMENT_TIMER.md](SEGMENT_TIMER.md)。
 
 运行后查看summary.csv/ranks.csv中的send_cores、recv_cores及active_aiv，或在已绑定目标设备的环境调用：
 

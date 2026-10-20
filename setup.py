@@ -42,7 +42,7 @@ setup(
     name="ascend-deepep",
     version=(ROOT / "VERSION").read_text(encoding="utf-8").strip(),
     description="DeepEP for Ascend: native runtime and optional communication/GMM operators",
-    license_files=["LICENSE", "third-party/deepseek-deepep.LICENSE"]
+    license_files=["LICENSE", "third-party/deepseek-deepep.LICENSE", "docs/licenses/CANN-Open-Software-License-2.0.txt"]
     + (["third-party/cann.LICENSE"] if beta_enabled else []),
     python_requires=">=3.11",
     packages=packages,

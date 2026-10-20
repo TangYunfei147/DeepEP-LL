@@ -18,7 +18,7 @@ int main(int argc, char** argv)
         if (argc != 4) throw std::runtime_error("output-json mode enabled");
         const auto mode = std::stoul(argv[2]);
         const bool enabled = std::stoul(argv[3]) != 0;
-        if (mode != 1 && mode != 2) throw std::runtime_error("invalid mode");
+        if (mode != 1) throw std::runtime_error("invalid mode");
         const char* visible = std::getenv("ASCEND_RT_VISIBLE_DEVICES");
         if (!visible || std::string(visible) != "0,1") throw std::runtime_error("A5 validation requires visible 0,1");
         check(aclInit(nullptr));
@@ -42,9 +42,14 @@ int main(int argc, char** argv)
         if (enabled)
             for (size_t c = 0; c < DispatchDedup::kLlActiveCoreNum; ++c) {
                 const auto* row = data.data() + c * LlStageTimer::kWordsPerCore;
-                if (row[0] != LlStageTimer::kMagic || row[4] != c || row[6] != 1 || row[5] != (mode | (uint64_t(DispatchDedup::kLlSendCoreNum) << 8U)))
+                if (row[0] != LlStageTimer::kMagic || row[1] != LlStageTimer::kSchema || row[4] != c || row[6] == 0)
                     throw std::runtime_error("header mismatch");
-                if (row[LlStageTimer::StageOffset(LlStageTimer::RecvWait) + 3] != 3) throw std::runtime_error("repeat count mismatch");
+                bool repeated=false;
+                for (uint64_t i=0;i<row[6];++i) {
+                    const uint64_t packed=row[8+i*2];
+                    if (uint32_t(packed)==0x8000U+LlStageTimer::RECV_POLL) repeated=(packed>>32U)==3U;
+                }
+                if (!repeated || row[7] != 1U) throw std::runtime_error("repeat/sampling mismatch");
             }
         std::ofstream file(argv[1]);
         if (!file) throw std::runtime_error("cannot create output");

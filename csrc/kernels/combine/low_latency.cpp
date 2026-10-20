@@ -26,25 +26,23 @@ extern "C" [[bisheng::core_ratio(0, 1)]] __global__ __aicore__ void combine_serv
     util_set_ffts_config(args->fftsVal);
     LlStageTimer::DeviceTimer timer;
     timer.Init(stageTimer, 2U, timerMode);
-    timer.Start(LlStageTimer::Kernel);
-    timer.Start(LlStageTimer::Magic);
+    const uint64_t initBegin = timer.Begin(LlStageTimer::INIT);
     uint32_t magic;
     {
         AscendC::TPipe pipe;
         // 与dispatch共用每核窗口轮转规则；即使本核没有有效token也必须参加本次轮转。
         magic = DispatchDedup::RotateDispatchServerDedupMagic(args, AscendC::GetBlockIdx(), &pipe);
     }
-    timer.End(LlStageTimer::Magic);
-    timer.Start(LlStageTimer::WorkerInit);
     const auto* td = reinterpret_cast<const volatile __gm__ CombineDedup::EpServerDedupCombineTilingData*>(tilingData);
     const bool enableDedup = DispatchDedup::EpServerDedupEnabled(td->numMaxTokensPerRank);
     CombineDedup::CombineMemoryServerDedupKernel kernel;
     kernel.Init(commArgs, expertOut, destinationIndex, sendCounts, expertScales, tokenType, relayReadIndex, sourceMask,
                 yOut, td->bs, td->h, td->topK, td->moeExpertNum, td->dtype, 0, magic, enableDedup, &timer);
-    timer.End(LlStageTimer::WorkerInit);
+    timer.End(LlStageTimer::INIT, initBegin);
+    const uint64_t kernelBegin = timer.Begin(LlStageTimer::KERNEL);
     kernel.Process();
-    timer.End(LlStageTimer::Kernel);
-    timer.Finish();
+    timer.End(LlStageTimer::KERNEL, kernelBegin);
+    if (timer.Enabled()) { AscendC::SyncAll<true>(); timer.Flush(); }
 }
 extern "C" DEEPEP_EXPORT void combine_server_dedup_kernel_do(void* stream,
                                                              const deepep::EpServerDedupCombineKernelArgs* args)

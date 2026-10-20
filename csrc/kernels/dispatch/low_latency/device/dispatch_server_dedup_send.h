@@ -66,7 +66,8 @@ public:
         // reservedBytes 对应仍可能被计数发送读取的 UB，不能当作可用空间覆盖。
         if (enableDedup_ && count_ == 0U) return;
         timer_ = timer;
-        if (timer_) timer_->Start(LlStageTimer::SendPrepare);
+        LL_SEG_SCOPE(SEND_TOKENS);
+        LL_SEG_BEGIN(segBegin1, PREPARE_INPUT);
         scratch_ = &scratch;
         TQue<QuePosition::VECIN, 1> input;
         TBufPool<TPosition::VECIN, 1> cleanPool;
@@ -142,26 +143,24 @@ public:
         }
         PipeBarrier<PIPE_V>();
 
-        if (timer_) timer_->End(LlStageTimer::SendPrepare);
-        if (timer_) timer_->Start(LlStageTimer::SendPayload);
+        LL_SEG_END(segBegin1, PREPARE_INPUT);
         if (enableDedup_)
             SendWithDedup(input);
         else
             SendWithoutDedup(input);
-        if (timer_) timer_->End(LlStageTimer::SendPayload);
-        if (timer_) timer_->Start(LlStageTimer::SendMetadata);
 
         // 6. 等待所有发送 lane 归还后，把本核 sourceMask 和 sourceWeights 写回 GM。
         // 只有 sourceMask 标记的权重位置才有效，未选中位置不应被下游消费。
         // 最后的 MTE3_S 依赖确保这两份源端输出完成后再返回。
+        LL_SEG_BEGIN(sendDrainBegin, SEND_DRAIN);
         for (uint32_t lane = 0; lane < lanes_; ++lane) WaitFlag<HardEvent::MTE3_V>(lane);
+        LL_SEG_END(sendDrainBegin, SEND_DRAIN);
         Sync<HardEvent::S_MTE3>();
         if (enableDedup_) DataCopyPad(maskOut_[start_], sourceMasks_, {1U, count_ * 4U, 0U, 0U, 0U});
         if (count_ != 0U)
             DataCopyPad(weightOut_[uint64_t(start_) * k_], enableDedup_ ? sourceWeights_ : routeWeights_,
                         {1U, count_ * k_ * 4U, 0U, 0U, 0U});
         Sync<HardEvent::MTE3_S>();
-        if (timer_) timer_->End(LlStageTimer::SendMetadata);
     }
 
     // 摘要：去重发送主流程：先发同 server 合并的 FIRST_HOP，再按 server 顺序发缓存的 DIRECT。
@@ -175,9 +174,9 @@ public:
         const uint32_t sendCore = GetBlockIdx();
         for (uint32_t token = 0; token < count_; ++token) {
             uint32_t directMask = 0, firstHopCount = 0;
-            if (timer_) timer_->Start(LlStageTimer::SendClassify);
+            LL_SEG_BEGIN(classifyBegin, PREPARE_INPUT);
             Classify(token, directMask, firstHopCount);
-            if (timer_) timer_->End(LlStageTimer::SendClassify);
+            LL_SEG_END(classifyBegin, PREPARE_INPUT);
             sourceMasks_.SetValue(token, 0U);
             for (uint32_t group = 0; group < firstHopCount; ++group) {
                 const uint32_t scheduled = LlFirstHopOrder(firstHopCount, rankInGroup, sendCore,
@@ -310,6 +309,7 @@ private:
     // 摘要：统计原始展平路由中 index 之前指向该专家的条数，作为槽内序号 q；首 token 按当前约定返回 0。
     __aicore__ inline uint32_t CalTokenSendExpertCnt(uint32_t expert, uint32_t index)
     {
+        LL_SEG_SCOPE(CAL_TOKEN);
         if (index < k_) return 0U;
         // Memory's prefix reduction over the complete original route sequence.
         auto dst = qDstBuf_.Get<int32_t>();
@@ -332,6 +332,7 @@ private:
     // 摘要：以每 32 元素为一组生成 MXFP8 scale 和量化数据，复用 q 计算的临时 UB。
     __aicore__ inline void QuantMxfp8(LocalTensor<uint8_t> output, LocalTensor<XType> input)
     {
+        LL_SEG_SCOPE(TOKEN_QUANT);
         const uint32_t scaleCount = uint32_t(data_.quantCount / 32U);
         auto work = qDstBuf_.Get<float>();
         auto* src = reinterpret_cast<__ubuf__ XType*>(input.GetPhyAddr());
@@ -378,9 +379,8 @@ private:
     __aicore__ inline void SendPacket(TQue<QuePosition::VECIN, 1>& input, uint32_t token, uint32_t firstK,
                                       uint32_t expert, uint32_t q, uint32_t mask)
     {
-        if (timer_) timer_->Start(LlStageTimer::SendPack);
         const uint32_t tokenId = token, destination = expert / localExperts_;
-        if (timer_) timer_->Start(LlStageTimer::SendInputGmToUb);
+        LL_SEG_BEGIN(segBegin2, TOKEN_INPUT);
         auto x = input.template AllocTensor<XType>();
         if constexpr (Prequantized) {
             // The full payload queue slot stages H bytes and 4P scale bytes.
@@ -396,10 +396,8 @@ private:
                         {1U, uint32_t(data_.scaleBytes), 0U, 0U, 0U}, {false, 0U, 0U, uint8_t(0)});
         }
         input.EnQue(x);
-        if (timer_) timer_->End(LlStageTimer::SendInputGmToUb);
-        if (timer_) timer_->Start(LlStageTimer::SendInputWait);
         x = input.template DeQue<XType>();
-        if (timer_) timer_->End(LlStageTimer::SendInputWait);
+        LL_SEG_END(segBegin2, TOKEN_INPUT);
         LocalTensor<uint8_t> payload;
         if constexpr (NeedQuantize) {
             payload = quantBuf_.Get<uint8_t>();
@@ -410,19 +408,18 @@ private:
             input.template FreeTensor<XType>(x);
             Sync<HardEvent::V_S>();
         } else {
-            if (timer_) timer_->Start(LlStageTimer::SendInputWait);
             Sync<HardEvent::MTE2_S>();
-            if (timer_) timer_->End(LlStageTimer::SendInputWait);
             payload = x.template ReinterpretCast<uint8_t>();
         }
-        if (timer_) timer_->Start(LlStageTimer::SendTail);
+        LL_SEG_BEGIN(segBegin5, TOKEN_METADATA);
         FillTail(payload, token, firstK, mask);
-        if (timer_) timer_->End(LlStageTimer::SendTail);
+        LL_SEG_END(segBegin5, TOKEN_METADATA);
         Sync<HardEvent::S_V>();
         const uint32_t lane = packets_ % lanes_;
-        if (timer_) timer_->Start(LlStageTimer::SendLaneWait);
+        LL_SEG_BEGIN(segBegin6, TOKEN_BUFFER_WAIT);
         WaitFlag<HardEvent::MTE3_V>(lane);
-        if (timer_) timer_->End(LlStageTimer::SendLaneWait);
+        LL_SEG_END(segBegin6, TOKEN_BUFFER_WAIT);
+        LL_SEG_BEGIN(packBegin, TOKEN_PACK);
         auto out = outBuf_.Get<uint8_t>()[lane * data_.tokenStride];
         auto outWords = out.template ReinterpretCast<int32_t>();
         auto inWords = payload.template ReinterpretCast<int32_t>();
@@ -437,19 +434,17 @@ private:
         if constexpr (!NeedQuantize) input.template FreeTensor<XType>(x);
         SetFlag<HardEvent::V_MTE3>(lane);
         WaitFlag<HardEvent::V_MTE3>(lane);
-        if (timer_) timer_->End(LlStageTimer::SendPack);
-        if (timer_) timer_->Start(LlStageTimer::SendIssue);
+        LL_SEG_END(packBegin, TOKEN_PACK);
         GlobalTensor<uint8_t> destinationGm;
         destinationGm.SetGlobalBuffer(args_->peerMems[destination] +
                                       DispatchServerDedupDispatchOffset(data_, args_->rank, destination,
                                                                         expert % localExperts_, q, args_->rankSize,
                                                                         localExperts_, bs_));
-        if (timer_) timer_->Start(LlStageTimer::SendMteWrite);
+        LL_SEG_BEGIN(segBegin7, TOKEN_SEND_ISSUE);
         DataCopy(destinationGm, out, uint32_t(data_.tokenStride));
-        if (timer_) timer_->End(LlStageTimer::SendMteWrite);
         SetFlag<HardEvent::MTE3_V>(lane);
+        LL_SEG_END(segBegin7, TOKEN_SEND_ISSUE);
         ++packets_;
-        if (timer_) timer_->End(LlStageTimer::SendIssue);
     }
 
     const __gm__ DispatchDedup::CommArgs* args_ = nullptr;

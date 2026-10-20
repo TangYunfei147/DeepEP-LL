@@ -5,6 +5,7 @@
 #define DISPATCH_SERVER_DEDUP_COUNTS_H
 
 #include "kernel_operator.h"
+#include "../common/ll_stage_timer_device.h"
 #include "adv_api/reduce/sum.h"
 #include "../common/ep_memory_server_dedup_count_layout.h"
 
@@ -23,8 +24,9 @@ public:
     // 摘要：绑定路由与计数输出，选择本轮控制区；保存并调整 CTRL[60]，供整数位模式的 FP32 归约使用。
     __aicore__ inline void Init(GM_ADDR commArgs, GM_ADDR expertIds, GM_ADDR expertTokenNumsOut, GM_ADDR sendCountsOut,
                                 uint32_t bs, uint32_t topK, uint32_t experts, uint32_t expertTokenNumsType,
-                                int64_t magic, TPipe* pipe)
+                                int64_t magic, TPipe* pipe, LlStageTimer::DeviceTimer* timer = nullptr)
     {
+        timer_ = timer;
         tpipe_ = pipe;
         args_ = reinterpret_cast<const __gm__ DispatchDedup::CommArgs*>(commArgs);
         epRankId_ = args_->rank;
@@ -163,6 +165,7 @@ private:
     // shared address range and remains immutable until the phase is retired.
     TBufPool<TPosition::VECCALC, 16> stagePool_;
     TBufPool<TPosition::VECCALC, 5> countPool_;
+    LlStageTimer::DeviceTimer* timer_ = nullptr;
     TBuf<> expertIdsBuf_, dstExpBuf_, subExpBuf_, workBuf_, statusBuf_, histogramBuf_;
     TBuf<> waitStatusBuf_, gatherMaskOutBuf_, sumCoreBuf_, sumLocalBuf_, sumContinueBuf_, scalarBuf_;
     TBuf<> prefixBuf_, readyBuf_, cleanBuf_, tokenNumBuf_;
@@ -171,6 +174,7 @@ private:
 // 摘要：统计完整原始路由的专家计数并异步发往专家所属 rank，同时保留仍被 MTE3 使用的记录 UB。
 __aicore__ inline void ServerDedupCounts::SendCnt()
 {
+        LL_SEG_SCOPE(SEND_COUNTS);
     // 1. 按专家编号而非 token 分片分工：小 BS 由本次启动的全部核参与，
     // 否则只由接收核统计；每个参与核读取完整路由，但只负责自己的专家区间。
     const uint32_t cores = useAllCoreCount_ ? coreNum_ : aivUsedCumSum_;
@@ -186,6 +190,7 @@ __aicore__ inline void ServerDedupCounts::SendCnt()
     tpipe_->InitBufPool(stagePool_, kEpServerDedupCountUbBytes - ReservedBytes());
     if (count == 0U) return;
 
+    LL_SEG_BEGIN(countBuffersBegin, INIT_COUNT_BUFFERS);
     // 3. 为完整 bs×topK 路由及筛选/归约临时数据分配 UB，等待 GM 路由搬入。
     const uint32_t routeBytes = Ceil(expertIdsCnt_ * sizeof(int32_t), SIZE_ALIGN_256) * SIZE_ALIGN_256;
     tpipe_->InitBufPool(countPool_, 4U * routeBytes + statusCntAlign_ * sizeof(int32_t), stagePool_);
@@ -202,6 +207,7 @@ __aicore__ inline void ServerDedupCounts::SendCnt()
     DataCopyPad(validExpertIdsTensor_, expertIdsGMTensor_, idsCopy, pad);
     SyncFunc<HardEvent::MTE2_V>();
 
+    LL_SEG_END(countBuffersBegin, INIT_COUNT_BUFFERS);
     // 4. 规模足够时先向量筛选本核专家区间再做直方图；小输入逐专家统计。
     // 两条路径都写 ready=1 和真实 count，零计数专家也发布，避免对端永久等待。
     const uint32_t maskBytes = Ceil(Ceil(expertIdsCnt_, 8U), UB_ALIGN) * UB_ALIGN;
@@ -224,6 +230,7 @@ __aicore__ inline void ServerDedupCounts::SendCnt()
 // 摘要：向量筛选本核专家区间内的路由，再用直方图生成每专家的 ready 标记和计数。
 __aicore__ inline void ServerDedupCounts::CountByVectorRange(uint32_t start, uint32_t end, uint32_t maskBytes)
 {
+        LL_SEG_SCOPE(COUNT_COMPUTE);
     LocalTensor<int32_t> histogram = histogramBuf_.Get<int32_t>();
     LocalTensor<int32_t> selected = dstExpBuf_.Get<int32_t>();
     LocalTensor<uint8_t> lower = subExpBuf_.Get<uint8_t>();
@@ -253,6 +260,7 @@ __aicore__ inline void ServerDedupCounts::CountByVectorRange(uint32_t start, uin
 // 摘要：逐个专家扫描路由并计算计数，作为小规模输入的统计路径。
 __aicore__ inline void ServerDedupCounts::CountByExpert(uint32_t start, uint32_t end)
 {
+        LL_SEG_SCOPE(COUNT_COMPUTE);
     uint64_t flagMask[2] = {0x0101010101010101ULL, 0ULL};
     Duplicate<int32_t>(statusTensor_, 0, statusCntAlign_ * UB_ALIGN_DATA_COUNT);
     PipeBarrier<PIPE_V>();
@@ -268,6 +276,7 @@ __aicore__ inline void ServerDedupCounts::CountByExpert(uint32_t start, uint32_t
 // 摘要：将专家计数按目标 rank 分组，写到远端“本地专家 × 来源 rank”的 32B 记录槽。
 __aicore__ inline void ServerDedupCounts::SendExpertCntRange(uint32_t start, uint32_t end)
 {
+        LL_SEG_SCOPE(COUNT_SEND_ISSUE);
     GlobalTensor<int32_t> peer;
     for (uint32_t expert = start; expert < end;) {
         const uint32_t dst = expert / moeExpertNumPerRank_;
@@ -295,6 +304,7 @@ __aicore__ inline void ServerDedupCounts::RecvCnt()
     const uint32_t receiver = aivId_ - aivUsedAllToAll_;
     // Inactive receivers only consume the final prefix in CompleteCumsum.
     if (receiver >= activeCumSumCores_) return;
+    LL_SEG_BEGIN(recvBuffersBegin, INIT_COUNT_BUFFERS);
     SplitToCore(rscvStatusNum_, aivUsedCumSum_, receiver, startStatusIndex_, endStatusIndex_, recStatusNumPerCore_);
     stagePool_.InitBuffer(waitStatusBuf_, Ceil(recStatusNumPerCore_ * UB_ALIGN + SIZE_ALIGN_256, SIZE_ALIGN_256) * SIZE_ALIGN_256);
     stagePool_.InitBuffer(gatherMaskOutBuf_, Ceil(rscvStatusNum_ * sizeof(int32_t), UB_ALIGN) * UB_ALIGN);
@@ -306,6 +316,7 @@ __aicore__ inline void ServerDedupCounts::RecvCnt()
     stagePool_.InitBuffer(sumContinueBuf_, Ceil(aivUsedCumSum_ * sizeof(float), UB_ALIGN) * UB_ALIGN);
     // 等待本片 ready 到齐后提取 count，并计算局部累计值、发布本片总数。
     // 本阶段不会等待 token payload；即使分到空片段也要发布总数 0，参与后续跨核汇总。
+    LL_SEG_END(recvBuffersBegin, INIT_COUNT_BUFFERS);
     WaitDispatch();
 }
 
@@ -339,6 +350,7 @@ __aicore__ inline void ServerDedupCounts::CompleteCumsum()
     // 每个专家最后一个来源 rank 的前缀即该专家结束位置；type=0 输出累计数，
     // 其他已验证类型输出与上一专家累计数之差，即该专家自己的接收条数。
     if (receiver == aivUsedAllToAll_) {
+        LL_SEG_SCOPE(WRITE_COUNTS_OUTPUT);
         tpipe_->InitBuffer(tokenNumBuf_, Ceil(moeExpertNumPerRank_ * sizeof(int64_t), UB_ALIGN) * UB_ALIGN);
         LocalTensor<int64_t> expertCounts = tokenNumBuf_.Get<int64_t>();
         int64_t previous = 0;
@@ -387,6 +399,7 @@ __aicore__ inline void ServerDedupCounts::CalTokenSendExpertCnt(uint32_t dstExpe
 // 摘要：清除本核已收取记录的 ready 标记，保留计数字段，为后续窗口复用做准备。
 __aicore__ inline void ServerDedupCounts::WaitDispatchClearStatus()
 {
+        LL_SEG_SCOPE(CLEAR_RECV_STATUS);
     DataCopyParams intriOutParams{static_cast<uint16_t>(recStatusNumPerCore_), 1, 0,
                                   static_cast<uint16_t>(CNT_GM_STRIDE_BLOCKS - 1U)};
     uint64_t duplicateMask[2] = {0x0101010101010101ULL, 0ULL};
@@ -405,6 +418,7 @@ __aicore__ inline void ServerDedupCounts::GatherSumRecvCnt(LocalTensor<float>& g
                                                            LocalTensor<uint32_t>& gatherTmpTensor,
                                                            LocalTensor<float>& statusSumOutTensor)
 {
+        LL_SEG_SCOPE(GATHER_RECV_COUNTS);
     gatherTmpTensor.SetValue(0, 2U);
     uint32_t mask = 2U;
     SyncFunc<AscendC::HardEvent::S_V>();
@@ -455,6 +469,7 @@ __aicore__ inline void ServerDedupCounts::PublishRecvCntSum(float sumOfRecvCnt)
 // 摘要：等待所有接收核总数就绪，求本核之前各片段之和，再清理本核消费的汇总标记。
 __aicore__ inline uint32_t ServerDedupCounts::GetCumSum(uint32_t newAivId)
 {
+        LL_SEG_SCOPE(GET_CUMSUM);
     uint32_t offset = 0;
     DataCopyParams sumIntriParams{static_cast<uint16_t>(activeCumSumCores_), 1,
                                   static_cast<uint16_t>(aivUsedCumSum_ - 1), 0};
@@ -471,7 +486,9 @@ __aicore__ inline uint32_t ServerDedupCounts::GetCumSum(uint32_t newAivId)
     gatherSumPattern.SetValue(0, 2);
     SyncFunc<AscendC::HardEvent::S_V>();
 
+    LL_SEG_BEGIN(corePollBegin, POLL_CORE_SUMS);
     while (true) {
+        LL_SEG_COUNT(POLL_CORE_SUMS_ITERATIONS, 1U);
         DataCopy(sumLocalTensor, selfRankWinInGMTensor_[(layout_.cumsumOffset + newAivId * UB_ALIGN) / sizeof(float)],
                  sumIntriParams);
         SyncFunc<AscendC::HardEvent::MTE2_V>();
@@ -486,6 +503,8 @@ __aicore__ inline uint32_t ServerDedupCounts::GetCumSum(uint32_t newAivId)
             break;
         }
     }
+    LL_SEG_END(corePollBegin, POLL_CORE_SUMS);
+    LL_SEG_BEGIN(reduceBegin, REDUCE_CORE_PREFIX);
     if (newAivId != 0U) {
         mask = 1;
         recvCnt = 0;
@@ -501,6 +520,8 @@ __aicore__ inline uint32_t ServerDedupCounts::GetCumSum(uint32_t newAivId)
         offset = uint32_t(recvCntSumOutTensor.ReinterpretCast<int32_t>().GetValue(0));
     }
 
+    LL_SEG_END(reduceBegin, REDUCE_CORE_PREFIX);
+    LL_SEG_BEGIN(clearBegin, CLEAR_CORE_SUMS);
     LocalTensor<float> sumCoreFp32Tensor = sumLocalBuf_.Get<float>();
 
     uint8_t repeatTimes = Ceil(activeCumSumCores_, 8);
@@ -511,12 +532,14 @@ __aicore__ inline uint32_t ServerDedupCounts::GetCumSum(uint32_t newAivId)
     SyncFunc<AscendC::HardEvent::V_MTE3>();
     DataCopy(selfRankWinInGMTensor_[(layout_.cumsumOffset + newAivId * UB_ALIGN) / sizeof(float)], sumCoreFp32Tensor,
              cleanParams);
+    LL_SEG_END(clearBegin, CLEAR_CORE_SUMS);
     return offset;
 }
 
 // 摘要：轮询本片所有来源计数的 ready 标记；到齐后提取计数、发布片段总数并清除 ready。
 __aicore__ inline void ServerDedupCounts::WaitDispatch()
 {
+        LL_SEG_SCOPE(WAIT_RECV_COUNTS);
     LocalTensor<float> gatherMaskOutTensor = gatherMaskOutBuf_.Get<float>();
     LocalTensor<uint32_t> gatherTmpTensor = scalarBuf_.GetWithOffset<uint32_t>(UB_ALIGN / sizeof(uint32_t), 0);
     LocalTensor<float> statusSumOutTensor = scalarBuf_.GetWithOffset<float>(UB_ALIGN / sizeof(float), UB_ALIGN);
@@ -529,7 +552,9 @@ __aicore__ inline void ServerDedupCounts::WaitDispatch()
     DataCopyParams intriParams{static_cast<uint16_t>(recStatusNumPerCore_), 1,
                                static_cast<uint16_t>(CNT_GM_STRIDE_BLOCKS - 1U), 0};
     SyncFunc<AscendC::HardEvent::S_V>();
+    LL_SEG_BEGIN(recvCountPollBegin, POLL_RECV_COUNTS);
     while (sumOfFlag != compareTarget) {
+        LL_SEG_COUNT(POLL_RECV_COUNTS_ITERATIONS, 1U);
         DataCopy(statusFp32Tensor_,
                  windowInstatusFp32Tensor_[startStatusIndex_ * kEpServerDedupCountGmStride / sizeof(float)],
                  intriParams);
@@ -539,6 +564,7 @@ __aicore__ inline void ServerDedupCounts::WaitDispatch()
         sumOfFlag = statusSumOutTensor.GetValue(0);
     }
 
+    LL_SEG_END(recvCountPollBegin, POLL_RECV_COUNTS);
     GatherSumRecvCnt(gatherMaskOutTensor, gatherTmpTensor, statusSumOutTensor);
     WaitDispatchClearStatus();
 }
@@ -546,6 +572,7 @@ __aicore__ inline void ServerDedupCounts::WaitDispatch()
 // 摘要：为本片局部前缀加上跨核偏移，写出 sendCountsOut 与各核前缀副本，再发布完成标记。
 __aicore__ inline void ServerDedupCounts::CalRecvAndSetFlag()
 {
+        LL_SEG_SCOPE(BUILD_RECV_CUMSUM);
     if (recStatusNumPerCore_ == 0U) return;
     LocalTensor<int32_t> outCountLocal = gatherMaskOutBuf_.Get<int32_t>();
     uint32_t newAivId = aivId_ - aivUsedAllToAll_;
@@ -566,11 +593,14 @@ __aicore__ inline void ServerDedupCounts::CalRecvAndSetFlag()
         // sendCountsOut 写的是累计前缀，而非单条记录的原始发送数量。
         DataCopyPad(sendCountsGlobal[startStatusIndex_], outCountLocal, dataCopyOutParams);
 
+        LL_SEG_BEGIN(broadcastBegin, BROADCAST_PREFIX);
         // 全部56核各持一份完整前缀副本；生产核向所有副本写入自己的片段。
         for (uint32_t index = 0; index < coreNum_; index++) {
             DataCopyPad(workspaceGlobal[index * rscvStatusNum_ + startStatusIndex_], outCountLocal, dataCopyOutParams);
         }
+        LL_SEG_END(broadcastBegin, BROADCAST_PREFIX);
     }
+    LL_SEG_BEGIN(flagsBegin, PUBLISH_PREFIX_FLAGS);
     uint8_t repeatTimes = Ceil(coreNum_, 8);
     DataCopyParams sumIntriParams{static_cast<uint16_t>(coreNum_), 1, 0,
                                   static_cast<uint16_t>(aivUsedCumSum_ - 1)};
@@ -587,11 +617,13 @@ __aicore__ inline void ServerDedupCounts::CalRecvAndSetFlag()
 
     DataCopy(selfRankWinInGMTensor_[(layout_.cumsumFlagOffset + newAivId * UB_ALIGN) / sizeof(float)],
              syncOnCoreFP32Tensor, sumIntriParams);
+    LL_SEG_END(flagsBegin, PUBLISH_PREFIX_FLAGS);
 }
 
 // 摘要：等待所有接收核的前缀写出标记到齐，并清除本核对应的标记行。
 __aicore__ inline void ServerDedupCounts::WaitCumSumFlag()
 {
+        LL_SEG_SCOPE(WAIT_CUMSUM);
     int32_t cumSumFlag = 0;
     int32_t targetFlag = activeCumSumCores_ * UB_ALIGN_DATA_COUNT;
     uint32_t cumSumFlagOffset =
@@ -601,6 +633,7 @@ __aicore__ inline void ServerDedupCounts::WaitCumSumFlag()
     LocalTensor<float> statusSumOutTensor = scalarBuf_.Get<float>();
 
     while (true) {
+        LL_SEG_COUNT(WAIT_CUMSUM_ITERATIONS, 1U);
         DataCopy(statusFp32Tensor_, selfRankWinInGMTensor_[cumSumFlagOffset], activeCumSumCores_ * UB_ALIGN_DATA_COUNT);
         SyncFunc<AscendC::HardEvent::MTE2_V>();
         Sum(statusSumOutTensor, statusFp32Tensor_, sumFlagParams);

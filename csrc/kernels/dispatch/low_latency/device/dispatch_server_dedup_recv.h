@@ -58,7 +58,7 @@ public:
     __aicore__ inline void Process(LlStageTimer::DeviceTimer* timer = nullptr)
     {
         timer_ = timer;
-        if (timer) timer->Start(LlStageTimer::RecvPrepare);
+        LL_SEG_SCOPE(FORMAT_OUTPUT);
         // 1. 调用方已完成计数阶段的写入，才能 Reset TPipe 回收旧计数 UB。
         // 从当前 magic 窗口加载本接收核的完整前缀副本，MTE2_S 后 Scalar 才能使用。
 
@@ -78,16 +78,16 @@ public:
 
         // 2. 按前缀定义的接收输出行均分任务，建立稳定槽位表和可压缩的 pending 表。
         // j 始终标识固定输出行/槽位；pending 下标只表示尚未消费的任务位置。
+        { LL_SEG_SCOPE(BUILD_EXPERT_TASKS);
         tasks_.Build(prefix, uint32_t(args_->rank), uint32_t(args_->rankSize), experts_, bs_, receiver_, pipe_, recvCoreNum_);
+        }
 
 
         // 空任务核没有拥有的接收槽，完成打点后直接返回，无需参与 packet 轮询。
-        if (timer) timer->End(LlStageTimer::RecvPrepare);
         if (tasks_.Count() == 0U) {
             return;
         }
 
-        if (timer) timer->Start(LlStageTimer::RecvPrepare);
         // 3. 为每批最多 16 个 packet 的块标记分配探测/归约空间。
         // flags 和 work 额外留尾部空间，覆盖归约实现的对齐读取；先清零 flags 的无效区域。
         const uint32_t blocks = uint32_t(data_.blockCount);
@@ -117,7 +117,6 @@ public:
         const uint32_t depth = lanes_;
         // 4. issued/consumed 是跨批累计的加载/消费序号，二者之差限制在 lane 深度内。
         // 它们按相同顺序推进，保证 consumed % lanes_ 对应之前预取的同一个 packet。
-        if (timer) timer->End(LlStageTimer::RecvPrepare);
         uint32_t scan = 0U, issued = 0U, consumed = 0U;
         while (tasks_.PendingCount() != 0U) {
             // Include all empty scans in one wait interval. Recording every
@@ -125,7 +124,6 @@ public:
             // 从 pending 表分批循环探测；一批没有就绪项就继续扫描，直到至少一个包到齐。
             // Probe 对每个 packet 检查全部块标记，不是只看到首块就认为数据可读。
 
-            if (timer) timer->Start(LlStageTimer::RecvWait);
             uint32_t count;
             ProbeResult probe;
             do {
@@ -135,8 +133,6 @@ public:
                 probe = Probe(scan, count);
                 if (probe.readyMask == 0U) scan += count;
             } while (probe.readyMask == 0U);
-            if (timer) timer->End(LlStageTimer::RecvWait);
-            if (timer) timer->Start(LlStageTimer::RecvConsume);
 
             // Load and consume the immutable snapshot in the same descending
             // order. Higher-index removals cannot change lower pending entries.
@@ -161,9 +157,7 @@ public:
                 tasks_.RemovePending(scan + index);
                 ++consumed;
             }
-            if (timer) timer->End(LlStageTimer::RecvConsume);
         }
-        if (timer) timer->Start(LlStageTimer::RecvCleanup);
         // 5. pending 清空后，等待各 lane 在途写入，随后统一清除本核所有槽位的块标记。
         // 清理使用稳定任务表，不能使用已压缩为空的 pending 表；payload 本身不清零。
 
@@ -175,7 +169,6 @@ public:
 
         // 最终流水屏障确保输出、relay 和标记清理完成。
         PipeBarrier<PIPE_ALL>();
-        if (timer) timer->End(LlStageTimer::RecvCleanup);
     }
 
 private:
@@ -193,6 +186,7 @@ private:
     // 摘要：保存最多 16 项 pending 任务快照，检查每个包全部块的标记，返回就绪位图。
     __aicore__ inline ProbeResult Probe(uint32_t start, uint32_t count)
     {
+        LL_SEG_SCOPE(RECV_POLL);
         auto indices = probeIdxBuf_.Get<uint32_t>();
         auto flags = flagsBuf_.Get<float>();
         auto sums = sumBuf_.Get<float>();
@@ -218,10 +212,10 @@ private:
     // 摘要：等待 lane 的旧输出完成后，将 packet 从 GM 预取到 UB，分别发布给 Scalar 和 MTE3 的依赖事件。
     __aicore__ inline void IssueLoad(uint32_t j, uint32_t lane, bool keepFlags)
     {
-        if (timer_) timer_->Start(LlStageTimer::RecvLaneWait);
+        LL_SEG_BEGIN(segBegin1, RECV_BUFFER_WAIT);
         WaitFlag<HardEvent::MTE3_MTE2>(lane);
-        if (timer_) timer_->End(LlStageTimer::RecvLaneWait);
-        if (timer_) timer_->Start(LlStageTimer::RecvGmToUb);
+        LL_SEG_END(segBegin1, RECV_BUFFER_WAIT);
+        LL_SEG_BEGIN(segBegin2, RECV_INPUT);
         auto wire = lanesBuf_.Get<uint8_t>()[lane * laneStride_];
         GlobalTensor<uint8_t> source;
         source.SetGlobalBuffer(Slot(j));
@@ -235,15 +229,18 @@ private:
         SetFlag<HardEvent::MTE2_MTE3>(lane);
         // Publish immediately after this load, before queuing later loads.
         SetFlag<HardEvent::MTE2_S>(lane);
-        if (timer_) timer_->End(LlStageTimer::RecvGmToUb);
+        LL_SEG_END(segBegin2, RECV_INPUT);
     }
 
     // 摘要：消费已预取包，写出 token/scale 和路由元数据；FIRST_HOP 还向其余专家转发，再归还 lane。
     __aicore__ inline void ConsumeLoaded(uint32_t j, uint32_t lane, bool keepFlags)
     {
-        if (timer_) timer_->Start(LlStageTimer::RecvLoadWait);
+        LL_SEG_SCOPE(RECV_COPY);
+        LL_SEG_COUNT(RECV_READY_TOKENS, 1U);
+        LL_SEG_BEGIN(segBegin3, RECV_INPUT);
         WaitFlag<HardEvent::MTE2_S>(lane);
-        if (timer_) timer_->End(LlStageTimer::RecvLoadWait);
+        LL_SEG_END(segBegin3, RECV_INPUT);
+        LL_SEG_SCOPE(RECV_OUTPUT);
         uint32_t expert = 0;
         if (expertTimer_ && expertTimer_->Enabled()) {
             // Position encodes rotated source, local expert, q. Source rotation
@@ -257,31 +254,24 @@ private:
         if (!enableDedup_ && !keepFlags) {
             // Compact offsets are logical payload offsets. Retain this lane
             // until all payload, scale and metadata output reads complete.
-            if (timer_) timer_->Start(LlStageTimer::RecvOutputWait);
+            LL_SEG_BEGIN(segBegin4, RECV_BUFFER_WAIT);
             WaitFlag<HardEvent::MTE2_MTE3>(lane);
-            if (timer_) timer_->End(LlStageTimer::RecvOutputWait);
-            if (timer_) timer_->Start(LlStageTimer::RecvOutputWrite);
+            LL_SEG_END(segBegin4, RECV_BUFFER_WAIT);
             if (expertTimer_) expertTimer_->Start(expert, LlExpertTimer::OutputWrite);
             DataCopyPad(expandX_[uint64_t(row) * hiddenBytes_], wire, {1U, hiddenBytes_, 0U, 0U, 0U});
             if constexpr (WireFp8)
                 DataCopyPad(dynamicScales_[uint64_t(row) * data_.scaleBytes], wire[uint32_t(data_.quantCount)],
                             {1U, uint32_t(data_.scaleBytes), 0U, 0U, 0U});
-            if (timer_) timer_->End(LlStageTimer::RecvOutputWrite);
             if (expertTimer_) expertTimer_->End(expert, LlExpertTimer::OutputWrite);
-            if (timer_) timer_->Start(LlStageTimer::RecvMetadata);
             if (expertTimer_) expertTimer_->Start(expert, LlExpertTimer::Metadata);
             auto header = wire[headerOffset].template ReinterpretCast<uint32_t>();
             if (expertTimer_) expertTimer_->End(expert, LlExpertTimer::Metadata);
-            if (timer_) timer_->End(LlStageTimer::RecvMetadata);
-            if (timer_) timer_->Start(LlStageTimer::RecvOutputWrite);
             if (expertTimer_) expertTimer_->Start(expert, LlExpertTimer::OutputWrite);
             DataCopyPad(destinationIndex_[uint64_t(row) * 3U], header, {1U, 12U, 0U, 0U, 0U});
             SetFlag<HardEvent::MTE3_MTE2>(lane);
             if (expertTimer_) expertTimer_->End(expert, LlExpertTimer::OutputWrite);
-            if (timer_) timer_->End(LlStageTimer::RecvOutputWrite);
             return;
         }
-        if (timer_) timer_->Start(LlStageTimer::RecvMetadata);
         if (expertTimer_) expertTimer_->Start(expert, LlExpertTimer::Metadata);
         auto type = wire[uint32_t(data_.tokenStride)].template ReinterpretCast<uint32_t>();
         auto destination = wire[uint32_t(data_.tokenStride) + 32U].template ReinterpretCast<uint32_t>();
@@ -301,12 +291,10 @@ private:
             wire.template ReinterpretCast<float>().SetValue(PacketReceiveLayout::kMarkerOffset / 4U,
                                                             PacketReceiveLayout::kCompact);
         }
-        if (timer_) timer_->End(LlStageTimer::RecvMetadata);
-        if (timer_) timer_->Start(LlStageTimer::RecvOutputWait);
+        LL_SEG_BEGIN(segBegin7, RECV_BUFFER_WAIT);
         ServerDedupReceiveSync<HardEvent::S_MTE3>();
         WaitFlag<HardEvent::MTE2_MTE3>(lane);
-        if (timer_) timer_->End(LlStageTimer::RecvOutputWait);
-        if (timer_) timer_->Start(LlStageTimer::RecvOutputWrite);
+        LL_SEG_END(segBegin7, RECV_BUFFER_WAIT);
         if (expertTimer_) expertTimer_->Start(expert, LlExpertTimer::OutputWrite);
         if (keepFlags) {
             WriteServerDedupPayloadRange(expandX_[uint64_t(row) * hiddenBytes_], wire, 0U, hiddenBytes_);
@@ -322,12 +310,8 @@ private:
         if (enableDedup_) DataCopyPad(tokenType_[row], type, {1U, 4U, 0U, 0U, 0U});
         DataCopyPad(destinationIndex_[uint64_t(row) * 3U], destination, {1U, 12U, 0U, 0U, 0U});
         if (expertTimer_) expertTimer_->End(expert, LlExpertTimer::OutputWrite);
-        if (timer_) timer_->End(LlStageTimer::RecvOutputWrite);
         if (firstHop) {
-            if (timer_) timer_->Start(LlStageTimer::RecvOutputWrite);
             DataCopyPad(relayReadIndex_[uint64_t(row) * k_ * 2U], tail.ReadIndex(), {1U, k_ * 8U, 0U, 0U, 0U});
-            if (timer_) timer_->End(LlStageTimer::RecvOutputWrite);
-            if (timer_) timer_->Start(LlStageTimer::RecvForward);
             const uint32_t sourceRank = tail.Header().GetValue(0U);
             const uint32_t ranks = uint32_t(args_->rankSize);
             const uint32_t members = tail.ReadIndex().GetValue(0U);
@@ -345,7 +329,6 @@ private:
                 DataCopy(output, wire, uint32_t(data_.tokenStride));
                 if (expertTimer_) expertTimer_->End(expertId, LlExpertTimer::Forward);
             }
-            if (timer_) timer_->End(LlStageTimer::RecvForward);
         }
         SetFlag<HardEvent::MTE3_MTE2>(lane);
     }
@@ -353,6 +336,7 @@ private:
     // 摘要：仅清零本核拥有的所有接收槽中的 32B 块标记，保留 payload；完成等待由调用方负责。
     __aicore__ inline void ClearFlags()
     {
+        LL_SEG_SCOPE(CLEAR_LOCAL_FLAGS);
         auto zeros = flagsBuf_.Get<float>();
         Duplicate(zeros, 0.0f, uint32_t(data_.blockCount) * 8U);
         ServerDedupReceiveSync<HardEvent::V_MTE3>();

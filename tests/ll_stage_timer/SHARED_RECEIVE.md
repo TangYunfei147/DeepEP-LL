@@ -36,7 +36,7 @@ python -m pip install -v --force-reinstall --no-build-isolation --no-deps .
 
 这表示前段10核发送、46核前缀/接收，发送完成后56核都接收。未设置两个变量时默认28/28。仅改变运行环境变量不会改变已安装wheel。所有rank重装完整wheel；本改动不要求强制重建已校验SHMEM。新clone需按[LL_KERNEL.md](../../LL_KERNEL.md)初始化子仓与构建SDK。
 
-原生`low_latency_core_config()`输出`send_cores=S`、`recv_cores=R`、`dispatch_recv_cores=56`。核心协议为`8000+S`，实现身份`g4-shared-recv`，拒绝混用父分支7000+S或其他配置。阶段schema6、专家schema1；专家采样保存`shared_receive=true`。旧schema1/2/5可离线解析，新采样必须匹配schema6 wheel。
+原生`low_latency_core_config()`输出`send_cores=S`、`recv_cores=R`、`dispatch_recv_cores=56`。当前核心标识为`9000+S`、实现身份g4-shared-recv、阶段schema7；全rank重装匹配完整wheel。打点已迁移到参考分段逻辑，见[SEGMENT_TIMER.md](SEGMENT_TIMER.md)，旧schema6记录仅离线解析。
 
 ## 诊断与A/B
 
@@ -46,11 +46,11 @@ python -m pip install -v --force-reinstall --no-build-isolation --no-deps .
 
 随后以父分支`5c2ea11`为基线，固定S/R/G/shape/输入/设备/Exp，使用各自匹配OFF wheel及不同run-name。沿用正式10预热、100采集、每轮Exp+scalar all_reduce、每完整task最后50条；profiler/Event/API分别报告。不要把打点ON的耗时当作OFF性能基线。
 
-独立ON诊断中，schema6把原发送核的整体角色标为`send_receive`，发送阶段为`send`，接收阶段为`receive`。检查原发送核的`receiver/recv_consume/recv_forward`记录及CountPublish等待，不强求无任务核出现consume。combine仍标注原S/R角色。
+独立ON诊断中，原发送核标为send_and_recv，检查其LOCAL_WINDOW_COPY/RECV_COPY/RECV_OUTPUT记录；前缀等待为WAIT_CUMSUM。参考阶段没有独立relay字段，relay包含在RECV_OUTPUT。缺任务核可以没有消费记录。
 
-本分支compare.py允许已知7000/8000协议间的实验对照，仍检查shape、采样、设备域等身份。dispatch逐核任务归属变化时标记`work_partition_changed`且不算逐核比例；缺失阶段保持空值。正式perf可比较完整kernel时间；不能把不同接收分片的单核时间减少解释为同一任务加速。
+新旧打点边界不同，跨schema6/7只允许匹配条件的OFF正式性能对照，不计算诊断耗时比。相同schema内若dispatch逐核任务划分改变，compare.py保留work_partition_changed提示，缺失阶段不补零。
 
-## 本地验证记录（2026-10-20）
+## 共享接收首次交付验证（6ea61a6，打点迁移前）
 
 阶段/专家解析、异步前缀模型、双窗口复用、全部S/R控制区边界、构建/打包及统计回归：256 passed、28因缺C++编译器跳过、9项Bash/POSIX检查未选。另Host/ST约束29 passed。新增共享接收检查17项包含在上述256项中。
 

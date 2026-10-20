@@ -30,7 +30,7 @@ def validate_core_split_capability(capability):
     send, recv = capability.get("send_cores"), capability.get("recv_cores")
     if (type(send) is not int or type(recv) is not int or send <= 0 or recv <= 0
             or send + recv != 56 or capability.get("active_aiv") != 56
-            or capability.get("core_protocol") != 8000 + send):
+            or capability.get("core_protocol") != 9000 + send):
         raise RuntimeError("Rebuild/install the matching configured 56-core split wheel on every rank")
 
 
@@ -189,9 +189,9 @@ def make_parser():
     parser.add_argument("--warmup", type=int, default=10)
     parser.add_argument("--num-iters", type=int, default=100)
     parser.add_argument("--ll-stage-timer", action="store_true", help="Separate device-stage diagnostic calls; requires timer-enabled wheel")
-    parser.add_argument('--ll-expert-timer', action='store_true', help='Opt-in dispatch per-expert receive work; implies stage capture, requires a matching configured-split wheel')
+    parser.add_argument('--ll-expert-timer', action='store_true', help='Legacy option: explicitly rejected by reference segment capture')
     parser.add_argument("--ll-timer-iters", type=int, default=5)
-    parser.add_argument("--ll-timer-mode", choices=("observe", "drain"), default="observe")
+    parser.add_argument("--ll-timer-mode", choices=("observe", "drain"), default="observe", help="Segment capture supports observe; drain is rejected")
     parser.add_argument("--ll-timer-frequency-hz", type=float, default=1_000_000_000, help="GetSystemCycle frequency; default 1GHz (ticks/1000 us)")
     parser.add_argument("--dispatch-only", action="store_true")
     parser.add_argument("--repeat-combine", type=int, default=2)
@@ -431,6 +431,10 @@ def resolve_delay_counts(args):
 
 
 def validate_args(args, world):
+    if args.ll_expert_timer:
+        raise ValueError("Reference segment capture rejects legacy per-expert GM instrumentation")
+    if args.ll_stage_timer and args.ll_timer_mode != "observe":
+        raise ValueError("Reference segment capture supports observe only")
     resolve_delay_counts(args)
     if any(isinstance(getattr(args, key), list) for key in MATRIX_FIELDS):
         capacities = []
@@ -1099,8 +1103,8 @@ def worker(local_rank, args):
             raise RuntimeError('Requested RDMA is not compiled in this wheel; no MTE fallback')
         if args.ll_stage_timer and not capability["stage_timer"]:
             raise RuntimeError("All ranks must install a DEEPEP_LL_STAGE_TIMER=ON wheel")
-        if args.ll_stage_timer and capability['stage_timer_schema'] != 6:
-            raise RuntimeError('Detailed LL diagnostics require timer schema 6; rebuild/install the matching wheel on every rank')
+        if args.ll_stage_timer and capability['stage_timer_schema'] != 7:
+            raise RuntimeError('Detailed LL diagnostics require timer schema 7; rebuild/install the matching wheel on every rank')
         if args.ll_expert_timer and not 8001 <= capability['core_protocol'] <= 8055:
             raise RuntimeError('Expert diagnostics require a matching configured-split wheel on every rank')
         args.ll_stage_timer_capabilities = capabilities

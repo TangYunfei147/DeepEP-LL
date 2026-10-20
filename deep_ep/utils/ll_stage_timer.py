@@ -1,180 +1,152 @@
-"""Optional, separate LL device-stage diagnostics. No Torch import for parsing.
+"""Reference-style sampled segments and full metrics; legacy formats are read-only.
 
-Raw values are GetSystemCycle ticks. Supply that counter's frequency explicitly
-to convert to microseconds; do not substitute the AIV compute clock.
+Semantics follow graph_dc_debug_seg@e58ece1. Native LL uses a separately validated
+512B-aligned per-core carrier; export can also produce dc_seg format-5 binaries.
 """
 from contextlib import contextmanager
+import importlib.util
 import json
 import math
 from pathlib import Path
+import struct
 import threading
 
 MAGIC = 0x4C4C5431
-SCHEMA = 6
-DEFAULT_FREQUENCY_HZ = 1_000_000_000  # Target-confirmed: time_us = ticks / 1000.
-SLOTS, FIELDS = 32, 8
-STAGES = ('header', 'kernel', 'magic', 'worker_init', 'count_init', 'count_send', 'sender',
-          'send_prepare', 'send_payload', 'send_metadata', 'count_receive', 'count_prefix',
-          'count_publish', 'receiver', 'recv_prepare', 'recv_wait', 'recv_consume', 'recv_cleanup',
-          'count_finish', 'combine_prepare', 'combine_notify', 'combine_wait_ready',
-          'combine_direct', 'combine_partial', 'combine_aggregate', 'combine_drain', 'combine_final_drain',
-          'send_classify', 'send_pack', 'send_issue')
-LEGACY_STAGES = STAGES
-STAGES += ('recv_lane_wait', 'recv_gm_to_ub', 'recv_load_wait', 'recv_metadata',
-           'recv_output_wait', 'recv_output_write', 'recv_forward',
-           'send_input_gm_to_ub', 'send_input_wait', 'send_tail', 'send_lane_wait',
-           'send_mte_write', 'send_rdma_stage', 'send_rdma_body_post', 'send_rdma_body_wait',
-           'send_rdma_flag_post', 'send_rdma_flag_wait', 'send_rdma_restore')
-ACTIVE = 1 << 62
-NOISY_SEND_ENVELOPES = frozenset(('send_input_gm_to_ub', 'send_input_wait', 'send_tail',
-                                 'send_lane_wait', 'send_issue', 'send_mte_write'))
-_state = threading.local()
+SCHEMA, SLOTS, FIELDS = 7, 72, 8
+TRACE_RECORDS, METRICS, RECORDS = 192, 64, 256
+DEFAULT_FREQUENCY_HZ = 1_000_000_000
+STAGES = ('KERNEL', 'SEND_TOKENS', 'CAL_CUMSUM', 'PREPARE_INPUT', 'SEND_COUNTS', 'INIT_COUNT_BUFFERS', 'WAIT_RECV_COUNTS', 'CLEAR_RECV_STATUS', 'GATHER_RECV_COUNTS', 'GET_CUMSUM', 'BUILD_RECV_CUMSUM', 'WAIT_CUMSUM', 'LOCAL_WINDOW_COPY', 'FORMAT_OUTPUT', 'BUILD_EXPERT_TASKS', 'CLEAR_LOCAL_FLAGS', 'TOKEN_INPUT', 'TOKEN_QUANT', 'TOKEN_METADATA', 'TOKEN_BUFFER_WAIT', 'TOKEN_PACK', 'TOKEN_SEND_ISSUE', 'COUNT_COMPUTE', 'COUNT_SEND_ISSUE', 'POLL_CORE_SUMS', 'REDUCE_CORE_PREFIX', 'CLEAR_CORE_SUMS', 'BROADCAST_PREFIX', 'PUBLISH_PREFIX_FLAGS', 'RECV_POLL', 'RECV_COPY', 'SEND_DRAIN', 'COMBINE_SEND', 'COMBINE_INIT_RECV', 'COMBINE_RECV', 'COMBINE_INPUT', 'COMBINE_PACK_QUANT', 'COMBINE_SEND_ISSUE', 'COMBINE_SEND_FINISH', 'COMBINE_RECV_POLL', 'COMBINE_DEQUANT_REDUCE', 'COMBINE_PROCESS_TOKEN', 'COMBINE_TOKEN_INIT', 'COMBINE_CLEAR_FLAGS', 'COMBINE_SHARED_EXPERT', 'COMBINE_SPECIAL_EXPERT', 'COMBINE_RMSNORM', 'FINAL_DRAIN', 'POLL_RECV_COUNTS', 'WRITE_COUNTS_OUTPUT', 'INIT', 'POLL_CORE_SUMS_ITERATIONS', 'POLL_RECV_COUNTS_ITERATIONS', 'WAIT_CUMSUM_ITERATIONS', 'RECV_READY_TOKENS', 'COMBINE_READY_SLOTS', 'COMBINE_QUANT', 'COMBINE_BUFFER_WAIT', 'COMBINE_COPY_PACK', 'RECV_BUFFER_WAIT', 'RECV_INPUT', 'RECV_OUTPUT', 'CAL_TOKEN', 'COMBINE_INDEX_INPUT')
+COUNTERS = frozenset(range(51,56))
+ROLES = {1:'send_token',2:'cumsum',3:'send_and_recv',4:'recv'}
+_state=threading.local()
+_legacy_spec=importlib.util.spec_from_file_location('_ll_stage_legacy',Path(__file__).with_name('ll_stage_timer_legacy.py'))
+legacy=importlib.util.module_from_spec(_legacy_spec);_legacy_spec.loader.exec_module(legacy)
+LEGACY_STAGES=legacy.LEGACY_STAGES
+ACTIVE=legacy.ACTIVE
+NOISY_SEND_ENVELOPES=legacy.NOISY_SEND_ENVELOPES
 
 
 def parse_records(raw, operation, frequency_hz=None):
-    if operation not in ('dispatch', 'combine'):
-        raise ValueError('Expected dispatch or combine')
-    if frequency_hz is not None and (not math.isfinite(frequency_hz) or frequency_hz <= 0):
+    if not raw or not raw[0] or len(raw[0][0])!=8:
+        raise ValueError('Missing timer header')
+    if raw[0][0][1] != SCHEMA:
+        return legacy.parse_records(raw,operation,frequency_hz)
+    if operation not in ('dispatch','combine'): raise ValueError('Expected dispatch or combine')
+    if frequency_hz is not None and (not math.isfinite(frequency_hz) or frequency_hz<=0):
         raise ValueError('Counter frequency must be finite and positive')
-    cores = len(raw)
-    if not 16 <= cores <= 72 or cores % 2:
-        raise ValueError('Expected actual even AIV count in [16,72]')
-    op = 1 if operation == 'dispatch' else 2
-    records, modes, schemas, splits = [], set(), set(), set()
-    for core, slots in enumerate(raw):
-        if len(slots) != SLOTS or any(len(row) != FIELDS for row in slots):
-            raise ValueError('Timer shape mismatch')
-        header = slots[0]
-        schema = header[1]
-        if schema not in (1, 2, 5, 6):
-            raise ValueError('Unsupported timer schema')
-        names = LEGACY_STAGES if schema == 1 else STAGES
-        schemas.add(schema)
-        if any(type(value) is not int or value < 0 for value in header):
-            raise ValueError("Invalid timer header word")
-        if header[:5] != [MAGIC, schema, op, cores, core] or header[6:] != [1, len(names)]:
-            raise ValueError(f'Incomplete or mismatched timer header on core {core}')
-        mode = header[5] & 255 if schema in (5, 6) else header[5]
-        send_cores = header[5] >> 8 if schema in (5, 6) else cores//2
-        if schema in (5, 6) and (cores != 56 or not 0 < send_cores < 56):
-            raise ValueError('Invalid configured 56-core split')
-        splits.add(send_cores)
-        if mode not in (1, 2):
-            raise ValueError('Unknown boundary mode')
-        modes.add(mode)
-        if schema in (2, 5, 6):
-            words = [value for row in slots for value in row]
-            if any(type(value) is not int or not 0 <= value < (1 << 63) for value in words):
-                raise ValueError('Invalid raw timer word')
-            normalized = [header]
-            for offset in range(8, SLOTS * FIELDS, 4):
-                first, last, total, count = words[offset:offset+4]
-                normalized.append([first, last, total, count & ~ACTIVE, first, int(bool(count & ACTIVE)), 0, 0])
-            slots = normalized
-        if slots[1][3] != 1:
-            raise ValueError('Exactly one completed kernel interval is required')
-        for stage, row in enumerate(slots[1:], 1):
-            if any(type(value) is not int or value < 0 for value in row):
-                raise ValueError('Invalid raw timer word')
-            if stage >= len(names):
-                if any(row):
-                    raise ValueError('Unknown stage data')
-                continue
-            first, last, total, count, active_start, active, reserved0, reserved1 = row
-            if active or reserved0 or reserved1:
-                raise ValueError(f'Unclosed or invalid stage {STAGES[stage]} on core {core}')
-            if not count:
-                if any(row):
-                    raise ValueError('Unfinished stage')
-                continue
-            if last < first or active_start < first or active_start > last or total > last-first:
-                raise ValueError('Invalid timestamp order or accumulated interval')
-            role = 'send' if core < send_cores else 'receive'
-            if schema == 6 and operation == 'dispatch' and core < send_cores:
-                role = ('receive' if names[stage].startswith('recv_') or names[stage] in ('receiver','count_publish')
-                        else 'send' if names[stage].startswith('send_') or names[stage]=='sender' else 'send_receive')
-            record = dict(core=core, role=role,
-                          stage=names[stage], first_tick=first, last_tick=last,
-                          total_ticks=total, calls=count, average_ticks=total/count)
-            if frequency_hz is not None:
-                record['total_us'] = total*1e6/frequency_hz
-                record['average_us'] = total*1e6/frequency_hz/count
-            records.append(record)
-    if len(modes) != 1:
-        raise ValueError('Mixed boundary modes')
-    if len(splits) != 1:
-        raise ValueError('Mixed core splits')
-    if len(schemas) != 1:
-        raise ValueError('Mixed timer schemas')
-    return dict(schema=schema, operation=operation, active_aiv=cores, send_cores=send_cores, recv_cores=cores-send_cores,
-                dispatch_recv_cores=cores if schema == 6 else cores-send_cores,
-                boundary_mode='observe' if modes == {1} else 'drain', frequency_hz=frequency_hz,
-                clock='AscendC::GetSystemCycle; no cross-rank clock alignment assumed', records=records,
-                interpretation='Nested and overlapping stages must not be summed; repeated-stage totals exclude gaps.')
+    cores=len(raw);op=1 if operation=='dispatch' else 2
+    if cores!=56: raise ValueError('Segment capture requires 56 AIV')
+    records,intervals,core_info,splits=[],[],[],set()
+    for core,rows in enumerate(raw):
+        if len(rows)!=SLOTS or any(len(row)!=FIELDS for row in rows): raise ValueError('Timer shape mismatch')
+        words=[value for row in rows for value in row]
+        if any(type(v) is not int or not -(1<<63)<=v<(1<<64) for v in words): raise ValueError('Invalid timer word')
+        words=[v & ((1<<64)-1) for v in words]
+        h=words[:8];mode=h[5]&255;send=(h[5]>>8)&255;role=h[5]>>16
+        if h[:5]!=[MAGIC,SCHEMA,op,cores,core] or mode!=1 or not 0<send<56:
+            raise ValueError('Incomplete or mismatched segment header')
+        expected=(3 if core<send else 2) if op==1 else (1 if core<send else 4)
+        if role!=expected: raise ValueError('Unexpected segment core role')
+        splits.add(send);count,omitted=h[6:]
+        if not 0<count<=RECORDS or any(words[8+count*2:]): raise ValueError('Truncated or invalid segment records')
+        metrics={};pairs={};trace_count=0;in_metrics=False
+        for i in range(count):
+            packed,value=words[8+i*2:10+i*2];event=packed&0xffffffff;payload=packed>>32
+            if event>=0x8000:
+                in_metrics=True;stage=event-0x8000
+                if stage>=METRICS or stage in metrics or not payload: raise ValueError('Duplicate or invalid metric')
+                if stage in COUNTERS and value: raise ValueError('Counter contains a duration')
+                metrics[stage]=(payload,value)
+            else:
+                stage=event//2
+                if in_metrics or payload or stage>=METRICS or stage in COUNTERS: raise ValueError('Invalid interval event')
+                pair=pairs.setdefault(stage,[[],[]]);pair[event&1].append(value);trace_count+=1
+        if trace_count>TRACE_RECORDS: raise ValueError('Trace capacity exceeded')
+        if metrics.get(0,(0,))[0]!=1 or 0 not in pairs: raise ValueError('Missing KERNEL interval')
+        recorded=0
+        for stage,(begins,ends) in pairs.items():
+            if len(begins)!=len(ends) or not 0<len(begins)<=2 or stage not in metrics:
+                raise ValueError('Unmatched or excessive sampled intervals')
+            calls,total=metrics[stage]
+            if len(begins)>calls or sum(e-b for b,e in zip(begins,ends))>total:
+                raise ValueError('Sampled intervals exceed accumulated metric')
+            for sample,(begin,end) in enumerate(zip(begins,ends)):
+                if end<begin: raise ValueError('Invalid timestamp order')
+                intervals.append(dict(core=core,role=ROLES[role],stage=STAGES[stage],sample=sample,
+                                      first_tick=begin,last_tick=end,total_ticks=end-begin))
+            recorded+=len(begins)
+        if len(pairs[0][0])!=1 or metrics[0][1]!=pairs[0][1][0]-pairs[0][0][0]:
+            raise ValueError('Invalid KERNEL metric')
+        if omitted!=sum(v[0] for stage,v in metrics.items() if stage not in COUNTERS)-recorded:
+            raise ValueError('Incorrect omitted interval count')
+        for stage,(calls,total) in sorted(metrics.items()):
+            item=dict(core=core,role=ROLES[role],stage=STAGES[stage],total_ticks=total,calls=calls,
+                      average_ticks=total/calls,time_measured=stage not in COUNTERS)
+            if frequency_hz is not None: item.update(total_us=total*1e6/frequency_hz,average_us=total*1e6/frequency_hz/calls)
+            records.append(item)
+        core_info.append(dict(core=core,role=ROLES[role],record_count=count,omitted_intervals=omitted))
+    if len(splits)!=1: raise ValueError('Mixed core splits')
+    return dict(schema=SCHEMA,operation=operation,active_aiv=cores,send_cores=send,recv_cores=cores-send,
+                dispatch_recv_cores=cores,boundary_mode='observe',frequency_hz=frequency_hz,
+                records=records,intervals=intervals,cores=core_info,
+                clock='AscendC::GetSystemCycle; no cross-rank clock alignment assumed',
+                interpretation='First two calls sampled per stage; all calls accumulated. Nested stages cannot be summed. GM export follows KERNEL and all-core synchronization.')
 
 
 def chrome_trace(saved_records, frequency_hz=None, lane_layout='core', show_repeated=False):
-    """Export rank/sample-local timelines; schema 1 cannot reconstruct repeated calls."""
-    if lane_layout not in ('core', 'stage'):
-        raise ValueError('Expected core or stage lane layout')
-    events, identities = [], set()
-    for pid, saved in enumerate(saved_records, 1):
-        frequency = frequency_hz if frequency_hz is not None else saved.get('frequency_hz')
-        if frequency is None:
-            raise ValueError('Chrome trace requires explicit GetSystemCycle frequency_hz')
-        report = parse_records(saved['raw'], saved['operation'], frequency)
-        meta = saved.get('metadata', {})
-        rank, iteration = meta.get('rank', 'unknown'), meta.get('iteration', pid - 1)
-        identity = (meta.get('run_id'), meta.get('case_id'), report['operation'], rank, iteration)
-        if identity in identities:
-            raise ValueError('Duplicate rank/operation/sample trace')
+    saved_records=list(saved_records)
+    if not saved_records: raise ValueError('No LL stage records')
+    if all(s['raw'][0][0][1]!=SCHEMA for s in saved_records):
+        return legacy.chrome_trace(saved_records,frequency_hz,lane_layout,show_repeated)
+    if any(s['raw'][0][0][1]!=SCHEMA for s in saved_records): raise ValueError('Mixed segment and legacy traces')
+    if lane_layout not in ('core','stage'): raise ValueError('Expected core or stage lane layout')
+    events=[];identities=set();info=[]
+    for pid,saved in enumerate(saved_records,1):
+        frequency=frequency_hz if frequency_hz is not None else saved.get('frequency_hz')
+        if frequency is None: raise ValueError('Chrome trace requires explicit frequency_hz')
+        report=parse_records(saved['raw'],saved['operation'],frequency);meta=saved.get('metadata',{})
+        rank,iteration=meta.get('rank','unknown'),meta.get('iteration',pid-1)
+        identity=(meta.get('run_id'),meta.get('case_id'),report['operation'],rank,iteration)
+        if identity in identities: raise ValueError('Duplicate rank/operation/sample trace')
         identities.add(identity)
-        origin = min(row['first_tick'] for row in report['records'])
-        name = f"{report['operation']} rank {rank} sample {iteration} ({report['boundary_mode']}; independent origin)"
-        events.append(dict(ph='M', name='process_name', pid=pid, tid=0, args={'name': name}))
-        lanes = set()
-        # Parents first at equal starts, so viewers can nest complete events.
-        records = sorted(report['records'], key=lambda row: (row['core'], row['first_tick'], -row['last_tick']))
-        for row in records:
-            if not show_repeated and row['calls'] > 1 and row['stage'] in NOISY_SEND_ENVELOPES:
-                continue
-            tid = row['core'] if lane_layout == 'core' else row['core'] * 64 + STAGES.index(row['stage'])
-            lane = f"AIV {row['core']:02d} {row['role']}"
-            if lane_layout == 'stage':
-                lane += f" / {row['stage']}"
+        origin=min(row['first_tick'] for row in report['intervals'])
+        lanes=set()
+        for row in sorted(report['intervals'],key=lambda row:(row['core'],row['first_tick'],-row['last_tick'])):
+            tid=row['core'] if lane_layout=='core' else row['core']*64+STAGES.index(row['stage'])
             if tid not in lanes:
-                events.append(dict(ph='M', name='thread_name', pid=pid, tid=tid, args={'name': lane}))
-                events.append(dict(ph='M', name='thread_sort_index', pid=pid, tid=tid, args={'sort_index': tid}))
+                events.append(dict(ph='M',name='thread_name',pid=pid,tid=tid,args=dict(name=f"AIV {row['core']:02d} {row['role']}"+(f" / {row['stage']}" if lane_layout=='stage' else ''))))
                 lanes.add(tid)
-            repeated = row['calls'] > 1
-            span = row['last_tick'] - row['first_tick']
-            args = dict(row, rank=rank, iteration=iteration, operation=report['operation'],
-                        sampling=meta.get('sampling'),
-                        boundary_mode=report['boundary_mode'], frequency_hz=frequency,
-                        origin_tick=origin, span_ticks=span, gap_ticks=span-row['total_ticks'],
-                        interval_kind='repeated envelope' if repeated else 'single interval',
-                        clock_alignment='Independent origin per rank/operation/sample; not profiler aligned')
-            events.append(dict(ph='X', cat='LL.stage.envelope' if repeated else 'LL.stage',
-                               name=row['stage'] + (f" [envelope x{row['calls']}]" if repeated else ''),
-                               pid=pid, tid=tid, ts=(row['first_tick']-origin)*1e6/frequency,
-                               dur=span*1e6/frequency, args=args))
-    if not identities:
-        raise ValueError('No LL stage records')
-    # Chrome Trace Event ts/dur are microseconds. displayTimeUnit is a viewer
-    # preference with a different enum; Chrome tracing rejects 'us'. Omit it.
-    return dict(traceEvents=events,
-                metadata={'format': 'LL stage Chrome trace (schemas 1/2)', 'lane_layout': lane_layout,
-                          'hidden_repeated_send_envelopes': not show_repeated,
-                          'interpretation': 'Repeated events show envelopes including gaps; args.total_us is accumulated active time. Independent rank/sample origins; no cross-rank or profiler clock alignment.'})
+            events.append(dict(ph='X',name=row['stage'],cat=report['operation'],pid=pid,tid=tid,
+                               ts=(row['first_tick']-origin)*1e6/frequency,dur=row['total_ticks']*1e6/frequency,
+                               args=dict(rank=rank,iteration=iteration,sample=row['sample'],raw_begin_cycle=row['first_tick'],
+                                         raw_end_cycle=row['last_tick'],interval_kind='sampled actual interval')))
+        info.append(dict(operation=report['operation'],rank=rank,iteration=iteration,cores=report['cores']))
+    return dict(traceEvents=events,metadata=dict(format='dc_seg sampled intervals',sampled_calls_per_stage=2,
+                all_calls_in_metrics=True,cores=info,clock='Rank-local origins; no cross-rank alignment'))
+
+
+def reference_binary(raw,operation):
+    """Export the reference format-5 body (no opt-in cookie); original parser can read it."""
+    report=parse_records(raw,operation)
+    if report['schema']!=SCHEMA: raise ValueError('Reference export requires segment capture')
+    offset=64+72*64;data=bytearray(offset+72*256*16)
+    struct.pack_into('<8I',data,0,0x50524f46,0x10005,len(raw),16,256,64,offset,1 if operation=='dispatch' else 2)
+    for core,rows in enumerate(raw):
+        words=[v for row in rows for v in row];count=words[6]
+        struct.pack_into('<3I',data,64+core*64,count,words[7],words[5]>>16)
+        for i in range(count): struct.pack_into('<QQ',data,offset+core*4096+i*16,*(v & ((1<<64)-1) for v in words[8+i*2:10+i*2]))
+    return bytes(data)
 
 
 class StageTrace:
     def __init__(self, buffer, operation, mode='observe', frequency_hz=DEFAULT_FREQUENCY_HZ,
                  expert_config=None):
-        if operation not in ('dispatch', 'combine') or mode not in ('observe', 'drain'):
+        if operation not in ('dispatch', 'combine') or mode != 'observe':
             raise ValueError('Invalid LL stage diagnostic configuration')
         if frequency_hz is not None and (not math.isfinite(frequency_hz) or frequency_hz <= 0):
             raise ValueError('Counter frequency must be finite and positive')
+        if expert_config is not None:
+            raise ValueError('Reference segment capture does not support legacy per-expert GM instrumentation')
         from .._native import require_native
         import torch
         native = require_native('LL stage timer')
@@ -191,23 +163,9 @@ class StageTrace:
         # Align the view to 512B even if an allocator returns only 8B alignment.
         offset = (-storage.data_ptr()) % 512 // 8
         self.tensor = storage.narrow(0, offset, words).view(cfg['active_aiv'], SLOTS, FIELDS)
-        self.expert_tensor, self.expert_raw, self.expert_config = None, None, (dict(expert_config, shared_receive=True, send_cores=cfg.get("send_cores", cfg["active_aiv"]//2)) if expert_config is not None else None)
         if expert_config is not None:
-            from . import ll_expert_timer as expert
-            rank, world, count = (expert_config[key] for key in ('rank','world','experts'))
-            if (operation != 'dispatch' or any(type(v) is not int for v in (rank,world,count)) or
-                    not (0 <= rank < world <= count <= 1024 and world >= 16 and world%16==0 and count%world==0)):
-                raise ValueError('Expert capture requires a valid dispatch expert configuration')
-            if not 8001 <= native.low_latency_core_protocol <= 8055 or not hasattr(native, 'low_latency_expert_timer_layout'):
-                raise RuntimeError('Expert diagnostics require the matching configured-split wheel on every rank')
-            if native.low_latency_expert_timer_layout() != dict(schema=expert.SCHEMA, header_rows=expert.HEADER_ROWS,
-                                                               fields=expert.FIELDS, stages=list(expert.STAGES)):
-                raise RuntimeError('Expert timer Python/native schema mismatch')
-            rows=expert.HEADER_ROWS+count*len(expert.STAGES)
-            expert_words=cfg['active_aiv']*rows*expert.FIELDS
-            backing=torch.zeros(expert_words+63,dtype=torch.int64,device=f"npu:{cfg['device']}")
-            offset=(-backing.data_ptr())%512//8
-            self.expert_tensor=backing.narrow(0,offset,expert_words).view(cfg['active_aiv'],rows,expert.FIELDS)
+            raise ValueError('Reference segment capture does not support legacy per-expert GM instrumentation')
+        self.expert_tensor, self.expert_raw, self.expert_config = None, None, None
         self.buffer, self.operation, self.mode = buffer, operation, mode
         self.frequency_hz, self.launches, self.raw, self.report = frequency_hz, 0, None, None
 
@@ -217,6 +175,8 @@ class StageTrace:
         # Public LL calls establish a current-stream dependency on completion.
         self.raw = self.tensor.cpu().tolist()
         self.report = parse_records(self.raw, self.operation, self.frequency_hz)
+        if self.report['schema'] != SCHEMA:
+            raise RuntimeError('Capture returned a stale timer format; rebuild the complete wheel')
         if self.expert_tensor is not None:
             from .ll_expert_timer import parse_records as parse_experts
             self.expert_raw=self.expert_tensor.cpu().tolist()
@@ -236,6 +196,10 @@ class StageTrace:
             saved['expert']=dict(raw=self.expert_raw, **self.expert_config)
         with path.open('x', encoding='utf-8') as stream:
             json.dump(saved, stream, indent=2)
+        if self.report['schema'] == SCHEMA:
+            rank=(metadata or {}).get('rank',0)
+            binary=path.with_name(f'{self.operation}_prof_rank{rank}_{path.stem}.bin')
+            with binary.open('xb') as stream: stream.write(reference_binary(self.raw,self.operation))
         if self.frequency_hz is not None:
             # Prefix avoids the analyzer's sample_*.json raw-record glob.
             trace_path = path.with_name('trace_' + path.name)

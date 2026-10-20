@@ -21,10 +21,10 @@ def raw(operation='dispatch', send=10, schema=6):
     for core in range(56):
         words = [0] * 256
         words[:8] = [timer.MAGIC, schema, 1 if operation=='dispatch' else 2, 56,
-                     core, 1 | (send << 8), 1, len(timer.STAGES)]
+                     core, 1 | (send << 8), 1, len(timer.legacy.STAGES)]
         for stage, begin, end in [('kernel', 1, 100), ('sender', 2, 30), ('receiver', 35, 90), ('recv_consume', 40, 80)]:
             if stage=='sender' and core>=send: continue
-            offset = 8 + (timer.STAGES.index(stage)-1)*4
+            offset = 8 + (timer.legacy.STAGES.index(stage)-1)*4
             words[offset:offset+4] = [begin, end, end-begin, 1]
         result.append([words[n:n+8] for n in range(0,256,8)])
     return result
