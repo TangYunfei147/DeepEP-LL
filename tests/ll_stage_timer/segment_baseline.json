@@ -7,13 +7,14 @@
     "csrc/kernels/dispatch/low_latency.cpp": "3bd7158c6e20109943f70cd9219430e979e6213819608650e7088e85e22cb277",
     "csrc/kernels/dispatch/low_latency/dispatch_server_dedup_kernel.h": "28af07bb4825170644e36cd23f6b26329709ed4cf304a948f19b92974d79dfd3",
     "csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_counts.h": "e480814a25f15ae4c3e6f732108fe082bfcd47786fd1588368b63a52332670ea",
-    "csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_send.h": "84fdba56f6c7187cdf147e7b8cb97ef135475535741dfb893c23fb4baf472df0",
+    "csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_send.h": "95d49150e8f4a78ceb052ad37008e4ea8a5fd7cb0596577e1d1fe8310efbedfe",
     "csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_recv.h": "ee6cc9826d470f34dfb051afd4e28f46e7fe7db24515e6323211c9a0b7920780",
     "csrc/kernels/combine/low_latency.cpp": "1a8d068a6076d7757fb74c4d60c49aa1c3c3b97847284df1aa869ef5578c5447",
     "csrc/kernels/combine/low_latency/combine_server_dedup_kernel.h": "237047dd000797039a0522568c82b3cc079a3f604a35738351539e0c2498372b",
     "csrc/kernels/combine/low_latency/combine_server_dedup_partial.h": "c7b81524ac3123ee21584c1c87cb860e40fcc05739a5f538b1b5c3c42ca0b5c1",
     "csrc/kernels/combine/low_latency/combine_server_dedup_source_aggregate.h": "801ef282246fffbb6818e86ff262191c89a485f19265245a461e655b895fceee",
-    "csrc/kernels/dispatch/low_latency/device/dispatch_frequency_histogram.h": "605934af12b53fe362966b038a508c92a3d843a215eec0e716e14a36f72902b9"
+    "csrc/kernels/dispatch/low_latency/device/dispatch_frequency_histogram.h": "605934af12b53fe362966b038a508c92a3d843a215eec0e716e14a36f72902b9",
+    "csrc/kernels/dispatch/low_latency/common/ll_input_prefetch.h": "904691f3b59294a6e182b169718d7096777753b429e4398356d541df1d13811a"
   },
   "authorized_source_update": {
     "parent": "b3f9004",
@@ -24,5 +25,9 @@
       "csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_send.h"
     ]
   },
-  "instrumentation_adaptation_base": "a1921139dce689cdc3b64644b532b8119d658ff3"
+  "instrumentation_adaptation_base": "a1921139dce689cdc3b64644b532b8119d658ff3",
+  "input_prefetch_update": {
+    "parent": "b33119343b46e13a65afac08b499c52c76cfb410",
+    "reason": "Authorized one-packet sender lookahead, two existing input buffers and unchanged output lane allocation; updated sender/controller only"
+  }
 }

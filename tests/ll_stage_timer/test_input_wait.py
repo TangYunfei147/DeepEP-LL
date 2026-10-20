@@ -83,12 +83,12 @@ def test_analysis_writes_wait_report_and_old_samples_are_insufficient(tmp_path):
     assert 'input_wait_bottleneck' in json.loads((out/'summary.json').read_text())
 
 
-def test_existing_sync_is_wrapped_not_added():
+def test_input_and_quant_wait_boundaries_are_preserved():
     source=(ROOT/'csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_send.h').read_text()
     assert 'LL_SEG_BEGIN(quantWaitBegin, TOKEN_QUANT_WAIT);\n            Sync<HardEvent::V_S>();\n            LL_SEG_END' in source
-    assert 'LL_SEG_BEGIN(inputWaitBegin, TOKEN_INPUT_WAIT);\n            Sync<HardEvent::MTE2_S>();\n            LL_SEG_END' in source
-    # The existing test_segment_source fingerprint checks *all* non-probe
-    # tokens, including event/barrier order, against the prior algorithm.
+    interval=source.split('LL_SEG_BEGIN(inputWaitBegin, TOKEN_INPUT_WAIT);')[1].split('LL_SEG_END')[0]
+    assert 'WaitFlag<HardEvent::MTE2_S>(inputReady_[pendingReady_]);' in interval
+    assert 'SetFlag<' not in interval  # Must not wait for the next input's DMA.
 
 
 def test_schema_change_rejects_diagnostic_ratio_but_allows_off_perf():

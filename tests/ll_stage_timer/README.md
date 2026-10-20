@@ -1,5 +1,7 @@
 > 当前新增输入/量化等待使用 **schema9、66阶段**。原64个ID保持不变；旧schema7可离线读取。新采样不再导出仅支持64阶段的参考format5二进制，使用JSON/CSV/Chrome trace。瓶颈报告与重采要求见 [INPUT_WAIT.md](INPUT_WAIT.md)。
 
+> 当前发送已加入两份输入缓冲的一包前瞻预取，输出lane分配不变。A/B基线为`b331193`，同步与打点边界说明见 [INPUT_PREFETCH.md](INPUT_PREFETCH.md)。
+
 # 最新共享接收分支：分段打点全流程
 
 当前源端算法基线为`a192113`：S核跨组初发，R核本组初发后进入原前缀与接收流程。分段打点使用schema9、66阶段、前两次实际区间+全量累计；本次补齐本组准备/排空和非去重远端索引筛选。二进制头保留初始角色，分析器依据实际SEND_TOKENS把参与本组发送的R核显示为send_and_recv，并保留initial_role=cumsum；无本组发送任务的核不补造区间。

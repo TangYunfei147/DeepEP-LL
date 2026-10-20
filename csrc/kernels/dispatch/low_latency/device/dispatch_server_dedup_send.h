@@ -13,6 +13,7 @@
 #include "../common/ep_memory_server_dedup_data_layout.h"
 #include "../common/ep_memory_server_dedup_protocol.h"
 #include "../common/ll_send_order.h"
+#include "../common/ll_input_prefetch.h"
 #include "../../../common/ep_packet_receive_layout.h"
 
 namespace DispatchDedup {
@@ -78,7 +79,7 @@ public:
             NeedQuantize ? uint32_t(data_.quantCount * sizeof(XType)) : uint32_t(data_.packedPayloadBytes);
         scratch_->InitBuffer(input, 2U, inputBytes);
         usedBytes_ = reservedBytes + 2U * inputBytes;
-        if constexpr (NeedQuantize) {
+        if constexpr (NeedQuantize || Prequantized) {
             // Alias the two input buffers exactly as Memory does. Quantization
             // reads the compute padding, so initialize it once before copying input.
             pipe_->InitBufPool(cleanPool, 2U * inputBytes, scratch);
@@ -154,11 +155,13 @@ public:
         }
         PipeBarrier<PIPE_V>();
 
+        BeginInputPrefetch();
         LL_SEG_END(segBegin1, PREPARE_INPUT);
         if (enableDedup_)
             SendWithDedup(input);
         else
             SendWithoutDedup(input);
+        EndInputPrefetch(input);
 
         // 6. 等待所有发送 lane 归还后，把本核 sourceMask 和 sourceWeights 写回 GM。
         // 只有 sourceMask 标记的权重位置才有效，未选中位置不应被下游消费。
@@ -195,11 +198,13 @@ public:
                                               : uint32_t(data_.packedPayloadBytes);
         scratch_->InitBuffer(input,2U,inputBytes);
         usedBytes_=reservedBytes+2U*inputBytes;
-        if constexpr (NeedQuantize) {
+        if constexpr (NeedQuantize || Prequantized) {
             pipe_->InitBufPool(cleanPool,2U*inputBytes,scratch);
             cleanPool.InitBuffer(cleanInput,2U*inputBytes);
             Duplicate<uint8_t>(cleanInput.Get<uint8_t>(),0U,2U*inputBytes);
             Sync<HardEvent::V_MTE2>();
+        }
+        if constexpr (NeedQuantize) {
             const uint32_t scales=uint32_t(data_.quantCount/32U);
             const uint32_t work=uint32_t(DispatchDedupAlign(DispatchDedupAlign(scales,32U)*4U+uint64_t(scales)*2U,32U));
             Allocate(qDstBuf_,work);
@@ -221,11 +226,13 @@ public:
             SetFlag<HardEvent::MTE3_V>(lane);
         }
         PipeBarrier<PIPE_V>();
+        BeginInputPrefetch();
         LL_SEG_END(localPrepareBegin, PREPARE_INPUT);
         for (uint32_t task=0;task<tasks;++task) {
             const uint32_t index=indices.GetValue(task),packed=expertQ.GetValue(task);
             SendPacket(input,index/k_,index%k_,packed&0xffffU,packed>>16U,0U);
         }
+        EndInputPrefetch(input);
         LL_SEG_BEGIN(localDrainBegin, SEND_DRAIN);
         // Retire all reads of packet scratch before RecvCnt overlays that UB.
         for (uint32_t lane=0;lane<lanes_;++lane) WaitFlag<HardEvent::MTE3_V>(lane);
@@ -473,29 +480,71 @@ private:
             }
         index.SetValue(0U, entries);
     }
-    // 摘要：搬入一个 token，可选量化并填尾部；打包为 480B 数据加 32B 标记的块后异步发送，按事件复用 lane。
-    __aicore__ inline void SendPacket(TQue<QuePosition::VECIN, 1>& input, uint32_t token, uint32_t firstK,
-                                      uint32_t expert, uint32_t q, uint32_t mask)
+    // The generator retains its original ordering; only execution is delayed
+    // by one descriptor so next-input MTE2 can overlap current compute/pack.
+    __aicore__ inline void SendPacket(TQue<QuePosition::VECIN,1>& input,uint32_t token,uint32_t firstK,
+                                     uint32_t expert,uint32_t q,uint32_t mask)
     {
-        const uint32_t tokenId = token, destination = expert / localExperts_;
+        PrefetchOps ops{*this,input};
+        inputPrefetch_.Push(ops,LlSendPacketTask{token,firstK,expert,q,mask});
+    }
+
+    __aicore__ inline void BeginInputPrefetch()
+    {
+        inputPrefetch_.Reset();
+        inputsIssued_=0U;
+        if constexpr (!NeedQuantize) {
+            inputReady_[0]=pipe_->AllocEventID<HardEvent::MTE2_S>();
+            inputReady_[1]=pipe_->AllocEventID<HardEvent::MTE2_S>();
+        }
+    }
+    __aicore__ inline void EndInputPrefetch(TQue<QuePosition::VECIN,1>& input)
+    {
+        PrefetchOps ops{*this,input};
+        inputPrefetch_.Flush(ops); // Includes singleton and final packet.
+        if constexpr (!NeedQuantize) {
+            pipe_->ReleaseEventID<HardEvent::MTE2_S>(inputReady_[0]);
+            pipe_->ReleaseEventID<HardEvent::MTE2_S>(inputReady_[1]);
+        }
+    }
+    __aicore__ inline void IssueInput(TQue<QuePosition::VECIN,1>& input,uint32_t token)
+    {
         LL_SEG_BEGIN(segBegin2, TOKEN_INPUT);
-        auto x = input.template AllocTensor<XType>();
+        auto x=input.template AllocTensor<XType>();
+        // Quantized modes clear both buffers once in PREPARE_INPUT. Per-packet
+        // clearing here would add a V dependency ahead of current computation.
+        // Payload/scales and every valid tail field are overwritten per use;
+        // old bytes outside those fields are padding, never consumed.
+        DataCopyPad(x,x_[uint64_t(token)*h_],{1U,h_*uint32_t(sizeof(XType)),0U,0U,0U},
+                    {NeedQuantize,0U,0U,XType(0)});
         if constexpr (Prequantized) {
-            // The full payload queue slot stages H bytes and 4P scale bytes.
-            // Only padding is synthesized; no input is read past its row end.
-            Duplicate<uint8_t>(x.template ReinterpretCast<uint8_t>(), 0U, uint32_t(data_.packedPayloadBytes));
-            Sync<HardEvent::V_MTE2>();
+            auto scale=x.template ReinterpretCast<uint8_t>()[uint32_t(data_.quantCount)];
+            DataCopyPad(scale,inputScales_[uint64_t(token)*data_.scaleBytes],
+                        {1U,uint32_t(data_.scaleBytes),0U,0U,0U},{false,0U,0U,uint8_t(0)});
         }
-        DataCopyPad(x, x_[uint64_t(tokenId) * h_], {1U, h_ * uint32_t(sizeof(XType)), 0U, 0U, 0U},
-                    {NeedQuantize, 0U, 0U, XType(0)});
-        if constexpr (Prequantized) {
-            auto scale = x.template ReinterpretCast<uint8_t>()[uint32_t(data_.quantCount)];
-            DataCopyPad(scale, inputScales_[uint64_t(tokenId) * data_.scaleBytes],
-                        {1U, uint32_t(data_.scaleBytes), 0U, 0U, 0U}, {false, 0U, 0U, uint8_t(0)});
-        }
+        if constexpr (!NeedQuantize)
+            SetFlag<HardEvent::MTE2_S>(inputReady_[inputsIssued_&1U]);
         input.EnQue(x);
-        x = input.template DeQue<XType>();
+        ++inputsIssued_;
         LL_SEG_END(segBegin2, TOKEN_INPUT);
+    }
+    struct PrefetchOps {
+        ServerDedupSender& sender;
+        TQue<QuePosition::VECIN,1>& input;
+        __aicore__ inline void Issue(const LlSendPacketTask& task) { sender.IssueInput(input,task.token); }
+        __aicore__ inline void Consume(const LlSendPacketTask& task) {
+            sender.ConsumePacket(input,sender.pendingInput_,task);
+        }
+        __aicore__ inline void Take() {
+            sender.pendingInput_=input.template DeQue<XType>();
+            sender.pendingReady_=(sender.inputsIssued_-1U)&1U;
+        }
+    };
+    __aicore__ inline void ConsumePacket(TQue<QuePosition::VECIN,1>& input,LocalTensor<XType> x,
+                                        const LlSendPacketTask& task)
+    {
+        const uint32_t token=task.token,firstK=task.firstK,expert=task.expert,q=task.q,mask=task.mask;
+        const uint32_t destination=expert/localExperts_;
         LocalTensor<uint8_t> payload;
         if constexpr (NeedQuantize) {
             payload = quantBuf_.Get<uint8_t>();
@@ -509,7 +558,9 @@ private:
             LL_SEG_END(quantWaitBegin, TOKEN_QUANT_WAIT);
         } else {
             LL_SEG_BEGIN(inputWaitBegin, TOKEN_INPUT_WAIT);
-            Sync<HardEvent::MTE2_S>();
+            // This marker precedes the NEXT input's DMA. A fresh SetFlag here
+            // would instead wait for both inputs and destroy the overlap.
+            WaitFlag<HardEvent::MTE2_S>(inputReady_[pendingReady_]);
             LL_SEG_END(inputWaitBegin, TOKEN_INPUT_WAIT);
             payload = x.template ReinterpretCast<uint8_t>();
         }
@@ -557,6 +608,10 @@ private:
     uint32_t sendCores_ = 0;
     uint32_t bs_ = 0, h_ = 0, k_ = 0, localExperts_ = 0, start_ = 0, count_ = 0;
     uint32_t usedBytes_ = 0, lanes_ = 0, packets_ = 0, directCount_ = 0;
+    LlOnePacketInput inputPrefetch_;
+    LocalTensor<XType> pendingInput_;
+    TEventID inputReady_[2]{};
+    uint32_t inputsIssued_=0U,pendingReady_=0U;
     EpServerDedupDataLayout data_{};
     GlobalTensor<XType> x_;
     GlobalTensor<uint8_t> inputScales_;

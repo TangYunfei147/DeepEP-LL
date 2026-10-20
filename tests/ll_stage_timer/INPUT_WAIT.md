@@ -1,5 +1,9 @@
 # Dispatch 输入与量化尾部等待
 
+后续一包前瞻预取保留这两个阶段；TOKEN_INPUT_WAIT改为等待在当前包DMA后
+记录的独立MTE2_S事件，避免误等下一包。TOKEN_INPUT的DeQue位置也随调度移动，
+详见[INPUT_PREFETCH.md](INPUT_PREFETCH.md)。下文记录最初补点基线的同步形式。
+
 本变更只在 `SendPacket` 的两处原有同步前后读取时间，不增加、删除或移动同步：
 
 | ID | 阶段 | 原有指令 | 含义 |
