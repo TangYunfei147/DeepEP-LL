@@ -11,6 +11,7 @@
 #include "../common/ep_memory_server_dedup_protocol.h"
 #include "../../../common/ep_packet_receive_layout.h"
 #include "dispatch_server_dedup_receive_tasks.h"
+#include "../common/ll_receive_priority.h"
 #include "dispatch_server_dedup_receive_packet.h"
 
 namespace DispatchDedup {
@@ -134,28 +135,31 @@ public:
                 if (probe.readyMask == 0U) scan += count;
             } while (probe.readyMask == 0U);
 
-            // Load and consume the immutable snapshot in the same descending
-            // order. Higher-index removals cannot change lower pending entries.
-            // Probe 已把本批任务编号保存为不可变 snapshot。按批内下标倒序加载/消费，
-            // 避免 RemovePending 用末项填洞时破坏本批尚未处理的较低下标。
-            uint32_t nextLoad = count;
-            for (uint32_t i = count; i > 0U; --i) {
-                const uint32_t index = i - 1U;
-                if ((probe.readyMask & (uint32_t(1) << index)) == 0U) continue;
-                // 只预取 ready 位图命中的包；先填满可用 lane，再按相同倒序消费。
-                while (issued - consumed < depth && nextLoad != 0U) {
-                    --nextLoad;
-                    if ((probe.readyMask & (uint32_t(1) << nextLoad)) == 0U) continue;
-                    IssueLoad(snapshot.GetValue(nextLoad), issued % lanes_,
-                              (probe.keepFlagsMask & (uint32_t(1) << nextLoad)) != 0U);
+            // Current senders mark only FIRST_HOP with KeepFlags; forwarded
+            // terminals are Compact. Probe already validated every block flag.
+            const auto order=LlMakeReceivePriority(count,probe.readyMask,
+                                                   enableDedup_ ? probe.keepFlagsMask : 0U);
+            uint32_t nextLoad=0U;
+            for (uint32_t current=0U;current<order.count;++current) {
+                // Load and consume in exactly the same priority order, so the
+                // global issued/consumed lane ring keeps its original ownership.
+                while (issued-consumed<depth && nextLoad<order.count) {
+                    const uint32_t index=order.At(nextLoad++);
+                    IssueLoad(snapshot.GetValue(index),issued%lanes_,
+                              (probe.keepFlagsMask&(uint32_t(1)<<index))!=0U);
                     ++issued;
                 }
-                // 消费包括写出展开 token、量化 scale 和路由元数据；FIRST_HOP 还执行转发。
-                // 任务移出 pending 表只表示相关写操作已下发，lane 事件另行保护实际完成。
-                ConsumeLoaded(snapshot.GetValue(index), consumed % lanes_,
-                              (probe.keepFlagsMask & (uint32_t(1) << index)) != 0U);
-                tasks_.RemovePending(scan + index);
+                const uint32_t index=order.At(current);
+                ConsumeLoaded(snapshot.GetValue(index),consumed%lanes_,
+                              (probe.keepFlagsMask&(uint32_t(1)<<index))!=0U);
                 ++consumed;
+            }
+            // Do NOT remove entries in priority order: swap-with-last would
+            // invalidate the remaining original pending positions. After all
+            // snapshot work is issued, remove by descending original index.
+            for (uint32_t n=count;n>0U;--n) {
+                const uint32_t index=n-1U;
+                if (probe.readyMask&(uint32_t(1)<<index)) tasks_.RemovePending(scan+index);
             }
         }
         // 5. pending 清空后，等待各 lane 在途写入，随后统一清除本核所有槽位的块标记。
@@ -173,6 +177,7 @@ public:
 
 private:
     static constexpr uint32_t kProbeBatch = 16U;
+    static_assert(kProbeBatch<=16U,"priority order uses four-bit snapshot positions");
     struct ProbeResult {
         uint32_t readyMask = 0U;
         uint32_t keepFlagsMask = 0U;

@@ -39,3 +39,7 @@ input_wait_bottleneck.md/csv，阈值与局限见 ../ll_stage_timer/INPUT_WAIT.m
 发送一包前瞻：common/ll_input_prefetch.h保持任务顺序，Sender拆分IssueInput与
 ConsumePacket；两份输入及输出lane分配不变，MTE2_S使用独立分配事件。
 测试/A-B基线与打点边界变化见 ../ll_stage_timer/INPUT_PREFETCH.md。
+
+独立relay-priority实验：Receiver先发relay再输出本地结果；
+common/ll_receive_priority.h对同批就绪FIRST_HOP优先排序，预取/消费顺序一致，
+pending仍按原下标倒序删除。见 ../ll_stage_timer/RELAY_PRIORITY.md。

@@ -1,5 +1,7 @@
 > 当前新增输入/量化等待使用 **schema9、66阶段**。原64个ID保持不变；旧schema7可离线读取。新采样不再导出仅支持64阶段的参考format5二进制，使用JSON/CSV/Chrome trace。瓶颈报告与重采要求见 [INPUT_WAIT.md](INPUT_WAIT.md)。
 
+> 本仓库为独立`kernel/ll-g4-relay-priority`实验，包含relay提前下发及同批就绪FIRST_HOP优先，逐提交A/B见[RELAY_PRIORITY.md](RELAY_PRIORITY.md)。
+
 > 当前发送已加入两份输入缓冲的一包前瞻预取，输出lane分配不变。A/B基线为`b331193`，同步与打点边界说明见 [INPUT_PREFETCH.md](INPUT_PREFETCH.md)。
 
 # 最新共享接收分支：分段打点全流程
