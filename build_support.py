@@ -201,10 +201,10 @@ def build_configuration(environment=None):
     result = {"arch": "Ascend950", "python": sys.version, "machine": platform.machine()}
     default_shmem = ROOT / "third-party/shmem/install/shmem"
 
-    send = int(env.get("DEEPEP_LL_SEND_CORES", "29"))
-    recv = int(env.get("DEEPEP_LL_RECV_CORES", "29"))
-    if send <= 0 or recv <= 0 or send + recv != 58:
-        raise ValueError("DEEPEP_LL_SEND_CORES and DEEPEP_LL_RECV_CORES must be positive and sum to 58")
+    send = int(env.get("DEEPEP_LL_SEND_CORES", "28"))
+    recv = int(env.get("DEEPEP_LL_RECV_CORES", "28"))
+    if send <= 0 or recv <= 0 or send + recv != 56:
+        raise ValueError("DEEPEP_LL_SEND_CORES and DEEPEP_LL_RECV_CORES must be positive and sum to 56")
     result["ll_send_cores"], result["ll_recv_cores"] = send, recv
     result["ll_stage_timer"] = enabled("DEEPEP_LL_STAGE_TIMER", env)
     result["build_type"] = env.get("DEEPEP_BUILD_TYPE", "RelWithDebInfo" if lineinfo else "Release")
@@ -402,8 +402,8 @@ class CMakeBuild(build_ext):
             f"-DCMAKE_BUILD_TYPE={configuration['build_type']}",
             f"-DDEEPEP_DEVICE_JOBS={jobs}",
             f"-DDEEPEP_LL_STAGE_TIMER={'ON' if configuration.get('ll_stage_timer', False) else 'OFF'}",
-            f"-DDEEPEP_LL_SEND_CORES={configuration.get('ll_send_cores', 29)}",
-            f"-DDEEPEP_LL_RECV_CORES={configuration.get('ll_recv_cores', 29)}",
+            f"-DDEEPEP_LL_SEND_CORES={configuration.get('ll_send_cores', 28)}",
+            f"-DDEEPEP_LL_RECV_CORES={configuration.get('ll_recv_cores', 28)}",
             f"-DPython_EXECUTABLE={sys.executable}",
             f"-Dpybind11_DIR={pybind11.get_cmake_dir()}",
             f"-DCMAKE_CXX_COMPILER={configuration['compiler_path']}",

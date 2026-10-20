@@ -1,6 +1,6 @@
 # LL kernel configuration and branch
 
-> 2026-10-19：本分支现在按编译配置分配固定58个AIV，默认29发+29收，支持不对称比例；以[CORE_SPLIT.md](tests/ll_stage_timer/CORE_SPLIT.md)为准。旧1:1和动态核数说明仅描述此前版本。全rank重建匹配wheel。
+> 2026-10-19：本分支现在按编译配置分配固定56个AIV，默认28发+28收，支持不对称比例；以[CORE_SPLIT.md](tests/ll_stage_timer/CORE_SPLIT.md)为准。旧1:1和动态核数说明仅描述此前版本。全rank重建匹配wheel。
 
 `kernel/ll-configurable-groups` is based on upstream-aligned `main` and contains
 LL dispatch/combine, required Host/runtime/build changes, and CPU protocol tests.
@@ -53,11 +53,11 @@ reads it from the installed native module. Profiling remains 10 warmups,
 100 captures, Exp plus scalar all_reduce per iteration, last 50 per task.
 
 A5 validation uses devices 0/1 only. CPU protocol tests exercise G=1..16,
-divisible EP16..256 (including non-power-of-two layout cases) and configured 58-AIV splits, including repeated ready clearing. They do not prove
+divisible EP16..256 (including non-power-of-two layout cases) and configured 56-AIV splits, including repeated ready clearing. They do not prove
 NPU ordering or cross-host communication. Full LL correctness and performance
 must be validated by the user on the target deployment.
 
 LL设备阶段打点：参见 [tests/ll_stage_timer/README.md](tests/ll_stage_timer/README.md)。默认关闭，通过独立诊断调用采集每rank/每AIV阶段累计ticks。
 
 ## Shared diagnostics update
-The configured-split protocol identifier is 6000 + send_cores, with stage schema 5 and expert schema 1. Rebuild all ranks. MTE, the original group policy and default G=4 are retained. Shared launch and comparison instructions: [PARITY.md](tests/ll_stage_timer/PARITY.md). Different G values are permitted in cross-branch comparisons.
+The configured-split protocol identifier is 7000 + send_cores, with stage schema 5 and expert schema 1. Rebuild all ranks. MTE, the original group policy and default G=4 are retained. Shared launch and comparison instructions: [PARITY.md](tests/ll_stage_timer/PARITY.md). Different G values are permitted in cross-branch comparisons.

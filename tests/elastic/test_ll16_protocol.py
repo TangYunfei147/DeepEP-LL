@@ -135,9 +135,9 @@ int main() {
             for(unsigned i=0;i<visited.size();++i) assert(visited[i]==i);
         }
         // Verify all allowed receiver counts, no missing/duplicate peer flags,
-        // and clearing across two rounds with 58 total cores and asymmetric splits.
-        for(unsigned send: {1U,20U,29U,40U,57U}) {
-            const unsigned total=58,receivers=58-send,notify=std::min(8U,receivers);
+        // and clearing across two rounds with 56 total cores and asymmetric splits.
+        for(unsigned send: {1U,20U,28U,40U,55U}) {
+            const unsigned total=56,receivers=56-send,notify=std::min(8U,receivers);
             modelActiveRecv=receivers;
             std::vector<std::vector<float>> memory(world,std::vector<float>(8192,0));
             for(unsigned round=0;round<2;++round) {

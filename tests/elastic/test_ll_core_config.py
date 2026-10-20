@@ -8,16 +8,16 @@ from tests.elastic.test_ll16_protocol import method
 ROOT = Path(__file__).resolve().parents[2]
 
 
-def compile_run(tmp_path, source, includes=(), send=29):
+def compile_run(tmp_path, source, includes=(), send=28):
     if not shutil.which("g++"): pytest.skip("g++ required for real C++ layout checks")
     cpp=tmp_path/'check.cpp';cpp.write_text(source)
     executable=tmp_path/'check'
-    subprocess.run(['g++','-std=c++17','-O2','-Werror=unused-parameter',f'-DDEEPEP_LL_SEND_CORES={send}',f'-DDEEPEP_LL_RECV_CORES={58-send}',*[f'-I{p}' for p in includes],f'-I{ROOT}',
+    subprocess.run(['g++','-std=c++17','-O2','-Werror=unused-parameter',f'-DDEEPEP_LL_SEND_CORES={send}',f'-DDEEPEP_LL_RECV_CORES={56-send}',*[f'-I{p}' for p in includes],f'-I{ROOT}',
                     str(cpp),'-o',str(executable)],check=True)
     subprocess.run([str(executable)],check=True,timeout=30)
 
 
-@pytest.mark.parametrize("send", [1,20,29,40,57])
+@pytest.mark.parametrize("send", [1,20,28,40,55])
 def test_actual_count_partitions_and_layouts(tmp_path, send):
     counts=(ROOT/'csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_counts.h').read_text()
     compile_run(tmp_path,r'''
@@ -32,7 +32,7 @@ struct Split {
 };
 int main() {
     Split split;
-    for(uint32_t cores: {58U}) {
+    for(uint32_t cores: {56U}) {
         assert(LlCoreCountValid(cores));
         const uint32_t half=kLlRecvCoreNum;
         for(uint32_t total: {1U,16U,32U,63U,256U,1024U}) {
@@ -73,7 +73,7 @@ int main() {
         assert(CombineDedup::EpCombineM4TaskBytes(3072,half)>=(3072+half-1)/half*4);
         assert(CombineDedup::EpCombineM5TokenCount(32,half)>=(32+half-1)/half);
     }
-    for(uint32_t bad: {0U,1U,15U,55U,56U,60U,64U,72U,73U,80U}) {
+    for(uint32_t bad: {0U,1U,15U,55U,58U,60U,64U,72U,73U,80U}) {
         assert(!LlCoreCountValid(bad));
         EpMemoryServerDedupLayout d;CombineDedup::Layout c;
         assert(BuildDispatchServerDedupLayout(16,32,256,4,64,&d,false,bad)!=0);
@@ -108,14 +108,14 @@ struct PlatformAscendCManager {
 #include "csrc/runtime/ll_core_config.hpp"
 int main() {
     auto cfg=deepep::query_ll_core_config();
-    assert(cfg.platform==64 && cfg.available==56 && cfg.active==58 && cfg.device==0);
+    assert(cfg.platform==64 && cfg.available==56 && cfg.active==56 && cfg.device==0);
     platform_ascendc::reported=56;available=60;
-    assert(deepep::query_ll_core_config().active==58);
+    assert(deepep::query_ll_core_config().active==56);
     current_result=1;
     assert(deepep::query_ll_core_config().device==-1);
-    assert(deepep::query_ll_core_config().active==58);
+    assert(deepep::query_ll_core_config().active==56);
     current_result=0;available=55;
-    assert(deepep::query_ll_core_config().active==58);
+    assert(deepep::query_ll_core_config().active==56);
     bool threw=false;
     available=56;info_result=1;threw=false;
     try { deepep::query_ll_core_config(); } catch(...) {threw=true;} assert(threw);

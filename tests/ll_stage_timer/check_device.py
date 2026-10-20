@@ -11,7 +11,7 @@ for mode in (1,2):
     data=json.loads((out/f'raw-1-{mode}.json').read_text())
     report=timer.parse_records(data,'dispatch')
     assert report['schema']==timer.SCHEMA
-    assert len(report['records'])==58*(len(timer.STAGES)-1)
+    assert len(report['records'])==56*(len(timer.STAGES)-1)
     assert all(row['calls']==3 for row in report['records'] if row['stage']=='recv_wait')
     (out/f'parsed-{mode}.json').write_text(json.dumps(report,indent=2))
-print('PASS real device timer parser, observe/drain and all 58 AIV records')
+print('PASS real device timer parser, observe/drain and all 56 AIV records')
