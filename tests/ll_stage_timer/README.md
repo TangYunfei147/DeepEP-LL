@@ -1,3 +1,5 @@
+> 当前共享接收分支的执行、构建和A/B说明见[SHARED_RECEIVE.md](SHARED_RECEIVE.md)。dispatch发送后全核接收；combine保持S/R。
+
 # LL阶段与专家诊断（泛化分支）
 
 > 2026-10-19：本分支现在按编译配置分配固定56个AIV，默认28发+28收，支持不对称比例；以[CORE_SPLIT.md](CORE_SPLIT.md)为准。旧1:1和动态核数说明仅描述此前版本。全rank重建匹配wheel。
@@ -117,7 +119,7 @@ python -m pip install -v --force-reinstall --no-build-isolation --no-deps .
 
 ## 格式与构建
 
-核心协议标识7000+发送核数、阶段schema5、专家schema1；全rank重建同一分支的匹配wheel。
+核心协议标识8000+发送核数、阶段schema6、专家schema1；全rank重建同一分支的匹配wheel。
 每核阶段缓冲2048B、512B对齐；专家统计有独立可选缓冲。
 设置DEEPEP_LL_STAGE_TIMER=ON启用；仅阶段schema1旧数据也可离线解析。
 泛化分支默认MTE构建；python scripts/build_shmem.py自动校验并复用已有SDK，包括身份匹配的HNS能力超集。
@@ -164,7 +166,7 @@ python tests/ll_stage_timer/analyze.py results/ll-stage-001 --latest --trace-ite
 
 ## G4基线与错峰候选（2026-10-19）
 
-本分支默认逻辑组已改为4，保持MTE、原发送顺序、阶段schema5/专家schema1。所有受支持EP均采用同一个编译期G，不引入NDR的按world选G策略。物理每机16rank的约定及原生EP准入保持不变。
+本分支默认逻辑组已改为4，保持MTE、原发送顺序、阶段schema6/专家schema1。所有受支持EP均采用同一个编译期G，不引入NDR的按world选G策略。物理每机16rank的约定及原生EP准入保持不变。
 
 更新后全rank重装匹配wheel；仅改变逻辑G不要求重建已通过校验的SDK。若此前显式定义了DEEPEP_LL_RANKS_PER_GROUP，该值会覆盖新默认，比较前核对运行记录中的logical_group。不要在同一作业内混用G4和G16 wheel。
 

@@ -20,12 +20,17 @@ def check_identity(left,right):
                                                for key in ('world_size','logical_group','active_aiv','core_protocol')):
             raise ValueError('Unknown or invalid runtime comparison identity')
     differences=set(DIFFERENCES)
-    if all(7001 <= item['core_protocol'] <= 7055 for item in (left,right)):
+    if all(7001 <= item['core_protocol'] <= 7055 or 8001 <= item['core_protocol'] <= 8055 for item in (left,right)):
         for item in (left,right):
             if (item.get('send_cores',0)+item.get('recv_cores',0)!=56 or item['active_aiv']!=56
-                    or item['core_protocol']!=7000+item.get('send_cores',0)):
+                    or item['core_protocol']!=(item['core_protocol']//1000)*1000+item.get('send_cores',0)):
                 raise ValueError('Invalid configured core split identity')
-        differences.update(('send_cores','recv_cores','core_protocol'))
+        for item in (left,right):
+            shared = item['core_protocol']//1000 == 8
+            expected = 56 if shared else item['recv_cores']
+            if item.get('dispatch_recv_cores',expected)!=expected or item['stage_timer_schema']!=(6 if shared else 5):
+                raise ValueError('Invalid receive participation/schema identity')
+        differences.update(('send_cores','recv_cores','dispatch_recv_cores','core_protocol','stage_timer_schema'))
     mismatches=[key for key in sorted(left.keys()|right.keys()) if key not in differences and left.get(key)!=right.get(key)]
     if mismatches: raise ValueError('Incomparable settings: '+', '.join(mismatches))
 
@@ -63,6 +68,8 @@ def compare(left,right,kind):
         role_changed = (kind=='stage' and key in l and key in r
                         and l[key][1].get('send_cores') is not None and r[key][1].get('send_cores') is not None
                         and (key[2] < l[key][1]['send_cores']) != (key[2] < r[key][1]['send_cores']))
+        partition_changed = (kind=='stage' and key[0]=='dispatch' and key in l and key in r
+                             and (l[key][1]['core_protocol']//1000==8)!=(r[key][1]['core_protocol']//1000==8))
         rows.append(dict(key=json.dumps(key),baseline_mean_us=a,candidate_mean_us=b,
                          baseline_send_cores=l[key][1].get("send_cores") if key in l else None,
                          candidate_send_cores=r[key][1].get("send_cores") if key in r else None,
@@ -70,8 +77,8 @@ def compare(left,right,kind):
                          candidate_recv_cores=r[key][1].get("recv_cores") if key in r else None,
                          baseline_group=l[key][1]['logical_group'] if key in l else None,
                          candidate_group=r[key][1]['logical_group'] if key in r else None,
-                         candidate_over_baseline=b/a if a is not None and a>0 and b is not None and not role_changed else None,
-                         status='role_changed' if role_changed else ('matched' if key in l and key in r else 'missing_on_one_side')))
+                         candidate_over_baseline=b/a if a is not None and a>0 and b is not None and not role_changed and not partition_changed else None,
+                         status='work_partition_changed' if partition_changed else 'role_changed' if role_changed else ('matched' if key in l and key in r else 'missing_on_one_side')))
     return rows
 
 

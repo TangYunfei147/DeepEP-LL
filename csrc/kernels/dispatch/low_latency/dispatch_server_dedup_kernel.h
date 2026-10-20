@@ -39,12 +39,11 @@ public:
         if (core_ < sendCores_)
             sender_.Init(args_, x, expertIds, expertScales, sourceMaskOut, expertScalesOut, bs, h, topK, experts, pipe,
                          magic, inputScales, enableDedup);
-        else
-            receiver_.Init(args_, expandXOut, dynamicScalesOut, tokenTypeOut, destinationIndexOut, relayReadIndexOut,
-                           bs, h, topK, experts, pipe, magic, enableDedup, expertTimer);
+        receiver_.Init(args_, expandXOut, dynamicScalesOut, tokenTypeOut, destinationIndexOut, relayReadIndexOut,
+                       bs, h, topK, experts, pipe, magic, enableDedup, expertTimer);
     }
 
-    // 完整dispatch：所有核先发送计数，再按固定核分工并行执行Sender与Receiver。
+    // 完整dispatch：先按S/R执行发送与前缀准备，再由全部核消费各自接收任务。
     // Sender可与接收核的计数前缀准备重叠，不能把提取阶段耗时直接相加当作完整时延。
     __aicore__ inline void Process()
     {
@@ -64,17 +63,18 @@ public:
             if (timer_) timer_->Start(LlStageTimer::CountPrefix);
             counts_.CalcCumsum();
             if (timer_) timer_->End(LlStageTimer::CountPrefix);
-            // 接收目标地址依赖计数前缀；写回完成并排空后，Receiver才可重置pipe并消费GM。
-            if (timer_) timer_->Start(LlStageTimer::CountPublish);
-            counts_.CompleteCumsum();
-            // CompleteCumsum may still be writing expert counts from its UB.
-            // Retire that stage before receiver resets the pipe and reloads GM.
-            PipeBarrier<PIPE_ALL>();
-            if (timer_) timer_->End(LlStageTimer::CountPublish);
-            if (timer_) timer_->Start(LlStageTimer::Receiver);
-            receiver_.Process(timer_);
-            if (timer_) timer_->End(LlStageTimer::Receiver);
         }
+
+        // Every core joins receive after completing its own send or prefix work.
+        // Prefix producers remain the original R cores. Each of the 56 consumers
+        // has its own publication row and disjoint output/cleanup ownership.
+        if (timer_) timer_->Start(LlStageTimer::CountPublish);
+        counts_.CompleteCumsum();
+        PipeBarrier<PIPE_ALL>();
+        if (timer_) timer_->End(LlStageTimer::CountPublish);
+        if (timer_) timer_->Start(LlStageTimer::Receiver);
+        receiver_.Process(timer_);
+        if (timer_) timer_->End(LlStageTimer::Receiver);
 
         if (timer_) timer_->Start(LlStageTimer::CountFinish);
         counts_.Finish();

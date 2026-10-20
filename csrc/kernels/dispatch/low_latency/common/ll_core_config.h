@@ -13,8 +13,10 @@ static_assert(DEEPEP_LL_SEND_CORES + DEEPEP_LL_RECV_CORES == 56, "LL send + rece
 constexpr uint32_t kLlSendCoreNum = DEEPEP_LL_SEND_CORES;
 constexpr uint32_t kLlRecvCoreNum = DEEPEP_LL_RECV_CORES;
 constexpr uint32_t kLlActiveCoreNum = 56U;
+// Dispatch senders join receive after their own sends; combine retains S/R.
+constexpr uint32_t kLlDispatchRecvCoreNum = kLlActiveCoreNum;
 // Encode the split so mismatched Host/device objects and rank identities differ.
-constexpr uint32_t kLlCoreProtocolVersion = 7000U + kLlSendCoreNum;
+constexpr uint32_t kLlCoreProtocolVersion = 8000U + kLlSendCoreNum;
 // Storage capacity remains separate from the fixed 56-core launch.
 constexpr uint32_t kLlMaxCoreNum = 72U;
 constexpr uint32_t kLlMaxRecvCoreNum = 56U;

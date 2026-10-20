@@ -41,7 +41,7 @@ def test_all_positive_56_splits_cover_roles_and_notify_targets(send):
     for experts in (16,384,1024):
         matrix=recv*recv*32
         prefix_stride=(experts*4+31)//32*32
-        end=72*512+experts*512+2*matrix+recv*prefix_stride
+        end=72*512+experts*512+matrix+56*prefix_stride+56*recv*32
         reserved=(end+1023)//1024*1024+1024
         assert reserved<=1024*1024
 
@@ -76,7 +76,7 @@ def test_split_changes_build_identity_and_wires_both_compilers():
     for name in ('DEEPEP_LL_SEND_CORES','DEEPEP_LL_RECV_CORES'):
         assert f'-D{name}=${{{name}}}' in child
     receiver=(ROOT/'csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_recv.h').read_text()
-    assert 'receiver_ = GetBlockIdx() - kLlSendCoreNum;' in receiver
+    assert 'receiver_ = GetBlockIdx();' in receiver
     partial=(ROOT/'csrc/kernels/combine/low_latency/combine_server_dedup_partial.h').read_text()
     assert 'GetBlockIdx() - DispatchDedup::kLlSendCoreNum' in partial
 
@@ -109,7 +109,7 @@ def test_expert_decoder_uses_supplied_receive_boundary():
 
 def test_perf_entry_rejects_stale_wheel_without_requesting_timer():
     st=load('split_entry','tests/elastic/test_ep_low_latency.py')
-    st.validate_core_split_capability(dict(active_aiv=56,send_cores=20,recv_cores=36,core_protocol=7020))
+    st.validate_core_split_capability(dict(active_aiv=56,send_cores=20,recv_cores=36,core_protocol=8020))
     for identity in (dict(active_aiv=58,send_cores=10,recv_cores=48,core_protocol=6010),
                      dict(active_aiv=56,send_cores=28,recv_cores=28,core_protocol=5),
                      dict(active_aiv=56,send_cores=20,recv_cores=36,core_protocol=7028)):

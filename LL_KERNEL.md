@@ -2,7 +2,7 @@
 
 > 2026-10-19：本分支现在按编译配置分配固定56个AIV，默认28发+28收，支持不对称比例；以[CORE_SPLIT.md](tests/ll_stage_timer/CORE_SPLIT.md)为准。旧1:1和动态核数说明仅描述此前版本。全rank重建匹配wheel。
 
-This checkout is `kernel/ll-g4-stagger`, derived from the G4 configurable baseline at `3876de4`. Only deduplicated dispatch send ordering is changed; see [SEND_STAGGER.md](tests/ll_stage_timer/SEND_STAGGER.md).
+This checkout is `kernel/ll-g4-shared-recv`, based on `kernel/ll-g4-stagger@5c2ea11`. Dispatch senders join receive after their own sends; see [SHARED_RECEIVE.md](tests/ll_stage_timer/SHARED_RECEIVE.md). Combine retains its existing S/R execution.
 
 `kernel/ll-configurable-groups` is based on upstream-aligned `main` and contains
 LL dispatch/combine, required Host/runtime/build changes, and CPU protocol tests.
@@ -62,4 +62,4 @@ must be validated by the user on the target deployment.
 LL设备阶段打点：参见 [tests/ll_stage_timer/README.md](tests/ll_stage_timer/README.md)。默认关闭，通过独立诊断调用采集每rank/每AIV阶段累计ticks。
 
 ## Shared diagnostics update
-The configured-split protocol identifier is 7000 + send_cores, with stage schema 5 and expert schema 1. Rebuild all ranks. MTE, the original group policy and default G=4 are retained. Shared launch and comparison instructions: [PARITY.md](tests/ll_stage_timer/PARITY.md). Different G values are permitted in cross-branch comparisons.
+The configured-split protocol identifier is 8000 + send_cores, with stage schema 6 and expert schema 1. Rebuild all ranks. MTE, the original group policy and default G=4 are retained. Shared launch and comparison instructions: [PARITY.md](tests/ll_stage_timer/PARITY.md). Different G values are permitted in cross-branch comparisons.

@@ -74,8 +74,9 @@ DISPATCH_DEDUP_EP_DEDUP_INLINE EpServerDedupCountLayout DispatchServerDedupCount
     layout.cumsumOffset = uint64_t(experts) * kEpServerDedupCountGmStride;
     layout.prefixOffset = layout.cumsumOffset + matrixBytes;
     layout.prefixStride = (uint64_t(experts) * sizeof(int32_t) + 31U) / 32U * 32U;
-    layout.cumsumFlagOffset = layout.prefixOffset + recvCores * layout.prefixStride;
-    const uint64_t bytes = layout.cntOffset + layout.cumsumFlagOffset + matrixBytes;
+    layout.cumsumFlagOffset = layout.prefixOffset + kLlDispatchRecvCoreNum * layout.prefixStride;
+    const uint64_t readyBytes = uint64_t(kLlDispatchRecvCoreNum) * recvCores * kEpServerDedupCountRecordBytes;
+    const uint64_t bytes = layout.cntOffset + layout.cumsumFlagOffset + readyBytes;
     layout.counterOffset = (bytes + 1023U) / 1024U * 1024U;
     layout.stateBytes = layout.counterOffset + 1024U;
     return layout;

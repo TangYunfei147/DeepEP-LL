@@ -18,4 +18,6 @@
 
 本错峰候选只额外使用common/ll_send_order.h，由SendWithDedup调用；未引入NDR传输层。
 
-收发编译配置：common/ll_core_config.h、cmake/CoreSplit.cmake及build_support.py；固定总数58，默认29+29，详见../ll_stage_timer/CORE_SPLIT.md。
+收发编译配置：common/ll_core_config.h、cmake/CoreSplit.cmake及build_support.py；固定总数56，默认28+28，详见../ll_stage_timer/CORE_SPLIT.md。
+
+共享接收分支：dispatch前S核完成发送后加入接收，全部56核按物理核编号静态分片；R核仍负责前缀生产。入口、counts前缀发布矩阵、receiver任务划分、Host UB预算必须一起维护。见../ll_stage_timer/SHARED_RECEIVE.md。

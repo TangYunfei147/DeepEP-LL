@@ -122,7 +122,7 @@ void bind_low_latency(py::module_& module)
     if (deepep_ll_core_protocol_version() != DispatchDedup::kLlCoreProtocolVersion)
         throw std::runtime_error("LL Host/device core protocol mismatch; rebuild and reinstall the complete wheel");
     module.attr("low_latency_core_protocol") = DispatchDedup::kLlCoreProtocolVersion;
-    module.attr("low_latency_implementation") = "configurable-groups";
+    module.attr("low_latency_implementation") = "g4-shared-recv";
     module.attr("low_latency_rdma_enabled") = false;
     module.attr("low_latency_stage_timer_enabled") = bool(deepep_ll_stage_timer_enabled());
     module.def("low_latency_expert_timer_layout", []() {
@@ -150,6 +150,7 @@ void bind_low_latency(py::module_& module)
         py::dict result;
         result["platform_aiv"] = cfg.platform; result["available_aiv"] = cfg.available;
         result["active_aiv"] = cfg.active; result["send_cores"] = DispatchDedup::kLlSendCoreNum;
+        result["dispatch_recv_cores"] = DispatchDedup::kLlDispatchRecvCoreNum;
         result["recv_cores"] = DispatchDedup::kLlRecvCoreNum; result["device"] = cfg.device;
         result["runtime_device_queried"] = cfg.device >= 0;
         result["control_capacity_aiv"] = DispatchDedup::kLlMaxCoreNum;

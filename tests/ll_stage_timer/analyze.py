@@ -100,9 +100,11 @@ def expert_reports(paths, frequency_hz):
         if payload['experts'] != meta['config'].get('num_experts',payload['experts']):
             raise ValueError('Expert count differs from case configuration')
         header=saved['raw'][0][0]
-        expected_send=header[5] >> 8 if header[1]==5 else len(saved['raw'])//2
-        if (header[1]==5 and 'send_cores' not in payload) or payload.get('send_cores',expected_send)!=expected_send:
+        expected_send=header[5] >> 8 if header[1] in (5,6) else len(saved['raw'])//2
+        if (header[1] in (5,6) and 'send_cores' not in payload) or payload.get('send_cores',expected_send)!=expected_send:
             raise ValueError('Expert/stage core split mismatch')
+        if payload.get('shared_receive',False) != (header[1]==6):
+            raise ValueError('Expert/stage receive participation mismatch')
         report=expert.parse_records(**payload, frequency_hz=frequency_hz)
         if report['active_aiv'] != len(saved['raw']) or report['boundary_mode'] != ('observe' if (saved['raw'][0][0][5] & 255)==1 else 'drain'):
             raise ValueError('Expert/stage core count or boundary mode mismatch')

@@ -1,10 +1,12 @@
+> 当前共享接收分支的执行、构建和A/B说明见[SHARED_RECEIVE.md](SHARED_RECEIVE.md)。dispatch发送后全核接收；combine保持S/R。
+
 # 两个 kernel 分支的共同实验与对比
 
 > 2026-10-19：本分支现在按编译配置分配固定56个AIV，默认28发+28收，支持不对称比例；以[CORE_SPLIT.md](CORE_SPLIT.md)为准。旧1:1和动态核数说明仅描述此前版本。全rank重建匹配wheel。
 
 本指南同时适用于kernel/ll-configurable-groups与kernel/ll-ndr-hns1825。
 统一启动入口tests/ll_stage_timer/run.py，保留共同ST/采样口径；不同分支的timer格式和分析器需分别匹配。
-本分支核心协议标识7000+发送核数、阶段schema5、专家schema1，NDR未随此次修改；implementation字段会拒绝混用不同分支wheel。
+本分支核心协议标识8000+发送核数、阶段schema6、专家schema1，NDR未随此次修改；implementation字段会拒绝混用不同分支wheel。
 同一ABI号不意味着可以在一个作业内混用两个分支。
 
 ## 必须匹配的条件

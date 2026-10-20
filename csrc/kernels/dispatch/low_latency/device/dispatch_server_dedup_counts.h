@@ -16,7 +16,7 @@ using namespace AscendC;
 // Adapted from Memory's CalAndSendCntByRankAndExpert / WaitDispatch / cumsum
 // chain. Counts cover the complete original routing tensor, including relay routes.
 // 本类没有 Process()：上层依次调用 SendCnt，再由接收核执行
-// RecvCnt → CalcCumsum → CompleteCumsum；发送核在 SendCnt 后进入 token 发送。
+// RecvCnt → CalcCumsum；发送核在 SendCnt 后进入 token 发送，之后所有核CompleteCumsum。
 // 计数覆盖原始专家路由（含后续 relay 路由），不按去重后的跨 server 包数计数。
 class ServerDedupCounts {
 public:
@@ -37,6 +37,7 @@ public:
         axisK_ = topK;
         expertIdsCnt_ = bs * topK;
         rscvStatusNum_ = experts;
+        activeCumSumCores_ = experts < aivUsedCumSum_ ? experts : aivUsedCumSum_;
         moeExpertNumPerRank_ = experts / epWorldSize_;
         expertTokenNumsType_ = expertTokenNumsType;
         useAllCoreCount_ = bs < kEpServerDedupAllCoreCountBsThreshold;
@@ -299,9 +300,9 @@ __aicore__ inline void ServerDedupCounts::RecvCnt()
     stagePool_.InitBuffer(gatherMaskOutBuf_, Ceil(rscvStatusNum_ * sizeof(int32_t), UB_ALIGN) * UB_ALIGN);
     // Vector publication/cleanup touches complete groups of eight 32B records.
     // Padding is UB-only; matrix strides and participation use actual core counts.
-    const uint32_t sumBytes = Ceil(aivUsedCumSum_, 8U) * SIZE_ALIGN_256;
+    const uint32_t sumBytes = Ceil(coreNum_, 8U) * SIZE_ALIGN_256;
     stagePool_.InitBuffer(sumCoreBuf_, sumBytes);
-    stagePool_.InitBuffer(sumLocalBuf_, sumBytes);
+    stagePool_.InitBuffer(sumLocalBuf_, Ceil(aivUsedCumSum_, 8U) * SIZE_ALIGN_256);
     stagePool_.InitBuffer(sumContinueBuf_, Ceil(aivUsedCumSum_ * sizeof(float), UB_ALIGN) * UB_ALIGN);
     // 等待本片 ready 到齐后提取 count，并计算局部累计值、发布本片总数。
     // 本阶段不会等待 token payload；即使分到空片段也要发布总数 0，参与后续跨核汇总。
@@ -311,12 +312,18 @@ __aicore__ inline void ServerDedupCounts::RecvCnt()
 // 摘要：等待所有前缀片段就绪，加载本核前缀副本，并由首个接收核输出各专家计数。
 __aicore__ inline void ServerDedupCounts::CompleteCumsum()
 {
-    // Convert the physical AIV index to its receive-group index.
-    // 前缀完成阶段：把物理 AIV 编号转成接收组编号，为本核加载完整前缀副本。
-    const uint32_t receiver = aivId_ - aivUsedAllToAll_;
-    stagePool_.InitBuffer(readyBuf_, Ceil(activeCumSumCores_ * UB_ALIGN + SIZE_ALIGN_256, SIZE_ALIGN_256) * SIZE_ALIGN_256);
-    stagePool_.InitBuffer(cleanBuf_, activeCumSumCores_ * UB_ALIGN);
-    stagePool_.InitBuffer(prefixBuf_, Ceil(rscvStatusNum_ * sizeof(int32_t), UB_ALIGN) * UB_ALIGN);
+    // Every physical AIV has a private ready row and prefix replica.
+    const uint32_t receiver = aivId_;
+    // Retire send/count writes before reusing their UB. No cross-core barrier.
+    PipeBarrier<PIPE_ALL>();
+    tpipe_->Reset();
+    // Ready flags use integer bit patterns reduced as FP32 subnormals.
+    // Reassert the mode after Reset before the count-protocol reduction.
+    SetCtrlSpr<60, 60>(0);
+    tpipe_->InitBuffer(scalarBuf_, 3U * UB_ALIGN);
+    tpipe_->InitBuffer(readyBuf_, Ceil(activeCumSumCores_ * UB_ALIGN + SIZE_ALIGN_256, SIZE_ALIGN_256) * SIZE_ALIGN_256);
+    tpipe_->InitBuffer(cleanBuf_, activeCumSumCores_ * UB_ALIGN);
+    tpipe_->InitBuffer(prefixBuf_, Ceil(rscvStatusNum_ * sizeof(int32_t), UB_ALIGN) * UB_ALIGN);
     statusFp32Tensor_ = readyBuf_.Get<float>();
     statusCleanFp32Tensor_ = cleanBuf_.Get<float>();
     // 各核先写前缀再发完成标记；全部标记到齐后，读取才不会混入未更新片段。
@@ -331,8 +338,8 @@ __aicore__ inline void ServerDedupCounts::CompleteCumsum()
     // 仅接收组的第 0 核写公开专家计数，避免多核重复写同一输出。
     // 每个专家最后一个来源 rank 的前缀即该专家结束位置；type=0 输出累计数，
     // 其他已验证类型输出与上一专家累计数之差，即该专家自己的接收条数。
-    if (receiver == 0U) {
-        stagePool_.InitBuffer(tokenNumBuf_, Ceil(moeExpertNumPerRank_ * sizeof(int64_t), UB_ALIGN) * UB_ALIGN);
+    if (receiver == aivUsedAllToAll_) {
+        tpipe_->InitBuffer(tokenNumBuf_, Ceil(moeExpertNumPerRank_ * sizeof(int64_t), UB_ALIGN) * UB_ALIGN);
         LocalTensor<int64_t> expertCounts = tokenNumBuf_.Get<int64_t>();
         int64_t previous = 0;
         for (uint32_t expert = 0; expert < moeExpertNumPerRank_; ++expert) {
@@ -559,13 +566,13 @@ __aicore__ inline void ServerDedupCounts::CalRecvAndSetFlag()
         // sendCountsOut 写的是累计前缀，而非单条记录的原始发送数量。
         DataCopyPad(sendCountsGlobal[startStatusIndex_], outCountLocal, dataCopyOutParams);
 
-        // 每个接收核各持一份完整前缀副本；当前核向所有副本写入自己负责的片段。
-        for (uint32_t index = 0; index < aivUsedCumSum_; index++) {
+        // 全部56核各持一份完整前缀副本；生产核向所有副本写入自己的片段。
+        for (uint32_t index = 0; index < coreNum_; index++) {
             DataCopyPad(workspaceGlobal[index * rscvStatusNum_ + startStatusIndex_], outCountLocal, dataCopyOutParams);
         }
     }
-    uint8_t repeatTimes = Ceil(aivUsedCumSum_, 8);
-    DataCopyParams sumIntriParams{static_cast<uint16_t>(aivUsedCumSum_), 1, 0,
+    uint8_t repeatTimes = Ceil(coreNum_, 8);
+    DataCopyParams sumIntriParams{static_cast<uint16_t>(coreNum_), 1, 0,
                                   static_cast<uint16_t>(aivUsedCumSum_ - 1)};
     LocalTensor<int32_t> syncOnCoreTensor = sumCoreBuf_.Get<int32_t>();
     LocalTensor<float> syncOnCoreFP32Tensor = sumCoreBuf_.Get<float>();
@@ -588,7 +595,7 @@ __aicore__ inline void ServerDedupCounts::WaitCumSumFlag()
     int32_t cumSumFlag = 0;
     int32_t targetFlag = activeCumSumCores_ * UB_ALIGN_DATA_COUNT;
     uint32_t cumSumFlagOffset =
-        (layout_.cumsumFlagOffset + (aivId_ - aivUsedAllToAll_) * aivUsedCumSum_ * UB_ALIGN) / sizeof(float);
+        (layout_.cumsumFlagOffset + aivId_ * aivUsedCumSum_ * UB_ALIGN) / sizeof(float);
     uint32_t innerSumParams = activeCumSumCores_ * UB_ALIGN / sizeof(float);
     SumParams sumFlagParams{1, innerSumParams, activeCumSumCores_ * UB_ALIGN_DATA_COUNT};
     LocalTensor<float> statusSumOutTensor = scalarBuf_.Get<float>();

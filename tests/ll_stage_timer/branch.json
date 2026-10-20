@@ -1,1 +1,1 @@
-{"implementation":"configurable-groups","rdma":false}
+{"implementation":"g4-shared-recv","rdma":false}

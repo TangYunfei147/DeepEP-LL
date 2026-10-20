@@ -1,6 +1,6 @@
 # 编译配置56个AIV的收发分工
 
-适用于 `kernel/ll-configurable-groups` 和 `kernel/ll-g4-stagger`。默认28发+28收；可用两个编译环境变量调整，要求正整数且相加等于56。不要求1:1、不要求各自为偶数、不增加8核倍数等比例限制。
+本分支为 `kernel/ll-g4-shared-recv`。默认前段28发送+28计数/接收；dispatch发送核完成发送后也加入接收，最终56核消费包。可用两个编译环境变量调整，要求正整数且相加等于56。不要求1:1、不要求各自为偶数、不增加8核倍数等比例限制。
 
 ```bash
 # 仓库根目录，已激活该分支匹配的Python/CANN环境
@@ -18,15 +18,15 @@ python -m pip install -v --force-reinstall --no-build-isolation --no-deps .
 
 ## 执行语义
 
-LL启动总数固定56：前S个核负责发送/直接回传，后R个核负责接收/partial及聚合；dispatch和combine共同使用该配置。接收局部编号为`core-S`，不能写成`core-R`。平台/设备查询值仅保留为诊断信息，不据此缩减或替换56；目标设备是否能运行该配置需在目标环境验证。
+LL启动总数固定56：dispatch前S核发送，后R核生产计数前缀；各核完成前段工作后等待自己的前缀ready行，再按物理core编号在全部56核间分配接收输出行。`recv_cores=R`表示初始接收/前缀核数，`dispatch_recv_cores=56`表示完整dispatch接收参与者。没有全核发送完成屏障，也不动态抢其他核任务。
 
-计数前缀矩阵、接收任务分片、Host UB预算和combine参与者使用实际S/R。控制容量仍保留72个magic槽；接收通知行容量56。通知工作由最后`min(8,R)`个接收核覆盖所有逻辑组成员，R<8也不新增准入限制；准备区仍保留原8行容量。G4逻辑分组和MTE传输保持原样，错峰分支继续保留原轮转算法。
+combine继续使用前S核direct、后R核partial/aggregate，局部编号仍为core-S。G4、MTE、去重首跳与错峰发送顺序保持。前缀求和矩阵仍R×R，前缀副本56份，ready矩阵56×R；按56核计算dispatch接收UB预算。详见[SHARED_RECEIVE.md](SHARED_RECEIVE.md)。
 
 ## 安装一致性与结果
 
-全rank必须使用同一分支、同一S/R的完整wheel。Host/device协议标识改为`7000+S`，防止混装不同分工的库；测试入口跨rank同时检查send_cores/recv_cores。不同S/R试验可通过compare.py比较，结果附baseline/candidate收发核数；同一作业仍禁止混配。逐核阶段对照若该核从发送变为接收或相反，输出role_changed，不计算该行加速比。
+全rank必须使用同一分支、同一S/R的完整wheel。Host/device协议标识改为`8000+S`，防止混装不同分工的库；测试入口跨rank同时检查send_cores/recv_cores。不同S/R试验可通过compare.py比较，结果附baseline/candidate收发核数；同一作业仍禁止混配。逐核阶段对照若该核从发送变为接收或相反，输出role_changed，不计算该行加速比。
 
-打点仍是累计阶段格式，每核2048B，但schema升为5，header的mode字段高位保存发送核数。解析器按记录分界标注send/receive，旧schema1/2仍可离线读取。新打点需匹配ON wheel并重采，不能把旧1:1数据重新解释成新比例。专家schema1数据结构不变，采样元数据额外保存send_cores，并检查与阶段记录一致。
+打点仍是累计阶段格式，每核2048B，但schema升为6，header的mode字段高位保存发送核数。schema6把dispatch原发送核的整体角色标为send_receive，接收阶段标为receive；combine不变，旧schema1/2/5仍可离线读取。新打点需匹配ON wheel并重采，不能把旧1:1数据重新解释成新比例。专家schema1数据结构不变，采样元数据额外保存send_cores与shared_receive，并检查与阶段记录一致。
 
 运行后查看summary.csv/ranks.csv中的send_cores、recv_cores及active_aiv，或在已绑定目标设备的环境调用：
 
@@ -39,6 +39,6 @@ print(require_native("LL split inspection").low_latency_core_config())
 
 ## 本地验证边界
 
-CPU模型遍历1+55到55+1的全部正整数分配，检查核角色、任务覆盖、通知目标覆盖及控制区1MiB边界；另覆盖schema5与旧数据、错误配置、构建指纹、跨比例对照。真实C++布局/平台查询测试已改为固定56并覆盖不对称比例，但本地无C++编译器，执行项跳过。本次未执行CANN编译或设备测试；原始NDR、事件分支及其他任务未提交kernel均不修改。
+CPU模型遍历1+55到55+1的全部正整数分配，检查核角色、任务覆盖、通知目标覆盖及控制区1MiB边界；另覆盖schema5/6与旧数据、错误配置、构建指纹、跨比例对照。真实C++布局/平台查询测试已改为固定56并覆盖不对称比例，但本地无C++编译器，执行项跳过。本次未执行CANN编译或设备测试；原始NDR、事件分支及其他任务未提交kernel均不修改。
 
-验证记录（2026-10-20）：泛化分支合计220 passed、27项缺C++编译器跳过、9项Bash/POSIX检查未选；错峰分支236 passed、28项跳过、9项未选。包含阶段/配置及构建/打包CPU检查；未执行CANN编译或NPU测试。旧58核协议6000+S被拒绝，全rank需重装56核完整wheel，SDK无需因本次核数修正重建。
+本次实现与验证边界见[SHARED_RECEIVE.md](SHARED_RECEIVE.md)；不得沿用基础分支的设备验证结论。
