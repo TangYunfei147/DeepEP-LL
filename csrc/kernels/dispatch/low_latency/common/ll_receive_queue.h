@@ -8,6 +8,9 @@ namespace DispatchDedup {
 #endif
 constexpr uint32_t kLlReceiveBatch = 16U;
 constexpr uint32_t kLlReceiveLeaseBatches = 8U;
+// Completion polling is independent of cursor leasing. Even fully skipped
+// windows count toward this bound, so late workers still terminate.
+constexpr uint32_t kLlReceiveDonePollBatches = 32U;
 constexpr uint32_t kLlReceiveDoneOffset = 512U;
 constexpr uint32_t kLlReceiveAdmissionOffset = 1024U;
 constexpr uint32_t kLlReceiveHeaderBytes = 1536U;
@@ -50,7 +53,7 @@ public:
     }
     LL_QUEUE_INLINE bool Next(uint32_t& batch) {
         if (!batches_ || allClaimed_) return false;
-        if (++poll_==kLlReceiveLeaseBatches) {
+        if (++poll_==kLlReceiveDonePollBatches) {
             poll_=0U;
             if (AllClaimed()) return false;
         }

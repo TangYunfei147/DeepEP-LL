@@ -87,3 +87,19 @@ def test_position_cache_resets_between_launches_and_keeps_partial_batch_size():
                 cached=(begin,count)
             assert tile==positions[begin:begin+count]
     assert loads==12  # 21 probes, with 9 descriptor loads eliminated.
+
+
+@pytest.mark.parametrize("finish_after",range(65))
+def test_decoupled_done_poll_has_bounded_exit_even_when_all_batches_skipped(finish_after):
+    # Next counts candidate iterations, including batches skipped by seen.
+    poll=0
+    reads=0
+    for iteration in range(1,finish_after+33):
+        poll+=1
+        if poll==32:
+            poll=0
+            reads+=1
+            if iteration>finish_after:
+                break
+    assert finish_after<iteration<=finish_after+32
+    assert reads==iteration//32
