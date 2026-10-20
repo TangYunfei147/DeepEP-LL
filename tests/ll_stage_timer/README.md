@@ -132,3 +132,12 @@ python tests/ll_stage_timer/analyze.py "results/ll-timer/$RUN_NAME" --trace-iter
 正式性能另装OFF wheel、不传--ll-stage-timer，沿用10/100/每完整task最后50条。ON profiler包含诊断同步与写出，不能替代OFF基线。更多语义见[SEGMENT_TIMER.md](SEGMENT_TIMER.md)与[GROUP_LOCAL_SEND.md](GROUP_LOCAL_SEND.md)。
 
 跨轮汇总按initial_role保持同核同阶段唯一统计项；某轮有本组发送、其他轮为空时，不拆分KERNEL统计。汇总角色表示该采样集合中实际参与过发送，cores.csv仍逐轮保留角色。
+
+## 按算子筛选离线分析
+
+```bash
+python tests/ll_stage_timer/analyze.py <run目录> --op dispatch --trace-iteration 4
+python tests/ll_stage_timer/analyze.py <run目录> --op combine --trace-iteration 4
+```
+
+`--operation`是`--op`的同义写法；不传则保留全部算子。筛选覆盖summary、CSV、trace及本分支附加报告，所选算子的全部rank/轮次仍必须完整。默认分别输出stage-analysis-dispatch、stage-analysis-combine；可用--output-dir指定新目录，已有输出不覆盖。仅离线脚本更新，无需重编wheel或重新采样。
