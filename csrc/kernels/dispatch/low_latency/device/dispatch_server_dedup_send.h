@@ -44,6 +44,8 @@ public:
         h_ = h;
         k_ = k;
         localExperts_ = experts / args->rankSize;
+        experts_ = experts;
+        remoteQReady_ = false;
         const uint32_t core = GetBlockIdx();
         const uint32_t base = bs / sendCores_, remainder = bs % sendCores_;
         count_ = base + (core < remainder ? 1U : 0U);
@@ -155,9 +157,10 @@ public:
         PipeBarrier<PIPE_V>();
 
         LL_SEG_END(segBegin1, PREPARE_INPUT);
-        if (enableDedup_)
+        if (enableDedup_) {
+            BuildRemoteQ();
             SendWithDedup(input);
-        else
+        } else
             SendWithoutDedup(input);
 
         // 6. 等待所有发送 lane 归还后，把本核 sourceMask 和 sourceWeights 写回 GM。
@@ -334,6 +337,8 @@ public:
         uint64_t remoteCount=0;
         GatherMask(directTasks_,indices.ReinterpretCast<uint32_t>(),lower.ReinterpretCast<uint32_t>(),true,span,{1U,1U,0U,0U},remoteCount);
         Sync<HardEvent::V_S>();
+        // The filter has finished using qWorkBuf_; it can now hold stable q.
+        BuildRemoteQ();
         const uint32_t serverNum=args_->rankSize/kLlRanksPerGroup;
         if (serverNum<16U) {
             for (uint32_t task=0;task<remoteCount;++task) {
@@ -399,11 +404,36 @@ private:
             }
         }
     }
-    // 摘要：统计原始展平路由中 index 之前指向该专家的条数，作为槽内序号 q；首 token 按当前约定返回 0。
+    // Reuse existing scratch: qSub holds the histogram; qWork holds stable q.
+    // Quantization only reuses qDst. No cross-core publication or extra UB.
+    __aicore__ inline void BuildRemoteQ()
+    {
+        LL_SEG_SCOPE(CAL_TOKEN);
+        const uint32_t routes=bs_*k_;
+        if (experts_>routes) return; // Keep the bounded-UB prefix path.
+        auto histogram=qSubBuf_.Get<uint32_t>();
+        auto table=qWorkBuf_.Get<uint32_t>();
+        Sync<HardEvent::S_V>();
+        Duplicate<uint32_t>(histogram,0U,experts_);
+        Sync<HardEvent::V_S>();
+        const uint32_t groupExperts=localExperts_*kLlRanksPerGroup;
+        const uint32_t localBegin=uint32_t(args_->rank)/kLlRanksPerGroup*groupExperts;
+        for (uint32_t i=0;i<routes;++i) {
+            const uint32_t expert=uint32_t(routeIds_.GetValue(i));
+            if (expert>=localBegin && expert<localBegin+groupExperts) continue;
+            const uint32_t q=histogram.GetValue(expert);
+            histogram.SetValue(expert,q+1U);
+            table.SetValue(i,i<k_ ? 0U : q);
+        }
+        remoteQReady_=true;
+    }
+
+    // First-token q=0 preserves the existing protocol, including duplicate IDs.
     __aicore__ inline uint32_t CalTokenSendExpertCnt(uint32_t expert, uint32_t index)
     {
         LL_SEG_SCOPE(CAL_TOKEN);
         if (index < k_) return 0U;
+        if (remoteQReady_) return qWorkBuf_.Get<uint32_t>().GetValue(index);
         // Memory's prefix reduction over the complete original route sequence.
         auto dst = qDstBuf_.Get<int32_t>();
         auto sub = qSubBuf_.Get<int32_t>();
@@ -541,6 +571,8 @@ private:
     }
 
     const __gm__ DispatchDedup::CommArgs* args_ = nullptr;
+    uint32_t experts_ = 0U;
+    bool remoteQReady_ = false;
     TPipe* pipe_ = nullptr;
     LlStageTimer::DeviceTimer* timer_ = nullptr;
     bool enableDedup_ = false;
