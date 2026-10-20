@@ -1,3 +1,5 @@
+> 2026-10-20本组初发更新：原R核先发送本源rank的组内包，再运行原接收流程；核心标识10000+S。当前调度/UB/验收以[GROUP_LOCAL_SEND.md](GROUP_LOCAL_SEND.md)为准。
+
 # LL参考分段打点
 
 当前`kernel/ll-g4-shared-recv`采用graph_dc_debug_seg的采样区间+全量累计逻辑。每阶段前两次调用保留真实时间线，所有调用累计；INIT单列，KERNEL结束后全核同步再写出。详细位置、格式和限制见[SEGMENT_TIMER.md](SEGMENT_TIMER.md)。

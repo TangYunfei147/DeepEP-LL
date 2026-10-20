@@ -30,7 +30,7 @@ def validate_core_split_capability(capability):
     send, recv = capability.get("send_cores"), capability.get("recv_cores")
     if (type(send) is not int or type(recv) is not int or send <= 0 or recv <= 0
             or send + recv != 56 or capability.get("active_aiv") != 56
-            or capability.get("core_protocol") != 9000 + send):
+            or capability.get("core_protocol") != 10000 + send):
         raise RuntimeError("Rebuild/install the matching configured 56-core split wheel on every rank")
 
 

@@ -1,3 +1,5 @@
+> 2026-10-20本组初发更新：原R核先发送本源rank的组内包，再运行原接收流程；核心标识10000+S。当前调度/UB/验收以[GROUP_LOCAL_SEND.md](tests/ll_stage_timer/GROUP_LOCAL_SEND.md)为准。
+
 # LL kernel configuration and branch
 
 > 2026-10-19：本分支现在按编译配置分配固定56个AIV，默认28发+28收，支持不对称比例；以[CORE_SPLIT.md](tests/ll_stage_timer/CORE_SPLIT.md)为准。旧1:1和动态核数说明仅描述此前版本。全rank重建匹配wheel。
