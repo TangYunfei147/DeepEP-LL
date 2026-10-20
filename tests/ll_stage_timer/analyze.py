@@ -137,8 +137,12 @@ def expert_reports(paths, frequency_hz):
     return rows,summaries
 
 
-def process_directory(source, output, frequency_hz, trace_iteration, lane_layout='core', show_repeated=False):
+def process_directory(source, output, frequency_hz, trace_iteration, lane_layout='core', show_repeated=False, operation=None):
+    if operation not in (None,'dispatch','combine'): raise ValueError('Expected dispatch or combine')
     paths = sorted(source.rglob('sample_*.json'))
+    if operation is not None:
+        paths=[path for path in paths if json.loads(path.read_text())['operation']==operation]
+        if not paths: raise ValueError(f'No {operation} diagnostic samples in {source}')
     report = analyze(paths, frequency_hz)
     selected = []
     for path in paths:
@@ -183,6 +187,7 @@ def process_directory(source, output, frequency_hz, trace_iteration, lane_layout
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('directory',type=Path,help='Timer directory, case, run, or run parent; every rank required per case')
+    parser.add_argument('--operation',choices=('dispatch','combine'),help='Filter statistics and trace to one operation')
     parser.add_argument('--latest',action='store_true',help='Select newest child run by cases.json creation mtime')
     parser.add_argument('--frequency-hz',type=float,default=timer.DEFAULT_FREQUENCY_HZ,
                         help='Default 1GHz: ticks/1000 us')
@@ -193,10 +198,10 @@ def main():
     args=parser.parse_args()
     source=args.directory if args.directory.is_absolute() else ROOT/args.directory
     source, directories = discover(source, args.latest)
-    output = (args.output_dir if args.output_dir.is_absolute() else ROOT/args.output_dir) if args.output_dir else source/'stage-analysis'
+    output = (args.output_dir if args.output_dir.is_absolute() else ROOT/args.output_dir) if args.output_dir else source/('stage-analysis-'+args.operation if args.operation else 'stage-analysis')
     for directory in directories:
         destination = output if len(directories)==1 else output/directory.relative_to(source)
-        process_directory(directory, destination, args.frequency_hz, args.trace_iteration, args.lane_layout, args.show_repeated)
+        process_directory(directory, destination, args.frequency_hz, args.trace_iteration, args.lane_layout, args.show_repeated, args.operation)
 
 
 if __name__=='__main__':main()

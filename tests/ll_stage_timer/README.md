@@ -92,3 +92,12 @@ python tests/ll_stage_timer/analyze.py "results/ll-timer/$RUN_NAME" --trace-iter
 SEND_DRAIN累计已包含拆分项，不能再次相加；阶段同步包括原有PipeBarrier和SyncAll等待，不代表纯网络传输。INIT在KERNEL之外；KERNEL之后的诊断SyncAll/Flush不混入内部计时，但仍进入Host/profiler算子耗时。正式性能另用OFF wheel。
 
 业务流程及验证边界见[ALL_SEND_RECV.md](ALL_SEND_RECV.md)。本次不改收发算法，CANN编译和NPU正确性/性能仍需目标环境验证。
+
+只分析一个算子（统计与trace同时筛选），默认输出stage-analysis-dispatch或stage-analysis-combine：
+
+```bash
+python tests/ll_stage_timer/analyze.py "results/ll-timer/$RUN_NAME" --operation dispatch --trace-iteration 4
+python tests/ll_stage_timer/analyze.py "results/ll-timer/$RUN_NAME" --operation combine --trace-iteration 4
+```
+
+不传--operation仍分析全部算子；所选算子仍检查全部rank和采样轮次，不会跳过缺失rank。此功能纯离线，更新代码即可，无需重装wheel或重采。
