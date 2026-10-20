@@ -101,3 +101,12 @@ python tests/ll_stage_timer/analyze.py "results/ll-timer/$RUN_NAME" --operation 
 ```
 
 不传--operation仍分析全部算子；所选算子仍检查全部rank和采样轮次，不会跳过缺失rank。此功能纯离线，更新代码即可，无需重装wheel或重采。
+
+## 按算子筛选离线分析
+
+```bash
+python tests/ll_stage_timer/analyze.py <run目录> --op dispatch --trace-iteration 4
+python tests/ll_stage_timer/analyze.py <run目录> --op combine --trace-iteration 4
+```
+
+`--operation`是`--op`的同义写法；不传则保留全部算子。筛选覆盖summary、CSV、trace及本分支附加报告，所选算子的全部rank/轮次仍必须完整。默认分别输出stage-analysis-dispatch、stage-analysis-combine；可用--output-dir指定新目录，已有输出不覆盖。仅离线脚本更新，无需重编wheel或重新采样。

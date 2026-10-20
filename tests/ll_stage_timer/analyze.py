@@ -187,7 +187,7 @@ def process_directory(source, output, frequency_hz, trace_iteration, lane_layout
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('directory',type=Path,help='Timer directory, case, run, or run parent; every rank required per case')
-    parser.add_argument('--operation',choices=('dispatch','combine'),help='Filter statistics and trace to one operation')
+    parser.add_argument('--op','--operation',dest='operation',choices=('dispatch','combine'),help='Filter statistics and trace to one operation')
     parser.add_argument('--latest',action='store_true',help='Select newest child run by cases.json creation mtime')
     parser.add_argument('--frequency-hz',type=float,default=timer.DEFAULT_FREQUENCY_HZ,
                         help='Default 1GHz: ticks/1000 us')
