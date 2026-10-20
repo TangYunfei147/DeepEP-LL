@@ -122,7 +122,8 @@ def test_production_wiring_preserves_nondedup_and_lane_lifetime():
     assert 'start_ + token, group)' in dedup
     assert 'firstHopMasks_.GetValue(scheduled)' in dedup
     assert 'LlDirectGroupOrder(serverNum, ownServer, rankInGroup, sendCore, step)' in dedup
-    assert 'while ((mask & (uint32_t(1) << firstK)) == 0U) ++firstK;' in dedup
+    assert 'qWorkBuf_.Get<uint32_t>().GetValue' in dedup
+    assert 'LlPlanFirst(mask)' in dedup
     assert 'WaitFlag' not in dedup and 'PipeBarrier' not in dedup
     nondedup = source.split('inline void SendWithoutDedup(', 1)[1].split('private:', 1)[0]
     assert 'LlFirstHopOrder' not in nondedup and 'LlDirectGroupOrder' not in nondedup

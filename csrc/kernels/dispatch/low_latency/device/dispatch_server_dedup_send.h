@@ -53,7 +53,12 @@ public:
         data_.dispatchOffset += DispatchServerDedupWindowOffset(magic);
         inputScales_.SetGlobalBuffer(inputScales);
         x_.SetGlobalBuffer(reinterpret_cast<__gm__ XType*>(x));
-        ids_.SetGlobalBuffer(reinterpret_cast<__gm__ int32_t*>(ids));
+        (void)ids; // Shared preparation reads the original input once per token shard.
+        const auto plan=LlRoutePlanMemory(uint64_t(bs)*k,experts);
+        auto* planBase=args_->peerMems[args_->rank]+DispatchServerDedupWindowOffset(magic)+data_.routePlanOffset;
+        ids_.SetGlobalBuffer(reinterpret_cast<__gm__ int32_t*>(planBase+plan.idsOffset));
+        plannedQ_.SetGlobalBuffer(reinterpret_cast<__gm__ uint32_t*>(planBase+plan.qOffset));
+        plannedMasks_.SetGlobalBuffer(reinterpret_cast<__gm__ uint32_t*>(planBase+plan.masksOffset));
         weights_.SetGlobalBuffer(reinterpret_cast<__gm__ float*>(weights));
         maskOut_.SetGlobalBuffer(reinterpret_cast<__gm__ uint32_t*>(sourceMask));
         weightOut_.SetGlobalBuffer(reinterpret_cast<__gm__ float*>(sourceWeights));
@@ -132,6 +137,9 @@ public:
         serverState_ = serverBuf_.Get<uint32_t>();
         if (maxGroups != 0U) firstHopMasks_ = firstHopBuf_.Get<uint32_t>();
         DataCopyPad(routeIds_, ids_, {1U, bs_ * k_ * 4U, 0U, 0U, 0U}, {false, 0U, 0U, 0});
+        DataCopyPad(qWorkBuf_.Get<uint32_t>(),plannedQ_,{1U,bs_*k_*4U,0U,0U,0U},{false,0U,0U,0U});
+        if (enableDedup_)
+            DataCopyPad(qSubBuf_.Get<uint32_t>(),plannedMasks_,{1U,bs_*k_*4U,0U,0U,0U},{false,0U,0U,0U});
         if (count_ != 0U)
             DataCopyPad(routeWeights_, weights_[uint64_t(start_) * k_], {1U, count_ * k_ * 4U, 0U, 0U, 0U},
                         {false, 0U, 0U, 0.0f});
@@ -264,8 +272,8 @@ public:
                 const uint32_t scheduled = LlFirstHopOrder(firstHopCount, rankInGroup, sendCore,
                                                           start_ + token, group);
                 const uint32_t mask = firstHopMasks_.GetValue(scheduled);
-                uint32_t firstK = 0;
-                while ((mask & (uint32_t(1) << firstK)) == 0U) ++firstK;
+                const uint32_t anchor=LlPlanFirst(mask);
+                const uint32_t firstK=(qWorkBuf_.Get<uint32_t>().GetValue((start_+token)*k_+anchor)>>16U)&0xffU;
                 const uint32_t index = (start_ + token) * k_ + firstK;
                 const uint32_t expert = uint32_t(routeIds_.GetValue(index));
                 SendPacket(input, start_ + token, firstK, expert, CalTokenSendExpertCnt(expert, index), mask);
@@ -346,6 +354,9 @@ public:
         GatherMask(directTasks_,indices.ReinterpretCast<uint32_t>(),lower.ReinterpretCast<uint32_t>(),true,span,{1U,1U,0U,0U},remoteCount);
         Sync<HardEvent::V_S>();
         LL_SEG_END(remotePrepareBegin, PREPARE_INPUT);
+        // Filtering used qWork as a mask; restore the immutable q table once.
+        DataCopyPad(qWorkBuf_.Get<uint32_t>(),plannedQ_,{1U,bs_*k_*4U,0U,0U,0U},{false,0U,0U,0U});
+        Sync<HardEvent::MTE2_S>();
         const uint32_t serverNum=args_->rankSize/kLlRanksPerGroup;
         if (serverNum<16U) {
             for (uint32_t task=0;task<remoteCount;++task) {
@@ -388,50 +399,23 @@ private:
     // 摘要：按目标 server 对当前 token 的路由分类：同 server 多条远端路由合并为 FIRST_HOP，其余为 DIRECT。
     __aicore__ inline void Classify(uint32_t token, uint32_t& directMask, uint32_t& groups, uint32_t& localMask)
     {
-        uint32_t seen = 0, grouped = 0;
-        for (uint32_t k = 0; k < k_; ++k) {
-            const uint32_t expert = uint32_t(routeIds_.GetValue((start_ + token) * k_ + k));
-            const uint32_t server = expert / localExperts_ / kLlRanksPerGroup;
-            const uint32_t bit = uint32_t(1) << k, serverBit = uint32_t(1) << server;
-            if (server == uint32_t(args_->rank) / kLlRanksPerGroup) {
-                localMask |= bit;
-            } else if ((seen & serverBit) == 0U) {
-                seen |= serverBit;
-                serverState_.SetValue(server, k);
-                directMask |= bit;
-            } else if ((grouped & serverBit) == 0U) {
-                const uint32_t firstBit = uint32_t(1) << serverState_.GetValue(server);
-                directMask &= ~firstBit;
-                firstHopMasks_.SetValue(groups, firstBit | bit);
-                serverState_.SetValue(server, groups++);
-                grouped |= serverBit;
-            } else {
-                const uint32_t index = serverState_.GetValue(server);
-                firstHopMasks_.SetValue(index, firstHopMasks_.GetValue(index) | bit);
-            }
+        const uint32_t ownGroup=uint32_t(args_->rank)/kLlRanksPerGroup;
+        const uint32_t groupExperts=localExperts_*kLlRanksPerGroup;
+        auto packedQ=qWorkBuf_.Get<uint32_t>(),masks=qSubBuf_.Get<uint32_t>();
+        for (uint32_t k=0;k<k_;++k) {
+            const uint32_t i=(start_+token)*k_+k,expert=uint32_t(routeIds_.GetValue(i));
+            if (expert/groupExperts==ownGroup) { localMask|=uint32_t(1)<<k; continue; }
+            const uint32_t mask=masks.GetValue(i),event=packedQ.GetValue(i)>>24U;
+            if (k!=event) continue;
+            if (mask&(mask-1U)) firstHopMasks_.SetValue(groups++,mask);
+            else directMask|=uint32_t(1)<<k;
         }
     }
     // 摘要：统计原始展平路由中 index 之前指向该专家的条数，作为槽内序号 q；首 token 按当前约定返回 0。
     __aicore__ inline uint32_t CalTokenSendExpertCnt(uint32_t expert, uint32_t index)
     {
-        LL_SEG_SCOPE(CAL_TOKEN);
-        if (index < k_) return 0U;
-        // Memory's prefix reduction over the complete original route sequence.
-        auto dst = qDstBuf_.Get<int32_t>();
-        auto sub = qSubBuf_.Get<int32_t>();
-        Duplicate<int32_t>(dst, int32_t(expert), index);
-        PipeBarrier<PIPE_V>();
-        Sub(sub, routeIds_, dst, index);
-        PipeBarrier<PIPE_V>();
-        auto input = sub.template ReinterpretCast<float>();
-        auto output = dst.template ReinterpretCast<float>();
-        Abs(output, input, index);
-        PipeBarrier<PIPE_V>();
-        Mins(sub, dst, 1, index);
-        PipeBarrier<PIPE_V>();
-        ReduceSum<float>(output, input, qWorkBuf_.Get<float>(), index);
-        Sync<HardEvent::V_S>();
-        return index - uint32_t(dst.GetValue(0));
+        (void)expert;
+        return qWorkBuf_.Get<uint32_t>().GetValue(index)&0xffffU;
     }
     template <class Fp8Type>
     // 摘要：以每 32 元素为一组生成 MXFP8 scale 和量化数据，复用 q 计算的临时 UB。
@@ -616,6 +600,7 @@ private:
     GlobalTensor<XType> x_;
     GlobalTensor<uint8_t> inputScales_;
     GlobalTensor<int32_t> ids_;
+    GlobalTensor<uint32_t> plannedQ_,plannedMasks_;
     GlobalTensor<float> weights_, weightOut_;
     GlobalTensor<uint32_t> maskOut_;
     TBuf<> idsBuf_, qDstBuf_, qSubBuf_, qWorkBuf_, quantBuf_;

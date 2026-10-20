@@ -1,3 +1,5 @@
+> 当前为共享路由准备候选，分支kernel/ll-g4-route-plan，身份g4-route-plan、协议13000+S，详见 [ROUTE_PLAN.md](ROUTE_PLAN.md)。下方历史源端扫描流程以候选为准。
+
 > 当前新增输入/量化等待使用 **schema9、66阶段**。原64个ID保持不变；旧schema7可离线读取。新采样不再导出仅支持64阶段的参考format5二进制，使用JSON/CSV/Chrome trace。瓶颈报告与重采要求见 [INPUT_WAIT.md](INPUT_WAIT.md)。
 
 > 当前发送已加入两份输入缓冲的一包前瞻预取，输出lane分配不变。A/B基线为`b331193`，同步与打点边界说明见 [INPUT_PREFETCH.md](INPUT_PREFETCH.md)。
@@ -54,7 +56,7 @@ python -m pip install -r requirements-build.txt
 python -m pip install -v --force-reinstall --no-build-isolation --no-deps .
 ```
 
-环境脚本已将日志、缓存、临时文件定向工程内并加入工程SDK库路径，不默认选卡。SDK身份匹配时复用，不删除构建缓存或强制重建SDK。全rank重装完整wheel；当前核心标识10000+S、schema9。
+环境脚本已将日志、缓存、临时文件定向工程内并加入工程SDK库路径，不默认选卡。SDK身份匹配时复用，不删除构建缓存或强制重建SDK。全rank重装完整wheel；当前核心标识13000+S、schema9。
 
 ## 3. 检查实际安装包
 
@@ -73,7 +75,7 @@ r = int(os.environ['DEEPEP_LL_RECV_CORES'])
 assert s > 0 and r > 0 and s + r == 56
 assert n.low_latency_implementation == 'g4-shared-recv'
 assert n.low_latency_stage_timer_enabled
-assert n.low_latency_core_protocol == 10000 + s
+assert n.low_latency_core_protocol == 13000 + s
 assert n.low_latency_ranks_per_group == 4
 layout = n.low_latency_stage_timer_layout()
 assert layout == dict(schema=SCHEMA, slots=SLOTS, fields=FIELDS, stages=list(STAGES))

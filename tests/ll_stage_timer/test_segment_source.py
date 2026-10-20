@@ -27,7 +27,7 @@ def normalize(s):
  return re.findall(r'[A-Za-z_]\w*|\d+|[^\s{}]',s)
 
 @pytest.mark.parametrize('relative',MANIFEST['files'])
-def test_non_diagnostic_token_stream_matches_shared_receive_baseline(relative):
+def test_non_diagnostic_token_stream_matches_recorded_route_plan(relative):
     tokens=normalize((ROOT/relative).read_text(encoding='utf-8'))
     assert hashlib.sha256(' '.join(tokens).encode()).hexdigest()==MANIFEST['files'][relative]
 
@@ -58,5 +58,5 @@ def test_poll_count_and_input_quant_pack_boundaries_are_present():
     for name in ('POLL_CORE_SUMS_ITERATIONS','POLL_RECV_COUNTS_ITERATIONS','WAIT_CUMSUM_ITERATIONS'):
         assert f'LL_SEG_COUNT({name}, 1U)' in counts
     sender=(ROOT/'csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_send.h').read_text(encoding='utf-8')
-    for name in ('TOKEN_INPUT','TOKEN_QUANT','TOKEN_METADATA','TOKEN_BUFFER_WAIT','TOKEN_PACK','TOKEN_SEND_ISSUE','CAL_TOKEN','SEND_DRAIN'):
+    for name in ('TOKEN_INPUT','TOKEN_QUANT','TOKEN_METADATA','TOKEN_BUFFER_WAIT','TOKEN_PACK','TOKEN_SEND_ISSUE','SEND_DRAIN'):
         assert name in sender

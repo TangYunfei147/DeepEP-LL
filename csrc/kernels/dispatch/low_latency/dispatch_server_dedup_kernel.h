@@ -30,7 +30,7 @@ public:
         sendCores_ = kLlSendCoreNum;
         pipe_ = pipe;
         const uint32_t magic = RotateDispatchServerDedupMagic(args_, core_, pipe);
-        counts_.Init(commArgs, expertIds, expertTokenNumsOut, sendCountsOut, bs, topK, experts, expertTokenNumsType,
+        counts_.Init(commArgs, expertIds, expertTokenNumsOut, sendCountsOut, bs, topK, experts, h, expertTokenNumsType,
                      magic, pipe, timer);
         sender_.Init(args_, x, expertIds, expertScales, sourceMaskOut, expertScalesOut, bs, h, topK, experts, pipe,
                      magic, inputScales, enableDedup);
@@ -42,6 +42,7 @@ public:
     // Sender可与接收核的计数前缀准备重叠，不能把提取阶段耗时直接相加当作完整时延。
     __aicore__ inline void Process()
     {
+        counts_.PrepareRoutes();
         counts_.SendCnt();
 
         if (core_ < sendCores_) {

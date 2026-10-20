@@ -6,6 +6,7 @@
 
 #include "ep_memory_server_dedup_count_layout.h"
 #include "ep_memory_server_dedup_input.h"
+#include "ll_route_plan.h"
 
 namespace DispatchDedup {
 #if DISPATCH_DEDUP_ASCENDC_AICORE_COMPILE
@@ -24,7 +25,7 @@ struct EpServerDedupDataLayout {
     uint64_t packedPayloadBytes = 0;
     uint64_t tokenStride = 0;
     uint64_t returnStride = 0;
-    uint64_t sourceOffset = 0, sourceBytes = 0;
+    uint64_t sourceOffset = 0, sourceBytes = 0, routePlanOffset = 0;
     uint64_t dispatchOffset = 0, dispatchBytes = 0;
     uint64_t relayOffset = 0, relayBytes = 0, requiredBytes = 0;
 };
@@ -63,7 +64,8 @@ DISPATCH_DEDUP_EP_DATA_INLINE EpServerDedupDataLayout DispatchServerDedupDataLay
     layout.returnStride = (uint64_t(h) * 2U + 479U) / 480U * 512U;
     layout.sourceOffset = kEpServerDedupControlBytes;
     layout.sourceBytes = uint64_t(bs) * topK * layout.returnStride;
-    layout.dispatchOffset = DispatchDedupAlign(layout.sourceOffset + layout.sourceBytes, 512U);
+    layout.routePlanOffset = LlRoutePlanOffset(bs,h,topK,layout.sourceOffset);
+    layout.dispatchOffset = DispatchDedupAlign(layout.routePlanOffset+LlRoutePlanMemory(uint64_t(bs)*topK,experts).bytes,512U);
     layout.dispatchBytes = uint64_t(experts) * bs * layout.tokenStride;
     layout.relayOffset = DispatchDedupAlign(layout.dispatchOffset + layout.dispatchBytes, 512U);
     // Historical Combine reservation, unused by Dispatch. The new pull Combine

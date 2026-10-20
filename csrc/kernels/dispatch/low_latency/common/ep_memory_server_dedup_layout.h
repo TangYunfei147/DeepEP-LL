@@ -92,6 +92,10 @@ inline int BuildDispatchServerDedupLayout(int64_t rankSize, int64_t bs, int64_t 
     if (DispatchGroupLocalCountSendUbBytes(uint64_t(bs)*topK,uint32_t(moeExpertNum),uint32_t(rankSize))>
         kEpServerDedupCountUbBytes) return DispatchDedup::DISPATCH_DEDUP_ERROR_PARA_CHECK_FAIL;
 
+    if (LlRoutePlanUbBytes(uint32_t(bs),uint32_t(topK),uint32_t(moeExpertNum),
+                           uint32_t(rankSize)/kLlRanksPerGroup)>kEpServerDedupCountUbBytes)
+        return DispatchDedup::DISPATCH_DEDUP_ERROR_PARA_CHECK_FAIL;
+
     const bool wireFp8 = mode != EpServerDedupInputMode::Plain16;
     const bool prequantized = mode == EpServerDedupInputMode::PrequantizedFp8Packs;
     EpMemoryServerDedupLayout next{};

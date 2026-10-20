@@ -1,5 +1,10 @@
 # 泛化分支生产LL路径
 
+当前候选在 kernel/ll-g4-route-plan：device/dispatch_shared_route_plan.h 并行
+准备同卡共享计数/q/组掩码，common/ll_route_plan.h 统一布局与首跳策略。
+Count和Sender读取准备结果，接收/combine算法不变；协议13000+S。
+历史说明中的计数扫描流程以本候选为准，见 ../ll_stage_timer/ROUTE_PLAN.md。
+
 该分支保留MTE传输和DEEPEP_LL_RANKS_PER_GROUP静态可配置分组，默认4。
 不要复制NDR的Session、ll_transport或tiling-key策略来替代这里的实现。
 
