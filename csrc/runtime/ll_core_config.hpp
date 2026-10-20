@@ -22,7 +22,7 @@ inline LlPlatformCores query_ll_core_config() {
     }
     const uint32_t active = DispatchDedup::kLlActiveCoreNum;
     if (!DispatchDedup::LlCoreCountValid(active))
-        throw std::runtime_error("LL requires the configured 58-core launch");
+        throw std::runtime_error("LL requires the configured 56-core launch");
     return {total, available, active, device};
 }
 }

@@ -20,10 +20,10 @@ def check_identity(left,right):
                                                for key in ('world_size','logical_group','active_aiv','core_protocol')):
             raise ValueError('Unknown or invalid runtime comparison identity')
     differences=set(DIFFERENCES)
-    if all(6001 <= item['core_protocol'] <= 6057 for item in (left,right)):
+    if all(7001 <= item['core_protocol'] <= 7055 for item in (left,right)):
         for item in (left,right):
-            if (item.get('send_cores',0)+item.get('recv_cores',0)!=58 or item['active_aiv']!=58
-                    or item['core_protocol']!=6000+item.get('send_cores',0)):
+            if (item.get('send_cores',0)+item.get('recv_cores',0)!=56 or item['active_aiv']!=56
+                    or item['core_protocol']!=7000+item.get('send_cores',0)):
                 raise ValueError('Invalid configured core split identity')
         differences.update(('send_cores','recv_cores','core_protocol'))
     mismatches=[key for key in sorted(left.keys()|right.keys()) if key not in differences and left.get(key)!=right.get(key)]

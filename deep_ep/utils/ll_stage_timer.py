@@ -56,8 +56,8 @@ def parse_records(raw, operation, frequency_hz=None):
             raise ValueError(f'Incomplete or mismatched timer header on core {core}')
         mode = header[5] & 255 if schema == 5 else header[5]
         send_cores = header[5] >> 8 if schema == 5 else cores//2
-        if schema == 5 and (cores != 58 or not 0 < send_cores < 58):
-            raise ValueError('Invalid configured 58-core split')
+        if schema == 5 and (cores != 56 or not 0 < send_cores < 56):
+            raise ValueError('Invalid configured 56-core split')
         splits.add(send_cores)
         if mode not in (1, 2):
             raise ValueError('Unknown boundary mode')
@@ -193,7 +193,7 @@ class StageTrace:
             if (operation != 'dispatch' or any(type(v) is not int for v in (rank,world,count)) or
                     not (0 <= rank < world <= count <= 1024 and world >= 16 and world%16==0 and count%world==0)):
                 raise ValueError('Expert capture requires a valid dispatch expert configuration')
-            if not 6001 <= native.low_latency_core_protocol <= 6057 or not hasattr(native, 'low_latency_expert_timer_layout'):
+            if not 7001 <= native.low_latency_core_protocol <= 7055 or not hasattr(native, 'low_latency_expert_timer_layout'):
                 raise RuntimeError('Expert diagnostics require the matching configured-split wheel on every rank')
             if native.low_latency_expert_timer_layout() != dict(schema=expert.SCHEMA, header_rows=expert.HEADER_ROWS,
                                                                fields=expert.FIELDS, stages=list(expert.STAGES)):

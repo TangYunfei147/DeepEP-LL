@@ -29,9 +29,9 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 def validate_core_split_capability(capability):
     send, recv = capability.get("send_cores"), capability.get("recv_cores")
     if (type(send) is not int or type(recv) is not int or send <= 0 or recv <= 0
-            or send + recv != 58 or capability.get("active_aiv") != 58
-            or capability.get("core_protocol") != 6000 + send):
-        raise RuntimeError("Rebuild/install the matching configured 58-core split wheel on every rank")
+            or send + recv != 56 or capability.get("active_aiv") != 56
+            or capability.get("core_protocol") != 7000 + send):
+        raise RuntimeError("Rebuild/install the matching configured 56-core split wheel on every rank")
 
 
 MATRIX_FIELDS = ("num_tokens", "dtype", "num_experts", "hidden", "num_topk", "do_cpu_sync", "fp8_scale_dtype")
@@ -1084,7 +1084,7 @@ def worker(local_rank, args):
             raise RuntimeError("All ranks must install a DEEPEP_LL_STAGE_TIMER=ON wheel")
         if args.ll_stage_timer and capability['stage_timer_schema'] != 5:
             raise RuntimeError('Detailed LL diagnostics require timer schema 5; rebuild/install the matching wheel on every rank')
-        if args.ll_expert_timer and not 6001 <= capability['core_protocol'] <= 6057:
+        if args.ll_expert_timer and not 7001 <= capability['core_protocol'] <= 7055:
             raise RuntimeError('Expert diagnostics require a matching configured-split wheel on every rank')
         args.ll_stage_timer_capabilities = capabilities
         run_directory = [None]

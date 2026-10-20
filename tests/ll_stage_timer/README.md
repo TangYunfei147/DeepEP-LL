@@ -1,6 +1,6 @@
 # LL阶段与专家诊断（泛化分支）
 
-> 2026-10-19：本分支现在按编译配置分配固定58个AIV，默认29发+29收，支持不对称比例；以[CORE_SPLIT.md](CORE_SPLIT.md)为准。旧1:1和动态核数说明仅描述此前版本。全rank重建匹配wheel。
+> 2026-10-19：本分支现在按编译配置分配固定56个AIV，默认28发+28收，支持不对称比例；以[CORE_SPLIT.md](CORE_SPLIT.md)为准。旧1:1和动态核数说明仅描述此前版本。全rank重建匹配wheel。
 
 维护分支kernel/ll-g4-stagger（从G4泛化基线派生）。实验、采样、解析与NDR分支共用同一套代码，
 推荐直接按[PARITY.md](PARITY.md)启动和对比。
@@ -117,7 +117,7 @@ python -m pip install -v --force-reinstall --no-build-isolation --no-deps .
 
 ## 格式与构建
 
-核心协议标识6000+发送核数、阶段schema5、专家schema1；全rank重建同一分支的匹配wheel。
+核心协议标识7000+发送核数、阶段schema5、专家schema1；全rank重建同一分支的匹配wheel。
 每核阶段缓冲2048B、512B对齐；专家统计有独立可选缓冲。
 设置DEEPEP_LL_STAGE_TIMER=ON启用；仅阶段schema1旧数据也可离线解析。
 泛化分支默认MTE构建；python scripts/build_shmem.py自动校验并复用已有SDK，包括身份匹配的HNS能力超集。
