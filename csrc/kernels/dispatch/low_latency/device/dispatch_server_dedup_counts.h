@@ -162,7 +162,8 @@ private:
 
     __aicore__ inline void BuildReceivePositions(LocalTensor<int32_t> prefix,uint32_t offset);
     __aicore__ inline void ClearReceiveQueue();
-    GM_ADDR receiveQueue_=nullptr,receivePositions_=nullptr;
+    GM_ADDR receiveQueue_ = nullptr;
+    GM_ADDR receivePositions_ = nullptr;
     uint32_t receiveQueueClearBytes_=0U,receiveActualRows_=0U;
     TPipe* tpipe_ = nullptr;
     const __gm__ DispatchDedup::CommArgs* args_ = nullptr;
