@@ -8,11 +8,17 @@ using namespace AscendC;
 class ServerDedupReceiveTasks {
 public:
     __aicore__ inline void Init(TPipe* pipe) {
+        cached_=false;
         pipe->InitBuffer(tokenPosBuf_,kLlReceiveBatch*sizeof(uint32_t));
         tokenPos_=tokenPosBuf_.Get<uint32_t>();
     }
+    // The table is immutable after prefix-ready publication for this launch.
+    __aicore__ inline bool Cached(uint32_t begin,uint32_t count) const {
+        return cached_ && begin_==begin && count_==count;
+    }
     __aicore__ inline void Load(GlobalTensor<uint32_t> positions,uint32_t begin,uint32_t count) {
         begin_=begin;count_=count;
+        cached_=true;
         DataCopyPad(tokenPos_,positions[begin],{1U,count*4U,0U,0U,0U},{false,0U,0U,0U});
     }
     __aicore__ inline uint32_t Begin() const { return begin_; }
@@ -20,6 +26,7 @@ public:
     __aicore__ inline uint32_t Position(uint32_t j) { return tokenPos_.GetValue(j); }
 private:
     uint32_t begin_=0U,count_=0U;
+    bool cached_=false;
     TBuf<> tokenPosBuf_;
     LocalTensor<uint32_t> tokenPos_;
 };

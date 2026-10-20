@@ -70,3 +70,20 @@ def test_non_dedup_links_fit_existing_host_worst_case():
                 max_tokens=(b+senders-1)//senders
                 max_routes=(b*k+senders-1)//senders
                 assert align(max_routes*8)<=align(max_tokens*k*16)
+
+
+def test_position_cache_resets_between_launches_and_keeps_partial_batch_size():
+    cached=None
+    loads=0
+    # Same begin in a different launch is not a cache hit: tables can change.
+    for epoch in range(3):
+        cached=None
+        positions=[epoch*1000+i for i in range(33)]
+        tile=[]
+        for begin,count in [(0,16),(0,16),(16,16),(16,16),(32,1),(32,1),(0,16)]:
+            if cached!=(begin,count):
+                tile=positions[begin:begin+count]
+                loads+=1
+                cached=(begin,count)
+            assert tile==positions[begin:begin+count]
+    assert loads==12  # 21 probes, with 9 descriptor loads eliminated.

@@ -106,10 +106,12 @@ public:
             if (seen.GetValue(word)&bit) continue;
             const uint32_t begin=batch*kProbeBatch;
             const uint32_t count=total-begin<kProbeBatch ? total-begin : kProbeBatch;
-            // Protect old Scalar descriptor reads before this fixed tile is reused.
-            ServerDedupReceiveSync<HardEvent::S_MTE2>();
-            tasks_.Load(positions,begin,count);
-            ServerDedupReceiveSync<HardEvent::MTE2_S>();
+            if (!tasks_.Cached(begin,count)) {
+                // Protect old Scalar reads only when replacing the cached tile.
+                ServerDedupReceiveSync<HardEvent::S_MTE2>();
+                tasks_.Load(positions,begin,count);
+                ServerDedupReceiveSync<HardEvent::MTE2_S>();
+            }
             ProbeResult probe=Probe(count);
             if (!probe.readyMask) continue; // No atomics for an empty probe.
             const uint32_t valid=LlReceiveValidMask(count);
