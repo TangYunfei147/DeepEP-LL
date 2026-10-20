@@ -260,6 +260,8 @@ def sample_stats(values):
         "min_us": ordered[0],
         "median_us": statistics.median(values),
         "max_us": ordered[-1],
+        "p50_us": percentile(0.50),
+        "p90_us": percentile(0.90),
         "p95_us": percentile(0.95),
         "p99_us": percentile(0.99),
     }
@@ -267,9 +269,13 @@ def sample_stats(values):
 
 def summarize_kernel(samples_by_rank, kernel, tail):
     ranks = []
+    selected_samples = []
     for rank, raw in enumerate(samples_by_rank):
         selected = raw[-tail:] if tail else raw
+        selected_samples.extend(selected)
         ranks.append({"rank": rank, **sample_stats(selected), "kernel_us": raw})
+    # Pool individual kernel durations after selecting each rank's stable tail.
+    pooled = sample_stats(selected_samples)
     fastest = min(ranks, key=lambda row: row["mean_us"])
     slowest = max(ranks, key=lambda row: row["mean_us"])
     return {
@@ -277,6 +283,9 @@ def summarize_kernel(samples_by_rank, kernel, tail):
         "kernel": kernel,
         "perf_tail": tail,
         "ranks": ranks,
+        "summary_statistics_scope": "pooled_rank_tail_kernel_samples",
+        "kernel_samples": pooled["samples"],
+        **{f"{name}_kernel_us": pooled[f"{name}_us"] for name in ("mean", "p99", "p90", "p50")},
         "min_rank_mean_kernel_us": fastest["mean_us"],
         "median_rank_mean_kernel_us": statistics.median(row["mean_us"] for row in ranks),
         "max_rank_mean_kernel_us": slowest["mean_us"],
@@ -318,6 +327,13 @@ def write_reports(directory, report):
                     **{
                         key: perf[key]
                         for key in (
+                            "summary_statistics_scope",
+                            "perf_tail",
+                            "kernel_samples",
+                            "mean_kernel_us",
+                            "p99_kernel_us",
+                            "p90_kernel_us",
+                            "p50_kernel_us",
                             "min_rank_mean_kernel_us",
                             "median_rank_mean_kernel_us",
                             "max_rank_mean_kernel_us",
