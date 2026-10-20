@@ -102,7 +102,7 @@ int main(){
 }
 ''',encoding='utf-8')
     exe=tmp_path/'plan'
-    subprocess.run([compiler,'-std=c++17','-I',str(ROOT),str(source),'-o',str(exe)],check=True,capture_output=True)
+    subprocess.run([compiler,'-std=c++17','-Werror=int-in-bool-context','-I',str(ROOT),str(source),'-o',str(exe)],check=True,capture_output=True)
     subprocess.run([str(exe)],check=True,capture_output=True)
 
 

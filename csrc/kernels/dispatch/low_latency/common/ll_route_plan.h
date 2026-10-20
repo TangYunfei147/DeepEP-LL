@@ -49,7 +49,7 @@ LL_PLAN_INLINE uint32_t LlChooseLeader(Ids ids,uint32_t k,uint32_t mask,uint32_t
 LL_PLAN_INLINE uint64_t LlRoutePlanUbBytes(uint32_t bs,uint32_t k,uint32_t experts,uint32_t groups) {
     const uint64_t shard=(uint64_t(bs)+kLlActiveCoreNum-1U)/kLlActiveCoreNum*k;
     const uint64_t owned=(experts+kLlActiveCoreNum-1U)/kLlActiveCoreNum;
-    return uint64_t(experts)*32U+3U*LlPlanAlign(shard*4U ? shard*4U : 1U,256U)+
+    return uint64_t(experts)*32U+3U*LlPlanAlign(shard!=0U ? shard*4U : 1U,256U)+
            LlPlanAlign(uint64_t(groups)*8U,32U)+LlPlanAlign(owned*kLlActiveCoreNum*32U,32U)+
            LlPlanAlign(owned*32U,32U);
 }
