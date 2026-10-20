@@ -1,4 +1,6 @@
-> 当前新增输入/量化等待使用 **schema9、66阶段**。原64个ID保持不变；旧schema7可离线读取。新采样不再导出仅支持64阶段的参考format5二进制，使用JSON/CSV/Chrome trace。瓶颈报告与重采要求见 [INPUT_WAIT.md](INPUT_WAIT.md)。
+> 当前relay诊断使用 **schema10、70阶段**，保留原ID；observe仅测下发，显式relay-complete测前置排空后的本核MTE3完成。采集与独立报表见 [RELAY_TIMING.md](RELAY_TIMING.md)。旧schema7/9可离线读取。
+
+> 输入/量化等待最初由schema9追加ID64/65，当前schema10保留。扩展采样使用JSON/CSV/Chrome trace，不导出仅支持64阶段的参考format5二进制。输入瓶颈报告见 [INPUT_WAIT.md](INPUT_WAIT.md)。
 
 > 本仓库为独立`kernel/ll-g4-relay-priority`实验，包含relay提前下发及同批就绪FIRST_HOP优先，逐提交A/B见[RELAY_PRIORITY.md](RELAY_PRIORITY.md)。
 
@@ -6,7 +8,7 @@
 
 # 最新共享接收分支：分段打点全流程
 
-当前源端算法基线为`a192113`：S核跨组初发，R核本组初发后进入原前缀与接收流程。分段打点使用schema9、66阶段、前两次实际区间+全量累计；本次补齐本组准备/排空和非去重远端索引筛选。二进制头保留初始角色，分析器依据实际SEND_TOKENS把参与本组发送的R核显示为send_and_recv，并保留initial_role=cumsum；无本组发送任务的核不补造区间。
+当前源端算法基线为`a192113`：S核跨组初发，R核本组初发后进入原前缀与接收流程。分段打点使用schema10、70阶段、前两次实际区间+全量累计；本次补齐本组准备/排空和非去重远端索引筛选。二进制头保留初始角色，分析器依据实际SEND_TOKENS把参与本组发送的R核显示为send_and_recv，并保留initial_role=cumsum；无本组发送任务的核不补造区间。
 
 下例为**目标机单机16rank**、B8/M256/H3584/K8/E384、BF16和FP8两组配置，dispatch+combine均采集；FP8配置的combine仍是BF16。默认G4/S28/R28。多机入口要求每机16个连续rank，不改变已有硬件/EP准入。
 
@@ -56,7 +58,7 @@ python -m pip install -r requirements-build.txt
 python -m pip install -v --force-reinstall --no-build-isolation --no-deps .
 ```
 
-环境脚本已将日志、缓存、临时文件定向工程内并加入工程SDK库路径，不默认选卡。SDK身份匹配时复用，不删除构建缓存或强制重建SDK。全rank重装完整wheel；当前核心标识10000+S、schema9。
+环境脚本已将日志、缓存、临时文件定向工程内并加入工程SDK库路径，不默认选卡。SDK身份匹配时复用，不删除构建缓存或强制重建SDK。全rank重装完整wheel；当前核心标识10000+S、schema10。
 
 ## 3. 检查实际安装包
 
@@ -79,7 +81,7 @@ assert n.low_latency_core_protocol == 10000 + s
 assert n.low_latency_ranks_per_group == 4
 layout = n.low_latency_stage_timer_layout()
 assert layout == dict(schema=SCHEMA, slots=SLOTS, fields=FIELDS, stages=list(STAGES))
-assert (SCHEMA, SLOTS, FIELDS) == (9, 72, 8)
+assert (SCHEMA, SLOTS, FIELDS) == (10, 72, 8)
 print('installed:', deep_ep.__file__)
 print('protocol:', n.low_latency_core_protocol, 'layout:', (SCHEMA, SLOTS, FIELDS))
 PY
@@ -131,7 +133,7 @@ python tests/ll_stage_timer/analyze.py "results/ll-timer/$RUN_NAME" --trace-iter
 - intervals.csv：各阶段前两次真实区间。
 - cores.csv：实际角色、initial_role、记录数、省略区间数。
 - trace.json：Chrome/Perfetto时间线。
-- 原始JSON旁的dispatch_prof_rankN_sample_*.bin / combine同类文件：参考format5二进制。
+- relay_timing.md/csv、relay_samples.csv：独立relay下发/完成报告。当前扩展格式不导出参考format5二进制。
 
 重点看R核SEND_TOKENS内的PREPARE_INPUT、TOKEN_*、SEND_DRAIN，以及之后的CAL_CUMSUM/WAIT_CUMSUM/LOCAL_WINDOW_COPY。R核本组q已融合COUNT_COMPUTE，不应期待逐包CAL_TOKEN。SEND_TOKENS是父阶段，不与其子阶段相加。
 

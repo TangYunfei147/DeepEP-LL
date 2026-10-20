@@ -22,6 +22,10 @@ inline uint64_t GetSystemCycle(){return clock++;}
 inline uint32_t GetBlockIdx(){return core;}
 inline uint32_t GetBlockNum(){return 56;}
 inline void Trap(){throw std::runtime_error("trap");}
+enum class HardEvent { MTE3_S };
+struct TPipe { int FetchEventID(HardEvent){return 0;} };
+template<HardEvent E> void SetFlag(int){}
+template<HardEvent E> void WaitFlag(int){}
 enum class CacheLine{SINGLE_CACHE_LINE};enum class DcciDst{CACHELINE_OUT};
 template<class T>struct GlobalTensor{void SetGlobalBuffer(T*,unsigned){}};
 template<class T,CacheLine C,DcciDst D>void DataCacheCleanAndInvalid(GlobalTensor<T>&){++flushes;}
@@ -40,7 +44,7 @@ int main(){
  DeviceTimer timer;timer.Init(reinterpret_cast<uint8_t*>(words.data()),1,1);
  auto kernel=timer.Begin(KERNEL);
  for(uint32_t stage=1;stage<kMetrics;++stage){
-  if(stage>=51 && stage<=55){timer.Count(static_cast<Stage>(stage),17);continue;}
+  if((stage>=51 && stage<=55) || stage==69){timer.Count(static_cast<Stage>(stage),17);continue;}
   for(unsigned i=0;i<5;++i){auto begin=timer.Begin(static_cast<Stage>(stage));timer.End(static_cast<Stage>(stage),begin);}
  }
  timer.End(KERNEL,kernel);

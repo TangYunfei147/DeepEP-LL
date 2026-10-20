@@ -11,7 +11,7 @@ def normalize(s):
  s=re.sub(r'/\*.*?\*/|//[^\n]*','',s,flags=re.S)
  s=re.sub(r'#include [^\n]*ll_(?:stage|expert)_timer[^\n]*','',s)
  s=re.sub(r'if \(timer.Enabled\(\)\) \{ AscendC::SyncAll<true>\(\); timer.Flush\(\); \}','',s)
- s=re.sub(r'\bLL_SEG_(?:BEGIN|END|COUNT|SCOPE)\([^;]*?\);','',s)
+ s=re.sub(r'\bLL_SEG_(?:BEGIN|END|COUNT|SCOPE|RELAY_COMPLETION)\([^;]*?\);','',s)
  s=re.sub(r'if \(timer_?\) timer_?->(?:Start|End)\([^;]*\);','',s)
  s=re.sub(r'(?:const uint64_t \w+ = )?timer\.(?:Start|End|Init|Finish|Begin)\([^;\n]*\);?','',s)
  s=re.sub(r'expert\.(?:Init|Finish)\([^;]*\);','',s)

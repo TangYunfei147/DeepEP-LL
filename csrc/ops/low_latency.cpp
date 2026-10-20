@@ -56,13 +56,14 @@ uint8_t* tensor(py::handle value, const Shape& shape, const char* dtype)
     }
     return reinterpret_cast<uint8_t*>(obj.attr("data_ptr")().cast<uintptr_t>());
 }
-uint8_t* stage_timer(py::dict tensors, uint32_t cores, uint32_t& mode)
+uint8_t* stage_timer(py::dict tensors, uint32_t cores, uint32_t& mode, bool allowRelayCompletion = false)
 {
     mode = 1U;
     if (!tensors.contains("ll_stage_timer") || tensors["ll_stage_timer"].is_none()) return nullptr;
     if (!deepep_ll_stage_timer_enabled()) throw std::invalid_argument("Rebuild with DEEPEP_LL_STAGE_TIMER=ON");
     if (tensors.contains("ll_stage_timer_mode")) mode = tensors["ll_stage_timer_mode"].cast<uint32_t>();
-    if (mode != 1U) throw std::invalid_argument("Reference segment capture supports observe only");
+    if (mode != 1U && !(allowRelayCompletion && mode == 3U))
+        throw std::invalid_argument("LL timer supports observe, or relay-complete for dispatch only");
     auto timer = py::reinterpret_borrow<py::object>(tensors["ll_stage_timer"]);
     auto device = timer.attr("device");
     if (device.attr("type").cast<std::string>() != "npu" ||
@@ -232,7 +233,7 @@ void bind_low_latency(py::module_& module)
         auto get = [&](const char* name, Shape shape, const char* type) { return tensor(tensors[name], shape, type); };
         deepep::EpServerDedupKernelArgs args{};
         args.coreNum = pin_session_cores(session);
-        args.stageTimer = stage_timer(tensors, args.coreNum, args.timerMode);
+        args.stageTimer = stage_timer(tensors, args.coreNum, args.timerMode, true);
         args.expertTimer = expert_timer(tensors, args.coreNum, e, args.stageTimer);
         args.commArgs = get("comm_args", {sizeof(DispatchDedup::CommArgs)}, "uint8");
         args.x = get("input", {b, h}, dtype.c_str());

@@ -17,7 +17,7 @@ def load(name,path):
 timer=load('segments','deep_ep/utils/ll_stage_timer.py')
 
 
-def raw(send=10,operation='dispatch',full=False,schema=7):
+def raw(send=10,operation='dispatch',full=False,schema=7,mode=1):
     result=[]
     for core in range(56):
         intervals=[];metrics={};omitted=0
@@ -29,7 +29,7 @@ def raw(send=10,operation='dispatch',full=False,schema=7):
             else:omitted+=1
         end(50,10,20)
         if full:
-            for stage in range(1,66 if schema==9 else 64):
+            for stage in range(1,{7:64,9:66,10:70}[schema]):
                 if stage in timer.COUNTERS: metrics[stage]=(100,0);continue
                 for sample in range(2):end(stage,200+stage*20+sample*5,203+stage*20+sample*5)
         else:
@@ -39,7 +39,7 @@ def raw(send=10,operation='dispatch',full=False,schema=7):
         events=intervals+[(0x8000+stage+(calls<<32),total) for stage,(calls,total) in sorted(metrics.items())]
         words=[0]*(timer.SLOTS*timer.FIELDS)
         role=(3 if core<send else 2) if operation=='dispatch' else (1 if core<send else 4)
-        words[:8]=[timer.MAGIC,schema,1 if operation=='dispatch' else 2,56,core,1|(send<<8)|(role<<16),len(events),omitted]
+        words[:8]=[timer.MAGIC,schema,1 if operation=='dispatch' else 2,56,core,mode|(send<<8)|(role<<16),len(events),omitted]
         for i,(event,value) in enumerate(events):words[8+i*2:10+i*2]=[event,value]
         result.append([words[i:i+8] for i in range(0,len(words),8)])
     return result

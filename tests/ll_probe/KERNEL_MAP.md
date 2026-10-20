@@ -43,3 +43,7 @@ ConsumePacket；两份输入及输出lane分配不变，MTE2_S使用独立分配
 独立relay-priority实验：Receiver先发relay再输出本地结果；
 common/ll_receive_priority.h对同批就绪FIRST_HOP优先排序，预取/消费顺序一致，
 pending仍按原下标倒序删除。见 ../ll_stage_timer/RELAY_PRIORITY.md。
+
+Relay诊断：schema10追加RELAY_ISSUE/PRE_DRAIN/COMPLETE/PACKETS。
+普通observe无新同步；显式relay-complete在单组relay前后做本核MTE3_S，
+只允许dispatch独立诊断。分析区分下发、完成、前置排空，见 ../ll_stage_timer/RELAY_TIMING.md。

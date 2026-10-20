@@ -13,8 +13,8 @@ class DeviceTimer {
 public:
     __aicore__ inline void Init(GM_ADDR address, uint32_t operation, uint32_t mode) {
 #ifdef DEEPEP_LL_STAGE_TIMER
-        if (address && mode != 1U) { AscendC::Trap(); return; }
-        address_ = address; operation_ = operation;
+        if (address && ((mode != 1U && mode != 3U) || (mode == 3U && operation != 1U))) { AscendC::Trap(); return; }
+        address_ = address; operation_ = operation; mode_ = mode;
 #else
         (void)address; (void)operation; (void)mode;
 #endif
@@ -22,6 +22,13 @@ public:
     __aicore__ inline bool Enabled() const {
 #ifdef DEEPEP_LL_STAGE_TIMER
         return address_ != nullptr;
+#else
+        return false;
+#endif
+    }
+    __aicore__ inline bool RelayCompletion() const {
+#ifdef DEEPEP_LL_STAGE_TIMER
+        return Enabled() && mode_ == 3U;
 #else
         return false;
 #endif
@@ -70,7 +77,7 @@ public:
         const uint32_t role = operation_ == 1U ? (core < DispatchDedup::kLlSendCoreNum ? 3U : 2U)
                                                : (core < DispatchDedup::kLlSendCoreNum ? 1U : 4U);
         words[0]=kMagic; words[1]=kSchema; words[2]=operation_; words[3]=AscendC::GetBlockNum();
-        words[4]=core; words[5]=1U | (uint64_t(DispatchDedup::kLlSendCoreNum) << 8U) | (uint64_t(role) << 16U);
+        words[4]=core; words[5]=mode_ | (uint64_t(DispatchDedup::kLlSendCoreNum) << 8U) | (uint64_t(role) << 16U);
         words[6]=records; words[7]=omitted_;
         FlushLine(words);
 #endif
@@ -87,7 +94,7 @@ private:
         words[0]=event; words[1]=value; FlushLine(words);
     }
     GM_ADDR address_ = nullptr;
-    uint32_t operation_ = 0, count_ = 0, omitted_ = 0;
+    uint32_t mode_ = 1U, operation_ = 0, count_ = 0, omitted_ = 0;
     uint64_t sums_[kMetrics]{};
     uint32_t calls_[kMetrics]{};
     uint64_t cycles_[kTraceRecords];
@@ -102,6 +109,36 @@ public:
 private:
     DeviceTimer* timer_; Stage stage_; uint64_t begin_;
 };
+// Construct BEFORE the issue scope: destruction then follows issue End.
+// Ordinary observe captures do not execute either synchronization.
+class RelayCompletionScope {
+public:
+    __aicore__ inline RelayCompletionScope(DeviceTimer* timer, AscendC::TPipe* pipe)
+        : timer_(timer),pipe_(pipe),active_(timer && timer->RelayCompletion()) {
+        if (active_) {
+            const uint64_t prior=timer_->Begin(RELAY_PRE_DRAIN);
+            Drain();
+            timer_->End(RELAY_PRE_DRAIN,prior);
+            begin_=timer_->Begin(RELAY_COMPLETE);
+        }
+    }
+    __aicore__ inline ~RelayCompletionScope() {
+        if (active_) {
+            Drain();
+            timer_->End(RELAY_COMPLETE,begin_);
+        }
+    }
+private:
+    __aicore__ inline void Drain() {
+        const auto event=pipe_->FetchEventID(AscendC::HardEvent::MTE3_S);
+        AscendC::SetFlag<AscendC::HardEvent::MTE3_S>(event);
+        AscendC::WaitFlag<AscendC::HardEvent::MTE3_S>(event);
+    }
+    DeviceTimer* timer_;
+    AscendC::TPipe* pipe_;
+    bool active_;
+    uint64_t begin_=0U;
+};
 }
 #define LL_SEG_JOIN_IMPL(a,b) a##b
 #define LL_SEG_JOIN(a,b) LL_SEG_JOIN_IMPL(a,b)
@@ -109,3 +146,4 @@ private:
 #define LL_SEG_BEGIN(name, stage) const uint64_t name = timer_ ? timer_->Begin(LlStageTimer::stage) : 0U
 #define LL_SEG_END(name, stage) do { if (timer_) timer_->End(LlStageTimer::stage, name); } while (false)
 #define LL_SEG_COUNT(stage, count) do { if (timer_) timer_->Count(LlStageTimer::stage, count); } while (false)
+#define LL_SEG_RELAY_COMPLETION(pipe) LlStageTimer::RelayCompletionScope LL_SEG_JOIN(llRelayScope,__LINE__)(timer_, pipe)

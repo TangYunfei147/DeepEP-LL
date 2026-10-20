@@ -96,7 +96,7 @@ def test_noisy_envelopes_hidden_only_from_trace():
 
 def test_full_offline_export_after_move(tmp_path):
     moved=tmp_path/'project with spaces'
-    for name in ('deep_ep/utils/ll_stage_timer.py','deep_ep/utils/ll_stage_timer_legacy.py','deep_ep/utils/ll_expert_timer.py','tests/ll_stage_timer/analyze.py'):
+    for name in ('deep_ep/utils/ll_stage_timer.py','deep_ep/utils/ll_stage_timer_legacy.py','deep_ep/utils/ll_expert_timer.py','tests/ll_stage_timer/analyze.py','tests/ll_stage_timer/relay_timing.py'):
         path=moved/name;path.parent.mkdir(parents=True,exist_ok=True);shutil.copyfile(ROOT/name,path)
     root=moved/'data';root.mkdir()
     # One-rank synthetic parser fixture, not a device launch.

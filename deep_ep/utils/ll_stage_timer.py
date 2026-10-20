@@ -12,11 +12,11 @@ import struct
 import threading
 
 MAGIC = 0x4C4C5431
-SCHEMA, SLOTS, FIELDS = 9, 72, 8
-TRACE_RECORDS, METRICS, RECORDS = 192, 66, 258
+SCHEMA, SLOTS, FIELDS = 10, 72, 8
+TRACE_RECORDS, METRICS, RECORDS = 192, 70, 262
 DEFAULT_FREQUENCY_HZ = 1_000_000_000
-STAGES = ('KERNEL', 'SEND_TOKENS', 'CAL_CUMSUM', 'PREPARE_INPUT', 'SEND_COUNTS', 'INIT_COUNT_BUFFERS', 'WAIT_RECV_COUNTS', 'CLEAR_RECV_STATUS', 'GATHER_RECV_COUNTS', 'GET_CUMSUM', 'BUILD_RECV_CUMSUM', 'WAIT_CUMSUM', 'LOCAL_WINDOW_COPY', 'FORMAT_OUTPUT', 'BUILD_EXPERT_TASKS', 'CLEAR_LOCAL_FLAGS', 'TOKEN_INPUT', 'TOKEN_QUANT', 'TOKEN_METADATA', 'TOKEN_BUFFER_WAIT', 'TOKEN_PACK', 'TOKEN_SEND_ISSUE', 'COUNT_COMPUTE', 'COUNT_SEND_ISSUE', 'POLL_CORE_SUMS', 'REDUCE_CORE_PREFIX', 'CLEAR_CORE_SUMS', 'BROADCAST_PREFIX', 'PUBLISH_PREFIX_FLAGS', 'RECV_POLL', 'RECV_COPY', 'SEND_DRAIN', 'COMBINE_SEND', 'COMBINE_INIT_RECV', 'COMBINE_RECV', 'COMBINE_INPUT', 'COMBINE_PACK_QUANT', 'COMBINE_SEND_ISSUE', 'COMBINE_SEND_FINISH', 'COMBINE_RECV_POLL', 'COMBINE_DEQUANT_REDUCE', 'COMBINE_PROCESS_TOKEN', 'COMBINE_TOKEN_INIT', 'COMBINE_CLEAR_FLAGS', 'COMBINE_SHARED_EXPERT', 'COMBINE_SPECIAL_EXPERT', 'COMBINE_RMSNORM', 'FINAL_DRAIN', 'POLL_RECV_COUNTS', 'WRITE_COUNTS_OUTPUT', 'INIT', 'POLL_CORE_SUMS_ITERATIONS', 'POLL_RECV_COUNTS_ITERATIONS', 'WAIT_CUMSUM_ITERATIONS', 'RECV_READY_TOKENS', 'COMBINE_READY_SLOTS', 'COMBINE_QUANT', 'COMBINE_BUFFER_WAIT', 'COMBINE_COPY_PACK', 'RECV_BUFFER_WAIT', 'RECV_INPUT', 'RECV_OUTPUT', 'CAL_TOKEN', 'COMBINE_INDEX_INPUT', 'TOKEN_INPUT_WAIT', 'TOKEN_QUANT_WAIT')
-COUNTERS = frozenset(range(51,56))
+STAGES = ('KERNEL', 'SEND_TOKENS', 'CAL_CUMSUM', 'PREPARE_INPUT', 'SEND_COUNTS', 'INIT_COUNT_BUFFERS', 'WAIT_RECV_COUNTS', 'CLEAR_RECV_STATUS', 'GATHER_RECV_COUNTS', 'GET_CUMSUM', 'BUILD_RECV_CUMSUM', 'WAIT_CUMSUM', 'LOCAL_WINDOW_COPY', 'FORMAT_OUTPUT', 'BUILD_EXPERT_TASKS', 'CLEAR_LOCAL_FLAGS', 'TOKEN_INPUT', 'TOKEN_QUANT', 'TOKEN_METADATA', 'TOKEN_BUFFER_WAIT', 'TOKEN_PACK', 'TOKEN_SEND_ISSUE', 'COUNT_COMPUTE', 'COUNT_SEND_ISSUE', 'POLL_CORE_SUMS', 'REDUCE_CORE_PREFIX', 'CLEAR_CORE_SUMS', 'BROADCAST_PREFIX', 'PUBLISH_PREFIX_FLAGS', 'RECV_POLL', 'RECV_COPY', 'SEND_DRAIN', 'COMBINE_SEND', 'COMBINE_INIT_RECV', 'COMBINE_RECV', 'COMBINE_INPUT', 'COMBINE_PACK_QUANT', 'COMBINE_SEND_ISSUE', 'COMBINE_SEND_FINISH', 'COMBINE_RECV_POLL', 'COMBINE_DEQUANT_REDUCE', 'COMBINE_PROCESS_TOKEN', 'COMBINE_TOKEN_INIT', 'COMBINE_CLEAR_FLAGS', 'COMBINE_SHARED_EXPERT', 'COMBINE_SPECIAL_EXPERT', 'COMBINE_RMSNORM', 'FINAL_DRAIN', 'POLL_RECV_COUNTS', 'WRITE_COUNTS_OUTPUT', 'INIT', 'POLL_CORE_SUMS_ITERATIONS', 'POLL_RECV_COUNTS_ITERATIONS', 'WAIT_CUMSUM_ITERATIONS', 'RECV_READY_TOKENS', 'COMBINE_READY_SLOTS', 'COMBINE_QUANT', 'COMBINE_BUFFER_WAIT', 'COMBINE_COPY_PACK', 'RECV_BUFFER_WAIT', 'RECV_INPUT', 'RECV_OUTPUT', 'CAL_TOKEN', 'COMBINE_INDEX_INPUT', 'TOKEN_INPUT_WAIT', 'TOKEN_QUANT_WAIT', 'RELAY_ISSUE', 'RELAY_PRE_DRAIN', 'RELAY_COMPLETE', 'RELAY_PACKETS')
+COUNTERS = frozenset((*range(51,56),69))
 ROLES = {1:'send_token',2:'cumsum',3:'send_and_recv',4:'recv'}
 _state=threading.local()
 _legacy_spec=importlib.util.spec_from_file_location('_ll_stage_legacy',Path(__file__).with_name('ll_stage_timer_legacy.py'))
@@ -30,8 +30,8 @@ def parse_records(raw, operation, frequency_hz=None):
     if not raw or not raw[0] or len(raw[0][0])!=8:
         raise ValueError('Missing timer header')
     schema=raw[0][0][1]
-    metrics_limit=64 if schema==7 else METRICS
-    if schema not in (7,SCHEMA):
+    metrics_limit={7:64,9:66,10:70}.get(schema,METRICS)
+    if schema not in (7,9,SCHEMA):
         return legacy.parse_records(raw,operation,frequency_hz)
     if operation not in ('dispatch','combine'): raise ValueError('Expected dispatch or combine')
     if frequency_hz is not None and (not math.isfinite(frequency_hz) or frequency_hz<=0):
@@ -39,17 +39,18 @@ def parse_records(raw, operation, frequency_hz=None):
     cores=len(raw);op=1 if operation=='dispatch' else 2
     if cores!=56: raise ValueError('Segment capture requires 56 AIV')
     records,intervals,core_info,splits=[],[],[],set()
+    modes=set()
     for core,rows in enumerate(raw):
         if len(rows)!=SLOTS or any(len(row)!=FIELDS for row in rows): raise ValueError('Timer shape mismatch')
         words=[value for row in rows for value in row]
         if any(type(v) is not int or not -(1<<63)<=v<(1<<64) for v in words): raise ValueError('Invalid timer word')
         words=[v & ((1<<64)-1) for v in words]
         h=words[:8];mode=h[5]&255;send=(h[5]>>8)&255;role=h[5]>>16
-        if h[:5]!=[MAGIC,schema,op,cores,core] or mode!=1 or not 0<send<56:
+        if h[:5]!=[MAGIC,schema,op,cores,core] or not (mode==1 or (schema==10 and mode==3 and op==1)) or not 0<send<56:
             raise ValueError('Incomplete or mismatched segment header')
         expected=(3 if core<send else 2) if op==1 else (1 if core<send else 4)
         if role!=expected: raise ValueError('Unexpected segment core role')
-        splits.add(send);count,omitted=h[6:]
+        splits.add(send);modes.add(mode);count,omitted=h[6:]
         if not 0<count<=TRACE_RECORDS+metrics_limit or any(words[8+count*2:]): raise ValueError('Truncated or invalid segment records')
         metrics={};pairs={};trace_count=0;in_metrics=False
         for i in range(count):
@@ -63,6 +64,18 @@ def parse_records(raw, operation, frequency_hz=None):
                 stage=event//2
                 if in_metrics or payload or stage>=metrics_limit or stage in COUNTERS: raise ValueError('Invalid interval event')
                 pair=pairs.setdefault(stage,[[],[]]);pair[event&1].append(value);trace_count+=1
+        if schema==10:
+            relay={stage for stage in metrics if stage>=66}
+            if relay and op!=1: raise ValueError('Relay diagnostics require dispatch')
+            if mode==1 and relay & {67,68}: raise ValueError('Completion metrics in observe capture')
+            if 66 in relay:
+                groups=metrics[66][0]
+                if 69 not in relay or metrics[69][0]<groups:
+                    raise ValueError('Missing/inconsistent relay write count')
+                if mode==3 and (not {67,68}<=relay or metrics[67][0]!=groups or
+                               metrics[68][0]!=groups or metrics[68][1]<metrics[66][1]):
+                    raise ValueError('Missing/inconsistent relay completion metrics')
+            elif relay: raise ValueError('Relay metrics without issue intervals')
         if trace_count>TRACE_RECORDS: raise ValueError('Trace capacity exceeded')
         if metrics.get(0,(0,))[0]!=1 or 0 not in pairs: raise ValueError('Missing KERNEL interval')
         initial_role=ROLES[role]
@@ -93,8 +106,9 @@ def parse_records(raw, operation, frequency_hz=None):
             records.append(item)
         core_info.append(dict(core=core,role=display_role,initial_role=initial_role,record_count=count,omitted_intervals=omitted))
     if len(splits)!=1: raise ValueError('Mixed core splits')
+    if len(modes)!=1: raise ValueError('Mixed relay diagnostic modes')
     return dict(schema=schema,operation=operation,active_aiv=cores,send_cores=send,recv_cores=cores-send,
-                dispatch_recv_cores=cores,boundary_mode='observe',frequency_hz=frequency_hz,
+                dispatch_recv_cores=cores,boundary_mode='relay-complete' if mode==3 else 'observe',frequency_hz=frequency_hz,
                 records=records,intervals=intervals,cores=core_info,
                 clock='AscendC::GetSystemCycle; no cross-rank clock alignment assumed',
                 interpretation='First two calls sampled per stage; all calls accumulated. Nested stages cannot be summed. GM export follows KERNEL and all-core synchronization.')
@@ -103,10 +117,11 @@ def parse_records(raw, operation, frequency_hz=None):
 def chrome_trace(saved_records, frequency_hz=None, lane_layout='core', show_repeated=False):
     saved_records=list(saved_records)
     if not saved_records: raise ValueError('No LL stage records')
-    if all(s['raw'][0][0][1] not in (7,SCHEMA) for s in saved_records):
+    if all(s['raw'][0][0][1] not in (7,9,SCHEMA) for s in saved_records):
         return legacy.chrome_trace(saved_records,frequency_hz,lane_layout,show_repeated)
-    if any(s['raw'][0][0][1] not in (7,SCHEMA) for s in saved_records): raise ValueError('Mixed segment and legacy traces')
+    if any(s['raw'][0][0][1] not in (7,9,SCHEMA) for s in saved_records): raise ValueError('Mixed segment and legacy traces')
     if len({s['raw'][0][0][1] for s in saved_records})!=1: raise ValueError('Mixed segment schemas')
+    if len({s['raw'][0][0][5]&255 for s in saved_records})!=1: raise ValueError('Mixed relay diagnostic modes')
     if lane_layout not in ('core','stage'): raise ValueError('Expected core or stage lane layout')
     events=[];identities=set();info=[]
     for pid,saved in enumerate(saved_records,1):
@@ -136,7 +151,7 @@ def chrome_trace(saved_records, frequency_hz=None, lane_layout='core', show_repe
 def reference_binary(raw,operation):
     """Export the reference format-5 body (no opt-in cookie); original parser can read it."""
     report=parse_records(raw,operation)
-    if report['schema']!=7: raise ValueError('Reference format-5 export requires original schema7; schema9 uses JSON/CSV/Chrome trace')
+    if report['schema']!=7: raise ValueError('Reference format-5 export requires original schema7; extended schemas use JSON/CSV/Chrome trace')
     offset=64+72*64;data=bytearray(offset+72*256*16)
     struct.pack_into('<8I',data,0,0x50524f46,0x10005,len(raw),16,256,64,offset,1 if operation=='dispatch' else 2)
     for core,rows in enumerate(raw):
@@ -149,7 +164,7 @@ def reference_binary(raw,operation):
 class StageTrace:
     def __init__(self, buffer, operation, mode='observe', frequency_hz=DEFAULT_FREQUENCY_HZ,
                  expert_config=None):
-        if operation not in ('dispatch', 'combine') or mode != 'observe':
+        if operation not in ('dispatch', 'combine') or mode not in ('observe','relay-complete') or (mode=='relay-complete' and operation!='dispatch'):
             raise ValueError('Invalid LL stage diagnostic configuration')
         if frequency_hz is not None and (not math.isfinite(frequency_hz) or frequency_hz <= 0):
             raise ValueError('Counter frequency must be finite and positive')
@@ -183,6 +198,8 @@ class StageTrace:
         # Public LL calls establish a current-stream dependency on completion.
         self.raw = self.tensor.cpu().tolist()
         self.report = parse_records(self.raw, self.operation, self.frequency_hz)
+        if self.report['boundary_mode']!=self.mode:
+            raise RuntimeError('Capture returned a different diagnostic mode')
         if self.report['schema'] != SCHEMA:
             raise RuntimeError('Capture returned a stale timer format; rebuild the complete wheel')
         if self.expert_tensor is not None:
@@ -254,4 +271,4 @@ def attach(buffer, tensors, operation):
     if getattr(trace, 'expert_tensor', None) is not None:
         tensors['ll_expert_timer'] = trace.expert_tensor
     # The native binding derives mode from this CPU scalar, not an NPU read.
-    tensors['ll_stage_timer_mode'] = 1 if trace.mode == 'observe' else 2
+    tensors['ll_stage_timer_mode'] = {'observe':1,'relay-complete':3}[trace.mode]

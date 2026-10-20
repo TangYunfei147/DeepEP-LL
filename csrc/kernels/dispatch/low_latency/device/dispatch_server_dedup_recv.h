@@ -307,6 +307,9 @@ private:
             const uint32_t sourceRank = tail.Header().GetValue(0U);
             const uint32_t ranks = uint32_t(args_->rankSize);
             const uint32_t members = tail.ReadIndex().GetValue(0U);
+            LL_SEG_RELAY_COMPLETION(pipe_);
+            LL_SEG_SCOPE(RELAY_ISSUE);
+            LL_SEG_COUNT(RELAY_PACKETS, members);
             for (uint32_t i = 0U; i < members; ++i) {
                 const uint32_t index = tail.Entry(i).GetValue(0U);
                 const uint32_t expertId = index & 0xffffU;

@@ -191,7 +191,7 @@ def make_parser():
     parser.add_argument("--ll-stage-timer", action="store_true", help="Separate device-stage diagnostic calls; requires timer-enabled wheel")
     parser.add_argument('--ll-expert-timer', action='store_true', help='Legacy option: explicitly rejected by reference segment capture')
     parser.add_argument("--ll-timer-iters", type=int, default=5)
-    parser.add_argument("--ll-timer-mode", choices=("observe", "drain"), default="observe", help="Segment capture supports observe; drain is rejected")
+    parser.add_argument("--ll-timer-mode", choices=("observe", "relay-complete", "drain"), default="observe", help="relay-complete is dispatch-only diagnostic; generic drain is rejected")
     parser.add_argument("--ll-timer-frequency-hz", type=float, default=1_000_000_000, help="GetSystemCycle frequency; default 1GHz (ticks/1000 us)")
     parser.add_argument("--dispatch-only", action="store_true")
     parser.add_argument("--repeat-combine", type=int, default=2)
@@ -433,8 +433,11 @@ def resolve_delay_counts(args):
 def validate_args(args, world):
     if args.ll_expert_timer:
         raise ValueError("Reference segment capture rejects legacy per-expert GM instrumentation")
-    if args.ll_stage_timer and args.ll_timer_mode != "observe":
-        raise ValueError("Reference segment capture supports observe only")
+    if args.ll_stage_timer and args.ll_timer_mode not in ("observe", "relay-complete"):
+        raise ValueError("LL segment capture supports observe or relay-complete, not generic drain")
+    if args.ll_timer_mode == "relay-complete" and not (
+            args.ll_stage_timer and args.dispatch_only and args.skip_perf_test):
+        raise ValueError("relay-complete requires --ll-stage-timer --dispatch-only --skip-perf-test")
     resolve_delay_counts(args)
     if any(isinstance(getattr(args, key), list) for key in MATRIX_FIELDS):
         capacities = []
@@ -1103,8 +1106,8 @@ def worker(local_rank, args):
             raise RuntimeError('Requested RDMA is not compiled in this wheel; no MTE fallback')
         if args.ll_stage_timer and not capability["stage_timer"]:
             raise RuntimeError("All ranks must install a DEEPEP_LL_STAGE_TIMER=ON wheel")
-        if args.ll_stage_timer and capability['stage_timer_schema'] != 9:
-            raise RuntimeError('Detailed LL diagnostics require timer schema 9; rebuild/install the matching wheel on every rank')
+        if args.ll_stage_timer and capability['stage_timer_schema'] != 10:
+            raise RuntimeError('Detailed LL diagnostics require timer schema 10; rebuild/install the matching wheel on every rank')
         if args.ll_expert_timer and not 8001 <= capability['core_protocol'] <= 8055:
             raise RuntimeError('Expert diagnostics require a matching configured-split wheel on every rank')
         args.ll_stage_timer_capabilities = capabilities

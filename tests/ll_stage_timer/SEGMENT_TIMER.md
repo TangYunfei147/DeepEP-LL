@@ -1,3 +1,5 @@
+> 当前relay扩展为schema10，独立完成诊断与observe区别见 [RELAY_TIMING.md](RELAY_TIMING.md)；下文为早期参考格式记录。
+
 > 本文下方记录schema7参考格式。当前实现已追加两处现有同步的计时，升级为schema9，详见 [INPUT_WAIT.md](INPUT_WAIT.md)。旧64个ID和采样语义保留，新格式用JSON/CSV/Chrome trace。
 
 # 参考分段打点（schema7）
