@@ -85,3 +85,12 @@ CPU检查覆盖真实区间绘图、计数/容量/边界错误、紧凑导出、
 任务轨道没有sender/receiver、send_payload/send_pack、recv_consume等父层插桩；按路由处理、输入搬入、metadata、输出写回、逐包转发及独立等待记录。combine_return_task逐路由返回，combine_reduce_task逐partial归约回传，combine_output_task逐输出token；输入/输出依赖等待切开执行区间，同一任务各片段保留相同task ID。
 
 例如一个归约任务先执行10tick、等待20tick、再执行30tick，保存执行[0,10,id]、等待[10,30,id]、执行[30,60,id]。该执行类型的统计为1个task、2个片段、40tick；等待类型为1个task、1个片段、20tick。固定kernel时长单独记录，不参与互斥任务的求和。
+
+## 按算子筛选离线分析
+
+```bash
+python tests/ll_stage_timer/analyze.py <run目录> --op dispatch --trace-iteration 4
+python tests/ll_stage_timer/analyze.py <run目录> --op combine --trace-iteration 4
+```
+
+`--operation`是`--op`的同义写法；不传则保留全部算子。筛选覆盖summary、CSV、trace及本分支附加报告，所选算子的全部rank/轮次仍必须完整。默认分别输出stage-analysis-dispatch、stage-analysis-combine；可用--output-dir指定新目录，已有输出不覆盖。仅离线脚本更新，无需重编wheel或重新采样。

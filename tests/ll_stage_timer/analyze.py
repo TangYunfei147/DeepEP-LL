@@ -392,8 +392,12 @@ def expert_reports(paths, frequency_hz):
     return rows,summaries
 
 
-def process_directory(source, output, frequency_hz, trace_iteration, lane_layout='core'):
+def process_directory(source, output, frequency_hz, trace_iteration, lane_layout='core', operation=None):
+    if operation not in (None,'dispatch','combine'): raise ValueError('Expected dispatch or combine')
     paths = sorted(source.rglob('sample_*.json'))
+    if operation is not None:
+        paths=[path for path in paths if json.loads(path.read_text())['operation']==operation]
+        if not paths: raise ValueError(f'No {operation} diagnostic samples in {source}')
     report = analyze(paths, frequency_hz)
     selected = []
     for path in paths:
@@ -444,6 +448,7 @@ def process_directory(source, output, frequency_hz, trace_iteration, lane_layout
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('directory',type=Path,help='Timer directory, case, run, or run parent; every rank required per case')
+    parser.add_argument('--op','--operation',dest='operation',choices=('dispatch','combine'),help='Filter all reports and trace to one operation')
     parser.add_argument('--latest',action='store_true',help='Select newest child run by cases.json creation mtime')
     parser.add_argument('--frequency-hz',type=float,default=None,
                         help='Override recorded counter frequency; missing frequency retains ticks without rates or trace')
@@ -453,13 +458,13 @@ def main():
     args=parser.parse_args()
     source=args.directory if args.directory.is_absolute() else ROOT/args.directory
     source, directories = discover(source, args.latest)
-    output = (args.output_dir if args.output_dir.is_absolute() else ROOT/args.output_dir) if args.output_dir else source/'stage-analysis'
+    output = (args.output_dir if args.output_dir.is_absolute() else ROOT/args.output_dir) if args.output_dir else source/('stage-analysis-'+args.operation if args.operation else 'stage-analysis')
     if len(directories)>1 and (output/'REPORT_INDEX.md').exists():
         raise FileExistsError('Report index already exists; use a new output directory')
     documents = []
     for directory in directories:
         destination = output if len(directories)==1 else output/directory.relative_to(source)
-        process_directory(directory, destination, args.frequency_hz, args.trace_iteration, args.lane_layout)
+        process_directory(directory, destination, args.frequency_hz, args.trace_iteration, args.lane_layout, args.operation)
         documents.append((directory.relative_to(source), (destination/'bottleneck_summary.md').relative_to(output)))
     if len(documents) > 1:
         from urllib.parse import quote
