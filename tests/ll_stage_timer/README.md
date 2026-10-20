@@ -179,3 +179,12 @@ python -m pip install -v --force-reinstall --no-build-isolation --no-deps .
 错峰候选独立维护在kernel/ll-g4-stagger，基于本分支G4提交，仅移植NDR发送顺序轮转，不移植RDMA、缓存策略、分组tiling或timer schema3。基线与候选用独立checkout和匹配环境，在相同shape/seed/采样协议下比较timer OFF的完整task性能；ON仅供诊断。默认值修改本地83项CPU通过，2项C++执行因无编译器跳过，1项既有Bash环境检查未选；未做设备验收。
 
 当前候选已沿用NDR的FIRST_HOP/DIRECT顺序轮转，未穿插本组流量。基线提交、适用范围和完整A/B步骤见[SEND_STAGGER.md](SEND_STAGGER.md)。
+
+## 按算子筛选离线分析
+
+```bash
+python tests/ll_stage_timer/analyze.py <run目录> --op dispatch --trace-iteration 4
+python tests/ll_stage_timer/analyze.py <run目录> --op combine --trace-iteration 4
+```
+
+`--operation`是`--op`的同义写法；不传则保留全部算子。筛选覆盖summary、CSV、trace及本分支附加报告，所选算子的全部rank/轮次仍必须完整。默认分别输出stage-analysis-dispatch、stage-analysis-combine；可用--output-dir指定新目录，已有输出不覆盖。仅离线脚本更新，无需重编wheel或重新采样。
