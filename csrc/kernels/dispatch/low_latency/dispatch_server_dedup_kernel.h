@@ -32,14 +32,13 @@ public:
         const uint32_t magic = RotateDispatchServerDedupMagic(args_, core_, pipe);
         counts_.Init(commArgs, expertIds, expertTokenNumsOut, sendCountsOut, bs, topK, experts, expertTokenNumsType,
                      magic, pipe, timer);
-        if (core_ < sendCores_)
-            sender_.Init(args_, x, expertIds, expertScales, sourceMaskOut, expertScalesOut, bs, h, topK, experts, pipe,
-                         magic, inputScales, enableDedup);
+        sender_.Init(args_, x, expertIds, expertScales, sourceMaskOut, expertScalesOut, bs, h, topK, experts, pipe,
+                     magic, inputScales, enableDedup);
         receiver_.Init(args_, expandXOut, dynamicScalesOut, tokenTypeOut, destinationIndexOut, relayReadIndexOut,
                        bs, h, topK, experts, pipe, magic, enableDedup, expertTimer);
     }
 
-    // 完整dispatch：先按S/R执行发送与前缀准备，再由全部核消费各自接收任务。
+    // 完整dispatch：S核跨组初发；R核本组初发后按原流程准备前缀；全部核接收。
     // Sender可与接收核的计数前缀准备重叠，不能把提取阶段耗时直接相加当作完整时延。
     __aicore__ inline void Process()
     {
@@ -49,6 +48,9 @@ public:
             sender_.Process(counts_.ScratchPool(), counts_.ReservedBytes(), timer_);
 
         } else {
+            const uint32_t localTasks=counts_.LocalTaskCount();
+            if (localTasks) sender_.ProcessGroupLocal(counts_.LocalSendScratchPool(),counts_.ReservedBytes(),
+                                                       counts_.LocalRouteIndices(),counts_.LocalExpertQ(),localTasks,timer_);
             LL_SEG_SCOPE(CAL_CUMSUM);
             counts_.RecvCnt();
             counts_.CalcCumsum();

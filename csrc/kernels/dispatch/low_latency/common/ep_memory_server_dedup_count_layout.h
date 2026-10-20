@@ -6,16 +6,17 @@
 
 #include "comm_args.h"
 #include "ll_core_config.h"
+#include "ll_group_local_send.h"
 #include "dispatch_dedup_types.h"
 
-// Count participation threshold is independent of the runtime send/receive split.
+// Legacy count-probe threshold; production group-local source ownership uses LlGroupCountPlan.
 #ifndef DISPATCH_SERVER_DEDUP_ALL_CORE_COUNT_BS_THRESHOLD
 #define DISPATCH_SERVER_DEDUP_ALL_CORE_COUNT_BS_THRESHOLD 512U
 #endif
 #include "ep_memory_server_dedup_mode.h"
 
 namespace DispatchDedup {
-// BS below this threshold uses all launched cores for Count; otherwise only receivers.
+// Retained for older extracted count probes; the production dispatch no longer selects owners by BS.
 constexpr uint32_t kEpServerDedupAllCoreCountBsThreshold = DISPATCH_SERVER_DEDUP_ALL_CORE_COUNT_BS_THRESHOLD;
 constexpr uint32_t kEpServerDedupMaxExperts = 1024U;
 constexpr uint32_t kEpServerDedupCountRecordBytes = 32U;
@@ -92,6 +93,18 @@ DISPATCH_DEDUP_EP_DEDUP_INLINE uint64_t DispatchServerDedupCountSendUbBytes(uint
     const uint32_t records = (experts + countCores - 1U) / countCores;
     const uint32_t alignedRecords = (records + 7U) / 8U * 8U;
     return 4U * routeBytes + uint64_t(alignedRecords) * (32U + sizeof(int32_t));
+}
+
+// Peak while counting and retaining local descriptors, including two remote
+// ranges around the local group. Actual count record lengths may be smaller.
+DISPATCH_DEDUP_EP_DEDUP_INLINE uint64_t DispatchGroupLocalCountSendUbBytes(uint64_t routes,uint32_t experts,uint32_t ranks)
+{
+    const uint64_t routeBytes=(routes*4U+255U)/256U*256U;
+    const uint64_t remote=(LlGroupCountMaxRecords(experts,ranks,false)+7U)/8U*8U;
+    const uint64_t local=(LlGroupCountMaxRecords(experts,ranks,true)+7U)/8U*8U;
+    const uint64_t remoteBytes=remote ? 4U*routeBytes+remote*36U : 0U;
+    const uint64_t localBytes=local ? 6U*routeBytes+local*36U : 0U;
+    return remoteBytes>localBytes ? remoteBytes : localBytes;
 }
 
 #undef DISPATCH_DEDUP_EP_DEDUP_INLINE

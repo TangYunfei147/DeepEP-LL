@@ -89,12 +89,8 @@ inline int BuildDispatchServerDedupLayout(int64_t rankSize, int64_t bs, int64_t 
         return DispatchDedup::DISPATCH_DEDUP_ERROR_PARA_CHECK_FAIL;
     }
 
-    const uint32_t countCores =
-        bs < kEpServerDedupAllCoreCountBsThreshold ? coreNum : kLlRecvCoreNum;
-    if (DispatchServerDedupCountSendUbBytes(uint64_t(bs) * topK, uint32_t(moeExpertNum), countCores) >
-        kEpServerDedupCountUbBytes) {
-        return DispatchDedup::DISPATCH_DEDUP_ERROR_PARA_CHECK_FAIL;
-    }
+    if (DispatchGroupLocalCountSendUbBytes(uint64_t(bs)*topK,uint32_t(moeExpertNum),uint32_t(rankSize))>
+        kEpServerDedupCountUbBytes) return DispatchDedup::DISPATCH_DEDUP_ERROR_PARA_CHECK_FAIL;
 
     const bool wireFp8 = mode != EpServerDedupInputMode::Plain16;
     const bool prequantized = mode == EpServerDedupInputMode::PrequantizedFp8Packs;
@@ -175,9 +171,9 @@ inline bool DispatchDedupPacketUbFits(const EpMemoryServerDedupLayout& layout, i
 {
     if (!LlCoreCountValid(coreNum)) return false;
     const auto align = [](uint64_t n, uint64_t a) { return (n + a - 1) / a * a; };
-    const uint64_t cores = b < kEpServerDedupAllCoreCountBsThreshold ? coreNum : kLlRecvCoreNum;
-    const uint64_t reserved =
-        b < kEpServerDedupAllCoreCountBsThreshold ? align((num_experts + cores - 1) / cores, 8) * 32 : 0;
+    const uint64_t reserved=align(LlGroupCountMaxRecords(uint32_t(num_experts),uint32_t(world_size),false),8U)*32U;
+    const uint64_t localReserved=align(LlGroupCountMaxRecords(uint32_t(num_experts),uint32_t(world_size),true),8U)*32U+
+                                 2U*align(b*k*4U,256U);
     const uint64_t tokens = (b + kLlSendCoreNum - 1U) / kLlSendCoreNum;
     const uint64_t groups = std::min<uint64_t>(world_size / kLlRanksPerGroup - 1, k / 2);
     const bool needQuantize = layout.inputMode == EpServerDedupInputMode::Quantize16;
@@ -192,12 +188,15 @@ inline bool DispatchDedupPacketUbFits(const EpMemoryServerDedupLayout& layout, i
                             align(tokens * 4, 32) + align(tokens * k * 16, 32) + 64 + align(groups * 4, 32) +
                             layout.data.tokenStride;
     const uint64_t serverStateExtra = std::max<uint64_t>(64U, align(world_size / kLlRanksPerGroup * 4U, 32U)) - 64U;
+    const uint64_t localSender=localReserved+2U*inputBytes+align(b*k*4U,32U)+
+                               (needQuantize ? quantWork+layout.data.packedPayloadBytes : 0U)+layout.data.tokenStride;
     const uint64_t receiver = align(num_experts * 4, 32) + 2 * align(((layout.capacityRows + kLlDispatchRecvCoreNum - 1U) / kLlDispatchRecvCoreNum) * 4, 32) +
                               16 * layout.data.blockCount * 32 + 256 +
                               16 * align((layout.data.blockCount + 7) / 8, 32) * 4 + 256 + 16 * 36 +
                               layout.data.tokenStride + 64;
     return layout.data.blockCount > 0 && layout.data.blockCount <= UINT8_MAX &&
-           sender + serverStateExtra <= kEpServerDedupCountUbBytes && receiver <= kEpServerDedupCountUbBytes;
+           sender + serverStateExtra <= kEpServerDedupCountUbBytes &&
+           localSender <= kEpServerDedupCountUbBytes && receiver <= kEpServerDedupCountUbBytes;
 }
 }  // namespace DispatchDedup
 

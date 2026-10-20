@@ -1,3 +1,5 @@
+> 2026-10-20本组初发更新：原R核先发送本源rank的组内包，再运行原接收流程；核心标识10000+S。当前调度/UB/验收以[GROUP_LOCAL_SEND.md](GROUP_LOCAL_SEND.md)为准。
+
 # Dispatch发送后参与接收
 
 分支：`kernel/ll-g4-shared-recv`。起点：`kernel/ll-g4-stagger@5c2ea11`，包含父分支已有统计更新。默认G4、MTE和错峰发送顺序保留。
