@@ -103,3 +103,21 @@ def test_decoupled_done_poll_has_bounded_exit_even_when_all_batches_skipped(fini
                 break
     assert finish_after<iteration<=finish_after+32
     assert reads==iteration//32
+
+
+@pytest.mark.parametrize("ranks",[16,32,64,128])
+@pytest.mark.parametrize("local_experts",[1,3,24])
+def test_incremental_position_slots_preserve_rotated_sources(ranks,local_experts):
+    for rank in (0,1,ranks-1):
+        for start in (0,1,ranks-1,ranks,min(ranks+3,ranks*local_experts)):
+            source=start%ranks
+            expert=start//ranks
+            rotated=(source+rank)%ranks
+            for record in range(start,ranks*local_experts):
+                assert rotated*local_experts+expert == (
+                    (record%ranks+rank)%ranks*local_experts+record//ranks)
+                source+=1
+                if source==ranks:
+                    source=0
+                    expert+=1
+                rotated=(rotated+1) if rotated+1<ranks else 0

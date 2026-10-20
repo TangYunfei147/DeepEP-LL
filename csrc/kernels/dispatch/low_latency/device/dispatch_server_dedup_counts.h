@@ -699,11 +699,12 @@ __aicore__ inline void ServerDedupCounts::BuildReceivePositions(LocalTensor<int3
     GlobalTensor<int32_t> output;
     output.SetGlobalBuffer(reinterpret_cast<__gm__ int32_t*>(receivePositions_));
     uint32_t previous=offset;
+    uint32_t source=startStatusIndex_%epWorldSize_;
+    uint32_t expert=startStatusIndex_/epWorldSize_;
+    uint32_t rotatedSource=(source+epRankId_)%epWorldSize_;
     for (uint32_t i=0;i<recStatusNumPerCore_;++i) {
         const uint32_t end=uint32_t(prefix.GetValue(i));
-        const uint32_t record=startStatusIndex_+i;
-        const uint32_t source=record%epWorldSize_,expert=record/epWorldSize_;
-        const uint32_t slot=((source+epRankId_)%epWorldSize_*moeExpertNumPerRank_+expert)*axisBS_;
+        const uint32_t slot=(rotatedSource*moeExpertNumPerRank_+expert)*axisBS_;
         for (uint32_t row=previous;row<end;) {
             const uint32_t count=end-row<tileWords ? end-row : tileWords;
             CreateVecIndex(tile,int32_t(slot+row-previous),count);
@@ -713,6 +714,8 @@ __aicore__ inline void ServerDedupCounts::BuildReceivePositions(LocalTensor<int3
             row+=count;
         }
         previous=end;
+        if (++source==epWorldSize_) { source=0U; ++expert; }
+        if (++rotatedSource==epWorldSize_) rotatedSource=0U;
     }
 }
 

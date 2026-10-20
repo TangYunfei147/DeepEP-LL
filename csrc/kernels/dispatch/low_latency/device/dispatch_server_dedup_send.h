@@ -401,11 +401,14 @@ private:
     __aicore__ inline void Classify(uint32_t token, uint32_t& directMask, uint32_t& groups, uint32_t& localMask)
     {
         uint32_t seen = 0, grouped = 0;
+        const uint32_t routeBegin=(start_+token)*k_;
+        const uint32_t groupExperts=localExperts_*kLlRanksPerGroup;
+        const uint32_t ownGroup=uint32_t(args_->rank)/kLlRanksPerGroup;
         for (uint32_t k = 0; k < k_; ++k) {
-            const uint32_t expert = uint32_t(routeIds_.GetValue((start_ + token) * k_ + k));
-            const uint32_t server = expert / localExperts_ / kLlRanksPerGroup;
+            const uint32_t expert = uint32_t(routeIds_.GetValue(routeBegin+k));
+            const uint32_t server = expert/groupExperts;
             const uint32_t bit = uint32_t(1) << k, serverBit = uint32_t(1) << server;
-            if (server == uint32_t(args_->rank) / kLlRanksPerGroup) {
+            if (server == ownGroup) {
                 localMask |= bit;
             } else if ((seen & serverBit) == 0U) {
                 seen |= serverBit;

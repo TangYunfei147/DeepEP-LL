@@ -43,6 +43,12 @@ Host 原有每核 ceil(B/S)×K×16B 预算中，不增加 Host 最大预算或�
 不含 CAS、入场和完成更新；其他核发现全部认领后的额外迭代最多 31 次，
 这是操作次数界限而非时间界限，需关注目标机尾延迟。
 
+第六个优化：`Classify` 显式外提 token 起点、本组编号和组专家数，
+用一次除法求目标组；`BuildReceivePositions` 将逐 record 的 source/expert
+除余改为分片起点一次解码和递增回绕，保留原 rotated source 的槽位顺序。
+不合并小区间的 DMA，不改发布依赖。编译器可能已做部分不变量提升，
+实际指令收益需检查目标汇编。
+
 ## 编译错误
 
 `dispatch_server_dedup_counts.h` 的两个 `GM_ADDR` 成员原先逗号连写。
