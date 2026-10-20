@@ -46,7 +46,7 @@ python -m pip install -v --force-reinstall --no-build-isolation --no-deps .
 
 A/B基线为b3f9004，保持S/R/G、dtype、实际EP、路由种子、shape、Exp和采样参数相同。沿用现有ST入口，使用不同run-name，先正确性和窗口复用，再按10预热/100采样/每task最后50条统计OFF性能。用户示例可以作为一个case，不能代替小B、非去重、热点、跨组、同组及重复调用覆盖。
 
-ON诊断中，原R核的worker标签仍为cumsum，但会出现SEND_TOKENS和对应TOKEN_*实际组内发送区间；之后才是CAL_CUMSUM/LOCAL_WINDOW_COPY。本组q计算已融合到COUNT_COMPUTE，不应在R核看到逐包CAL_TOKEN。compare.py识别9000/10000两种已知schema7身份；dispatch逐核源端工作分配变化时不输出逐核加速比。
+ON诊断中，原始头保留初始worker=cumsum；解析器依据实际SEND_TOKENS将参与本组初发的R核显示为send_and_recv，另保留initial_role。补齐PREPARE_INPUT与SEND_DRAIN，之后才是CAL_CUMSUM/LOCAL_WINDOW_COPY；空任务核不补造发送区间。本组q计算已融合到COUNT_COMPUTE，不应在R核看到逐包CAL_TOKEN。compare.py识别9000/10000两种已知schema7身份；dispatch逐核源端工作分配变化时不输出逐核加速比。
 
 源码指纹测试仅更新三个获授权变更的源端文件；接收器和combine指纹仍对照原始记录。原始6ea61a6指纹不再用于宣称本次源端算法无变化。
 

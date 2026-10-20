@@ -25,3 +25,5 @@
 当前诊断为graph_dc_debug_seg语义的schema7（64阶段，前两次区间+全量metrics）；ll_stage_timer_device.h只在KERNEL结束且全核同步后Flush，旧ll_expert_timer仅用于历史记录接口，新采样明确拒绝。新增探针不得改业务等待/协议；静态摘要基线见tests/ll_stage_timer/segment_baseline.json。
 
 本组初发：common/ll_group_local_send.h统一专家所有者；Counts在本组计数循环生成q/紧凑任务，Sender::ProcessGroupLocal由R核调用。Receiver和接收侧计数链保持不变；UB预算与源端分工一起维护，见../ll_stage_timer/GROUP_LOCAL_SEND.md。
+
+本组初发打点适配：ProcessGroupLocal的准备和退休分别PREPARE_INPUT/SEND_DRAIN；非去重远端压紧记PREPARE_INPUT。分析按实际SEND_TOKENS提升显示角色并保留initial_role；schema7/参考64阶段字典不变。

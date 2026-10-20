@@ -21,7 +21,7 @@ def stats(values):
 
 
 def analyze(paths, frequency_hz=None):
-    configurations={};ranks={};groups={};identity=None;stage_max={};measured={}
+    configurations={};ranks={};groups={};identity=None;stage_max={};measured={};worker_roles={}
     for path in paths:
         saved=json.loads(path.read_text())
         meta=saved['metadata']
@@ -39,7 +39,10 @@ def analyze(paths, frequency_hz=None):
         configurations[op]=meta['config']
         unit='us' if report['frequency_hz'] is not None else 'ticks'
         for row in report['records']:
-            key=(op,rank,row['core'],row['role'],row['stage'])
+            initial_role=row.get('initial_role',row['role'])
+            key=(op,rank,row['core'],initial_role,row['stage'])
+            if report['schema']==7:
+                worker_roles.setdefault((op,rank,row['core']),set()).add(row['role'])
             duration=row['total_us'] if unit=='us' else row['total_ticks']
             groups.setdefault(key,[]).append((duration,row['calls']))
             measured[key]=row.get('time_measured',True)
@@ -60,7 +63,8 @@ def analyze(paths, frequency_hz=None):
                 raise ValueError('Incomplete diagnostic tail')
     rows=[]
     for (op,rank,core,role,stage), values in sorted(groups.items()):
-        rows.append(dict(operation=op,rank=rank,core=core,role=role,stage=stage,unit=unit,
+        display_role='send_and_recv' if 'send_and_recv' in worker_roles.get((op,rank,core),set()) else role
+        rows.append(dict(operation=op,rank=rank,core=core,role=display_role,initial_role=role,stage=stage,unit=unit,
                          **stats([v for v,n in values]),mean_calls=statistics.mean(n for v,n in values),
                          time_measured=measured[(op,rank,core,role,stage)]))
         if not rows[-1]['time_measured']:

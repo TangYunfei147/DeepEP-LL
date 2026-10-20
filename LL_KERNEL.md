@@ -64,6 +64,6 @@ must be validated by the user on the target deployment.
 LL设备阶段打点：参见 [tests/ll_stage_timer/README.md](tests/ll_stage_timer/README.md)。默认关闭，通过独立诊断调用采集每rank/每AIV阶段累计ticks。
 
 ## Shared diagnostics update
-The configured-split protocol identifier is 9000 + send_cores, with sampled segment schema 7; legacy expert capture is disabled. Rebuild all ranks. MTE, the original group policy and default G=4 are retained. Shared launch and comparison instructions: [PARITY.md](tests/ll_stage_timer/PARITY.md). Different G values are permitted in cross-branch comparisons.
+The configured-split protocol identifier is 10000 + send_cores, with sampled segment schema 7; legacy expert capture is disabled. Rebuild all ranks. MTE, the original group policy and default G=4 are retained. Shared launch and comparison instructions: [PARITY.md](tests/ll_stage_timer/PARITY.md). Different G values are permitted in cross-branch comparisons.
 
 Reference instrumentation and migration: [SEGMENT_TIMER.md](tests/ll_stage_timer/SEGMENT_TIMER.md). All cores finish KERNEL timing before synchronization and diagnostic GM export.

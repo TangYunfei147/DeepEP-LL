@@ -185,6 +185,7 @@ public:
         if (!tasks) return;
         timer_=timer;
         LL_SEG_SCOPE(SEND_TOKENS);
+        LL_SEG_BEGIN(localPrepareBegin, PREPARE_INPUT);
         scratch_=&scratch;
         start_=0U; count_=bs_;
         TQue<QuePosition::VECIN,1> input;
@@ -220,10 +221,12 @@ public:
             SetFlag<HardEvent::MTE3_V>(lane);
         }
         PipeBarrier<PIPE_V>();
+        LL_SEG_END(localPrepareBegin, PREPARE_INPUT);
         for (uint32_t task=0;task<tasks;++task) {
             const uint32_t index=indices.GetValue(task),packed=expertQ.GetValue(task);
             SendPacket(input,index/k_,index%k_,packed&0xffffU,packed>>16U,0U);
         }
+        LL_SEG_BEGIN(localDrainBegin, SEND_DRAIN);
         // Retire all reads of packet scratch before RecvCnt overlays that UB.
         for (uint32_t lane=0;lane<lanes_;++lane) WaitFlag<HardEvent::MTE3_V>(lane);
         Sync<HardEvent::MTE3_S>();
@@ -231,6 +234,7 @@ public:
         // Packet packing may use a different control mode; the unchanged
         // count-receive reductions require integer FP32 subnormals preserved.
         SetCtrlSpr<60,60>(0);
+        LL_SEG_END(localDrainBegin, SEND_DRAIN);
 
     }
 
@@ -310,6 +314,7 @@ public:
         const uint32_t begin=core*base+(core<remainder ? core : remainder);
         const uint32_t count=base+(core<remainder ? 1U : 0U);
         if (!count) return;
+        LL_SEG_BEGIN(remotePrepareBegin, PREPARE_INPUT);
         const uint32_t expertsPerGroup=localExperts_*kLlRanksPerGroup;
         const uint32_t ownGroup=args_->rank/kLlRanksPerGroup;
         const uint32_t ownBegin=ownGroup*expertsPerGroup;
@@ -333,6 +338,7 @@ public:
         uint64_t remoteCount=0;
         GatherMask(directTasks_,indices.ReinterpretCast<uint32_t>(),lower.ReinterpretCast<uint32_t>(),true,span,{1U,1U,0U,0U},remoteCount);
         Sync<HardEvent::V_S>();
+        LL_SEG_END(remotePrepareBegin, PREPARE_INPUT);
         const uint32_t serverNum=args_->rankSize/kLlRanksPerGroup;
         if (serverNum<16U) {
             for (uint32_t task=0;task<remoteCount;++task) {

@@ -47,7 +47,7 @@ BROADCAST_PREFIX在本分支确实写56份副本；参考分支最新算法写�
 
 沿用LL显式诊断tensor参数，Host校验dtype/shape/设备/512B对齐，不借用performance_info隐藏扩容。每核 `[72,8] int64`、4608B；56核每次252KiB。记录部分使用参考相同的16B event/payload/cycle结构，额外空间用于LL独立头和按核对齐。
 
-核心标识为`9000+S`，阶段schema7。全rank重装完整匹配wheel；本改动不要求强制重建已校验SDK。`ll_stage_timer_legacy.py`只用于读取旧schema1/2/5/6；不以旧包生成新诊断。
+核心标识为`10000+S`，阶段schema7。全rank重装完整匹配wheel；本改动不要求强制重建已校验SDK。`ll_stage_timer_legacy.py`只用于读取旧schema1/2/5/6；不以旧包生成新诊断。
 
 `--ll-timer-mode drain`和`--ll-expert-timer`在新模式明确报错，Native也拒绝旧专家tensor。旧专家数据仍可离线读取。使用OFF wheel比较新旧提交的正式性能；新旧打点边界不同，不计算跨schema6/7的诊断耗时比。
 
@@ -95,4 +95,18 @@ python tests/ll_stage_timer/analyze.py results/ll-timer/segment-001 --trace-iter
 
 本地缺CANN和C++编译器，未执行设备编译或上板。`test_segment_native.py`在有g++时编译实际记录器的CPU mock，覆盖OFF无写入、ON延后写出与哨兵；真实设备仍需匹配wheel全rank验收。
 
-最终本地回归：315 passed、30项缺C++编译器跳过、9项Bash/POSIX检查未选；包含30项新增格式/插桩检查，另2项原生记录器mock因无g++跳过。原参考解析器交叉读取通过。未执行CANN或NPU。
+schema7首次交付回归：315 passed、30项缺C++编译器跳过、9项Bash/POSIX检查未选；包含30项新增格式/插桩检查，另2项原生记录器mock因无g++跳过。原参考解析器交叉读取通过。未执行CANN或NPU。
+
+## a192113本组初发后的打点适配
+
+适配仅添加探针和更新分析标签，不改当前源端分工、接收器或combine。ProcessGroupLocal内补PREPARE_INPUT（输入/权重/量化暂存及lane准备）、SEND_DRAIN（lane归还、MTE3_S、scratch Reset和CTRL恢复）；无本组任务时仍不生成发送区间。LocalSendScratchPool别名池建立另记PREPARE_INPUT，发生在SEND_TOKENS调用前，不能把所有PREPARE_INPUT累计都当成其内部子区间。
+
+非去重S核的本组过滤/远端索引压紧也单列PREPARE_INPUT。R核的q来自COUNT_COMPUTE融合扫描，不增加CAL_TOKEN或新的Scalar扫描。逐包TOKEN_*继续复用同一SendPacket探针。
+
+原始格式头的cumsum是初始worker类，保持参考二进制兼容。LL解析器仅在该核实际出现SEND_TOKENS时显示send_and_recv，并在metrics/intervals/cores保留initial_role=cumsum；旧数据或空任务核不被误标。核心标识10000+S、schema7均不变，全rank重装最新ON wheel。
+
+当前插桩业务核对基线为a192113；保留已更新的源端指纹及原接收/combine指纹，不再用6ea61a6声称本组初发算法未变。完整新命令见[README.md](README.md)。
+
+跨轮汇总按initial_role保持同核同阶段唯一统计项；某轮有本组发送、其他轮为空时，不拆分KERNEL统计。汇总角色表示该采样集合中实际参与过发送，cores.csv仍逐轮保留角色。
+
+本次a192113适配回归：357 passed、43项缺编译器/POSIX环境跳过、8项未选；含跨轮角色聚合和含空格目录迁移。B8/M256/H3584/K8/E384、BF16+FP8的EP16 CPU --plan通过。未执行CANN编译或NPU采样。新增准备/退休区间必须重装ON wheel并重采，旧数据不能补出缺失区间。

@@ -38,7 +38,7 @@ python -m pip install -v --force-reinstall --no-build-isolation --no-deps .
 
 这表示前段10核发送、46核前缀/接收，发送完成后56核都接收。未设置两个变量时默认28/28。仅改变运行环境变量不会改变已安装wheel。所有rank重装完整wheel；本改动不要求强制重建已校验SHMEM。新clone需按[LL_KERNEL.md](../../LL_KERNEL.md)初始化子仓与构建SDK。
 
-原生`low_latency_core_config()`输出`send_cores=S`、`recv_cores=R`、`dispatch_recv_cores=56`。当前核心标识为`9000+S`、实现身份g4-shared-recv、阶段schema7；全rank重装匹配完整wheel。打点已迁移到参考分段逻辑，见[SEGMENT_TIMER.md](SEGMENT_TIMER.md)，旧schema6记录仅离线解析。
+原生`low_latency_core_config()`输出`send_cores=S`、`recv_cores=R`、`dispatch_recv_cores=56`。当前核心标识为`10000+S`、实现身份g4-shared-recv、阶段schema7；全rank重装匹配完整wheel。打点已迁移到参考分段逻辑，见[SEGMENT_TIMER.md](SEGMENT_TIMER.md)，旧schema6记录仅离线解析。
 
 ## 诊断与A/B
 

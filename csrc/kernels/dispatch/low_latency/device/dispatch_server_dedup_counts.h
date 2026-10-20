@@ -83,6 +83,7 @@ public:
     // the original RecvCnt allocations. ProcessGroupLocal drains its reads first.
     __aicore__ inline TBufPool<TPosition::VECCALC,16>& LocalSendScratchPool()
     {
+        LL_SEG_SCOPE(PREPARE_INPUT);
         tpipe_->InitBufPool(localSendPool_,kEpServerDedupCountUbBytes-ReservedBytes(),stagePool_);
         return localSendPool_;
     }

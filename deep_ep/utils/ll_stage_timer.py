@@ -63,6 +63,11 @@ def parse_records(raw, operation, frequency_hz=None):
                 pair=pairs.setdefault(stage,[[],[]]);pair[event&1].append(value);trace_count+=1
         if trace_count>TRACE_RECORDS: raise ValueError('Trace capacity exceeded')
         if metrics.get(0,(0,))[0]!=1 or 0 not in pairs: raise ValueError('Missing KERNEL interval')
+        initial_role=ROLES[role]
+        # Schema7's header records the initial worker class. Only actual SEND_TOKENS
+        # evidence promotes an old cumsum worker to send_and_recv; old captures
+        # without local sends and empty local partitions retain their old label.
+        display_role='send_and_recv' if op==1 and role==2 and 1 in metrics else initial_role
         recorded=0
         for stage,(begins,ends) in pairs.items():
             if len(begins)!=len(ends) or not 0<len(begins)<=2 or stage not in metrics:
@@ -72,7 +77,7 @@ def parse_records(raw, operation, frequency_hz=None):
                 raise ValueError('Sampled intervals exceed accumulated metric')
             for sample,(begin,end) in enumerate(zip(begins,ends)):
                 if end<begin: raise ValueError('Invalid timestamp order')
-                intervals.append(dict(core=core,role=ROLES[role],stage=STAGES[stage],sample=sample,
+                intervals.append(dict(core=core,role=display_role,initial_role=initial_role,stage=STAGES[stage],sample=sample,
                                       first_tick=begin,last_tick=end,total_ticks=end-begin))
             recorded+=len(begins)
         if len(pairs[0][0])!=1 or metrics[0][1]!=pairs[0][1][0]-pairs[0][0][0]:
@@ -80,11 +85,11 @@ def parse_records(raw, operation, frequency_hz=None):
         if omitted!=sum(v[0] for stage,v in metrics.items() if stage not in COUNTERS)-recorded:
             raise ValueError('Incorrect omitted interval count')
         for stage,(calls,total) in sorted(metrics.items()):
-            item=dict(core=core,role=ROLES[role],stage=STAGES[stage],total_ticks=total,calls=calls,
+            item=dict(core=core,role=display_role,initial_role=initial_role,stage=STAGES[stage],total_ticks=total,calls=calls,
                       average_ticks=total/calls,time_measured=stage not in COUNTERS)
             if frequency_hz is not None: item.update(total_us=total*1e6/frequency_hz,average_us=total*1e6/frequency_hz/calls)
             records.append(item)
-        core_info.append(dict(core=core,role=ROLES[role],record_count=count,omitted_intervals=omitted))
+        core_info.append(dict(core=core,role=display_role,initial_role=initial_role,record_count=count,omitted_intervals=omitted))
     if len(splits)!=1: raise ValueError('Mixed core splits')
     return dict(schema=SCHEMA,operation=operation,active_aiv=cores,send_cores=send,recv_cores=cores-send,
                 dispatch_recv_cores=cores,boundary_mode='observe',frequency_hz=frequency_hz,
