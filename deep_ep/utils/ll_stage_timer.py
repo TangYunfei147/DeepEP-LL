@@ -38,6 +38,7 @@ def parse_records(raw, operation, frequency_hz=None):
     cores=len(raw);op=1 if operation=='dispatch' else 2
     if cores!=56: raise ValueError('Segment capture requires 56 AIV')
     records,intervals,core_info,splits=[],[],[],set()
+    phase_parts=[]
     for core,rows in enumerate(raw):
         if len(rows)!=SLOTS or any(len(row)!=FIELDS for row in rows): raise ValueError('Timer shape mismatch')
         words=[value for row in rows for value in row]
@@ -64,6 +65,35 @@ def parse_records(raw, operation, frequency_hz=None):
                 pair=pairs.setdefault(stage,[[],[]]);pair[event&1].append(value);trace_count+=1
         if trace_count>TRACE_RECORDS: raise ValueError('Trace capacity exceeded')
         if metrics.get(0,(0,))[0]!=1 or 0 not in pairs: raise ValueError('Missing KERNEL interval')
+        phase_complete=False;drain_labels={}
+        lane_ticks=sync_ticks=None
+        if schema==8 and op==1:
+            # SEND_DRAIN occurs once inside Sender and once at the business
+            # phase boundary. Only classify when both actual intervals and the
+            # sender envelope are present; never recover missing samples by subtraction.
+            sender=pairs.get(1,[[],[]]);drain=pairs.get(31,[[],[]])
+            if (metrics.get(1,(0,))[0]==1 and metrics.get(31,(0,))[0]==2
+                    and len(sender[0])==len(sender[1])==1 and len(drain[0])==len(drain[1])==2):
+                sb,se=sender[0][0],sender[1][0];db,de=drain
+                phase_complete=(sb<=db[0]<=de[0]<=se<=db[1]<=de[1]
+                                and metrics[31][1]==sum(e-b for b,e in zip(db,de)))
+                if phase_complete:
+                    lane_ticks=de[0]-db[0];sync_ticks=de[1]-db[1]
+                    drain_labels={0:'sender_lane_drain',1:'send_phase_drain_sync'}
+            elif (1 not in metrics and metrics.get(31,(0,))[0]==1
+                  and len(drain[0])==len(drain[1])==1 and len(pairs[0][0])==len(pairs[0][1])==1):
+                # Empty dedup shards skip Sender::Process, but still join SyncAll.
+                begin,end=drain[0][0],drain[1][0]
+                phase_complete=(pairs[0][0][0]<=begin<=end<=pairs[0][1][0] and metrics[31][1]==end-begin)
+                if phase_complete:
+                    sync_ticks=end-begin;drain_labels={0:'send_phase_drain_sync'}
+            part=dict(core=core,sampled_complete=phase_complete,sender_executed=1 in metrics,
+                      send_drain_calls=metrics.get(31,(0,))[0],
+                      sender_lane_drain_ticks=lane_ticks,send_phase_sync_ticks=sync_ticks)
+            if frequency_hz is not None:
+                for field in ('sender_lane_drain','send_phase_sync'):
+                    value=part[field+'_ticks'];part[field+'_us']=value*1e6/frequency_hz if value is not None else None
+            phase_parts.append(part)
         recorded=0
         for stage,(begins,ends) in pairs.items():
             if len(begins)!=len(ends) or not 0<len(begins)<=2 or stage not in metrics:
@@ -74,7 +104,8 @@ def parse_records(raw, operation, frequency_hz=None):
             for sample,(begin,end) in enumerate(zip(begins,ends)):
                 if end<begin: raise ValueError('Invalid timestamp order')
                 intervals.append(dict(core=core,role=ROLES[role],stage=STAGES[stage],sample=sample,
-                                      first_tick=begin,last_tick=end,total_ticks=end-begin))
+                                      first_tick=begin,last_tick=end,total_ticks=end-begin,
+                                      detail=drain_labels.get(sample,'') if stage==31 else ''))
             recorded+=len(begins)
         if len(pairs[0][0])!=1 or metrics[0][1]!=pairs[0][1][0]-pairs[0][0][0]:
             raise ValueError('Invalid KERNEL metric')
@@ -91,7 +122,7 @@ def parse_records(raw, operation, frequency_hz=None):
                 dispatch_send_cores=cores if schema==8 else send,
                 dispatch_prefix_cores=cores if schema==8 else cores-send,
                 dispatch_recv_cores=cores,boundary_mode='observe',frequency_hz=frequency_hz,
-                records=records,intervals=intervals,cores=core_info,
+                records=records,intervals=intervals,cores=core_info,send_phase_parts=phase_parts,
                 clock='AscendC::GetSystemCycle; no cross-rank clock alignment assumed',
                 interpretation='First two calls sampled per stage; all calls accumulated. Nested stages cannot be summed. GM export follows KERNEL and all-core synchronization.')
 
@@ -119,9 +150,9 @@ def chrome_trace(saved_records, frequency_hz=None, lane_layout='core', show_repe
             if tid not in lanes:
                 events.append(dict(ph='M',name='thread_name',pid=pid,tid=tid,args=dict(name=f"AIV {row['core']:02d} {row['role']}"+(f" / {row['stage']}" if lane_layout=='stage' else ''))))
                 lanes.add(tid)
-            events.append(dict(ph='X',name=row['stage'],cat=report['operation'],pid=pid,tid=tid,
+            events.append(dict(ph='X',name=row['stage']+(f" [{row['detail']}]" if row.get('detail') else ''),cat=report['operation'],pid=pid,tid=tid,
                                ts=(row['first_tick']-origin)*1e6/frequency,dur=row['total_ticks']*1e6/frequency,
-                               args=dict(rank=rank,iteration=iteration,sample=row['sample'],raw_begin_cycle=row['first_tick'],
+                               args=dict(rank=rank,iteration=iteration,sample=row['sample'],detail=row.get('detail',''),raw_begin_cycle=row['first_tick'],
                                          raw_end_cycle=row['last_tick'],interval_kind='sampled actual interval')))
         info.append(dict(operation=report['operation'],rank=rank,iteration=iteration,cores=report['cores']))
     return dict(traceEvents=events,metadata=dict(format='dc_seg sampled intervals',sampled_calls_per_stage=2,

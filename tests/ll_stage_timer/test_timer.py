@@ -123,7 +123,7 @@ def test_native_st_reference_schedule(monkeypatch,tmp_path,with_tail):
 def test_moved_checkout_with_spaces_and_other_cwd(tmp_path):
     import os, shutil, subprocess, sys
     moved=tmp_path/'renamed checkout with spaces'
-    for relative in ('deep_ep/utils/ll_stage_timer.py','deep_ep/utils/ll_expert_timer.py','tests/ll_stage_timer/analyze.py',
+    for relative in ('deep_ep/utils/ll_stage_timer.py','deep_ep/utils/ll_stage_timer_legacy.py','deep_ep/utils/ll_expert_timer.py','tests/ll_stage_timer/analyze.py',
                      'tests/elastic/test_ep_low_latency.py','scripts/ll_timer_env.sh'):
         target=moved/relative;target.parent.mkdir(parents=True,exist_ok=True)
         shutil.copyfile(ROOT/relative,target)
@@ -138,6 +138,15 @@ def test_moved_checkout_with_spaces_and_other_cwd(tmp_path):
             metadata=dict(rank=rank,world_size=2,iteration=0,config={'B':32},correctness='passed'))))
     subprocess.run([sys.executable,str(moved/'tests/ll_stage_timer/analyze.py'),'data','--output-dir','report'],cwd=away,check=True)
     assert (moved/'report/stages.csv').is_file()
+
+
+def test_shell_environment_moved_checkout(tmp_path):
+    import os, shutil, subprocess
+    if os.name=='nt': pytest.skip('POSIX Bash path semantics require a POSIX host')
+    moved=tmp_path/'renamed checkout with spaces'
+    script=moved/'scripts/ll_timer_env.sh';script.parent.mkdir(parents=True)
+    shutil.copyfile(ROOT/'scripts/ll_timer_env.sh',script)
+    away=tmp_path/'different cwd';away.mkdir()
     env=dict(os.environ,ASCEND_HOME_PATH=str(tmp_path/'synthetic-toolchain'))
     env.pop('CANN_ENV',None)
     actual=subprocess.check_output(['bash','-c','source "$1"; printf "%s" "$LL_TIMER_ROOT"','bash',

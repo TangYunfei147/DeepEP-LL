@@ -1,62 +1,94 @@
-> 当前分支kernel/ll-all-send-recv：dispatch固定56核发送、阶段同步后56核准备前缀并接收；S/R仅用于combine。协议11000+S、stage schema8。以[ALL_SEND_RECV.md](ALL_SEND_RECV.md)为准，以下共享接收内容为历史背景。
+# kernel/ll-all-send-recv 分段打点
 
-# LL参考分段打点
+Dispatch固定56核发送 → 业务SyncAll → 56核前缀/接收；combine仍按编译期S/R，默认28/28。S+R必须56，仅控制combine，不要设置56/56。核心标识11000+S、schema8、每核4608B；保留参考64阶段、前两次实际区间及全量metrics。
 
-当前`kernel/ll-g4-shared-recv`采用graph_dc_debug_seg的采样区间+全量累计逻辑。每阶段前两次调用保留真实时间线，所有调用累计；INIT单列，KERNEL结束后全核同步再写出。详细位置、格式和限制见[SEGMENT_TIMER.md](SEGMENT_TIMER.md)。
+## 更新与安装
 
-## 构建
-
-先加载目标机实际CANN环境；所有操作在本分支工程根目录、工程内Python环境进行：
+在本分支工程根目录执行；先处理已有未提交修改，多机每台使用相同提交和绝对工程路径：
 
 ```bash
-git submodule update --init --recursive --depth 1
+git status --short
+git switch kernel/ll-all-send-recv
+git fetch origin kernel/ll-all-send-recv
+git merge --ff-only FETCH_HEAD
+
+# 已加载有效CANN环境时可省略CANN_ENV
+export CANN_ENV=/实际的CANN安装目录/set_env.sh
 source scripts/ll_timer_env.sh
+if [ ! -d .venv-ll-timer ]; then
+  python3 -m venv --system-site-packages .venv-ll-timer
+fi
+source .venv-ll-timer/bin/activate
+python -c "import torch, torch_npu; print(torch.__version__, torch_npu.__version__)"
+git submodule update --init --recursive --depth 1
 unset SHMEM_ROOT CATLASS_ROOT
 export DEEPEP_NPU_ARCH=Ascend950
-python scripts/build_shmem.py
-export DEEPEP_LL_SEND_CORES=10
-export DEEPEP_LL_RECV_CORES=46
+export DEEPEP_LL_SEND_CORES=28
+export DEEPEP_LL_RECV_CORES=28
 export DEEPEP_LL_STAGE_TIMER=ON
+python scripts/build_shmem.py
 python -m pip install -r requirements-build.txt
 python -m pip install -v --force-reinstall --no-build-isolation --no-deps .
 ```
 
-未指定S/R默认28/28，总数56。SDK符合身份时复用；不删除缓存或自动强制重建。全rank使用同提交/配置wheel。日志、缓存、临时文件由环境脚本定位到工程目录；公共脚本不默认选卡。
+SDK匹配时校验复用，不强制重建。所有rank重装完整wheel；日志/缓存/临时文件位于工程内。首次clone使用`git clone --single-branch --branch kernel/ll-all-send-recv https://github.com/TangYunfei147/DeepEP-LL.git DeepEP-LL-all-send-recv`。
 
-## 目标机采集示例
-
-下例为用户目标机单机16rank配置，设备须为实际获分配的卡。CPU `--plan`不启动设备，也不证明设备可运行。其他主机的历史双卡限制不因此改变。
+安装检查（不启动通信域）：
 
 ```bash
+python - <<'PY'
+import os, runpy
+runpy.run_path('tests/elastic/test_dispatch.py')['_import_installed_deep_ep']()
+from deep_ep._native import require_native
+n=require_native('all-core timer installation check')
+assert n.low_latency_implementation=='all-send-recv'
+assert n.low_latency_stage_timer_enabled
+assert n.low_latency_core_protocol==11000+int(os.environ['DEEPEP_LL_SEND_CORES'])
+assert n.low_latency_stage_timer_layout()['schema']==8
+print('PASS protocol',n.low_latency_core_protocol,'schema 8')
+PY
+```
+
+## 目标机采集与解析
+
+以下为单机EP16示例，设备必须实际获分配；B8/M256/H3584/K8/E384，BF16与FP8配置串行运行，dispatch+combine均采集。FP8配置的combine仍为BF16。每机16连续rank的入口约束保持，不放宽原生EP准入。
+
+```bash
+source .venv-ll-timer/bin/activate
+source scripts/ll_timer_env.sh
+unset RANK WORLD_SIZE LOCAL_RANK LOCAL_WORLD_SIZE
 DEVICES=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15
 NNODES=1
 NODE_RANK=0
 MASTER_ADDR=127.0.0.1
-RUN_NAME=segment-001
+RUN_NAME=all-send-recv-segment-001
 LL_ARGS=(
   --devices "$DEVICES"
   --num-nodes "$NNODES" --node-rank "$NODE_RANK"
   --master-addr "$MASTER_ADDR" --master-port 29500 --shmem-port 29501
-  --num-tokens 32 --num-max-tokens-per-rank 256
-  --hidden 7168 --num-topk 6 --num-experts 256 --dtype bf16 --do-cpu-sync 0
+  --num-tokens 8 --num-max-tokens-per-rank 256
+  --hidden 3584 --num-topk 8 --num-experts 384 --dtype bf16 fp8 --do-cpu-sync 0
   --warmup 10 --num-iters 100
   --ll-stage-timer --ll-timer-iters 5 --ll-timer-mode observe
   --skip-perf-test --output-dir results/ll-timer --run-name "$RUN_NAME"
 )
 python tests/ll_stage_timer/run.py "${LL_ARGS[@]}" --plan
 python tests/ll_stage_timer/run.py "${LL_ARGS[@]}"
+python tests/ll_stage_timer/analyze.py "results/ll-timer/$RUN_NAME" --trace-iteration 4
 ```
 
-多机沿用目标环境的节点/端口/设备配置，所有节点参数和run-name一致，每机16连续rank；跨机MTE需要真实可用peer映射。不要伪造EP或把机内验证当成跨机验收。默认Exp约13.53GiB/卡，诊断输出额外保留；正确性校验仍在计时外执行。
+--plan是CPU参数检查，不启动NPU。--skip-perf-test仍执行10预热、100稳定调用后采5轮打点，每轮Exp+scalar all_reduce，默认Exp约13.53GiB/卡。只测dispatch添加--dispatch-only；重跑改RUN_NAME。禁止drain与旧逐专家GM打点。
 
-仅测dispatch加`--dispatch-only`。新模式只接受observe，旧drain和逐专家GM打点明确拒绝。发送结束后参与接收的算法说明见[SHARED_RECEIVE.md](SHARED_RECEIVE.md)。
+多机统一NNODES/MASTER_ADDR/端口/RUN_NAME，设置各自NODE_RANK，重新构造LL_ARGS后在各节点执行。非共享目录先按原结构汇集同一run全部rank文件再解析；缺rank或配置不一致会拒绝。
 
-## 解析
+## 报告解释
 
-```bash
-python tests/ll_stage_timer/analyze.py results/ll-timer/segment-001 --trace-iteration 4
-```
+- metrics.csv：所有调用累计cycles/calls；轮询计数不算耗时。
+- intervals.csv / trace.json：实际采到的前两次区间。
+- send_phase.csv：区分sender_lane_drain与send_phase_drain_sync，保留是否完整采样。跳过Sender的空分片只有后者，前者留空；不完整采样不推算。
+- cores.csv：全部dispatch核为send_and_recv，combine保留S/R角色。
+- summary.json / stages.csv：跨轮统计；报告在run下stage-analysis，多个case分目录。
 
-多机先按原目录合并同一run的各rank原始文件，不能覆盖或混入其他轮次。输出summary.json、stages.csv、metrics.csv、intervals.csv、cores.csv和trace.json；原始JSON旁另有参考格式.bin。缺rank、重复采样或格式损坏会失败。实际区间只覆盖采到的前两次，完整统计看metrics。
+SEND_DRAIN累计已包含拆分项，不能再次相加；阶段同步包括原有PipeBarrier和SyncAll等待，不代表纯网络传输。INIT在KERNEL之外；KERNEL之后的诊断SyncAll/Flush不混入内部计时，但仍进入Host/profiler算子耗时。正式性能另用OFF wheel。
 
-正式性能另装OFF wheel，不传`--ll-stage-timer`，仍使用10/100/最后50及Exp+scalar all_reduce协议。ON profiler含诊断同步/写出，不能替代OFF基线。新旧诊断schema不能直接作耗时比；旧数据仍可离线解析。
+业务流程及验证边界见[ALL_SEND_RECV.md](ALL_SEND_RECV.md)。本次不改收发算法，CANN编译和NPU正确性/性能仍需目标环境验证。

@@ -80,6 +80,7 @@ public:
     // Reclaim packet UB; incoming count records and prefixes live in GM.
     __aicore__ inline void PrepareReceive()
     {
+        LL_SEG_SCOPE(INIT_COUNT_BUFFERS);
         tpipe_->Reset();
         SetCtrlSpr<60,60>(0);
         tpipe_->InitBufPool(stagePool_, kEpServerDedupCountUbBytes);

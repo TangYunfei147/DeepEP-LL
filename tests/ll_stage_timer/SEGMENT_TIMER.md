@@ -98,3 +98,11 @@ python tests/ll_stage_timer/analyze.py results/ll-timer/segment-001 --trace-iter
 本地缺CANN和C++编译器，未执行设备编译或上板。`test_segment_native.py`在有g++时编译实际记录器的CPU mock，覆盖OFF无写入、ON延后写出与哨兵；真实设备仍需匹配wheel全rank验收。
 
 最终本地回归：315 passed、30项缺C++编译器跳过、9项Bash/POSIX检查未选；包含30项新增格式/插桩检查，另2项原生记录器mock因无g++跳过。原参考解析器交叉读取通过。未执行CANN或NPU。
+
+## 全核分支a493032上的打点更新
+
+当前有效流程和命令以[README.md](README.md)及[ALL_SEND_RECV.md](ALL_SEND_RECV.md)为准：schema8、协议11000+combine S，dispatch发送/前缀/接收均56。PrepareReceive新增INIT_COUNT_BUFFERS；业务SyncAll早已存在，本次未增加业务同步。
+
+报告send_phase.csv把SEND_DRAIN的sender lane退休和全核phase drain+sync两段区分；只有完整实际区间吻合才拆分。去重路径空发送分片跳过Sender，只有阶段同步；缺失采样不通过差值估计。两段已经包含在SEND_DRAIN总量中，不能重复相加。原始64阶段字典和参考二进制不变，旧schema8可离线获得拆分。
+
+本次CPU回归343 passed、32项缺C++/POSIX环境跳过、8项未选；包含采样缺失、空发送分片、混合/旧schema、不改变业务代码的静态检查和目录迁移。未执行CANN编译或NPU验证；新增UB准备区间需全rank重装ON wheel并重采。

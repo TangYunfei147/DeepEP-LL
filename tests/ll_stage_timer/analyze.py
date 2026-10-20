@@ -158,7 +158,7 @@ def process_directory(source, output, frequency_hz, trace_iteration, lane_layout
         writer = csv.DictWriter(stream, fieldnames=list(rows[0]))
         writer.writeheader(); writer.writerows(rows)
     (output/'trace.json').write_text(json.dumps(trace))
-    segment_metrics, segment_intervals, segment_cores = [], [], []
+    segment_metrics, segment_intervals, segment_cores, send_phases = [], [], [], []
     for path in paths:
         saved=json.loads(path.read_text());meta=saved['metadata']
         decoded=timer.parse_records(saved['raw'],saved['operation'],frequency_hz)
@@ -167,7 +167,8 @@ def process_directory(source, output, frequency_hz, trace_iteration, lane_layout
         segment_metrics.extend(dict(**shared,**row) for row in decoded['records'])
         segment_intervals.extend(dict(**shared,**row) for row in decoded['intervals'])
         segment_cores.extend(dict(**shared,**row) for row in decoded['cores'])
-    for filename,values in (('metrics.csv',segment_metrics),('intervals.csv',segment_intervals),('cores.csv',segment_cores)):
+        send_phases.extend(dict(**shared,**row) for row in decoded.get('send_phase_parts',[]))
+    for filename,values in (('metrics.csv',segment_metrics),('intervals.csv',segment_intervals),('cores.csv',segment_cores),('send_phase.csv',send_phases)):
         if values:
             with (output/filename).open('w',newline='') as stream:
                 writer=csv.DictWriter(stream,fieldnames=list(values[0]));writer.writeheader();writer.writerows(values)

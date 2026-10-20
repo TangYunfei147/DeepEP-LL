@@ -25,3 +25,5 @@
 当前诊断为graph_dc_debug_seg语义的schema7（64阶段，前两次区间+全量metrics）；ll_stage_timer_device.h只在KERNEL结束且全核同步后Flush，旧ll_expert_timer仅用于历史记录接口，新采样明确拒绝。新增探针不得改业务等待/协议；静态摘要基线见tests/ll_stage_timer/segment_baseline.json。
 
 全核分支：dispatch的send/prefix/recv均56，CountSend所有B均全核分专家；Sender之后SyncAll形成阶段边界，PrepareReceive回收UB。combine保留原S/R。前缀矩阵与Host UB预算同步改为56；接收器保持基线。指南../ll_stage_timer/ALL_SEND_RECV.md。
+
+全核打点：PrepareReceive记INIT_COUNT_BUFFERS；SEND_DRAIN仍分别覆盖Sender lane和既有发送阶段同步，解析器按完整实际区间分类（含空发送分片），输出send_phase.csv。不得把拆分与父累计相加。

@@ -61,3 +61,15 @@ compare.py识别两轮已知身份；新旧dispatch逐核工作分配变化时�
 Python模型检查路由覆盖、延后q与原前缀扫描一致、源mask/权重语义和schema7/8离线解析。C++检查包含实际Host布局和从真实kernel提取的Process多线程模拟，用于验证空发送分片仍参与阶段同步；本机缺编译器时跳过。这些检查不模拟设备MTE或NPU内存顺序，不能替代CANN编译及目标机正确性/性能验证。
 
 本次本地回归：334 passed、31项因缺C++编译器跳过、9项Bash/POSIX检查未选。没有执行CANN编译或NPU测试。
+
+## 打点适配更新
+
+在a493032基础上仅更新诊断：PrepareReceive的TPipe Reset、CTRL恢复和接收scratch准备计入INIT_COUNT_BUFFERS。SEND_DRAIN仍保留参考阶段ID，其两次调用分别为Sender内的lane收尾、Process内既有PipeBarrier+SyncAll业务阶段边界。该更新没有增加业务屏障或改变接收流程。
+
+解析器只有在SEND_TOKENS父区间、两段SEND_DRAIN及累计值完整吻合时，才标记sender_lane_drain与send_phase_drain_sync。去重路径跳过Sender的空发送分片没有SEND_TOKENS，唯一SEND_DRAIN属于阶段边界；lane时间留空，不补零。采样缺失、额外调用或顺序异常则sampled_complete=false、拆分留空，不用累计相减重建。
+
+新输出send_phase.csv逐rank/轮/核保存sender_executed、sampled_complete及两段实际ticks/us；trace同时标记区间用途。send_phase_sync包含原有本核排空和等待其他核，不是纯网络时间。metrics.csv中的SEND_DRAIN仍是两段累计，不能与拆分再相加。
+
+schema8、11000+S、64阶段字典和参考二进制载体不变。旧schema8原始数据可以离线获得区间拆分；新增PrepareReceive探针需全rank重装ON wheel并重采。完整命令见[README.md](README.md)。
+
+本次打点更新回归：343 passed、32项缺编译器/POSIX环境跳过、8项未选；未CANN编译或上板。
