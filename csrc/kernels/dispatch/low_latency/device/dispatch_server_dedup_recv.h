@@ -295,23 +295,10 @@ private:
         ServerDedupReceiveSync<HardEvent::S_MTE3>();
         WaitFlag<HardEvent::MTE2_MTE3>(lane);
         LL_SEG_END(segBegin7, RECV_BUFFER_WAIT);
-        if (expertTimer_) expertTimer_->Start(expert, LlExpertTimer::OutputWrite);
-        if (keepFlags) {
-            WriteServerDedupPayloadRange(expandX_[uint64_t(row) * hiddenBytes_], wire, 0U, hiddenBytes_);
-            if constexpr (WireFp8)
-                WriteServerDedupPayloadRange(dynamicScales_[uint64_t(row) * data_.scaleBytes], wire,
-                                             uint32_t(data_.quantCount), uint32_t(data_.scaleBytes));
-        } else {
-            DataCopyPad(expandX_[uint64_t(row) * hiddenBytes_], wire, {1U, hiddenBytes_, 0U, 0U, 0U});
-            if constexpr (WireFp8)
-                DataCopyPad(dynamicScales_[uint64_t(row) * data_.scaleBytes], wire[uint32_t(data_.quantCount)],
-                            {1U, uint32_t(data_.scaleBytes), 0U, 0U, 0U});
-        }
-        if (enableDedup_) DataCopyPad(tokenType_[row], type, {1U, 4U, 0U, 0U, 0U});
-        DataCopyPad(destinationIndex_[uint64_t(row) * 3U], destination, {1U, 12U, 0U, 0U, 0U});
-        if (expertTimer_) expertTimer_->End(expert, LlExpertTimer::OutputWrite);
+        // Initiate downstream work before local output writes on the same
+        // MTE3 stream. Metadata was snapshotted before the terminal rewrite;
+        // wire stays immutable until every relay/output read retires.
         if (firstHop) {
-            DataCopyPad(relayReadIndex_[uint64_t(row) * k_ * 2U], tail.ReadIndex(), {1U, k_ * 8U, 0U, 0U, 0U});
             const uint32_t sourceRank = tail.Header().GetValue(0U);
             const uint32_t ranks = uint32_t(args_->rankSize);
             const uint32_t members = tail.ReadIndex().GetValue(0U);
@@ -329,6 +316,24 @@ private:
                 DataCopy(output, wire, uint32_t(data_.tokenStride));
                 if (expertTimer_) expertTimer_->End(expertId, LlExpertTimer::Forward);
             }
+        }
+        if (expertTimer_) expertTimer_->Start(expert, LlExpertTimer::OutputWrite);
+        if (keepFlags) {
+            WriteServerDedupPayloadRange(expandX_[uint64_t(row) * hiddenBytes_], wire, 0U, hiddenBytes_);
+            if constexpr (WireFp8)
+                WriteServerDedupPayloadRange(dynamicScales_[uint64_t(row) * data_.scaleBytes], wire,
+                                             uint32_t(data_.quantCount), uint32_t(data_.scaleBytes));
+        } else {
+            DataCopyPad(expandX_[uint64_t(row) * hiddenBytes_], wire, {1U, hiddenBytes_, 0U, 0U, 0U});
+            if constexpr (WireFp8)
+                DataCopyPad(dynamicScales_[uint64_t(row) * data_.scaleBytes], wire[uint32_t(data_.quantCount)],
+                            {1U, uint32_t(data_.scaleBytes), 0U, 0U, 0U});
+        }
+        if (enableDedup_) DataCopyPad(tokenType_[row], type, {1U, 4U, 0U, 0U, 0U});
+        DataCopyPad(destinationIndex_[uint64_t(row) * 3U], destination, {1U, 12U, 0U, 0U, 0U});
+        if (expertTimer_) expertTimer_->End(expert, LlExpertTimer::OutputWrite);
+        if (firstHop) {
+            DataCopyPad(relayReadIndex_[uint64_t(row) * k_ * 2U], tail.ReadIndex(), {1U, k_ * 8U, 0U, 0U, 0U});
         }
         SetFlag<HardEvent::MTE3_MTE2>(lane);
     }
