@@ -504,9 +504,13 @@ private:
             else
                 QuantMxfp8<fp8_e5m2_t>(payload, x);
             input.template FreeTensor<XType>(x);
+            LL_SEG_BEGIN(quantWaitBegin, TOKEN_QUANT_WAIT);
             Sync<HardEvent::V_S>();
+            LL_SEG_END(quantWaitBegin, TOKEN_QUANT_WAIT);
         } else {
+            LL_SEG_BEGIN(inputWaitBegin, TOKEN_INPUT_WAIT);
             Sync<HardEvent::MTE2_S>();
+            LL_SEG_END(inputWaitBegin, TOKEN_INPUT_WAIT);
             payload = x.template ReinterpretCast<uint8_t>();
         }
         LL_SEG_BEGIN(segBegin5, TOKEN_METADATA);

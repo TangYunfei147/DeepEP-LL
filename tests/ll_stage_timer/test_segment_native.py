@@ -39,7 +39,7 @@ int main(){
  AscendC::core=55;
  DeviceTimer timer;timer.Init(reinterpret_cast<uint8_t*>(words.data()),1,1);
  auto kernel=timer.Begin(KERNEL);
- for(uint32_t stage=1;stage<64;++stage){
+ for(uint32_t stage=1;stage<kMetrics;++stage){
   if(stage>=51 && stage<=55){timer.Count(static_cast<Stage>(stage),17);continue;}
   for(unsigned i=0;i<5;++i){auto begin=timer.Begin(static_cast<Stage>(stage));timer.End(static_cast<Stage>(stage),begin);}
  }
@@ -50,7 +50,7 @@ int main(){
 #ifdef DEEPEP_LL_STAGE_TIMER
  assert(AscendC::flushes>0);
  auto* data=words.data()+55*kWordsPerCore;
- assert(data[0]==kMagic && data[1]==7 && data[6]<=256 && data[7]>0);
+ assert(data[0]==kMagic && data[1]==kSchema && data[6]<=kRecords && data[7]>0);
  unsigned kernelBegins=0,kernelEnds=0,kernelMetrics=0;
  for(unsigned i=0;i<data[6];++i){
   auto event=uint32_t(data[8+i*2]);

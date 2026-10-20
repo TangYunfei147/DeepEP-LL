@@ -1,7 +1,7 @@
 """Reference-style sampled segments and full metrics; legacy formats are read-only.
 
 Semantics follow graph_dc_debug_seg@e58ece1. Native LL uses a separately validated
-512B-aligned per-core carrier; export can also produce dc_seg format-5 binaries.
+512B-aligned per-core carrier; only original schema7 exports dc_seg format-5.
 """
 from contextlib import contextmanager
 import importlib.util
@@ -12,10 +12,10 @@ import struct
 import threading
 
 MAGIC = 0x4C4C5431
-SCHEMA, SLOTS, FIELDS = 7, 72, 8
-TRACE_RECORDS, METRICS, RECORDS = 192, 64, 256
+SCHEMA, SLOTS, FIELDS = 9, 72, 8
+TRACE_RECORDS, METRICS, RECORDS = 192, 66, 258
 DEFAULT_FREQUENCY_HZ = 1_000_000_000
-STAGES = ('KERNEL', 'SEND_TOKENS', 'CAL_CUMSUM', 'PREPARE_INPUT', 'SEND_COUNTS', 'INIT_COUNT_BUFFERS', 'WAIT_RECV_COUNTS', 'CLEAR_RECV_STATUS', 'GATHER_RECV_COUNTS', 'GET_CUMSUM', 'BUILD_RECV_CUMSUM', 'WAIT_CUMSUM', 'LOCAL_WINDOW_COPY', 'FORMAT_OUTPUT', 'BUILD_EXPERT_TASKS', 'CLEAR_LOCAL_FLAGS', 'TOKEN_INPUT', 'TOKEN_QUANT', 'TOKEN_METADATA', 'TOKEN_BUFFER_WAIT', 'TOKEN_PACK', 'TOKEN_SEND_ISSUE', 'COUNT_COMPUTE', 'COUNT_SEND_ISSUE', 'POLL_CORE_SUMS', 'REDUCE_CORE_PREFIX', 'CLEAR_CORE_SUMS', 'BROADCAST_PREFIX', 'PUBLISH_PREFIX_FLAGS', 'RECV_POLL', 'RECV_COPY', 'SEND_DRAIN', 'COMBINE_SEND', 'COMBINE_INIT_RECV', 'COMBINE_RECV', 'COMBINE_INPUT', 'COMBINE_PACK_QUANT', 'COMBINE_SEND_ISSUE', 'COMBINE_SEND_FINISH', 'COMBINE_RECV_POLL', 'COMBINE_DEQUANT_REDUCE', 'COMBINE_PROCESS_TOKEN', 'COMBINE_TOKEN_INIT', 'COMBINE_CLEAR_FLAGS', 'COMBINE_SHARED_EXPERT', 'COMBINE_SPECIAL_EXPERT', 'COMBINE_RMSNORM', 'FINAL_DRAIN', 'POLL_RECV_COUNTS', 'WRITE_COUNTS_OUTPUT', 'INIT', 'POLL_CORE_SUMS_ITERATIONS', 'POLL_RECV_COUNTS_ITERATIONS', 'WAIT_CUMSUM_ITERATIONS', 'RECV_READY_TOKENS', 'COMBINE_READY_SLOTS', 'COMBINE_QUANT', 'COMBINE_BUFFER_WAIT', 'COMBINE_COPY_PACK', 'RECV_BUFFER_WAIT', 'RECV_INPUT', 'RECV_OUTPUT', 'CAL_TOKEN', 'COMBINE_INDEX_INPUT')
+STAGES = ('KERNEL', 'SEND_TOKENS', 'CAL_CUMSUM', 'PREPARE_INPUT', 'SEND_COUNTS', 'INIT_COUNT_BUFFERS', 'WAIT_RECV_COUNTS', 'CLEAR_RECV_STATUS', 'GATHER_RECV_COUNTS', 'GET_CUMSUM', 'BUILD_RECV_CUMSUM', 'WAIT_CUMSUM', 'LOCAL_WINDOW_COPY', 'FORMAT_OUTPUT', 'BUILD_EXPERT_TASKS', 'CLEAR_LOCAL_FLAGS', 'TOKEN_INPUT', 'TOKEN_QUANT', 'TOKEN_METADATA', 'TOKEN_BUFFER_WAIT', 'TOKEN_PACK', 'TOKEN_SEND_ISSUE', 'COUNT_COMPUTE', 'COUNT_SEND_ISSUE', 'POLL_CORE_SUMS', 'REDUCE_CORE_PREFIX', 'CLEAR_CORE_SUMS', 'BROADCAST_PREFIX', 'PUBLISH_PREFIX_FLAGS', 'RECV_POLL', 'RECV_COPY', 'SEND_DRAIN', 'COMBINE_SEND', 'COMBINE_INIT_RECV', 'COMBINE_RECV', 'COMBINE_INPUT', 'COMBINE_PACK_QUANT', 'COMBINE_SEND_ISSUE', 'COMBINE_SEND_FINISH', 'COMBINE_RECV_POLL', 'COMBINE_DEQUANT_REDUCE', 'COMBINE_PROCESS_TOKEN', 'COMBINE_TOKEN_INIT', 'COMBINE_CLEAR_FLAGS', 'COMBINE_SHARED_EXPERT', 'COMBINE_SPECIAL_EXPERT', 'COMBINE_RMSNORM', 'FINAL_DRAIN', 'POLL_RECV_COUNTS', 'WRITE_COUNTS_OUTPUT', 'INIT', 'POLL_CORE_SUMS_ITERATIONS', 'POLL_RECV_COUNTS_ITERATIONS', 'WAIT_CUMSUM_ITERATIONS', 'RECV_READY_TOKENS', 'COMBINE_READY_SLOTS', 'COMBINE_QUANT', 'COMBINE_BUFFER_WAIT', 'COMBINE_COPY_PACK', 'RECV_BUFFER_WAIT', 'RECV_INPUT', 'RECV_OUTPUT', 'CAL_TOKEN', 'COMBINE_INDEX_INPUT', 'TOKEN_INPUT_WAIT', 'TOKEN_QUANT_WAIT')
 COUNTERS = frozenset(range(51,56))
 ROLES = {1:'send_token',2:'cumsum',3:'send_and_recv',4:'recv'}
 _state=threading.local()
@@ -29,7 +29,9 @@ NOISY_SEND_ENVELOPES=legacy.NOISY_SEND_ENVELOPES
 def parse_records(raw, operation, frequency_hz=None):
     if not raw or not raw[0] or len(raw[0][0])!=8:
         raise ValueError('Missing timer header')
-    if raw[0][0][1] != SCHEMA:
+    schema=raw[0][0][1]
+    metrics_limit=64 if schema==7 else METRICS
+    if schema not in (7,SCHEMA):
         return legacy.parse_records(raw,operation,frequency_hz)
     if operation not in ('dispatch','combine'): raise ValueError('Expected dispatch or combine')
     if frequency_hz is not None and (not math.isfinite(frequency_hz) or frequency_hz<=0):
@@ -43,23 +45,23 @@ def parse_records(raw, operation, frequency_hz=None):
         if any(type(v) is not int or not -(1<<63)<=v<(1<<64) for v in words): raise ValueError('Invalid timer word')
         words=[v & ((1<<64)-1) for v in words]
         h=words[:8];mode=h[5]&255;send=(h[5]>>8)&255;role=h[5]>>16
-        if h[:5]!=[MAGIC,SCHEMA,op,cores,core] or mode!=1 or not 0<send<56:
+        if h[:5]!=[MAGIC,schema,op,cores,core] or mode!=1 or not 0<send<56:
             raise ValueError('Incomplete or mismatched segment header')
         expected=(3 if core<send else 2) if op==1 else (1 if core<send else 4)
         if role!=expected: raise ValueError('Unexpected segment core role')
         splits.add(send);count,omitted=h[6:]
-        if not 0<count<=RECORDS or any(words[8+count*2:]): raise ValueError('Truncated or invalid segment records')
+        if not 0<count<=TRACE_RECORDS+metrics_limit or any(words[8+count*2:]): raise ValueError('Truncated or invalid segment records')
         metrics={};pairs={};trace_count=0;in_metrics=False
         for i in range(count):
             packed,value=words[8+i*2:10+i*2];event=packed&0xffffffff;payload=packed>>32
             if event>=0x8000:
                 in_metrics=True;stage=event-0x8000
-                if stage>=METRICS or stage in metrics or not payload: raise ValueError('Duplicate or invalid metric')
+                if stage>=metrics_limit or stage in metrics or not payload: raise ValueError('Duplicate or invalid metric')
                 if stage in COUNTERS and value: raise ValueError('Counter contains a duration')
                 metrics[stage]=(payload,value)
             else:
                 stage=event//2
-                if in_metrics or payload or stage>=METRICS or stage in COUNTERS: raise ValueError('Invalid interval event')
+                if in_metrics or payload or stage>=metrics_limit or stage in COUNTERS: raise ValueError('Invalid interval event')
                 pair=pairs.setdefault(stage,[[],[]]);pair[event&1].append(value);trace_count+=1
         if trace_count>TRACE_RECORDS: raise ValueError('Trace capacity exceeded')
         if metrics.get(0,(0,))[0]!=1 or 0 not in pairs: raise ValueError('Missing KERNEL interval')
@@ -91,7 +93,7 @@ def parse_records(raw, operation, frequency_hz=None):
             records.append(item)
         core_info.append(dict(core=core,role=display_role,initial_role=initial_role,record_count=count,omitted_intervals=omitted))
     if len(splits)!=1: raise ValueError('Mixed core splits')
-    return dict(schema=SCHEMA,operation=operation,active_aiv=cores,send_cores=send,recv_cores=cores-send,
+    return dict(schema=schema,operation=operation,active_aiv=cores,send_cores=send,recv_cores=cores-send,
                 dispatch_recv_cores=cores,boundary_mode='observe',frequency_hz=frequency_hz,
                 records=records,intervals=intervals,cores=core_info,
                 clock='AscendC::GetSystemCycle; no cross-rank clock alignment assumed',
@@ -101,9 +103,10 @@ def parse_records(raw, operation, frequency_hz=None):
 def chrome_trace(saved_records, frequency_hz=None, lane_layout='core', show_repeated=False):
     saved_records=list(saved_records)
     if not saved_records: raise ValueError('No LL stage records')
-    if all(s['raw'][0][0][1]!=SCHEMA for s in saved_records):
+    if all(s['raw'][0][0][1] not in (7,SCHEMA) for s in saved_records):
         return legacy.chrome_trace(saved_records,frequency_hz,lane_layout,show_repeated)
-    if any(s['raw'][0][0][1]!=SCHEMA for s in saved_records): raise ValueError('Mixed segment and legacy traces')
+    if any(s['raw'][0][0][1] not in (7,SCHEMA) for s in saved_records): raise ValueError('Mixed segment and legacy traces')
+    if len({s['raw'][0][0][1] for s in saved_records})!=1: raise ValueError('Mixed segment schemas')
     if lane_layout not in ('core','stage'): raise ValueError('Expected core or stage lane layout')
     events=[];identities=set();info=[]
     for pid,saved in enumerate(saved_records,1):
@@ -117,7 +120,7 @@ def chrome_trace(saved_records, frequency_hz=None, lane_layout='core', show_repe
         origin=min(row['first_tick'] for row in report['intervals'])
         lanes=set()
         for row in sorted(report['intervals'],key=lambda row:(row['core'],row['first_tick'],-row['last_tick'])):
-            tid=row['core'] if lane_layout=='core' else row['core']*64+STAGES.index(row['stage'])
+            tid=row['core'] if lane_layout=='core' else row['core']*METRICS+STAGES.index(row['stage'])
             if tid not in lanes:
                 events.append(dict(ph='M',name='thread_name',pid=pid,tid=tid,args=dict(name=f"AIV {row['core']:02d} {row['role']}"+(f" / {row['stage']}" if lane_layout=='stage' else ''))))
                 lanes.add(tid)
@@ -133,7 +136,7 @@ def chrome_trace(saved_records, frequency_hz=None, lane_layout='core', show_repe
 def reference_binary(raw,operation):
     """Export the reference format-5 body (no opt-in cookie); original parser can read it."""
     report=parse_records(raw,operation)
-    if report['schema']!=SCHEMA: raise ValueError('Reference export requires segment capture')
+    if report['schema']!=7: raise ValueError('Reference format-5 export requires original schema7; schema9 uses JSON/CSV/Chrome trace')
     offset=64+72*64;data=bytearray(offset+72*256*16)
     struct.pack_into('<8I',data,0,0x50524f46,0x10005,len(raw),16,256,64,offset,1 if operation=='dispatch' else 2)
     for core,rows in enumerate(raw):
@@ -201,7 +204,7 @@ class StageTrace:
             saved['expert']=dict(raw=self.expert_raw, **self.expert_config)
         with path.open('x', encoding='utf-8') as stream:
             json.dump(saved, stream, indent=2)
-        if self.report['schema'] == SCHEMA:
+        if self.report['schema'] == 7:
             rank=(metadata or {}).get('rank',0)
             binary=path.with_name(f'{self.operation}_prof_rank{rank}_{path.stem}.bin')
             with binary.open('xb') as stream: stream.write(reference_binary(self.raw,self.operation))

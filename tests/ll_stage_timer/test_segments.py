@@ -17,7 +17,7 @@ def load(name,path):
 timer=load('segments','deep_ep/utils/ll_stage_timer.py')
 
 
-def raw(send=10,operation='dispatch',full=False):
+def raw(send=10,operation='dispatch',full=False,schema=7):
     result=[]
     for core in range(56):
         intervals=[];metrics={};omitted=0
@@ -29,7 +29,7 @@ def raw(send=10,operation='dispatch',full=False):
             else:omitted+=1
         end(50,10,20)
         if full:
-            for stage in range(1,64):
+            for stage in range(1,66 if schema==9 else 64):
                 if stage in timer.COUNTERS: metrics[stage]=(100,0);continue
                 for sample in range(2):end(stage,200+stage*20+sample*5,203+stage*20+sample*5)
         else:
@@ -39,7 +39,7 @@ def raw(send=10,operation='dispatch',full=False):
         events=intervals+[(0x8000+stage+(calls<<32),total) for stage,(calls,total) in sorted(metrics.items())]
         words=[0]*(timer.SLOTS*timer.FIELDS)
         role=(3 if core<send else 2) if operation=='dispatch' else (1 if core<send else 4)
-        words[:8]=[timer.MAGIC,7,1 if operation=='dispatch' else 2,56,core,1|(send<<8)|(role<<16),len(events),omitted]
+        words[:8]=[timer.MAGIC,schema,1 if operation=='dispatch' else 2,56,core,1|(send<<8)|(role<<16),len(events),omitted]
         for i,(event,value) in enumerate(events):words[8+i*2:10+i*2]=[event,value]
         result.append([words[i:i+8] for i in range(0,len(words),8)])
     return result
@@ -99,20 +99,20 @@ def test_reference_binary_fields_and_stage_dictionary():
     assert tuple(re.findall('"([A-Z_]+)"',names))==timer.STAGES
 
 
-def test_full_capture_is_deferred_and_saves_reference_binary(monkeypatch,tmp_path):
+def test_full_capture_is_deferred_and_saves_extended_json(monkeypatch,tmp_path):
     package=ModuleType('deep_ep');package.__path__=[]
     utils=ModuleType('deep_ep.utils');utils.__path__=[]
     monkeypatch.setitem(sys.modules,'deep_ep',package);monkeypatch.setitem(sys.modules,'deep_ep.utils',utils)
     copies=[]
     class Tensor:
-        def __init__(self):self.ptr=256;self.device='npu:0';self.raw=raw()
+        def __init__(self):self.ptr=256;self.device='npu:0';self.raw=raw(schema=timer.SCHEMA)
         def data_ptr(self):return self.ptr
         def narrow(self,dim,offset,count):self.ptr+=offset*8;return self
         def view(self,*shape):self.shape=shape;return self
         def cpu(self):copies.append(self.shape);return self
         def tolist(self):return self.raw
     native=SimpleNamespace(low_latency_stage_timer_enabled=True,
-        low_latency_stage_timer_layout=lambda:dict(schema=7,slots=72,fields=8,stages=list(timer.STAGES)),
+        low_latency_stage_timer_layout=lambda:dict(schema=timer.SCHEMA,slots=72,fields=8,stages=list(timer.STAGES)),
         low_latency_core_config=lambda:dict(active_aiv=56,send_cores=10,device=0,runtime_device_queried=True))
     monkeypatch.setitem(sys.modules,'torch',SimpleNamespace(int64=0,zeros=lambda *a,**k:Tensor()))
     monkeypatch.setitem(sys.modules,'deep_ep._native',SimpleNamespace(require_native=lambda _:native))
@@ -123,7 +123,8 @@ def test_full_capture_is_deferred_and_saves_reference_binary(monkeypatch,tmp_pat
     assert not copies
     trace.complete();trace.save(tmp_path/'sample_0.json',dict(rank=0,iteration=0))
     assert copies==[(56,72,8)]
-    assert (tmp_path/'dispatch_prof_rank0_sample_0.bin').read_bytes()==timer.reference_binary(raw(),'dispatch')
+    assert not (tmp_path/'dispatch_prof_rank0_sample_0.bin').exists()
+    assert json.loads((tmp_path/'sample_0.json').read_text())['schema']==timer.SCHEMA
     with pytest.raises(FileExistsError):trace.save(tmp_path/'sample_0.json')
     with pytest.raises(ValueError):module.StageTrace(object(),'dispatch',mode='drain')
 

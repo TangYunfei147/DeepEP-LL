@@ -1,3 +1,5 @@
+> 本文下方记录schema7参考格式。当前实现已追加两处现有同步的计时，升级为schema9，详见 [INPUT_WAIT.md](INPUT_WAIT.md)。旧64个ID和采样语义保留，新格式用JSON/CSV/Chrome trace。
+
 # 参考分段打点（schema7）
 
 当前分支：`kernel/ll-g4-shared-recv`。参考版本：[`graph_dc_debug_seg@e58ece1f0b8cb8179607ac0300a22a3bdc0150b9`](https://gitcode.com/zhong-zixin/ops-transformer/tree/e58ece1f0b8cb8179607ac0300a22a3bdc0150b9)。参考公共记录器为`mc2/common/op_kernel/dc_seg_profiler.h`，插桩语义来自该版本Dispatch FullMesh与Combine MTE头文件。

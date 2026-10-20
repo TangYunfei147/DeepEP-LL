@@ -19,14 +19,85 @@ def stats(values):
     return dict(samples=len(values),mean=statistics.mean(values),minimum=min(values),maximum=max(values),
                 p50=q(.5),p90=q(.9),p99=q(.99))
 
+def input_wait_report(samples):
+    """Same-core/sample ratios only; no missing-as-zero or causal attribution."""
+    buckets={}
+    thresholds=dict(min_samples=3,send_share=0.20,kernel_share=0.10,
+                    hot_sample_fraction=0.50,critical_core_fraction=0.90)
+    for meta,decoded in samples:
+        if decoded['operation']!='dispatch': continue
+        cores={}
+        for row in decoded['records']:
+            cores.setdefault(row['core'],{})[row['stage']]=row
+        longest=max((st.get('KERNEL',{}).get('total_ticks',0) for st in cores.values()),default=0)
+        for core,st in cores.items():
+            if 'SEND_TOKENS' not in st: continue
+            quant=st.get('TOKEN_QUANT',{}).get('calls',0)>0
+            name='TOKEN_QUANT_WAIT' if quant else 'TOKEN_INPUT_WAIT'
+            bucket=buckets.setdefault((meta['rank'],core,name),dict(values=[],missing=0))
+            packet=st.get('TOKEN_INPUT');wait=st.get(name)
+            send=st['SEND_TOKENS']['total_ticks'];kernel=st.get('KERNEL',{}).get('total_ticks',0)
+            if (decoded['schema']!=9 or not packet or not wait or
+                    wait['calls']!=packet['calls'] or send<=0 or kernel<=0 or
+                    not 0<=wait['total_ticks']<=min(send,kernel)):
+                bucket['missing']+=1
+                continue
+            ticks=wait['total_ticks']
+            bucket['values'].append(dict(iteration=meta['iteration'],ticks=ticks,calls=wait['calls'],
+                send_share=ticks/send,kernel_share=ticks/kernel,
+                critical=kernel>=thresholds['critical_core_fraction']*longest))
+    rows=[]
+    for (rank,core,stage),bucket in sorted(buckets.items()):
+        values=bucket['values'];n=len(values)
+        sufficient=n>=thresholds['min_samples'] and bucket['missing']==0
+        hot=sum(v['send_share']>=thresholds['send_share'] and
+                v['kernel_share']>=thresholds['kernel_share'] for v in values)
+        candidate=hot/n>=thresholds['hot_sample_fraction'] if sufficient else None
+        rows.append(dict(rank=rank,core=core,stage=stage,samples=n,missing_samples=bucket['missing'],
+            status=('疑似瓶颈' if candidate else '未见明显证据') if sufficient else '数据不足',
+            is_bottleneck_candidate=candidate,
+            median_send_share=statistics.median(v['send_share'] for v in values) if n else None,
+            median_kernel_share=statistics.median(v['kernel_share'] for v in values) if n else None,
+            hot_sample_fraction=hot/n if n else None,
+            critical_core_fraction=sum(v['critical'] for v in values)/n if n else None,
+            weighted_ticks_per_call=sum(v['ticks'] for v in values)/sum(v['calls'] for v in values) if n else None))
+    overall=('疑似瓶颈' if any(r['is_bottleneck_candidate'] is True for r in rows) else
+             '数据不足' if not rows or any(r['is_bottleneck_candidate'] is None for r in rows) else '未见明显证据')
+    return dict(status=overall,thresholds=thresholds,per_core=rows,
+        interpretation='Heuristic candidates, not proven bottlenecks. MTE2_S measures residual input-path wait; '
+        'V_S may include earlier vector work, not only quantization. Instrumented timing cannot prove prefetch benefit. '
+        'Old/missing/inconsistent records are insufficient, never zero. Validate with timer-OFF A/B.')
+
+
+def input_wait_markdown(report):
+    lines=['# Dispatch 输入等待诊断','',f"总体筛查：{report['status']}（任一核命中即提示候选，不代表全局关键路径已证实）。",'',
+           '启发式判断：至少3轮；至少半数有效轮次中，等待占同核 SEND_TOKENS ≥20% 且占同核 KERNEL ≥10%。',
+           '疑似瓶颈不等于缺少预取已被证实；未见明显证据也不排除等待。单位为原始 ticks，未假定时钟频率。',
+           'critical_core_fraction 表示该核时长达到同 rank/轮最长核的90%的轮次比例。','',
+           '| rank | core | 等待阶段 | 结论 | 有效/缺失轮次 | 发送占比中位数 | kernel占比中位数 | 慢核轮次比例 | ticks/call |',
+           '|---|---|---|---|---|---|---|---|---|']
+    for row in report['per_core']:
+        def fmt(key,percent=False):
+            value=row[key]
+            return '—' if value is None else (f'{value:.1%}' if percent else f'{value:.2f}')
+        lines.append(f"| {row['rank']} | {row['core']} | {row['stage']} | {row['status']} | "
+                     f"{row['samples']}/{row['missing_samples']} | {fmt('median_send_share',True)} | "
+                     f"{fmt('median_kernel_share',True)} | {fmt('critical_core_fraction',True)} | {fmt('weighted_ticks_per_call')} |")
+    if not report['per_core']: lines+=['','无 dispatch 发送样本，无法判断输入等待。']
+    lines+=['','仅保留前两次实际区间；结论使用全量累计计数，不重建逐包流水。',
+            'MTE2_S 是输入路径剩余等待；V_S 也可能等待此前向量工作。需用 timer OFF 的预取 A/B 确认收益。']
+    return '\n'.join(lines)+'\n'
+
 
 def analyze(paths, frequency_hz=None):
     configurations={};ranks={};groups={};identity=None;stage_max={};measured={};worker_roles={}
+    wait_samples=[]
     for path in paths:
         saved=json.loads(path.read_text())
         meta=saved['metadata']
         if meta.get('correctness')!='passed':raise ValueError('Missing instrumented correctness evidence')
         report=timer.parse_records(saved['raw'],saved['operation'],frequency_hz if frequency_hz is not None else saved['frequency_hz'])
+        wait_samples.append((meta,report))
         common=(meta['world_size'],meta['config'],(report['active_aiv'],report['send_cores']),report['boundary_mode'],report['frequency_hz'],
                 meta.get('run_id'),meta.get('seed'),meta.get('case_id'),meta.get('sampling'),report['schema'],meta.get('comparison'))
         if identity is not None and common!=identity:raise ValueError('Mixed configurations or timer modes')
@@ -41,7 +112,7 @@ def analyze(paths, frequency_hz=None):
         for row in report['records']:
             initial_role=row.get('initial_role',row['role'])
             key=(op,rank,row['core'],initial_role,row['stage'])
-            if report['schema']==7:
+            if report['schema'] in (7,9):
                 worker_roles.setdefault((op,rank,row['core']),set()).add(row['role'])
             duration=row['total_us'] if unit=='us' else row['total_ticks']
             groups.setdefault(key,[]).append((duration,row['calls']))
@@ -71,6 +142,7 @@ def analyze(paths, frequency_hz=None):
             for name in ('mean','minimum','maximum','p50','p90','p99'): rows[-1][name]=None
     return dict(schema=identity[9],world_size=identity[0],boundary_mode=identity[3],frequency_hz=identity[4],comparison=identity[10],
                 configurations=configurations,sampling=identity[8],per_rank_core_stage=rows,
+                input_wait_bottleneck=input_wait_report(wait_samples),
                 per_rank_stage_max=[dict(operation=op,rank=rank,stage=stage,unit=unit,**stats(list(values.values())))
                                     for (op,rank,stage),values in sorted(stage_max.items())],
                 note='Per-call diagnostic stage totals; nested/parallel stages cannot be added. No cross-rank timestamp subtraction.')
@@ -109,7 +181,7 @@ def expert_reports(paths, frequency_hz):
         if payload['experts'] != meta['config'].get('num_experts',payload['experts']):
             raise ValueError('Expert count differs from case configuration')
         header=saved['raw'][0][0]
-        if header[1]==7: raise ValueError('Segment capture cannot contain legacy expert instrumentation')
+        if header[1] in (7,9): raise ValueError('Segment capture cannot contain legacy expert instrumentation')
         expected_send=header[5] >> 8 if header[1] in (5,6) else len(saved['raw'])//2
         if (header[1] in (5,6) and 'send_cores' not in payload) or payload.get('send_cores',expected_send)!=expected_send:
             raise ValueError('Expert/stage core split mismatch')
@@ -161,6 +233,12 @@ def process_directory(source, output, frequency_hz, trace_iteration, lane_layout
     report['expert_interpretation']='Per executing rank and expert; core durations are summed work, not latency. Packet stage counts deliveries only. Shared FIRST_HOP preparation and batch waiting are not assigned. Only samples with executed records enter stage statistics.'
     output.mkdir(parents=True, exist_ok=False)
     (output/'summary.json').write_text(json.dumps(report, indent=2))
+    wait_report=report['input_wait_bottleneck']
+    (output/'input_wait_bottleneck.md').write_text(input_wait_markdown(wait_report),encoding='utf-8')
+    if wait_report['per_core']:
+        with (output/'input_wait_bottleneck.csv').open('w',newline='',encoding='utf-8-sig') as stream:
+            writer=csv.DictWriter(stream,fieldnames=list(wait_report['per_core'][0]))
+            writer.writeheader();writer.writerows(wait_report['per_core'])
     rows = report['per_rank_core_stage']
     with (output/'stages.csv').open('w', newline='') as stream:
         writer = csv.DictWriter(stream, fieldnames=list(rows[0]))
@@ -170,7 +248,7 @@ def process_directory(source, output, frequency_hz, trace_iteration, lane_layout
     for path in paths:
         saved=json.loads(path.read_text());meta=saved['metadata']
         decoded=timer.parse_records(saved['raw'],saved['operation'],frequency_hz)
-        if decoded['schema']!=timer.SCHEMA: continue
+        if decoded['schema'] not in (7,timer.SCHEMA): continue
         shared=dict(operation=saved['operation'],rank=meta['rank'],iteration=meta['iteration'])
         segment_metrics.extend(dict(**shared,**row) for row in decoded['records'])
         segment_intervals.extend(dict(**shared,**row) for row in decoded['intervals'])
@@ -185,6 +263,7 @@ def process_directory(source, output, frequency_hz, trace_iteration, lane_layout
                 writer=csv.DictWriter(stream,fieldnames=list(values[0]))
                 writer.writeheader();writer.writerows(values)
     print(f'{source} -> {output} (all samples summarized; trace iteration {trace_iteration})')
+    print(f"Dispatch input wait: {wait_report['status']} (heuristic; see input_wait_bottleneck.md)")
 
 
 def main():

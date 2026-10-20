@@ -31,3 +31,7 @@
 远端纯计数直方图：device/dispatch_frequency_histogram.h 使用 asc_frequency_histogram；
 CountByVectorRange 调用单段/有界多段模板，复用原输入和直方图 UB。
 本组稳定 q 不使用总频数替代。见 ../ll_stage_timer/FREQUENCY_HISTOGRAM.md。
+
+输入等待打点：SendPacket原有MTE2_S、量化末尾V_S分别记TOKEN_INPUT_WAIT、
+TOKEN_QUANT_WAIT；schema9追加ID64/65，不新增同步。分析入口额外输出
+input_wait_bottleneck.md/csv，阈值与局限见 ../ll_stage_timer/INPUT_WAIT.md。

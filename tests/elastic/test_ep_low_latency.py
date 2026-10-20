@@ -1103,8 +1103,8 @@ def worker(local_rank, args):
             raise RuntimeError('Requested RDMA is not compiled in this wheel; no MTE fallback')
         if args.ll_stage_timer and not capability["stage_timer"]:
             raise RuntimeError("All ranks must install a DEEPEP_LL_STAGE_TIMER=ON wheel")
-        if args.ll_stage_timer and capability['stage_timer_schema'] != 7:
-            raise RuntimeError('Detailed LL diagnostics require timer schema 7; rebuild/install the matching wheel on every rank')
+        if args.ll_stage_timer and capability['stage_timer_schema'] != 9:
+            raise RuntimeError('Detailed LL diagnostics require timer schema 9; rebuild/install the matching wheel on every rank')
         if args.ll_expert_timer and not 8001 <= capability['core_protocol'] <= 8055:
             raise RuntimeError('Expert diagnostics require a matching configured-split wheel on every rank')
         args.ll_stage_timer_capabilities = capabilities
