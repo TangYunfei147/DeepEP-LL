@@ -5,6 +5,7 @@
 #define DISPATCH_SERVER_DEDUP_COUNTS_H
 
 #include "kernel_operator.h"
+#include "dispatch_frequency_histogram.h"
 #include "../common/ll_stage_timer_device.h"
 #include "adv_api/reduce/sum.h"
 #include "../common/ep_memory_server_dedup_count_layout.h"
@@ -250,7 +251,6 @@ __aicore__ inline void ServerDedupCounts::CountByVectorRange(uint32_t start, uin
     LocalTensor<uint8_t> lower = subExpBuf_.Get<uint8_t>();
     LocalTensor<uint8_t> upper = lower[maskBytes];
     SyncFunc<HardEvent::S_V>();
-    Duplicate<int32_t>(histogram, 0, end - start);
     Compares(lower, validExpertIdsTensor_, int32_t(start), CMPMODE::GE, expertIdsCnt_);
     Compares(upper, validExpertIdsTensor_, int32_t(end), CMPMODE::LT, expertIdsCnt_);
     PipeBarrier<PIPE_V>();
@@ -261,10 +261,15 @@ __aicore__ inline void ServerDedupCounts::CountByVectorRange(uint32_t start, uin
     GatherMask(selected, validExpertIdsTensor_, lower.ReinterpretCast<uint32_t>(), true, expertIdsCnt_,
                {1U, 1U, 0U, 0U}, selectedCount);
     SyncFunc<HardEvent::V_S>();
-    for (uint32_t i = 0; i < selectedCount; ++i) {
-        const uint32_t slot = uint32_t(selected.GetValue(i)) - start;
-        histogram.SetValue(slot, histogram.GetValue(slot) + 1);
-    }
+    auto* output=reinterpret_cast<__ubuf__ uint32_t*>(histogram.GetPhyAddr());
+    auto* input=reinterpret_cast<__ubuf__ uint32_t*>(selected.GetPhyAddr());
+    // selected is already compact and padded to a 256B allocation. Only one
+    // segment decision is made here, never one overflow check per route.
+    if (selectedCount<=kLlHistogramSegment)
+        asc_vf_call<CountFrequency<true>>(output,input,uint32_t(selectedCount),start,end-start);
+    else
+        asc_vf_call<CountFrequency<false>>(output,input,uint32_t(selectedCount),start,end-start);
+    SyncFunc<HardEvent::V_S>();
     for (uint32_t i = 0; i < end - start; ++i) {
         statusTensor_.SetValue((record+i) * UB_ALIGN_DATA_COUNT + 1U, histogram.GetValue(i));
     }

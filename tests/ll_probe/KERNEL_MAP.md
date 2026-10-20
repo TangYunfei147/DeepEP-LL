@@ -27,3 +27,7 @@
 本组初发：common/ll_group_local_send.h统一专家所有者；Counts在本组计数循环生成q/紧凑任务，Sender::ProcessGroupLocal由R核调用。Receiver和接收侧计数链保持不变；UB预算与源端分工一起维护，见../ll_stage_timer/GROUP_LOCAL_SEND.md。
 
 本组初发打点适配：ProcessGroupLocal的准备和退休分别PREPARE_INPUT/SEND_DRAIN；非去重远端压紧记PREPARE_INPUT。分析按实际SEND_TOKENS提升显示角色并保留initial_role；schema7/参考64阶段字典不变。
+
+远端纯计数直方图：device/dispatch_frequency_histogram.h 使用 asc_frequency_histogram；
+CountByVectorRange 调用单段/有界多段模板，复用原输入和直方图 UB。
+本组稳定 q 不使用总频数替代。见 ../ll_stage_timer/FREQUENCY_HISTOGRAM.md。
