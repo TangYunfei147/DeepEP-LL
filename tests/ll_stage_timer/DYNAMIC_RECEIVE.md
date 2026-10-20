@@ -28,7 +28,7 @@ S+R仍固定56，默认28/28，G默认4。S核先跨组初发，R核先本组初
 
 前缀生产核并行生成一次全局`输出行→packet slot`表，使用向量CreateVecIndex和DMA写入。动态核每批连续加载最多16个位置，省去逐核前缀二分、逐行pending索引初始化及RemovePending操作。
 
-认领与进度均为**本卡GM Scalar原子**，不使用跨卡/RDMA原子，也不通过SetAtomicAdd/SetAtomicMax实现fetch语义。空探测不做行认领CAS，但仍有摊薄的探测票据及完成计数器检查；不是零原子轮询。无竞争且整批就绪时，一批通常1次CAS+1次批完成Add；另有每8批的票据和完成检查，以及小队列admission。部分就绪、争用和尾部扫描会增加操作，不能承诺每批总共只有一次原子。
+认领与进度均为**本卡GM Scalar原子**，不使用跨卡/RDMA原子，也不通过SetAtomicAdd/SetAtomicMax实现fetch语义。空探测不做行认领CAS，但仍有摊薄的探测票据及完成计数器检查；不是零原子轮询。无竞争且整批就绪时，一批通常1次CAS+1次批完成Add；另有每8批的票据、每32次候选迭代的完成检查，以及小队列admission。部分就绪、争用和尾部扫描会增加操作，不能承诺每批总共只有一次原子。
 
 领取后沿用最多8个预取lane，跨批持续复用。清flag使用独立常量零buffer，按MTE3顺序排在本行输出/relay之后，不在每批添加PIPE_ALL；只在本核结束时统一drain。每核只保留16行描述符及“已知整批被认领”的小位图，不构建全量pending表。
 
@@ -73,3 +73,6 @@ ON诊断沿用参考阶段；位置表构造归BUILD_EXPERT_TASKS，探测归REC
 本机无C++编译器/CANN/NPU。Python回归和协议模型不验证NPU原子内存序、MTE可运行性或实际收益。提供了实际调度器的std::atomic多线程测试、双bank变更T测试以及实际布局C++检查，需有编译器的目标环境执行；完整设备正确性和性能仍待验收。
 
 本次本地记录（2026-10-20）：395 passed、53项缺C++编译器跳过、9项Bash/POSIX检查未选。动态队列协议模型42项通过；实际std::atomic调度器及布局11项在跳过项中。CANN编译、NPU正确性和性能均未验证。
+
+后续逐特性 Scalar 优化及本地回归记录见 [SCALAR_AUDIT.md](SCALAR_AUDIT.md)。
+最新完整回归为 523 passed、53 skipped、9 deselected；仍无 CANN/NPU 验证。

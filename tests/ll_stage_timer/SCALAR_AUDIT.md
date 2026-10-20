@@ -49,6 +49,26 @@ Host 原有每核 ceil(B/S)×K×16B 预算中，不增加 Host 最大预算或�
 不合并小区间的 DMA，不改发布依赖。编译器可能已做部分不变量提升，
 实际指令收益需检查目标汇编。
 
+### 提交与验证
+
+| 提交 | 独立特性 | 本地相关检查 |
+|---|---|---|
+| `ae57dea` | source mask 单次 UB 写回 | 53 passed / 12 skipped |
+| `4291a78` | 远端 q 表预生成，容量不足保留前缀路径 | 77 passed / 12 skipped |
+| `51a25a7` | 去重和大组非去重 DIRECT 稳定分桶 | 103 passed / 12 skipped |
+| `a5bbfdb` | 单轮接收位置 tile 缓存 | 109 passed / 11 skipped |
+| `0b2d423` | 完成查询与领取粒度解耦 | 174 passed / 11 skipped |
+| `0ce1178` | 分类不变量外提及位置表槽位递增 | 完整回归 523 passed / 53 skipped / 9 deselected |
+
+新增 128 项为 CPU 等价/边界模型，源码指纹校验仅用于记录经审查的修改；
+这些检查不能证明设备编译、实际执行或性能通过。跳过项缺少 C++ 编译器，
+未选项是当前 Windows 环境不适用的 Bash/POSIX 检查。
+所有特性保持现有包格式、核心身份 11000+S 和阶段 schema7；
+完整 wheel 仍须全 rank 重装。逐提交与其直接父提交使用相同路由种子、
+S/R/G、dtype、shape 和 timer OFF 作 A/B；新结果使用独立目录。
+已有 16/32/64/128 EP 准入和形状约束继续由原 Host 检查决定，
+不依据 B256/H3584/K8/E384 示例特化，也不自动扩展设备授权。
+
 ## 编译错误
 
 `dispatch_server_dedup_counts.h` 的两个 `GM_ADDR` 成员原先逗号连写。
