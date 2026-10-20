@@ -39,9 +39,9 @@ def test_all_positive_56_splits_cover_roles_and_notify_targets(send):
             assert covered==list(range(count))
     # Dispatch control tables must remain below Combine's fixed 1MiB boundary.
     for experts in (16,384,1024):
-        matrix=recv*recv*32
+        matrix=56*56*32
         prefix_stride=(experts*4+31)//32*32
-        end=72*512+experts*512+matrix+56*prefix_stride+56*recv*32
+        end=72*512+experts*512+matrix+56*prefix_stride+56*56*32
         reserved=(end+1023)//1024*1024+1024
         assert reserved<=1024*1024
 
@@ -109,7 +109,7 @@ def test_expert_decoder_uses_supplied_receive_boundary():
 
 def test_perf_entry_rejects_stale_wheel_without_requesting_timer():
     st=load('split_entry','tests/elastic/test_ep_low_latency.py')
-    st.validate_core_split_capability(dict(active_aiv=56,send_cores=20,recv_cores=36,core_protocol=9020))
+    st.validate_core_split_capability(dict(active_aiv=56,send_cores=20,recv_cores=36,core_protocol=11020))
     for identity in (dict(active_aiv=58,send_cores=10,recv_cores=48,core_protocol=6010),
                      dict(active_aiv=56,send_cores=28,recv_cores=28,core_protocol=5),
                      dict(active_aiv=56,send_cores=20,recv_cores=36,core_protocol=7028)):

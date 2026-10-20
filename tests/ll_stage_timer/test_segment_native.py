@@ -50,7 +50,7 @@ int main(){
 #ifdef DEEPEP_LL_STAGE_TIMER
  assert(AscendC::flushes>0);
  auto* data=words.data()+55*kWordsPerCore;
- assert(data[0]==kMagic && data[1]==7 && data[6]<=256 && data[7]>0);
+ assert(data[0]==kMagic && data[1]==8 && data[6]<=256 && data[7]>0);
  unsigned kernelBegins=0,kernelEnds=0,kernelMetrics=0;
  for(unsigned i=0;i<data[6];++i){
   auto event=uint32_t(data[8+i*2]);

@@ -55,9 +55,9 @@ int main() {
             auto count=DispatchServerDedupCountLayout(experts,cores);
             assert(count.cntOffset==kLlMaxCoreNum*512);
             assert(count.cumsumOffset==experts*512);
-            assert(count.cumsumOffset+half*half*32<=count.prefixOffset);
-            assert(count.prefixOffset+cores*count.prefixStride<=count.cumsumFlagOffset);
-            assert(count.cumsumFlagOffset+cores*half*32+count.cntOffset<=count.stateBytes);
+            assert(count.cumsumOffset+cores*cores*32==count.prefixOffset);
+            assert(count.prefixOffset+cores*count.prefixStride==count.cumsumFlagOffset);
+            assert(count.cumsumFlagOffset+cores*cores*32+count.cntOffset<=count.stateBytes);
             assert(count.stateBytes<=COMBINE_DEDUP_EP_SERVER_DEDUP_COMBINE_CONTROL_OFFSET);
         }
         // The user reproduction must remain admissible at the actual core count.

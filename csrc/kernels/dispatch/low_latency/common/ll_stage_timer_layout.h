@@ -5,7 +5,7 @@
 #pragma once
 #include <cstdint>
 namespace LlStageTimer {
-constexpr uint32_t kSchema = 7U;
+constexpr uint32_t kSchema = 8U;
 constexpr uint64_t kMagic = 0x4c4c5431ULL;
 constexpr uint32_t kTraceRecords = 192U, kMetrics = 64U;
 constexpr uint32_t kRecords = kTraceRecords + kMetrics;

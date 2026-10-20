@@ -30,7 +30,7 @@ def validate_core_split_capability(capability):
     send, recv = capability.get("send_cores"), capability.get("recv_cores")
     if (type(send) is not int or type(recv) is not int or send <= 0 or recv <= 0
             or send + recv != 56 or capability.get("active_aiv") != 56
-            or capability.get("core_protocol") != 9000 + send):
+            or capability.get("core_protocol") != 11000 + send):
         raise RuntimeError("Rebuild/install the matching configured 56-core split wheel on every rank")
 
 
@@ -299,7 +299,7 @@ def write_reports(directory, report):
             perf = result[operation]
             identity=result.get('comparison') or {}
             base = {"case_id": result["case_id"], **result["config"], "route": result["route"], "operation": operation,
-                    **{key:identity.get(key) for key in ('implementation','transport','logical_group','active_aiv','send_cores','recv_cores','core_protocol','source_revision')}}
+                    **{key:identity.get(key) for key in ('implementation','transport','logical_group','active_aiv','send_cores','recv_cores','dispatch_send_cores','dispatch_prefix_cores','dispatch_recv_cores','core_protocol','source_revision')}}
             summaries.append(
                 {
                     **base,
@@ -1081,6 +1081,8 @@ def worker(local_rank, args):
         capability = {"active_aiv": core_config["active_aiv"],
                       "send_cores": core_config["send_cores"], "recv_cores": core_config["recv_cores"],
                       "dispatch_recv_cores": core_config["dispatch_recv_cores"],
+                      "dispatch_send_cores": core_config["dispatch_send_cores"],
+                      "dispatch_prefix_cores": core_config["dispatch_prefix_cores"],
                       "transport": backend,
                       "rdma_compiled": bool(getattr(native, "low_latency_rdma_enabled", False)),
                       "logical_group": compiled_group(native,world),
@@ -1094,7 +1096,7 @@ def worker(local_rank, args):
         if any(item != capabilities[0] for item in capabilities):
             raise RuntimeError("LL AIV/group/protocol/timer build differs across ranks")
         validate_core_split_capability(capability)
-        if capability['implementation'] not in ('ndr-hns1825','configurable-groups','g4-shared-recv'):
+        if capability['implementation'] not in ('ndr-hns1825','configurable-groups','g4-shared-recv','all-send-recv'):
             raise RuntimeError('Rebuild the wheel with the shared experiment implementation identity')
         requested_impl=os.environ.get('DEEPEP_LL_EXPECT_IMPLEMENTATION')
         if requested_impl and capability['implementation']!=requested_impl:
@@ -1103,8 +1105,8 @@ def worker(local_rank, args):
             raise RuntimeError('Requested RDMA is not compiled in this wheel; no MTE fallback')
         if args.ll_stage_timer and not capability["stage_timer"]:
             raise RuntimeError("All ranks must install a DEEPEP_LL_STAGE_TIMER=ON wheel")
-        if args.ll_stage_timer and capability['stage_timer_schema'] != 7:
-            raise RuntimeError('Detailed LL diagnostics require timer schema 7; rebuild/install the matching wheel on every rank')
+        if args.ll_stage_timer and capability['stage_timer_schema'] != 8:
+            raise RuntimeError('Detailed LL diagnostics require timer schema 8; rebuild/install the matching wheel on every rank')
         if args.ll_expert_timer and not 8001 <= capability['core_protocol'] <= 8055:
             raise RuntimeError('Expert diagnostics require a matching configured-split wheel on every rank')
         args.ll_stage_timer_capabilities = capabilities

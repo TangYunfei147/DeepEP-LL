@@ -1,3 +1,5 @@
+> 当前分支kernel/ll-all-send-recv：dispatch固定56核发送、阶段同步后56核准备前缀并接收；S/R仅用于combine。协议11000+S、stage schema8。以[ALL_SEND_RECV.md](ALL_SEND_RECV.md)为准，以下共享接收内容为历史背景。
+
 # 编译配置56个AIV的收发分工
 
 本分支为 `kernel/ll-g4-shared-recv`。默认前段28发送+28计数/接收；dispatch发送核完成发送后也加入接收，最终56核消费包。可用两个编译环境变量调整，要求正整数且相加等于56。不要求1:1、不要求各自为偶数、不增加8核倍数等比例限制。

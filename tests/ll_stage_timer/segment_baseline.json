@@ -5,13 +5,22 @@
   "interpretation": "Ordered non-diagnostic tokens, ignoring whitespace/comments and block braces; supplemental static evidence, not CANN validation.",
   "files": {
     "csrc/kernels/dispatch/low_latency.cpp": "3bd7158c6e20109943f70cd9219430e979e6213819608650e7088e85e22cb277",
-    "csrc/kernels/dispatch/low_latency/dispatch_server_dedup_kernel.h": "01b733853bf9c9b4e8b69fff67286ab076105dfc69d760add8ed7153f7a07691",
-    "csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_counts.h": "4fd5d2d188f747cca4bbf0f008a9ec91c37740210e79d19e47de752596eb7e41",
-    "csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_send.h": "b475caff1451367a30d3f6535bcbb0ffc1888e77a5a39899c157936007cd348a",
+    "csrc/kernels/dispatch/low_latency/dispatch_server_dedup_kernel.h": "98a568fb6ff577a7273d53b4c6d7397807a8f184f23e0ffe7fbb037647cc36fa",
+    "csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_counts.h": "14f5e7843513b5058e5c4abc683dfb7b76cf9c4ff8cc0257e4bb08c26d019b4b",
+    "csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_send.h": "06d507957c6bd0a6eda10885a740786463fe1be04fa6ab0147ad6dc3d61450fd",
     "csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_recv.h": "ee6cc9826d470f34dfb051afd4e28f46e7fe7db24515e6323211c9a0b7920780",
     "csrc/kernels/combine/low_latency.cpp": "1a8d068a6076d7757fb74c4d60c49aa1c3c3b97847284df1aa869ef5578c5447",
     "csrc/kernels/combine/low_latency/combine_server_dedup_kernel.h": "237047dd000797039a0522568c82b3cc079a3f604a35738351539e0c2498372b",
     "csrc/kernels/combine/low_latency/combine_server_dedup_partial.h": "c7b81524ac3123ee21584c1c87cb860e40fcc05739a5f538b1b5c3c42ca0b5c1",
     "csrc/kernels/combine/low_latency/combine_server_dedup_source_aggregate.h": "801ef282246fffbb6818e86ff262191c89a485f19265245a461e655b895fceee"
+  },
+  "authorized_source_update": {
+    "parent": "b3f9004",
+    "reason": "All 56 dispatch cores send, synchronize, then compute prefix/receive; no group-local sender split",
+    "files": [
+      "csrc/kernels/dispatch/low_latency/dispatch_server_dedup_kernel.h",
+      "csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_counts.h",
+      "csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_send.h"
+    ]
   }
 }

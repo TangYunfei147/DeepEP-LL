@@ -37,13 +37,14 @@ public:
     {
         args_ = args;
         (void)coreNum; // The launch split is fixed by the build configuration.
-        sendCores_ = kLlSendCoreNum;
+        sendCores_ = kLlDispatchSendCoreNum;
         pipe_ = pipe;
         enableDedup_ = enableDedup;
         bs_ = bs;
         h_ = h;
         k_ = k;
         localExperts_ = experts / args->rankSize;
+        expertsPerGroup_ = localExperts_ * kLlRanksPerGroup;
         const uint32_t core = GetBlockIdx();
         const uint32_t base = bs / sendCores_, remainder = bs % sendCores_;
         count_ = base + (core < remainder ? 1U : 0U);
@@ -104,7 +105,7 @@ public:
         Allocate(weightInBuf_, uint32_t(DispatchDedupAlign(uint64_t(count_) * k_ * 4U, 32U)));
         Allocate(weightOutBuf_, uint32_t(DispatchDedupAlign(uint64_t(count_) * k_ * 4U, 32U)));
         Allocate(maskBuf_, uint32_t(DispatchDedupAlign(uint64_t(count_) * 4U, 32U)));
-        Allocate(directBuf_, uint32_t(DispatchDedupAlign(uint64_t(count_) * k_ * 16U, 32U)));
+        Allocate(directBuf_, uint32_t(DispatchDedupAlign(uint64_t(count_) * k_ * 12U, 32U)));
         // One uint32 state per server, including EP256's 16 host groups.
         const uint32_t serverBytes = uint32_t(DispatchDedupAlign(uint64_t(args_->rankSize / kLlRanksPerGroup) * 4U, 32U));
         Allocate(serverBuf_, serverBytes < 64U ? 64U : serverBytes);
@@ -131,7 +132,13 @@ public:
         if (count_ != 0U)
             DataCopyPad(routeWeights_, weights_[uint64_t(start_) * k_], {1U, count_ * k_ * 4U, 0U, 0U, 0U},
                         {false, 0U, 0U, 0.0f});
-        Sync<HardEvent::MTE2_S>();
+        if (enableDedup_ && count_ != 0U) {
+            Sync<HardEvent::MTE2_V>();
+            Copy(sourceWeights_, routeWeights_, count_ * k_);
+            Sync<HardEvent::V_S>();
+        } else {
+            Sync<HardEvent::MTE2_S>();
+        }
         // 每个 512B 块尾部的 32B 标记预置为 1；发送时 payload 和标记一起搬运。
         // 初始 MTE3_V 事件让 lane 首次可写，后续复用由上一包的发送完成事件控制。
         uint64_t flagMask[2] = {0xffU, 0U};
@@ -177,7 +184,7 @@ public:
             LL_SEG_BEGIN(classifyBegin, PREPARE_INPUT);
             Classify(token, directMask, firstHopCount);
             LL_SEG_END(classifyBegin, PREPARE_INPUT);
-            sourceMasks_.SetValue(token, 0U);
+            uint32_t sourceMask = directMask;
             for (uint32_t group = 0; group < firstHopCount; ++group) {
                 const uint32_t scheduled = LlFirstHopOrder(firstHopCount, rankInGroup, sendCore,
                                                           start_ + token, group);
@@ -187,23 +194,22 @@ public:
                 const uint32_t index = (start_ + token) * k_ + firstK;
                 const uint32_t expert = uint32_t(routeIds_.GetValue(index));
                 SendPacket(input, start_ + token, firstK, expert, CalTokenSendExpertCnt(expert, index), mask);
-                sourceMasks_.SetValue(token, sourceMasks_.GetValue(token) | (uint32_t(1) << firstK));
+                sourceMask |= uint32_t(1) << firstK;
                 // 源端仅标记实际发出的首跳路由；该位置输出权重 1，原路由权重另存包尾。
                 sourceWeights_.SetValue(token * k_ + firstK, 1.0f);
             }
-            // DIRECT 暂不发送，缓存 token/k/expert/q 四元组。q 在此按原始路由计算，
-            // 后续按 server 重排发送顺序时仍沿用同一个槽位编号。
+            // DIRECT caches token/k/expert only. Compute q at issue from the immutable
+            // original route index, avoiding a q store/load without changing slots.
             for (uint32_t k = 0; k < k_; ++k)
                 if (directMask & (uint32_t(1) << k)) {
                     const uint32_t index = (start_ + token) * k_ + k;
                     const uint32_t expert = uint32_t(routeIds_.GetValue(index));
-                    const uint32_t q = CalTokenSendExpertCnt(expert, index);
-                    directTasks_.SetValue(directCount_ * 4U, token);
-                    directTasks_.SetValue(directCount_ * 4U + 1U, k);
-                    directTasks_.SetValue(directCount_ * 4U + 2U, expert);
-                    directTasks_.SetValue(directCount_ * 4U + 3U, q);
+                    directTasks_.SetValue(directCount_ * 3U, token);
+                    directTasks_.SetValue(directCount_ * 3U + 1U, k);
+                    directTasks_.SetValue(directCount_ * 3U + 2U, expert);
                     ++directCount_;
                 }
+            sourceMasks_.SetValue(token, sourceMask);
         }
 
         // 5. Rotate the existing DIRECT group order by source card and send core.
@@ -220,14 +226,13 @@ public:
             const uint32_t server = LlDirectGroupOrder(serverNum, ownServer, rankInGroup, sendCore, step);
             const uint32_t firstExpert = server * expertsPerServer;
             for (uint32_t task = 0; task < directCount_; ++task) {
-                const uint32_t expert = directTasks_.GetValue(task * 4U + 2U);
+                const uint32_t expert = directTasks_.GetValue(task * 3U + 2U);
                 if (expert < firstExpert || expert >= firstExpert + expertsPerServer) continue;
-                const uint32_t token = directTasks_.GetValue(task * 4U);
-                const uint32_t k = directTasks_.GetValue(task * 4U + 1U);
-                const uint32_t q = directTasks_.GetValue(task * 4U + 3U);
+                const uint32_t token = directTasks_.GetValue(task * 3U);
+                const uint32_t k = directTasks_.GetValue(task * 3U + 1U);
+                const uint32_t q = CalTokenSendExpertCnt(expert, (start_ + token) * k_ + k);
                 SendPacket(input, start_ + token, k, expert, q, 0U);
-                sourceMasks_.SetValue(token, sourceMasks_.GetValue(token) | (uint32_t(1) << k));
-                sourceWeights_.SetValue(token * k_ + k, routeWeights_.GetValue(token * k_ + k));
+                // One token mask store and the bulk weight copy cover DIRECT metadata.
             }
         }
     }
@@ -286,7 +291,7 @@ private:
         uint32_t seen = 0, grouped = 0;
         for (uint32_t k = 0; k < k_; ++k) {
             const uint32_t expert = uint32_t(routeIds_.GetValue((start_ + token) * k_ + k));
-            const uint32_t server = expert / localExperts_ / kLlRanksPerGroup;
+            const uint32_t server = expert / expertsPerGroup_;
             const uint32_t bit = uint32_t(1) << k, serverBit = uint32_t(1) << server;
             if (server == uint32_t(args_->rank) / kLlRanksPerGroup) {
                 directMask |= bit;
@@ -314,9 +319,7 @@ private:
         // Memory's prefix reduction over the complete original route sequence.
         auto dst = qDstBuf_.Get<int32_t>();
         auto sub = qSubBuf_.Get<int32_t>();
-        Duplicate<int32_t>(dst, int32_t(expert), index);
-        PipeBarrier<PIPE_V>();
-        Sub(sub, routeIds_, dst, index);
+        Subs(sub, routeIds_, int32_t(expert), index);
         PipeBarrier<PIPE_V>();
         auto input = sub.template ReinterpretCast<float>();
         auto output = dst.template ReinterpretCast<float>();
@@ -454,6 +457,7 @@ private:
     TBufPool<TPosition::VECCALC, 16>* scratch_ = nullptr;
     uint32_t sendCores_ = 0;
     uint32_t bs_ = 0, h_ = 0, k_ = 0, localExperts_ = 0, start_ = 0, count_ = 0;
+    uint32_t expertsPerGroup_ = 0;
     uint32_t usedBytes_ = 0, lanes_ = 0, packets_ = 0, directCount_ = 0;
     EpServerDedupDataLayout data_{};
     GlobalTensor<XType> x_;

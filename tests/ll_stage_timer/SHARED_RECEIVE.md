@@ -1,3 +1,5 @@
+> 当前分支kernel/ll-all-send-recv：dispatch固定56核发送、阶段同步后56核准备前缀并接收；S/R仅用于combine。协议11000+S、stage schema8。以[ALL_SEND_RECV.md](ALL_SEND_RECV.md)为准，以下共享接收内容为历史背景。
+
 # Dispatch发送后参与接收
 
 分支：`kernel/ll-g4-shared-recv`。起点：`kernel/ll-g4-stagger@5c2ea11`，包含父分支已有统计更新。默认G4、MTE和错峰发送顺序保留。

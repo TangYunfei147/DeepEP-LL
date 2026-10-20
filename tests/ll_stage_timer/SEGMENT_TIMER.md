@@ -1,3 +1,5 @@
+> 当前分支kernel/ll-all-send-recv：dispatch固定56核发送、阶段同步后56核准备前缀并接收；S/R仅用于combine。协议11000+S、stage schema8。以[ALL_SEND_RECV.md](ALL_SEND_RECV.md)为准，以下共享接收内容为历史背景。
+
 # 参考分段打点（schema7）
 
 当前分支：`kernel/ll-g4-shared-recv`。参考版本：[`graph_dc_debug_seg@e58ece1f0b8cb8179607ac0300a22a3bdc0150b9`](https://gitcode.com/zhong-zixin/ops-transformer/tree/e58ece1f0b8cb8179607ac0300a22a3bdc0150b9)。参考公共记录器为`mc2/common/op_kernel/dc_seg_profiler.h`，插桩语义来自该版本Dispatch FullMesh与Combine MTE头文件。

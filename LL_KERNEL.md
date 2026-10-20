@@ -1,3 +1,5 @@
+> 当前分支kernel/ll-all-send-recv：dispatch固定56核发送、阶段同步后56核准备前缀并接收；S/R仅用于combine。协议11000+S、stage schema8。以[ALL_SEND_RECV.md](tests/ll_stage_timer/ALL_SEND_RECV.md)为准，以下共享接收内容为历史背景。
+
 # LL kernel configuration and branch
 
 > 2026-10-19：本分支现在按编译配置分配固定56个AIV，默认28发+28收，支持不对称比例；以[CORE_SPLIT.md](tests/ll_stage_timer/CORE_SPLIT.md)为准。旧1:1和动态核数说明仅描述此前版本。全rank重建匹配wheel。

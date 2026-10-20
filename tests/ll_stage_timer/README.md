@@ -1,3 +1,5 @@
+> 当前分支kernel/ll-all-send-recv：dispatch固定56核发送、阶段同步后56核准备前缀并接收；S/R仅用于combine。协议11000+S、stage schema8。以[ALL_SEND_RECV.md](ALL_SEND_RECV.md)为准，以下共享接收内容为历史背景。
+
 # LL参考分段打点
 
 当前`kernel/ll-g4-shared-recv`采用graph_dc_debug_seg的采样区间+全量累计逻辑。每阶段前两次调用保留真实时间线，所有调用累计；INIT单列，KERNEL结束后全核同步再写出。详细位置、格式和限制见[SEGMENT_TIMER.md](SEGMENT_TIMER.md)。

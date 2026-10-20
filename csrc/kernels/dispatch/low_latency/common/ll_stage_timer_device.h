@@ -67,7 +67,7 @@ public:
                 (uint64_t(calls_[stage]) << 32U) | (0x8000U + stage), sums_[stage]);
         }
         // Commit header last. No device-side GM record writes occur before Flush.
-        const uint32_t role = operation_ == 1U ? (core < DispatchDedup::kLlSendCoreNum ? 3U : 2U)
+        const uint32_t role = operation_ == 1U ? 3U
                                                : (core < DispatchDedup::kLlSendCoreNum ? 1U : 4U);
         words[0]=kMagic; words[1]=kSchema; words[2]=operation_; words[3]=AscendC::GetBlockNum();
         words[4]=core; words[5]=1U | (uint64_t(DispatchDedup::kLlSendCoreNum) << 8U) | (uint64_t(role) << 16U);

@@ -68,7 +68,7 @@ DISPATCH_DEDUP_EP_DEDUP_INLINE EpServerDedupCountLayout DispatchServerDedupCount
 {
     (void)coreNum; // Retained for callers; the receive count is fixed by the build.
     EpServerDedupCountLayout layout{};
-    const uint32_t recvCores = kLlRecvCoreNum;
+    const uint32_t recvCores = kLlDispatchPrefixCoreNum;
     const uint64_t matrixBytes = uint64_t(recvCores) * recvCores * kEpServerDedupCountRecordBytes;
     layout.cntOffset = kEpServerDedupControlPrefixBytes;
     layout.cumsumOffset = uint64_t(experts) * kEpServerDedupCountGmStride;

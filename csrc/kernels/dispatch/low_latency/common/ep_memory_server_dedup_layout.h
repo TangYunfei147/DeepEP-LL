@@ -90,7 +90,7 @@ inline int BuildDispatchServerDedupLayout(int64_t rankSize, int64_t bs, int64_t 
     }
 
     const uint32_t countCores =
-        bs < kEpServerDedupAllCoreCountBsThreshold ? coreNum : kLlRecvCoreNum;
+        coreNum;
     if (DispatchServerDedupCountSendUbBytes(uint64_t(bs) * topK, uint32_t(moeExpertNum), countCores) >
         kEpServerDedupCountUbBytes) {
         return DispatchDedup::DISPATCH_DEDUP_ERROR_PARA_CHECK_FAIL;
@@ -175,10 +175,10 @@ inline bool DispatchDedupPacketUbFits(const EpMemoryServerDedupLayout& layout, i
 {
     if (!LlCoreCountValid(coreNum)) return false;
     const auto align = [](uint64_t n, uint64_t a) { return (n + a - 1) / a * a; };
-    const uint64_t cores = b < kEpServerDedupAllCoreCountBsThreshold ? coreNum : kLlRecvCoreNum;
+    const uint64_t cores = coreNum;
     const uint64_t reserved =
-        b < kEpServerDedupAllCoreCountBsThreshold ? align((num_experts + cores - 1) / cores, 8) * 32 : 0;
-    const uint64_t tokens = (b + kLlSendCoreNum - 1U) / kLlSendCoreNum;
+        align((num_experts + cores - 1) / cores, 8) * 32;
+    const uint64_t tokens = (b + kLlDispatchSendCoreNum - 1U) / kLlDispatchSendCoreNum;
     const uint64_t groups = std::min<uint64_t>(world_size / kLlRanksPerGroup - 1, k / 2);
     const bool needQuantize = layout.inputMode == EpServerDedupInputMode::Quantize16;
     const uint64_t inputBytes = needQuantize ? layout.data.quantCount * 2U : layout.data.packedPayloadBytes;
@@ -189,7 +189,7 @@ inline bool DispatchDedupPacketUbFits(const EpMemoryServerDedupLayout& layout, i
     const uint64_t scratchBytes = needQuantize ? std::max(qBytes, quantWork) : qBytes;
     const uint64_t sender = reserved + 2 * inputBytes + (needQuantize ? layout.data.packedPayloadBytes : 0U) +
                             align(b * k * 4, 256) + 2 * scratchBytes + qBytes + 2 * align(tokens * k * 4, 32) +
-                            align(tokens * 4, 32) + align(tokens * k * 16, 32) + 64 + align(groups * 4, 32) +
+                            align(tokens * 4, 32) + align(tokens * k * 12, 32) + 64 + align(groups * 4, 32) +
                             layout.data.tokenStride;
     const uint64_t serverStateExtra = std::max<uint64_t>(64U, align(world_size / kLlRanksPerGroup * 4U, 32U)) - 64U;
     const uint64_t receiver = align(num_experts * 4, 32) + 2 * align(((layout.capacityRows + kLlDispatchRecvCoreNum - 1U) / kLlDispatchRecvCoreNum) * 4, 32) +

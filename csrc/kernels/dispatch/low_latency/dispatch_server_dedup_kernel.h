@@ -26,36 +26,39 @@ public:
     {
         timer_ = timer;
         args_ = reinterpret_cast<const __gm__ DispatchDedup::CommArgs*>(commArgs);
-        core_ = GetBlockIdx();
-        sendCores_ = kLlSendCoreNum;
+
+
         pipe_ = pipe;
-        const uint32_t magic = RotateDispatchServerDedupMagic(args_, core_, pipe);
+        const uint32_t magic = RotateDispatchServerDedupMagic(args_, GetBlockIdx(), pipe);
         counts_.Init(commArgs, expertIds, expertTokenNumsOut, sendCountsOut, bs, topK, experts, expertTokenNumsType,
                      magic, pipe, timer);
-        if (core_ < sendCores_)
-            sender_.Init(args_, x, expertIds, expertScales, sourceMaskOut, expertScalesOut, bs, h, topK, experts, pipe,
+        sender_.Init(args_, x, expertIds, expertScales, sourceMaskOut, expertScalesOut, bs, h, topK, experts, pipe,
                          magic, inputScales, enableDedup);
         receiver_.Init(args_, expandXOut, dynamicScalesOut, tokenTypeOut, destinationIndexOut, relayReadIndexOut,
                        bs, h, topK, experts, pipe, magic, enableDedup, expertTimer);
     }
 
-    // 完整dispatch：先按S/R执行发送与前缀准备，再由全部核消费各自接收任务。
-    // Sender可与接收核的计数前缀准备重叠，不能把提取阶段耗时直接相加当作完整时延。
+    // 全部56核发送，发送阶段同步后全部56核准备前缀并接收。
+    // No initial sender/receiver split or group-local sender handoff.
     __aicore__ inline void Process()
     {
         counts_.SendCnt();
 
-        if (core_ < sendCores_) {
-            sender_.Process(counts_.ScratchPool(), counts_.ReservedBytes(), timer_);
-
-        } else {
-            LL_SEG_SCOPE(CAL_CUMSUM);
-            counts_.RecvCnt();
-            counts_.CalcCumsum();
+        sender_.Process(counts_.ScratchPool(), counts_.ReservedBytes(), timer_);
+        // True phase boundary: all 56 local AIVs retire sends before any enters
+        // count receive or packet receive. Empty send shards still participate.
+        { LL_SEG_SCOPE(SEND_DRAIN);
+          PipeBarrier<PIPE_ALL>();
+          SyncAll<true>();
+        }
+        counts_.PrepareReceive();
+        { LL_SEG_SCOPE(CAL_CUMSUM);
+          counts_.RecvCnt();
+          counts_.CalcCumsum();
         }
 
         // Every core joins receive after completing its own send or prefix work.
-        // Prefix producers remain the original R cores. Each of the 56 consumers
+        // All 56 cores produce the prefix. Each of the 56 consumers
         // has its own publication row and disjoint output/cleanup ownership.
         counts_.CompleteCumsum();
         PipeBarrier<PIPE_ALL>();
@@ -78,7 +81,7 @@ private:
     ServerDedupReceiver<XType, WireFp8, E4M3, Prequantized> receiver_;
     const __gm__ DispatchDedup::CommArgs* args_ = nullptr;
     TPipe* pipe_ = nullptr;
-    uint32_t core_ = 0, sendCores_ = 0;
+
 };
 }  // namespace DispatchDedup
 #endif

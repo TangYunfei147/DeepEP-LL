@@ -1,1 +1,1 @@
-{"implementation":"g4-shared-recv","rdma":false}
+{"implementation":"all-send-recv","rdma":false}
