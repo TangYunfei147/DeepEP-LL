@@ -23,6 +23,13 @@ SendPacket 不读取 sourceMasks，最终 GM 发布仍在发送流程结束后�
 qDst，不覆盖 q 表。分配和 Host 预算不变。新增路由/分片等价模型，
 实际 Scalar 指令数和性能待目标机测量，不能将一次扫描的 Scalar 更新成本忽略。
 
+第三个优化：DIRECT 任务按组建立稳定链表，复用 `serverState_` 作桶头；
+去重模式将记录的 token/k 合成展平索引，空出的 word 存 next。逆序建链，
+发送仍保持原组轮转及组内 token/k 顺序。非去重的原大组排序路径使用
+紧凑索引后面的 next 数组，小组路径保留原一次扫描。next 容量包含在
+Host 原有每核 ceil(B/S)×K×16B 预算中，不增加 Host 最大预算或全局协议。
+分桶建立本身有 Scalar 成本，小任务不保证提速；复杂度从 O(G×D) 降到 O(G+D)。
+
 ## 编译错误
 
 `dispatch_server_dedup_counts.h` 的两个 `GM_ADDR` 成员原先逗号连写。

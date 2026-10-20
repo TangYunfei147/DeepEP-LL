@@ -107,7 +107,9 @@ public:
         Allocate(weightOutBuf_, uint32_t(DispatchDedupAlign(uint64_t(count_) * k_ * 4U, 32U)));
         Allocate(maskBuf_, uint32_t(DispatchDedupAlign(uint64_t(count_) * 4U, 32U)));
         const uint32_t directBytes=uint32_t(DispatchDedupAlign(uint64_t(count_)*k_*16U,32U));
-        const uint32_t indexBytes=uint32_t(DispatchDedupAlign(uint64_t((bs_*k_+sendCores_-1U)/sendCores_)*4U,32U));
+        const uint32_t indexBytes=uint32_t(DispatchDedupAlign(uint64_t((bs_*k_+sendCores_-1U)/sendCores_)*8U,32U));
+        // Non-dedup uses a compact route-index array plus one next-index array.
+        // The existing Host worst-case 16B/token-route budget covers both.
         Allocate(directBuf_,directBytes>indexBytes ? directBytes : indexBytes);
         // One uint32 state per server, including EP256's 16 host groups.
         const uint32_t serverBytes = uint32_t(DispatchDedupAlign(uint64_t(args_->rankSize / kLlRanksPerGroup) * 4U, 32U));
@@ -285,21 +287,30 @@ public:
         // Stable scans within each group retain q, token/k ordering and ownership.
         // 首跳和 DIRECT 共用 packets_ 序号及 lane 环；阶段之间不额外等待全部包发完。
 
-        // Stable per-server scans retain the original q and token/k order.
-        // Each core advances independently; the packet/lane sequence continues
-        // across first hops and server boundaries without an added drain.
+        // Classify no longer needs serverState. Reuse it for bucket heads,
+        // and encode (token,k) as one route index to free each record's link.
+        // Reverse insertion preserves the original order within every group.
         const uint32_t serverNum = args_->rankSize / kLlRanksPerGroup;
         const uint32_t expertsPerServer = localExperts_ * kLlRanksPerGroup;
         const uint32_t ownServer = args_->rank / kLlRanksPerGroup;
+        for (uint32_t server=0;server<serverNum;++server) serverState_.SetValue(server,directCount_);
+        for (uint32_t n=directCount_;n>0U;--n) {
+            const uint32_t task=n-1U,record=task*4U;
+            const uint32_t index=directTasks_.GetValue(record)*k_+directTasks_.GetValue(record+1U);
+            const uint32_t server=directTasks_.GetValue(record+2U)/expertsPerServer;
+            directTasks_.SetValue(record,index);
+            directTasks_.SetValue(record+1U,serverState_.GetValue(server));
+            serverState_.SetValue(server,task);
+        }
         for (uint32_t step = 0; step < serverNum; ++step) {
             const uint32_t server = LlDirectGroupOrder(serverNum, ownServer, rankInGroup, sendCore, step);
             if (server == ownServer) continue; // Original receive cores own all local DIRECT tasks.
-            const uint32_t firstExpert = server * expertsPerServer;
-            for (uint32_t task = 0; task < directCount_; ++task) {
+            for (uint32_t task=serverState_.GetValue(server);task<directCount_;
+                 task=directTasks_.GetValue(task*4U+1U)) {
                 const uint32_t expert = directTasks_.GetValue(task * 4U + 2U);
-                if (expert < firstExpert || expert >= firstExpert + expertsPerServer) continue;
-                const uint32_t token = directTasks_.GetValue(task * 4U);
-                const uint32_t k = directTasks_.GetValue(task * 4U + 1U);
+                const uint32_t index = directTasks_.GetValue(task * 4U);
+                const uint32_t token = index/k_;
+                const uint32_t k = index%k_;
                 const uint32_t q = directTasks_.GetValue(task * 4U + 3U);
                 SendPacket(input, start_ + token, k, expert, q, 0U);
                 // Mask/weights were emitted once before remote task scheduling.
@@ -348,14 +359,22 @@ public:
             }
             return;
         }
+        const uint32_t tasks=uint32_t(remoteCount);
+        const uint32_t linkOffset=(total+sendCores_-1U)/sendCores_;
+        for (uint32_t server=0;server<serverNum;++server) serverState_.SetValue(server,tasks);
+        for (uint32_t n=tasks;n>0U;--n) {
+            const uint32_t task=n-1U,index=directTasks_.GetValue(task);
+            const uint32_t server=uint32_t(routeIds_.GetValue(index))/expertsPerGroup;
+            directTasks_.SetValue(linkOffset+task,serverState_.GetValue(server));
+            serverState_.SetValue(server,task);
+        }
         for (uint32_t step=0;step<serverNum;++step) {
             const uint32_t server=EpServerOrder::ServerDedupDispatchDirectOrder(serverNum,ownGroup,step);
             if (server==ownGroup) continue;
-            const uint32_t first=server*expertsPerGroup;
-            for (uint32_t task=0;task<remoteCount;++task) {
+            for (uint32_t task=serverState_.GetValue(server);task<tasks;
+                 task=directTasks_.GetValue(linkOffset+task)) {
                 const uint32_t i=directTasks_.GetValue(task);
                 const uint32_t expert=uint32_t(routeIds_.GetValue(i));
-                if (expert<first || expert>=first+expertsPerGroup) continue;
                 SendPacket(input,i/k_,i%k_,expert,CalTokenSendExpertCnt(expert,i),0U);
             }
         }
