@@ -31,7 +31,7 @@ public:
         pipe_ = pipe;
         const uint32_t magic = RotateDispatchServerDedupMagic(args_, core_, pipe);
         counts_.Init(commArgs, expertIds, expertTokenNumsOut, sendCountsOut, bs, topK, experts, h, expertTokenNumsType,
-                     magic, pipe, timer);
+                     magic, pipe, timer, enableDedup);
         sender_.Init(args_, x, expertIds, expertScales, sourceMaskOut, expertScalesOut, bs, h, topK, experts, pipe,
                      magic, inputScales, enableDedup);
         receiver_.Init(args_, expandXOut, dynamicScalesOut, tokenTypeOut, destinationIndexOut, relayReadIndexOut,

@@ -86,13 +86,13 @@ using namespace DispatchDedup;
 struct Ids {const uint32_t* p;uint32_t GetValue(unsigned i)const{return p[i];}};
 int main(){
  const std::vector<std::array<unsigned,4>> shapes={{1,1,16,16},{3,8,384,16},{57,32,1024,64},{256,8,384,16}};
- for(auto shape:shapes){
+ for(auto shape:shapes)for(bool dedup:{false,true}){
   auto b=shape[0],k=shape[1],e=shape[2],r=shape[3];auto layout=LlRoutePlanMemory(b*k,e);
   std::vector<uint32_t> memory(layout.bytes/4+128,0xdeadbeefU),ids(b*k),counts(e),running(e);
   for(unsigned i=0;i<b*k;++i){ids[i]=(i*37+i/7)%e;++counts[ids[i]];}
   std::vector<std::thread> threads;
   for(unsigned c=0;c<56;++c)threads.emplace_back([&,c]{AscendC::core=c;AscendC::TPipe pipe;
-   BuildSharedRoutePlan(reinterpret_cast<uint8_t*>(memory.data()),reinterpret_cast<uint8_t*>(ids.data()),b,k,e,r,&pipe);});
+   BuildSharedRoutePlan(reinterpret_cast<uint8_t*>(memory.data()),reinterpret_cast<uint8_t*>(ids.data()),b,k,e,r,0,dedup,&pipe);});
   for(auto& t:threads)t.join();
   for(unsigned x=0;x<e;++x){assert(memory[layout.totalsOffset/4+x*8]==0x3f800000U);assert(memory[layout.totalsOffset/4+x*8+1]==counts[x]);}
   const unsigned groupExperts=e/r*kLlRanksPerGroup;
@@ -104,7 +104,7 @@ int main(){
    assert(memory[layout.masksOffset/4+i]==mask);
    auto anchor=LlPlanFirst(mask),rest=mask&~(1U<<anchor),event=rest?LlPlanFirst(rest):anchor;
    assert((packed>>24)==event);
-   assert(((packed>>16)&255U)==LlChooseLeader(Ids{ids.data()+t*k},k,mask,e/r));
+   assert(((packed>>16)&255U)==(!dedup || ids[i]/groupExperts==0 ? anchor : LlChooseLeader(Ids{ids.data()+t*k},k,mask,e/r)));
   }
   for(unsigned i=layout.bytes/4;i<memory.size();++i)assert(memory[i]==0xdeadbeefU);
  }

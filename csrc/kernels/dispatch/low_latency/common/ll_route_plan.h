@@ -1,6 +1,7 @@
 #pragma once
 #include <cstdint>
 #include "ll_core_config.h"
+#include "ep_memory_server_dedup_protocol.h"
 namespace DispatchDedup {
 #if defined(__CCE__) && defined(__CCE_IS_AICORE__)
 #define LL_PLAN_INLINE __aicore__ inline
@@ -32,8 +33,18 @@ LL_PLAN_INLINE uint32_t LlPlanFirst(uint32_t mask) {
 }
 template<class Ids>
 LL_PLAN_INLINE uint32_t LlChooseLeader(Ids ids,uint32_t k,uint32_t mask,uint32_t localExperts) {
-    (void)ids; (void)k; (void)localExperts;
-    return LlPlanFirst(mask);
+    uint32_t counts[kLlRanksPerGroup]{};
+    uint32_t first[kLlRanksPerGroup]{};
+    uint32_t best=ids.GetValue(LlPlanFirst(mask))/localExperts%kLlRanksPerGroup;
+    for (uint32_t j=0;j<k;++j) {
+        if (!(mask&(uint32_t(1)<<j))) continue;
+        const uint32_t rank=ids.GetValue(j)/localExperts%kLlRanksPerGroup;
+        if (!counts[rank]) first[rank]=j;
+        ++counts[rank];
+        if (counts[rank]>counts[best] ||
+            (counts[rank]==counts[best] && first[rank]<first[best])) best=rank;
+    }
+    return first[best];
 }
 LL_PLAN_INLINE uint64_t LlRoutePlanUbBytes(uint32_t bs,uint32_t k,uint32_t experts,uint32_t groups) {
     const uint64_t shard=(uint64_t(bs)+kLlActiveCoreNum-1U)/kLlActiveCoreNum*k;

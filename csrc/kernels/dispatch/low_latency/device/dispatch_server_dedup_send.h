@@ -257,7 +257,7 @@ public:
     __aicore__ inline void SendWithDedup(TQue<QuePosition::VECIN, 1>& input)
     {
         // 4. 第一遍处理本核 token：同一远端 server 的多条路由合并为一份 FIRST_HOP。
-        // 以组内最小 k 对应专家作为首跳目标，把其他成员的路由信息放入包尾，
+        // 以准备阶段选定的最多命中rank的代表专家作为首跳，把其余成员放入包尾，
         // 由目标接收端继续转发。所有首跳优先发出，尽早启动远端 relay。
 
         const uint32_t rankInGroup = uint32_t(args_->rank) % kLlRanksPerGroup;
@@ -453,8 +453,12 @@ private:
         token -= start_;
         weights.SetValue(1U, routeWeights_.GetValue(token * k_ + firstK));
         uint32_t entries = 0U;
-        for (uint32_t k = firstK + 1U; mask != 0U && k < k_; ++k)
-            if (mask & (uint32_t(1) << k)) {
+        // The majority-rank leader need not be the earliest route. Enumerate
+        // every other member, including routes before firstK, exactly once.
+        uint32_t remaining=mask&~(uint32_t(1)<<firstK);
+        for (uint32_t k=0;remaining && k<k_;++k)
+            if (remaining&(uint32_t(1)<<k)) {
+                remaining&=~(uint32_t(1)<<k);
                 const uint32_t routeIndex = (start_ + token) * k_ + k;
                 const uint32_t expert = uint32_t(routeIds_.GetValue(routeIndex));
                 const uint32_t q = CalTokenSendExpertCnt(expert, routeIndex);

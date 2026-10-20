@@ -112,14 +112,17 @@ def test_fused_local_tasks_match_original_route_slots(send,group,kind):
     for key,(owner,q) in descriptors.items():
         assert owner>=send and first<=key[1]<end and q==reference[key]
     # Source metadata remains token-owned: local bits are recorded even though
-    # those packets moved to receive cores; FIRST_HOP ownership remains first-k.
+    # those packets moved to receive cores; majority FIRST_HOP ownership is checked separately in test_ll_route_plan.py.
     for token,row in enumerate(routes):
         by_group={}
         for slot,e in enumerate(row):by_group.setdefault(e//(experts//ranks*group),[]).append(slot)
-        original_mask=sum(1<<slots[0] if g!=rank//group and len(slots)>1 else sum(1<<v for v in slots)
+        def head(slots):
+            hits=Counter(row[j]//(experts//ranks) for j in slots)
+            return min(slots,key=lambda j:(-hits[row[j]//(experts//ranks)],j))
+        original_mask=sum(1<<head(slots) if g!=rank//group and len(slots)>1 else sum(1<<v for v in slots)
                           for g,slots in by_group.items())
         local_mask=sum(1<<slot for slot,e in enumerate(row) if first<=e<end)
-        remote_mask=sum(1<<slots[0] if len(slots)>1 else 1<<slots[0]
+        remote_mask=sum(1<<head(slots)
                         for g,slots in by_group.items() if g!=rank//group)
         assert original_mask==local_mask|remote_mask
 

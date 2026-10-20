@@ -26,9 +26,10 @@ public:
     // 摘要：绑定路由与计数输出，选择本轮控制区；保存并调整 CTRL[60]，供整数位模式的 FP32 归约使用。
     __aicore__ inline void Init(GM_ADDR commArgs, GM_ADDR expertIds, GM_ADDR expertTokenNumsOut, GM_ADDR sendCountsOut,
                                 uint32_t bs, uint32_t topK, uint32_t experts, uint32_t hidden, uint32_t expertTokenNumsType,
-                                int64_t magic, TPipe* pipe, LlStageTimer::DeviceTimer* timer = nullptr)
+                                int64_t magic, TPipe* pipe, LlStageTimer::DeviceTimer* timer = nullptr, bool enableDedup = true)
     {
         timer_ = timer;
+        planDedup_ = enableDedup;
         tpipe_ = pipe;
         args_ = reinterpret_cast<const __gm__ DispatchDedup::CommArgs*>(commArgs);
         epRankId_ = args_->rank;
@@ -65,7 +66,7 @@ public:
     // 摘要：统计完整原始路由的专家计数并异步发往专家所属 rank，同时保留仍被 MTE3 使用的记录 UB。
     __aicore__ inline void PrepareRoutes() {
         LL_SEG_SCOPE(PREPARE_INPUT);
-        BuildSharedRoutePlan(planBase_,sourceIds_,axisBS_,axisK_,rscvStatusNum_,epWorldSize_,tpipe_);
+        BuildSharedRoutePlan(planBase_,sourceIds_,axisBS_,axisK_,rscvStatusNum_,epWorldSize_,epRankId_,planDedup_,tpipe_);
         SetCtrlSpr<60,60>(0);
     }
     __aicore__ inline void SendCnt();
@@ -158,6 +159,7 @@ private:
     // 摘要：等待所有接收核的前缀写出标记到齐，并清除本核对应的标记行。
     __aicore__ inline void WaitCumSumFlag();
 
+    bool planDedup_ = true;
     GM_ADDR sourceIds_ = nullptr;
     GM_ADDR planBase_ = nullptr;
     TPipe* tpipe_ = nullptr;

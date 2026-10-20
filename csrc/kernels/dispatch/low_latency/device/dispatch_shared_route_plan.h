@@ -11,7 +11,7 @@ template<HardEvent E> __aicore__ inline void RoutePlanSync(TPipe* pipe) {
 // Three LOCAL-device phase boundaries. Every launched core participates even
 // when its token/expert interval is empty. No remote payload starts beforehand.
 __aicore__ inline void BuildSharedRoutePlan(GM_ADDR base,GM_ADDR ids,uint32_t bs,uint32_t k,
-                                           uint32_t experts,uint32_t ranks,TPipe* pipe) {
+                                           uint32_t experts,uint32_t ranks,uint32_t rank,bool enableDedup,TPipe* pipe) {
     const uint32_t core=GetBlockIdx(),workers=kLlActiveCoreNum;
     const uint32_t tokens=bs/workers+(core<bs%workers ? 1U : 0U);
     const uint32_t first=core*(bs/workers)+(core<bs%workers ? core : bs%workers);
@@ -54,7 +54,8 @@ __aicore__ inline void BuildSharedRoutePlan(GM_ADDR base,GM_ADDR ids,uint32_t bs
             if (j==anchor) {
                 const uint32_t remaining=mask&~(uint32_t(1)<<anchor);
                 const uint32_t event=remaining ? LlPlanFirst(remaining) : anchor;
-                const uint32_t leader=LlChooseLeader(localIds[t*k],k,mask,experts/ranks);
+                const uint32_t leader=!enableDedup || !remaining || g==rank/kLlRanksPerGroup ? anchor :
+                    LlChooseLeader(localIds[t*k],k,mask,experts/ranks);
                 state.SetValue(g*2U,(t+1U)|(leader<<16U)|(event<<24U));
             }
             localQ.SetValue(i,localQ.GetValue(i)|(state.GetValue(g*2U)&0xffff0000U));
