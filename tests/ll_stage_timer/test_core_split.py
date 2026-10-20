@@ -76,7 +76,7 @@ def test_split_changes_build_identity_and_wires_both_compilers():
     for name in ('DEEPEP_LL_SEND_CORES','DEEPEP_LL_RECV_CORES'):
         assert f'-D{name}=${{{name}}}' in child
     receiver=(ROOT/'csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_recv.h').read_text()
-    assert 'receiver_ = GetBlockIdx();' in receiver
+    assert 'queue.Init(reinterpret_cast<__gm__ uint32_t*>(QueueAddress()),total,coreNum_);' in receiver
     partial=(ROOT/'csrc/kernels/combine/low_latency/combine_server_dedup_partial.h').read_text()
     assert 'GetBlockIdx() - DispatchDedup::kLlSendCoreNum' in partial
 
@@ -109,7 +109,7 @@ def test_expert_decoder_uses_supplied_receive_boundary():
 
 def test_perf_entry_rejects_stale_wheel_without_requesting_timer():
     st=load('split_entry','tests/elastic/test_ep_low_latency.py')
-    st.validate_core_split_capability(dict(active_aiv=56,send_cores=20,recv_cores=36,core_protocol=10020))
+    st.validate_core_split_capability(dict(active_aiv=56,send_cores=20,recv_cores=36,core_protocol=11020))
     for identity in (dict(active_aiv=58,send_cores=10,recv_cores=48,core_protocol=6010),
                      dict(active_aiv=56,send_cores=28,recv_cores=28,core_protocol=5),
                      dict(active_aiv=56,send_cores=20,recv_cores=36,core_protocol=7028)):

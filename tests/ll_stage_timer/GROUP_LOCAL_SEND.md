@@ -1,3 +1,5 @@
+> 当前演进分支为`kernel/ll-g4-local-send-dynamic-recv`：保留组内初发，接收改为就绪批次动态认领，协议11000+S。以[DYNAMIC_RECEIVE.md](DYNAMIC_RECEIVE.md)为准；下文静态接收说明为父版本记录。
+
 # 原接收核承担本组初发
 
 当前分支：`kernel/ll-g4-shared-recv`；本次源端改动基线：`b3f9004`（保留参考分段打点）。默认G4，编译配置S+R=56，默认S/R=28/28；按实际G/EP/shape计算，不按示例规模特化。

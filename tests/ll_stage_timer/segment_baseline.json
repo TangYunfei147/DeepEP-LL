@@ -2,17 +2,21 @@
   "baseline": "6ea61a6948f664f4ddee0c8395e1aa94815f146a",
   "reference": "e58ece1f0b8cb8179607ac0300a22a3bdc0150b9",
   "reference_header_sha256": "b8f6754e88748e655d1979bf56aad6e4be645799f1ad3b6541fecc537847c37f",
-  "interpretation": "Ordered non-diagnostic tokens, ignoring whitespace/comments and block braces; supplemental static evidence, not CANN validation.",
+  "interpretation": "Ordered non-diagnostic tokens after explicitly authorized group-send and dynamic-receive changes. Unmodified combine hashes retained. Supplemental static evidence only, not CANN validation.",
   "files": {
     "csrc/kernels/dispatch/low_latency.cpp": "3bd7158c6e20109943f70cd9219430e979e6213819608650e7088e85e22cb277",
-    "csrc/kernels/dispatch/low_latency/dispatch_server_dedup_kernel.h": "28af07bb4825170644e36cd23f6b26329709ed4cf304a948f19b92974d79dfd3",
-    "csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_counts.h": "0d30015015bd45a2acdd062a66a4e8de3361de50574243632013111e0563fcc0",
-    "csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_send.h": "84fdba56f6c7187cdf147e7b8cb97ef135475535741dfb893c23fb4baf472df0",
-    "csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_recv.h": "ee6cc9826d470f34dfb051afd4e28f46e7fe7db24515e6323211c9a0b7920780",
+    "csrc/kernels/dispatch/low_latency/dispatch_server_dedup_kernel.h": "a4444cd1adf1f9fc1a4e2b1b4f8eec14015b3f3eb4b97c0875ae854c1d186e37",
+    "csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_counts.h": "589f1adf116526912691b65d917e35b8607e62aa94582ca0bab98d825f8f82c8",
+    "csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_send.h": "531833ea46649f4ec1e3a729de14bb4d9cbc70f07b191c00e9a6ae2db4d15fb3",
+    "csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_recv.h": "36937c1f5773215ca69365e49163a3941b887b5626f1b809ca693f5f3ab6282e",
     "csrc/kernels/combine/low_latency.cpp": "1a8d068a6076d7757fb74c4d60c49aa1c3c3b97847284df1aa869ef5578c5447",
     "csrc/kernels/combine/low_latency/combine_server_dedup_kernel.h": "237047dd000797039a0522568c82b3cc079a3f604a35738351539e0c2498372b",
     "csrc/kernels/combine/low_latency/combine_server_dedup_partial.h": "c7b81524ac3123ee21584c1c87cb860e40fcc05739a5f538b1b5c3c42ca0b5c1",
-    "csrc/kernels/combine/low_latency/combine_server_dedup_source_aggregate.h": "801ef282246fffbb6818e86ff262191c89a485f19265245a461e655b895fceee"
+    "csrc/kernels/combine/low_latency/combine_server_dedup_source_aggregate.h": "801ef282246fffbb6818e86ff262191c89a485f19265245a461e655b895fceee",
+    "csrc/kernels/dispatch/low_latency/common/ll_receive_queue.h": "d9d0897a1c65855b3f9953476f74a9d85fb96fb80618c5d9a29740410639f969",
+    "csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_receive_queue.h": "a26e42c44a4f75b02c2bb0ee5d8c9492cf1731bc5684fbc5392d07641cedca1d",
+    "csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_receive_tasks.h": "7a1956c61aa97a0446e538c9ccf7fe5e68cc3b69a9d3250d4a81f5153a8d475e",
+    "csrc/kernels/dispatch/low_latency/common/ep_memory_server_dedup_data_layout.h": "0aba4eb043fc7a97d1eed42659656d06820eecb2ce95f45134045688adc78727"
   },
   "authorized_source_update": {
     "parent": "b3f9004",
@@ -21,6 +25,20 @@
       "csrc/kernels/dispatch/low_latency/dispatch_server_dedup_kernel.h",
       "csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_counts.h",
       "csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_send.h"
+    ]
+  },
+  "authorized_dynamic_update": {
+    "parent": "a2eae05",
+    "reason": "Ready-only bitmap ownership replaces static receive slices; combine algorithm remains unchanged",
+    "files": [
+      "csrc/kernels/dispatch/low_latency/dispatch_server_dedup_kernel.h",
+      "csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_counts.h",
+      "csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_send.h",
+      "csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_recv.h",
+      "csrc/kernels/dispatch/low_latency/common/ll_receive_queue.h",
+      "csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_receive_queue.h",
+      "csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_receive_tasks.h",
+      "csrc/kernels/dispatch/low_latency/common/ep_memory_server_dedup_data_layout.h"
     ]
   }
 }

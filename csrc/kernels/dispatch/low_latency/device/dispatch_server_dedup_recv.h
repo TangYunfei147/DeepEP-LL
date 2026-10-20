@@ -12,6 +12,7 @@
 #include "../../../common/ep_packet_receive_layout.h"
 #include "dispatch_server_dedup_receive_tasks.h"
 #include "dispatch_server_dedup_receive_packet.h"
+#include "dispatch_server_dedup_receive_queue.h"
 
 namespace DispatchDedup {
 using namespace AscendC;
@@ -35,16 +36,14 @@ public:
         args_ = args;
         expertTimer_ = expertTimer;
         coreNum_ = GetBlockNum();
-        recvCoreNum_ = kLlDispatchRecvCoreNum;
         pipe_ = pipe;
         enableDedup_ = enableDedup;
         bs_ = bs;
         k_ = k;
         experts_ = experts;
         localExperts_ = experts / uint32_t(args_->rankSize);
-        receiver_ = GetBlockIdx();
         hiddenBytes_ = WireFp8 ? h : h * uint32_t(sizeof(XType));
-        data_ = DispatchServerDedupDataLayout(bs, h, k, experts, InputMode);
+        data_ = DispatchServerDedupDataLayout(bs, h, k, experts, InputMode, uint32_t(args_->rankSize));
         windowOffset_ = DispatchServerDedupWindowOffset(magic);
         data_.dispatchOffset += windowOffset_;
         expandX_.SetGlobalBuffer(expandX);
@@ -54,125 +53,93 @@ public:
         relayReadIndex_.SetGlobalBuffer(reinterpret_cast<__gm__ uint32_t*>(relayReadIndex));
     }
 
+    __aicore__ inline GM_ADDR QueueAddress() const {
+        return args_->peerMems[args_->rank]+windowOffset_+data_.receiveQueueOffset;
+    }
+    __aicore__ inline uint32_t QueueClearBytes() const {
+        return uint32_t(kLlReceiveHeaderBytes+data_.receiveClaimBytes);
+    }
+    __aicore__ inline GM_ADDR PositionAddress() const {
+        return args_->peerMems[args_->rank]+windowOffset_+data_.receivePositionsOffset;
+    }
     // 摘要：执行接收主流程：加载前缀、构建任务、批量探测、预取并消费就绪包，最后清理本核槽位标记。
-    __aicore__ inline void Process(LlStageTimer::DeviceTimer* timer = nullptr)
+    __aicore__ inline void Process(LlStageTimer::DeviceTimer* timer,uint32_t total)
     {
-        timer_ = timer;
+        timer_=timer;
         LL_SEG_SCOPE(FORMAT_OUTPUT);
-        // 1. 调用方已完成计数阶段的写入，才能 Reset TPipe 回收旧计数 UB。
-        // 从当前 magic 窗口加载本接收核的完整前缀副本，MTE2_S 后 Scalar 才能使用。
-
-        // Caller has completed count-stage writes before this Reset. The GM
-        // prefix belongs to this receive core; old count UB is no longer used.
         pipe_->Reset();
-        const uint32_t prefixBytes = uint32_t(DispatchDedupAlign(uint64_t(experts_) * 4U, 32U));
-        pipe_->InitBuffer(prefixBuf_, prefixBytes);
-        GlobalTensor<int32_t> prefixGlobal;
-        const auto counts = DispatchServerDedupCountLayout(experts_, coreNum_);
-        prefixGlobal.SetGlobalBuffer(reinterpret_cast<__gm__ int32_t*>(args_->peerMems[args_->rank] + windowOffset_ +
-                                                                       counts.cntOffset + counts.prefixOffset +
-                                                                       uint64_t(receiver_) * counts.prefixStride));
-        auto prefix = prefixBuf_.Get<int32_t>();
-        DataCopyPad(prefix, prefixGlobal, {1U, prefixBytes, 0U, 0U, 0U}, {false, 0U, 0U, 0});
-        ServerDedupReceiveSync<HardEvent::MTE2_S>();
-
-        // 2. 按前缀定义的接收输出行均分任务，建立稳定槽位表和可压缩的 pending 表。
-        // j 始终标识固定输出行/槽位；pending 下标只表示尚未消费的任务位置。
-        { LL_SEG_SCOPE(BUILD_EXPERT_TASKS);
-        tasks_.Build(prefix, uint32_t(args_->rank), uint32_t(args_->rankSize), experts_, bs_, receiver_, pipe_, recvCoreNum_);
-        }
-
-
-        // 空任务核没有拥有的接收槽，完成打点后直接返回，无需参与 packet 轮询。
-        if (tasks_.Count() == 0U) {
-            return;
-        }
-
-        // 3. 为每批最多 16 个 packet 的块标记分配探测/归约空间。
-        // flags 和 work 额外留尾部空间，覆盖归约实现的对齐读取；先清零 flags 的无效区域。
-        const uint32_t blocks = uint32_t(data_.blockCount);
-        const uint32_t flagsBytes = kProbeBatch * blocks * 32U + 256U;
-        // CANN 9.1/A5 Sum stores ceil(B*8/64) partials per row at a
-        // 32-element stride. Reserve all rows plus a full-vector tail read.
-        const uint32_t workBytes = kProbeBatch * uint32_t(DispatchDedupAlign((blocks + 7U) / 8U, 32U)) * 4U + 256U;
-        pipe_->InitBuffer(flagsBuf_, flagsBytes);
-        pipe_->InitBuffer(sumBuf_, kProbeBatch * 32U);
-        pipe_->InitBuffer(workBuf_, workBytes);
-        // LoadAlign may read past the masked tail, including inactive rows.
-        Duplicate(flagsBuf_.Get<float>(), 0.0f, flagsBytes / 4U);
+        if (!total) return;
+        NativeReceiveQueue queue;
+        queue.Init(reinterpret_cast<__gm__ uint32_t*>(QueueAddress()),total,coreNum_);
+        if (!queue.Enter()) return; // Late/extra workers avoid all receive setup.
+        const uint32_t batches=(total+kProbeBatch-1U)/kProbeBatch;
+        const uint32_t seenBytes=(batches+31U)/32U*4U;
+        pipe_->InitBuffer(seenBuf_,uint32_t(DispatchDedupAlign(seenBytes,32U)));
+        auto seen=seenBuf_.Get<uint32_t>();
+        Duplicate<uint32_t>(seen,0U,uint32_t(DispatchDedupAlign(seenBytes,32U))/4U);
+        tasks_.Init(pipe_);
+        GlobalTensor<uint32_t> positions;
+        positions.SetGlobalBuffer(reinterpret_cast<__gm__ uint32_t*>(PositionAddress()));
+        const uint32_t blocks=uint32_t(data_.blockCount);
+        const uint32_t flagsBytes=kProbeBatch*blocks*32U+256U;
+        const uint32_t workBytes=kProbeBatch*uint32_t(DispatchDedupAlign((blocks+7U)/8U,32U))*4U+256U;
+        pipe_->InitBuffer(flagsBuf_,flagsBytes);
+        pipe_->InitBuffer(sumBuf_,kProbeBatch*32U);
+        pipe_->InitBuffer(workBuf_,workBytes);
+        pipe_->InitBuffer(zeroFlagsBuf_,blocks*32U);
+        Duplicate(flagsBuf_.Get<float>(),0.0f,flagsBytes/4U);
+        Duplicate(zeroFlagsBuf_.Get<float>(),0.0f,blocks*8U);
+        ServerDedupReceiveSync<HardEvent::V_S>();
         ServerDedupReceiveSync<HardEvent::V_MTE2>();
-        pipe_->InitBuffer(probeIdxBuf_, kProbeBatch * 4U);
-        const uint32_t tablesBytes = 2U * uint32_t(DispatchDedupAlign(uint64_t(tasks_.Count()) * 4U, 32U));
-        const uint32_t fixed = prefixBytes + tablesBytes + flagsBytes + workBytes + kProbeBatch * 36U;
-        // 剩余 UB 作为最多 8 路预取 lane；每路包括完整 packet 和 64B 输出元数据。
-        // MTE3_MTE2 事件保护 lane：旧包的输出和 relay 读完后，下一次加载才可覆盖。
-        laneStride_ = uint32_t(data_.tokenStride) + 64U;
-        const uint32_t available = (kEpServerDedupCountUbBytes - fixed) / laneStride_;
-        lanes_ = available < 8U ? available : 8U;  // Safe inputs guarantee at least one lane.
-        pipe_->InitBuffer(lanesBuf_, lanes_ * laneStride_);
-        for (uint32_t lane = 0; lane < lanes_; ++lane) SetFlag<HardEvent::MTE3_MTE2>(lane);
-
-        auto snapshot = probeIdxBuf_.Get<uint32_t>();
-        // Fill every allocated lane (up to eight); reuse still waits for MTE3.
-        const uint32_t depth = lanes_;
-        // 4. issued/consumed 是跨批累计的加载/消费序号，二者之差限制在 lane 深度内。
-        // 它们按相同顺序推进，保证 consumed % lanes_ 对应之前预取的同一个 packet。
-        uint32_t scan = 0U, issued = 0U, consumed = 0U;
-        while (tasks_.PendingCount() != 0U) {
-            // Include all empty scans in one wait interval. Recording every
-            // retry perturbs the polling loop and can exhaust the trace buffer.
-            // 从 pending 表分批循环探测；一批没有就绪项就继续扫描，直到至少一个包到齐。
-            // Probe 对每个 packet 检查全部块标记，不是只看到首块就认为数据可读。
-
-            uint32_t count;
-            ProbeResult probe;
-            do {
-                if (scan >= tasks_.PendingCount()) scan = 0U;
-                const uint32_t remaining = tasks_.PendingCount() - scan;
-                count = remaining < kProbeBatch ? remaining : kProbeBatch;
-                probe = Probe(scan, count);
-                if (probe.readyMask == 0U) scan += count;
-            } while (probe.readyMask == 0U);
-
-            // Load and consume the immutable snapshot in the same descending
-            // order. Higher-index removals cannot change lower pending entries.
-            // Probe 已把本批任务编号保存为不可变 snapshot。按批内下标倒序加载/消费，
-            // 避免 RemovePending 用末项填洞时破坏本批尚未处理的较低下标。
-            uint32_t nextLoad = count;
-            for (uint32_t i = count; i > 0U; --i) {
-                const uint32_t index = i - 1U;
-                if ((probe.readyMask & (uint32_t(1) << index)) == 0U) continue;
-                // 只预取 ready 位图命中的包；先填满可用 lane，再按相同倒序消费。
-                while (issued - consumed < depth && nextLoad != 0U) {
+        ServerDedupReceiveSync<HardEvent::V_MTE3>();
+        const uint32_t fixed=uint32_t(DispatchDedupAlign(seenBytes,32U))+kProbeBatch*4U+
+                             flagsBytes+workBytes+kProbeBatch*32U+blocks*32U;
+        laneStride_=uint32_t(data_.tokenStride)+64U;
+        const uint32_t available=(kEpServerDedupCountUbBytes-fixed)/laneStride_;
+        lanes_=available<8U ? available : 8U;
+        if (lanes_>total) lanes_=total;
+        pipe_->InitBuffer(lanesBuf_,lanes_*laneStride_);
+        for (uint32_t lane=0;lane<lanes_;++lane) SetFlag<HardEvent::MTE3_MTE2>(lane);
+        uint32_t issued=0U,consumed=0U,batch=0U;
+        while (queue.Next(batch)) {
+            const uint32_t bit=uint32_t(1)<<(batch&31U),word=batch>>5U;
+            if (seen.GetValue(word)&bit) continue;
+            const uint32_t begin=batch*kProbeBatch;
+            const uint32_t count=total-begin<kProbeBatch ? total-begin : kProbeBatch;
+            // Protect old Scalar descriptor reads before this fixed tile is reused.
+            ServerDedupReceiveSync<HardEvent::S_MTE2>();
+            tasks_.Load(positions,begin,count);
+            ServerDedupReceiveSync<HardEvent::MTE2_S>();
+            ProbeResult probe=Probe(count);
+            if (!probe.readyMask) continue; // No atomics for an empty probe.
+            const uint32_t valid=LlReceiveValidMask(count);
+            uint32_t observed=0U;
+            const uint32_t owned=queue.Claim(batch,probe.readyMask,valid,observed);
+            if (observed==valid) seen.SetValue(word,seen.GetValue(word)|bit);
+            if (!owned) continue;
+            uint32_t nextLoad=count;
+            for (uint32_t i=count;i>0U;--i) {
+                const uint32_t index=i-1U;
+                if (!(owned&(uint32_t(1)<<index))) continue;
+                while (issued-consumed<lanes_ && nextLoad) {
                     --nextLoad;
-                    if ((probe.readyMask & (uint32_t(1) << nextLoad)) == 0U) continue;
-                    IssueLoad(snapshot.GetValue(nextLoad), issued % lanes_,
-                              (probe.keepFlagsMask & (uint32_t(1) << nextLoad)) != 0U);
+                    if (!(owned&(uint32_t(1)<<nextLoad))) continue;
+                    IssueLoad(nextLoad,issued%lanes_,(probe.keepFlagsMask&(uint32_t(1)<<nextLoad))!=0U);
                     ++issued;
                 }
-                // 消费包括写出展开 token、量化 scale 和路由元数据；FIRST_HOP 还执行转发。
-                // 任务移出 pending 表只表示相关写操作已下发，lane 事件另行保护实际完成。
-                ConsumeLoaded(snapshot.GetValue(index), consumed % lanes_,
-                              (probe.keepFlagsMask & (uint32_t(1) << index)) != 0U);
-                tasks_.RemovePending(scan + index);
+                ConsumeLoaded(index,consumed%lanes_,(probe.keepFlagsMask&(uint32_t(1)<<index))!=0U);
                 ++consumed;
             }
+            // A constant zero buffer permits cleanup without a per-batch drain.
+            // MTE3 orders each clear after this owner's output and relay writes.
+            ClearFlags(owned);
         }
-        // 5. pending 清空后，等待各 lane 在途写入，随后统一清除本核所有槽位的块标记。
-        // 清理使用稳定任务表，不能使用已压缩为空的 pending 表；payload 本身不清零。
-
-        for (uint32_t lane = 0; lane < lanes_; ++lane) WaitFlag<HardEvent::MTE3_MTE2>(lane);
-        // This is the end of wait instruction submission, not a new Scalar
-        // completion barrier. The existing final PIPE_ALL establishes completion.
-
-        ClearFlags();
-
-        // 最终流水屏障确保输出、relay 和标记清理完成。
+        for (uint32_t lane=0;lane<lanes_;++lane) WaitFlag<HardEvent::MTE3_MTE2>(lane);
         PipeBarrier<PIPE_ALL>();
     }
 
 private:
-    static constexpr uint32_t kProbeBatch = 16U;
+    static constexpr uint32_t kProbeBatch = kLlReceiveBatch;
     struct ProbeResult {
         uint32_t readyMask = 0U;
         uint32_t keepFlagsMask = 0U;
@@ -184,18 +151,15 @@ private:
     }
 
     // 摘要：保存最多 16 项 pending 任务快照，检查每个包全部块的标记，返回就绪位图。
-    __aicore__ inline ProbeResult Probe(uint32_t start, uint32_t count)
+    __aicore__ inline ProbeResult Probe(uint32_t count)
     {
         LL_SEG_SCOPE(RECV_POLL);
-        auto indices = probeIdxBuf_.Get<uint32_t>();
         auto flags = flagsBuf_.Get<float>();
         auto sums = sumBuf_.Get<float>();
         auto work = workBuf_.Get<uint8_t>();
         const uint32_t blocks = uint32_t(data_.blockCount);
         for (uint32_t i = 0; i < count; ++i) {
-            const uint32_t j = tasks_.PendingIndex(start + i);
-            indices.SetValue(i, j);
-            ReadServerDedupFlags(Slot(j), blocks, flags[i * blocks * 8U]);
+            ReadServerDedupFlags(Slot(i), blocks, flags[i * blocks * 8U]);
         }
         ServerDedupReceiveSync<HardEvent::MTE2_V>();
         Sum<float>(sums, flags, work, SumParams{count, blocks * 8U, blocks * 8U});
@@ -334,13 +298,12 @@ private:
     }
 
     // 摘要：仅清零本核拥有的所有接收槽中的 32B 块标记，保留 payload；完成等待由调用方负责。
-    __aicore__ inline void ClearFlags()
+    __aicore__ inline void ClearFlags(uint32_t owned)
     {
         LL_SEG_SCOPE(CLEAR_LOCAL_FLAGS);
-        auto zeros = flagsBuf_.Get<float>();
-        Duplicate(zeros, 0.0f, uint32_t(data_.blockCount) * 8U);
-        ServerDedupReceiveSync<HardEvent::V_MTE3>();
+        auto zeros = zeroFlagsBuf_.Get<float>();
         for (uint32_t j = 0; j < tasks_.Count(); ++j) {
+            if (!(owned&(uint32_t(1)<<j))) continue;
             GlobalTensor<float> output;
             output.SetGlobalBuffer(reinterpret_cast<__gm__ float*>(Slot(j) + 480U));
             DataCopyPad(output, zeros, {uint16_t(data_.blockCount), 32U, 0U, 480U, 0U});
@@ -353,12 +316,12 @@ private:
     TPipe* pipe_ = nullptr;
     bool enableDedup_ = false;
     uint64_t windowOffset_ = 0;
-    uint32_t recvCoreNum_ = 0, coreNum_ = 0;
-    uint32_t bs_ = 0U, k_ = 0U, experts_ = 0U, localExperts_ = 0U, receiver_ = 0U;
+    uint32_t coreNum_ = 0;
+    uint32_t bs_ = 0U, k_ = 0U, experts_ = 0U, localExperts_ = 0U;
     uint32_t hiddenBytes_ = 0U, laneStride_ = 0U, lanes_ = 0U;
     EpServerDedupDataLayout data_{};
     ServerDedupReceiveTasks tasks_;
-    TBuf<> prefixBuf_, flagsBuf_, sumBuf_, workBuf_, probeIdxBuf_, lanesBuf_;
+    TBuf<> flagsBuf_, sumBuf_, workBuf_, zeroFlagsBuf_, seenBuf_, lanesBuf_;
     GlobalTensor<uint8_t> expandX_, dynamicScales_;
     GlobalTensor<uint32_t> tokenType_, destinationIndex_, relayReadIndex_;
 };

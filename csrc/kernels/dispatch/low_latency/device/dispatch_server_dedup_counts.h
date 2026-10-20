@@ -9,6 +9,7 @@
 #include "adv_api/reduce/sum.h"
 #include "../common/ep_memory_server_dedup_count_layout.h"
 #include "../common/ll_group_local_send.h"
+#include "../common/ll_receive_queue.h"
 
 namespace DispatchDedup {
 using namespace AscendC;
@@ -89,6 +90,11 @@ public:
     __aicore__ inline uint32_t LocalTaskCount() const { return localTaskCount_; }
     __aicore__ inline LocalTensor<uint32_t> LocalRouteIndices() { return localRouteBuf_.Get<uint32_t>(); }
     __aicore__ inline LocalTensor<uint32_t> LocalExpertQ() { return localExpertQBuf_.Get<uint32_t>(); }
+    __aicore__ inline void SetReceiveQueue(GM_ADDR queue,uint32_t clearBytes,GM_ADDR positions)
+    {
+        receiveQueue_=queue; receiveQueueClearBytes_=clearBytes; receivePositions_=positions;
+    }
+    __aicore__ inline uint32_t ReceiveTotal() { return uint32_t(prefixBuf_.Get<int32_t>().GetValue(rscvStatusNum_-1U)); }
     // Valid after CompleteCumsum and until this core's TPipe is reset.
     // 摘要：返回完整前缀的 UB 视图，仅在 CompleteCumsum 完成后且 TPipe 重置前有效。
     __aicore__ inline LocalTensor<int32_t> Prefix()
@@ -154,6 +160,10 @@ private:
     // 摘要：等待所有接收核的前缀写出标记到齐，并清除本核对应的标记行。
     __aicore__ inline void WaitCumSumFlag();
 
+    __aicore__ inline void BuildReceivePositions(LocalTensor<int32_t> prefix,uint32_t offset);
+    __aicore__ inline void ClearReceiveQueue();
+    GM_ADDR receiveQueue_=nullptr,receivePositions_=nullptr;
+    uint32_t receiveQueueClearBytes_=0U,receiveActualRows_=0U;
     TPipe* tpipe_ = nullptr;
     const __gm__ DispatchDedup::CommArgs* args_ = nullptr;
     EpServerDedupCountLayout layout_{};
@@ -549,6 +559,18 @@ __aicore__ inline uint32_t ServerDedupCounts::GetCumSum(uint32_t newAivId)
     }
     LL_SEG_END(corePollBegin, POLL_CORE_SUMS);
     LL_SEG_BEGIN(reduceBegin, REDUCE_CORE_PREFIX);
+    if (newAivId==0U) {
+        // All fragment sums are already resident. Reuse one vector reduction to
+        // clear only the actual claim words, not the worst-case receive capacity.
+        gatherSumPattern.SetValue(0,1U);
+        SyncFunc<HardEvent::S_V>();
+        GatherMask(sumContinueTensor,sumLocalTensor,gatherSumPattern,true,1U,
+                   {1,static_cast<uint16_t>(activeCumSumCores_),1,0},recvCnt);
+        PipeBarrier<PIPE_V>();
+        Sum(recvCntSumOutTensor,sumContinueTensor,sumParams);
+        SyncFunc<HardEvent::V_S>();
+        receiveActualRows_=recvCntSumOutTensor.ReinterpretCast<uint32_t>().GetValue(0);
+    }
     if (newAivId != 0U) {
         mask = 1;
         recvCnt = 0;
@@ -655,6 +677,8 @@ __aicore__ inline void ServerDedupCounts::CalRecvAndSetFlag()
     // 再复用它构造标记；前缀写入与完成标记之间保留原 MTE3 顺序约束。
     // This is the first overwrite of the asynchronous local-sum publication.
     SyncFunc<AscendC::HardEvent::MTE3_V>();
+    BuildReceivePositions(outCountLocal,offset);
+    if (newAivId==0U) ClearReceiveQueue();
     Duplicate<int32_t>(syncOnCoreTensor, static_cast<int32_t>(1), SIZE_ALIGN_256 / sizeof(int32_t), repeatTimes, 1, 8);
     SyncFunc<AscendC::HardEvent::V_MTE3>();
     PipeBarrier<PIPE_MTE3>();
@@ -664,7 +688,55 @@ __aicore__ inline void ServerDedupCounts::CalRecvAndSetFlag()
     LL_SEG_END(flagsBegin, PUBLISH_PREFIX_FLAGS);
 }
 
-// 摘要：等待所有接收核的前缀写出标记到齐，并清除本核对应的标记行。
+// Each count producer writes exactly its own disjoint output-row interval.
+// Vector index generation replaces per-consumer scalar row-to-slot rebuilding.
+__aicore__ inline void ServerDedupCounts::BuildReceivePositions(LocalTensor<int32_t> prefix,uint32_t offset)
+{
+    LL_SEG_SCOPE(BUILD_EXPERT_TASKS);
+    auto tile=sumCoreBuf_.Get<int32_t>();
+    const uint32_t tileWords=Ceil(coreNum_,8U)*SIZE_ALIGN_256/sizeof(int32_t);
+    GlobalTensor<int32_t> output;
+    output.SetGlobalBuffer(reinterpret_cast<__gm__ int32_t*>(receivePositions_));
+    uint32_t previous=offset;
+    for (uint32_t i=0;i<recStatusNumPerCore_;++i) {
+        const uint32_t end=uint32_t(prefix.GetValue(i));
+        const uint32_t record=startStatusIndex_+i;
+        const uint32_t source=record%epWorldSize_,expert=record/epWorldSize_;
+        const uint32_t slot=((source+epRankId_)%epWorldSize_*moeExpertNumPerRank_+expert)*axisBS_;
+        for (uint32_t row=previous;row<end;) {
+            const uint32_t count=end-row<tileWords ? end-row : tileWords;
+            CreateVecIndex(tile,int32_t(slot+row-previous),count);
+            SyncFunc<HardEvent::V_MTE3>();
+            DataCopyPad(output[row],tile,{1U,count*4U,0U,0U,0U});
+            SyncFunc<HardEvent::MTE3_V>();
+            row+=count;
+        }
+        previous=end;
+    }
+}
+
+// This producer's prefix-ready flag gates every consumer. Queue words are only
+// accessed by scalar atomics after this DMA clear; no cached Scalar GM views.
+__aicore__ inline void ServerDedupCounts::ClearReceiveQueue()
+{
+    auto zeros=sumCoreBuf_.Get<uint32_t>();
+    const uint32_t tileWords=Ceil(coreNum_,8U)*SIZE_ALIGN_256/sizeof(uint32_t);
+    Duplicate<uint32_t>(zeros,0U,tileWords);
+    SyncFunc<HardEvent::V_MTE3>();
+    GlobalTensor<uint32_t> output;
+    output.SetGlobalBuffer(reinterpret_cast<__gm__ uint32_t*>(receiveQueue_));
+    const uint32_t clearBytes=kLlReceiveHeaderBytes+uint32_t(LlReceiveQueueMemory(receiveActualRows_).claimBytes);
+    if (clearBytes>receiveQueueClearBytes_) { AscendC::Trap(); return; }
+    for (uint32_t word=0;word<clearBytes/4U;) {
+        const uint32_t count=clearBytes/4U-word<tileWords ? clearBytes/4U-word : tileWords;
+        DataCopy(output[word],zeros,count);
+        word+=count;
+    }
+    SyncFunc<HardEvent::MTE3_V>();
+    SyncFunc<HardEvent::MTE3_S>(); // Publish initialization before any Scalar atomic consumer.
+}
+
+// 等待前缀和队列初始化的发布标记，再清除本核对应的标记行。
 __aicore__ inline void ServerDedupCounts::WaitCumSumFlag()
 {
         LL_SEG_SCOPE(WAIT_CUMSUM);

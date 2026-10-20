@@ -99,7 +99,7 @@ inline int BuildDispatchServerDedupLayout(int64_t rankSize, int64_t bs, int64_t 
     next.globalBs = static_cast<uint64_t>(rankSize * bs);
     next.localExpertNum = static_cast<uint64_t>(moeExpertNum / rankSize);
     next.countStateBytes = DispatchServerDedupCountLayout(uint32_t(moeExpertNum), coreNum).stateBytes;
-    next.data = DispatchServerDedupDataLayout(uint32_t(bs), uint32_t(h), uint32_t(topK), uint32_t(moeExpertNum), mode);
+    next.data = DispatchServerDedupDataLayout(uint32_t(bs), uint32_t(h), uint32_t(topK), uint32_t(moeExpertNum), mode, uint32_t(rankSize));
     if (next.countStateBytes > kEpServerDedupControlBytes ||
         next.data.requiredBytes > kEpServerDedupWindowUsableBytes) {
         return DispatchDedup::DISPATCH_DEDUP_ERROR_PARA_CHECK_FAIL;
@@ -190,10 +190,12 @@ inline bool DispatchDedupPacketUbFits(const EpMemoryServerDedupLayout& layout, i
     const uint64_t serverStateExtra = std::max<uint64_t>(64U, align(world_size / kLlRanksPerGroup * 4U, 32U)) - 64U;
     const uint64_t localSender=localReserved+2U*inputBytes+align(b*k*4U,32U)+
                                (needQuantize ? quantWork+layout.data.packedPayloadBytes : 0U)+layout.data.tokenStride;
-    const uint64_t receiver = align(num_experts * 4, 32) + 2 * align(((layout.capacityRows + kLlDispatchRecvCoreNum - 1U) / kLlDispatchRecvCoreNum) * 4, 32) +
-                              16 * layout.data.blockCount * 32 + 256 +
-                              16 * align((layout.data.blockCount + 7) / 8, 32) * 4 + 256 + 16 * 36 +
-                              layout.data.tokenStride + 64;
+    const uint64_t batches=(layout.capacityRows+kLlReceiveBatch-1U)/kLlReceiveBatch;
+    const uint64_t seenBytes=align(((batches+31U)/32U)*4U,32U);
+    const uint64_t receiver=seenBytes+kLlReceiveBatch*4U+
+                              kLlReceiveBatch*layout.data.blockCount*32U+256U+
+                              kLlReceiveBatch*align((layout.data.blockCount+7U)/8U,32U)*4U+256U+
+                              kLlReceiveBatch*32U+layout.data.blockCount*32U+layout.data.tokenStride+64U;
     return layout.data.blockCount > 0 && layout.data.blockCount <= UINT8_MAX &&
            sender + serverStateExtra <= kEpServerDedupCountUbBytes &&
            localSender <= kEpServerDedupCountUbBytes && receiver <= kEpServerDedupCountUbBytes;

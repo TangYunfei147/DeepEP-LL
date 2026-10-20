@@ -20,7 +20,7 @@ def check_identity(left,right):
                                                for key in ('world_size','logical_group','active_aiv','core_protocol')):
             raise ValueError('Unknown or invalid runtime comparison identity')
     differences=set(DIFFERENCES)
-    if all(7001 <= item['core_protocol'] <= 7055 or 8001 <= item['core_protocol'] <= 8055 or 9001 <= item['core_protocol'] <= 9055 or 10001 <= item['core_protocol'] <= 10055 for item in (left,right)):
+    if all(7001 <= item['core_protocol'] <= 7055 or 8001 <= item['core_protocol'] <= 8055 or 9001 <= item['core_protocol'] <= 9055 or 10001 <= item['core_protocol'] <= 10055 or 11001 <= item['core_protocol'] <= 11055 for item in (left,right)):
         for item in (left,right):
             if (item.get('send_cores',0)+item.get('recv_cores',0)!=56 or item['active_aiv']!=56
                     or item['core_protocol']!=(item['core_protocol']//1000)*1000+item.get('send_cores',0)):
@@ -28,9 +28,9 @@ def check_identity(left,right):
         for item in (left,right):
             shared = item['core_protocol']//1000 >= 8
             expected = 56 if shared else item['recv_cores']
-            if item.get('dispatch_recv_cores',expected)!=expected or item['stage_timer_schema']!={7:5,8:6,9:7,10:7}[item['core_protocol']//1000]:
+            if item.get('dispatch_recv_cores',expected)!=expected or item['stage_timer_schema']!={7:5,8:6,9:7,10:7,11:7}[item['core_protocol']//1000]:
                 raise ValueError('Invalid receive participation/schema identity')
-        if (left['core_protocol']//1000 in (9,10))!=(right['core_protocol']//1000 in (9,10)):
+        if (left['core_protocol']//1000 in (9,10,11))!=(right['core_protocol']//1000 in (9,10,11)):
             if any(item['stage_timer'] or item['stage_capture'] or item['expert_capture'] for item in (left,right)):
                 raise ValueError('Incomparable diagnostic semantics: segment and legacy timers')
         differences.update(('send_cores','recv_cores','dispatch_recv_cores','core_protocol','stage_timer_schema'))
@@ -73,7 +73,8 @@ def compare(left,right,kind):
                         and (key[2] < l[key][1]['send_cores']) != (key[2] < r[key][1]['send_cores']))
         partition_changed = (kind=='stage' and key[0]=='dispatch' and key in l and key in r
                              and ((l[key][1]['core_protocol']//1000>=8)!=(r[key][1]['core_protocol']//1000>=8)
-                                  or (l[key][1]['core_protocol']//1000==10)!=(r[key][1]['core_protocol']//1000==10)))
+                                  or (l[key][1]['core_protocol']//1000>=10)!=(r[key][1]['core_protocol']//1000>=10)
+                                  or (l[key][1]['core_protocol']//1000==11)!=(r[key][1]['core_protocol']//1000==11)))
         rows.append(dict(key=json.dumps(key),baseline_mean_us=a,candidate_mean_us=b,
                          baseline_send_cores=l[key][1].get("send_cores") if key in l else None,
                          candidate_send_cores=r[key][1].get("send_cores") if key in r else None,

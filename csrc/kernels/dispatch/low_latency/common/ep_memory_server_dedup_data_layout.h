@@ -6,6 +6,7 @@
 
 #include "ep_memory_server_dedup_count_layout.h"
 #include "ep_memory_server_dedup_input.h"
+#include "ll_receive_queue.h"
 
 namespace DispatchDedup {
 #if DISPATCH_DEDUP_ASCENDC_AICORE_COMPILE
@@ -25,6 +26,7 @@ struct EpServerDedupDataLayout {
     uint64_t tokenStride = 0;
     uint64_t returnStride = 0;
     uint64_t sourceOffset = 0, sourceBytes = 0;
+    uint64_t receiveQueueOffset = 0, receiveClaimBytes = 0, receivePositionsOffset = 0, receiveQueueBytes = 0;
     uint64_t dispatchOffset = 0, dispatchBytes = 0;
     uint64_t relayOffset = 0, relayBytes = 0, requiredBytes = 0;
 };
@@ -39,7 +41,7 @@ DISPATCH_DEDUP_EP_DATA_INLINE uint64_t DispatchDedupAlign(uint64_t value, uint64
 // Public buffer products are also checked against size_t by the Host builder.
 DISPATCH_DEDUP_EP_DATA_INLINE EpServerDedupDataLayout DispatchServerDedupDataLayout(uint32_t bs, uint32_t h,
                                                                                     uint32_t topK, uint32_t experts,
-                                                                                    EpServerDedupInputMode mode)
+                                                                                    EpServerDedupInputMode mode, uint32_t rankSize)
 {
     const bool wireFp8 = mode != EpServerDedupInputMode::Plain16;
     EpServerDedupDataLayout layout{};
@@ -63,7 +65,15 @@ DISPATCH_DEDUP_EP_DATA_INLINE EpServerDedupDataLayout DispatchServerDedupDataLay
     layout.returnStride = (uint64_t(h) * 2U + 479U) / 480U * 512U;
     layout.sourceOffset = kEpServerDedupControlBytes;
     layout.sourceBytes = uint64_t(bs) * topK * layout.returnStride;
-    layout.dispatchOffset = DispatchDedupAlign(layout.sourceOffset + layout.sourceBytes, 512U);
+    // The source-return reservation is unused until the following Combine.
+    // Reuse it for the local ready queue; enlarge only when required by shape.
+    const auto receiveQueue=LlReceiveQueueMemory(LlReceiveCapacity(bs,topK,experts,rankSize));
+    layout.receiveQueueOffset=layout.sourceOffset;
+    layout.receiveClaimBytes=receiveQueue.claimBytes;
+    layout.receivePositionsOffset=layout.receiveQueueOffset+receiveQueue.positionOffset;
+    layout.receiveQueueBytes=receiveQueue.bytes;
+    const uint64_t sourceReservation=layout.sourceBytes>receiveQueue.bytes ? layout.sourceBytes : receiveQueue.bytes;
+    layout.dispatchOffset = DispatchDedupAlign(layout.sourceOffset + sourceReservation, 512U);
     layout.dispatchBytes = uint64_t(experts) * bs * layout.tokenStride;
     layout.relayOffset = DispatchDedupAlign(layout.dispatchOffset + layout.dispatchBytes, 512U);
     // Historical Combine reservation, unused by Dispatch. The new pull Combine
@@ -73,13 +83,13 @@ DISPATCH_DEDUP_EP_DATA_INLINE EpServerDedupDataLayout DispatchServerDedupDataLay
     return layout;
 }
 
-// Compatibility for existing plain/internal-quantization callers.
+// Plain/internal-quantization planning; the actual EP is explicit.
 DISPATCH_DEDUP_EP_DATA_INLINE EpServerDedupDataLayout DispatchServerDedupDataLayout(uint32_t bs, uint32_t h,
                                                                                     uint32_t topK, uint32_t experts,
-                                                                                    bool quantized)
+                                                                                    bool quantized, uint32_t rankSize)
 {
     return DispatchServerDedupDataLayout(
-        bs, h, topK, experts, quantized ? EpServerDedupInputMode::Quantize16 : EpServerDedupInputMode::Plain16);
+        bs, h, topK, experts, quantized ? EpServerDedupInputMode::Quantize16 : EpServerDedupInputMode::Plain16, rankSize);
 }
 
 DISPATCH_DEDUP_EP_DATA_INLINE uint64_t DispatchServerDedupDispatchOffset(const EpServerDedupDataLayout& layout,

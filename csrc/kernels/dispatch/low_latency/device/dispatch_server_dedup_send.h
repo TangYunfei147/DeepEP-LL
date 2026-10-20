@@ -48,7 +48,7 @@ public:
         const uint32_t base = bs / sendCores_, remainder = bs % sendCores_;
         count_ = base + (core < remainder ? 1U : 0U);
         start_ = core * base + (core < remainder ? core : remainder);
-        data_ = DispatchServerDedupDataLayout(bs, h, k, experts, InputMode);
+        data_ = DispatchServerDedupDataLayout(bs, h, k, experts, InputMode, uint32_t(args_->rankSize));
         data_.dispatchOffset += DispatchServerDedupWindowOffset(magic);
         inputScales_.SetGlobalBuffer(inputScales);
         x_.SetGlobalBuffer(reinterpret_cast<__gm__ XType*>(x));

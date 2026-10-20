@@ -1,10 +1,12 @@
+> 当前演进分支为`kernel/ll-g4-local-send-dynamic-recv`：保留组内初发，接收改为就绪批次动态认领，协议11000+S。以[DYNAMIC_RECEIVE.md](tests/ll_stage_timer/DYNAMIC_RECEIVE.md)为准；下文静态接收说明为父版本记录。
+
 > 2026-10-20本组初发更新：原R核先发送本源rank的组内包，再运行原接收流程；核心标识10000+S。当前调度/UB/验收以[GROUP_LOCAL_SEND.md](tests/ll_stage_timer/GROUP_LOCAL_SEND.md)为准。
 
 # LL kernel configuration and branch
 
 > 2026-10-19：本分支现在按编译配置分配固定56个AIV，默认28发+28收，支持不对称比例；以[CORE_SPLIT.md](tests/ll_stage_timer/CORE_SPLIT.md)为准。旧1:1和动态核数说明仅描述此前版本。全rank重建匹配wheel。
 
-This checkout is `kernel/ll-g4-shared-recv`, based on `kernel/ll-g4-stagger@5c2ea11`. Dispatch senders join receive after their own sends; see [SHARED_RECEIVE.md](tests/ll_stage_timer/SHARED_RECEIVE.md). Combine retains its existing S/R execution.
+This checkout is `kernel/ll-g4-local-send-dynamic-recv`: `b3f9004` plus replayed group-local sends (`a2eae05`) and ready-bitmap dynamic receive. See [DYNAMIC_RECEIVE.md](tests/ll_stage_timer/DYNAMIC_RECEIVE.md).
 
 `kernel/ll-configurable-groups` is based on upstream-aligned `main` and contains
 LL dispatch/combine, required Host/runtime/build changes, and CPU protocol tests.

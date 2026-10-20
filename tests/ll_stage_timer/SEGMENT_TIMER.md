@@ -1,3 +1,5 @@
+> 当前动态接收演进分支核心标识为11000+S，schema7载体、64阶段ID和采样规则不变；当前业务变化与验收见[DYNAMIC_RECEIVE.md](DYNAMIC_RECEIVE.md)，原先业务token不变结论仅对应父版本的探针替换。
+
 # 参考分段打点（schema7）
 
 当前分支：`kernel/ll-g4-shared-recv`。参考版本：[`graph_dc_debug_seg@e58ece1f0b8cb8179607ac0300a22a3bdc0150b9`](https://gitcode.com/zhong-zixin/ops-transformer/tree/e58ece1f0b8cb8179607ac0300a22a3bdc0150b9)。参考公共记录器为`mc2/common/op_kernel/dc_seg_profiler.h`，插桩语义来自该版本Dispatch FullMesh与Combine MTE头文件。

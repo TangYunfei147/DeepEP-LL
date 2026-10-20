@@ -25,3 +25,5 @@
 当前诊断为graph_dc_debug_seg语义的schema7（64阶段，前两次区间+全量metrics）；ll_stage_timer_device.h只在KERNEL结束且全核同步后Flush，旧ll_expert_timer仅用于历史记录接口，新采样明确拒绝。新增探针不得改业务等待/协议；静态摘要基线见tests/ll_stage_timer/segment_baseline.json。
 
 本组初发：common/ll_group_local_send.h统一专家所有者；Counts在本组计数循环生成q/紧凑任务，Sender::ProcessGroupLocal由R核调用。Receiver和接收侧计数链保持不变；UB预算与源端分工一起维护，见../ll_stage_timer/GROUP_LOCAL_SEND.md。
+
+动态接收：common/ll_receive_queue.h为共享调度/布局，device/dispatch_server_dedup_receive_queue.h仅桥接本卡Scalar原子；Count前缀阶段发布位置表并初始化认领区，Receiver按16行就绪位图唯一认领。DataLayout显式接收EP并统一队列/packet位置，Host UB预算同步；详见../ll_stage_timer/DYNAMIC_RECEIVE.md。

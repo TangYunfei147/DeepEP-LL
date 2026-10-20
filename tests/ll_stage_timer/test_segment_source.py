@@ -1,4 +1,4 @@
-"""Keep business statements and existing DMA/event ordering while replacing probes."""
+"""Record authorized business sources separately from their diagnostic probes."""
 from collections import Counter
 import hashlib
 import json
@@ -27,7 +27,7 @@ def normalize(s):
  return re.findall(r'[A-Za-z_]\w*|\d+|[^\s{}]',s)
 
 @pytest.mark.parametrize('relative',MANIFEST['files'])
-def test_non_diagnostic_token_stream_matches_shared_receive_baseline(relative):
+def test_non_diagnostic_token_stream_matches_recorded_algorithm(relative):
     tokens=normalize((ROOT/relative).read_text(encoding='utf-8'))
     assert hashlib.sha256(' '.join(tokens).encode()).hexdigest()==MANIFEST['files'][relative]
 

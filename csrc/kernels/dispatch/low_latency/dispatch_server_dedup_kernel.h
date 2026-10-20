@@ -36,9 +36,10 @@ public:
                      magic, inputScales, enableDedup);
         receiver_.Init(args_, expandXOut, dynamicScalesOut, tokenTypeOut, destinationIndexOut, relayReadIndexOut,
                        bs, h, topK, experts, pipe, magic, enableDedup, expertTimer);
+        counts_.SetReceiveQueue(receiver_.QueueAddress(),receiver_.QueueClearBytes(),receiver_.PositionAddress());
     }
 
-    // 完整dispatch：S核跨组初发；R核本组初发后按原流程准备前缀；全部核接收。
+    // 完整dispatch：S核跨组初发；R核本组初发后按原流程准备前缀；最多56核动态接收。
     // Sender可与接收核的计数前缀准备重叠，不能把提取阶段耗时直接相加当作完整时延。
     __aicore__ inline void Process()
     {
@@ -58,11 +59,11 @@ public:
 
         // Every core joins receive after completing its own send or prefix work.
         // Prefix producers remain the original R cores. Each of the 56 consumers
-        // has its own publication row and disjoint output/cleanup ownership.
+        // has its own publication row; ready-bit CAS selects disjoint output/cleanup ownership.
         counts_.CompleteCumsum();
         PipeBarrier<PIPE_ALL>();
         { LL_SEG_SCOPE(LOCAL_WINDOW_COPY);
-        receiver_.Process(timer_);
+        receiver_.Process(timer_,counts_.ReceiveTotal());
         }
 
         { LL_SEG_SCOPE(FINAL_DRAIN);

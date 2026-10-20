@@ -122,10 +122,10 @@ def test_production_wiring_keeps_producers_separate_from_consumers():
     kernel=(base/'dispatch_server_dedup_kernel.h').read_text(encoding='utf-8')
     counts=(base/'device/dispatch_server_dedup_counts.h').read_text(encoding='utf-8')
     receiver=(base/'device/dispatch_server_dedup_recv.h').read_text(encoding='utf-8')
-    assert kernel.index('sender_.Process(')<kernel.index('counts_.CompleteCumsum();')<kernel.index('receiver_.Process(timer_);')
-    assert kernel.count('receiver_.Process(timer_);')==1
-    assert 'recvCoreNum_ = kLlDispatchRecvCoreNum;' in receiver
-    assert 'receiver_ = GetBlockIdx();' in receiver
+    assert kernel.index('sender_.Process(')<kernel.index('counts_.CompleteCumsum();')<kernel.index('receiver_.Process(timer_,counts_.ReceiveTotal());')
+    assert kernel.count('receiver_.Process(timer_,counts_.ReceiveTotal());')==1
+    assert 'NativeReceiveQueue queue;' in receiver
+    assert 'queue.Init(reinterpret_cast<__gm__ uint32_t*>(QueueAddress()),total,coreNum_);' in receiver
     assert 'aivId_ * aivUsedCumSum_ * UB_ALIGN' in counts
     assert 'for (uint32_t index = 0; index < coreNum_; index++)' in counts
     complete=counts[counts.index('inline void ServerDedupCounts::CompleteCumsum()'):]
