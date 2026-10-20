@@ -1,7 +1,19 @@
 # 动态接收分支 Scalar 审查（2026-10-20）
 
 审查基线为 `2c27af8`，范围为组内初发、计数和动态接收的生产源码。
-以下成本由源码推导，尚无目标机指令统计或性能结论；本次仅修复声明错误。
+以下成本由源码推导，尚无目标机指令统计或性能结论。
+
+## 按特性交付
+
+首个优化：在 `SendWithDedup` 中用 Scalar 局部变量累计 source mask，
+处理完该 token 的 FIRST_HOP 后单次写入 UB。设首跳组数为 F，
+原来每 token 对 sourceMasks 执行 F 次读取和 F+1 次写入，
+现在为 0 次读取和 1 次写入；F=0 时写入次数相同。
+SendPacket 不读取 sourceMasks，最终 GM 发布仍在发送流程结束后，
+因此延后这次 UB 写入不改变发布顺序、路由位或发送顺序。
+仅修改发送器和对应源码指纹；相关 CPU 回归 53 passed、12 skipped
+（缺少 C++ 编译器），尚无 CANN 编译或设备性能验证。
+后续候选各用独立提交交付，不与本特性合并。
 
 ## 编译错误
 
@@ -32,7 +44,7 @@
 ## 较小的优化与边界
 
 - `Classify` 可显式预计算本组编号、每组专家数和 token 路由起点；
-  Sender 的 `sourceMasks_` 可在 Scalar 局部变量累计后单次写回。
+  Sender 的 `sourceMasks_` 单次写回已按上面的独立特性交付。
   编译器可能已做循环不变量提升，应先看目标汇编再判断收益。
 - `BuildReceivePositions` 逐 count record 计算 source/expert/slot，并在每个
   非空区间执行向量索引生成和 DMA 同步。可用递增索引替代循环中的除余，
