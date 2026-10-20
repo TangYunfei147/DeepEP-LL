@@ -62,3 +62,12 @@ python tests/ll_stage_timer/analyze.py results/ll-timer/segment-001 --trace-iter
 多机先按原目录合并同一run的各rank原始文件，不能覆盖或混入其他轮次。输出summary.json、stages.csv、metrics.csv、intervals.csv、cores.csv和trace.json；原始JSON旁另有参考格式.bin。缺rank、重复采样或格式损坏会失败。实际区间只覆盖采到的前两次，完整统计看metrics。
 
 正式性能另装OFF wheel，不传`--ll-stage-timer`，仍使用10/100/最后50及Exp+scalar all_reduce协议。ON profiler含诊断同步/写出，不能替代OFF基线。新旧诊断schema不能直接作耗时比；旧数据仍可离线解析。
+
+## 按算子筛选离线分析
+
+```bash
+python tests/ll_stage_timer/analyze.py <run目录> --op dispatch --trace-iteration 4
+python tests/ll_stage_timer/analyze.py <run目录> --op combine --trace-iteration 4
+```
+
+`--operation`是`--op`的同义写法；不传则保留全部算子。筛选覆盖summary、CSV、trace及本分支附加报告，所选算子的全部rank/轮次仍必须完整。默认分别输出stage-analysis-dispatch、stage-analysis-combine；可用--output-dir指定新目录，已有输出不覆盖。仅离线脚本更新，无需重编wheel或重新采样。
