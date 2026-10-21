@@ -1,12 +1,33 @@
 """Dispatch compile partition and profiler identity regression tests; CPU only."""
 import csv
 import importlib.util
+import re
 import shutil
 import subprocess
 from pathlib import Path
 import pytest
 ROOT=Path(__file__).resolve().parents[2]
 MODES=('prequant_e4m3','fp16','fp16_e4m3','fp16_e5m2','bf16','bf16_e4m3','bf16_e5m2')
+
+def test_device_modes_cannot_collapse_back_into_one_translation_unit():
+    base=ROOT/'csrc/kernels/dispatch/low_latency'
+    # Ignore comments: these checks guard build structure, not explanatory text.
+    def code(path):
+        return re.sub(r'/\*.*?\*/|//[^\n]*','',path.read_text(),flags=re.S)
+    bridge=code(base.parent/'low_latency.cpp')
+    assert '__global__' not in bridge
+    assert 'DispatchMemoryServerDedupKernel<' not in bridge
+    assert 'dispatch_server_dedup_kernel.h' not in bridge
+    assert 'dispatch_variant_kernel.h' not in bridge
+    for number,mode in enumerate(MODES):
+        unit=code(base/'variants'/f'{mode}.cpp')
+        assert re.findall(r'#define\s+DEEPEP_LL_VARIANT_MODE\s+(\d+)',unit)==[str(number)]
+        assert re.findall(r'#define\s+DEEPEP_LL_VARIANT_NAME\s+(\w+)',unit)==[mode]
+        assert re.findall(r'#include\s+"([^"]+)"',unit)==['../dispatch_variant_kernel.h']
+        assert '__global__' not in unit and 'DispatchMemoryServerDedupKernel<' not in unit
+    cmake=(ROOT/'cmake/device/CMakeLists.txt').read_text()
+    # An explicit target property overrides a caller's global unity-build setting.
+    assert re.search(r'set_target_properties\(deepep_kernels\s+PROPERTIES\s+UNITY_BUILD\s+OFF\b',cmake)
 
 def test_variant_inventory_and_timer_lifetimes():
     base=ROOT/'csrc/kernels/dispatch/low_latency'

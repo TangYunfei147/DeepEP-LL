@@ -62,5 +62,5 @@ else()
 endif()
 target_link_options(deepep_kernels PRIVATE --cce-fatobj-link -Wl,-z,relro,-z,now,-z,noexecstack)
 target_link_libraries(deepep_kernels PRIVATE ascend_runtime ascendcl shmem ${CMAKE_DL_LIBS})
-set_target_properties(deepep_kernels PROPERTIES BUILD_WITH_INSTALL_RPATH TRUE
+set_target_properties(deepep_kernels PROPERTIES UNITY_BUILD OFF BUILD_WITH_INSTALL_RPATH TRUE
     INSTALL_RPATH "$ORIGIN" INSTALL_RPATH_USE_LINK_PATH FALSE)
