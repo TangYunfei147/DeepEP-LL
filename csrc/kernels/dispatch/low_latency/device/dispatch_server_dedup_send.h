@@ -15,6 +15,7 @@
 #include "../common/ep_memory_server_dedup_protocol.h"
 #include "../common/ll_send_order.h"
 #include "../common/ll_input_prefetch.h"
+#include "../common/ll_private_route_q.h"
 #include "../../../common/ep_packet_receive_layout.h"
 
 namespace DispatchDedup {
@@ -46,6 +47,7 @@ public:
         h_ = h;
         k_ = k;
         localExperts_ = experts / args->rankSize;
+        experts_ = experts;
         const uint32_t core = GetBlockIdx();
         const uint32_t base = bs / sendCores_, remainder = bs % sendCores_;
         count_ = base + (core < remainder ? 1U : 0U);
@@ -108,7 +110,8 @@ public:
         const uint32_t scratchBytes = NeedQuantize && quantWorkBytes > qBytes ? quantWorkBytes : qBytes;
         Allocate(idsBuf_, routeBytes);
         Allocate(qDstBuf_, scratchBytes);
-        Allocate(qSubBuf_, scratchBytes);
+        const uint32_t histogramBytes=uint32_t(DispatchDedupAlign(uint64_t(experts_)*4U,32U));
+        Allocate(qSubBuf_,enableDedup_ && histogramBytes>scratchBytes ? histogramBytes:scratchBytes);
         Allocate(qWorkBuf_, qBytes);
         if constexpr (NeedQuantize) Allocate(quantBuf_, uint32_t(data_.packedPayloadBytes));
         Allocate(weightInBuf_, uint32_t(DispatchDedupAlign(uint64_t(count_) * k_ * 4U, 32U)));
@@ -165,6 +168,17 @@ public:
         PipeBarrier<PIPE_V>();
 
         LL_SEG_END(segBegin1, PREPARE_INPUT);
+        if (enableDedup_) {
+            LL_SEG_SCOPE(BUILD_Q_TABLE);
+            // qDst remains quantization work; qWork is immutable private q data
+            // through EndInputPrefetch/FillTail. Non-dedup keeps all old scratch.
+            auto histogram=qSubBuf_.Get<uint32_t>();
+            routeQ_=qWorkBuf_.Get<uint32_t>();
+            routeQBegin_=start_*k_;
+            Duplicate<int32_t>(histogram.ReinterpretCast<int32_t>(),0,experts_);
+            Sync<HardEvent::V_S>();
+            LlBuildPrivateRouteQ(routeIds_,histogram,routeQ_,routeQBegin_,count_*k_,k_);
+        }
         { LL_SEG_SCOPE(SEND_TOKENS);
         BeginInputPrefetch();
         if (enableDedup_)
@@ -305,7 +319,7 @@ public:
                 while ((mask & (uint32_t(1) << firstK)) == 0U) ++firstK;
                 const uint32_t index = (start_ + token) * k_ + firstK;
                 const uint32_t expert = uint32_t(routeIds_.GetValue(index));
-                SendPacket(input, start_ + token, firstK, expert, CalTokenSendExpertCnt(expert, index), mask);
+                SendPacket(input, start_ + token, firstK, expert, routeQ_.GetValue(index-routeQBegin_), mask);
                 sourceMasks_.SetValue(token, sourceMasks_.GetValue(token) | (uint32_t(1) << firstK));
                 // 源端仅标记实际发出的首跳路由；该位置输出权重 1，原路由权重另存包尾。
                 sourceWeights_.SetValue(token * k_ + firstK, 1.0f);
@@ -316,7 +330,7 @@ public:
                 if (directMask & (uint32_t(1) << k)) {
                     const uint32_t index = (start_ + token) * k_ + k;
                     const uint32_t expert = uint32_t(routeIds_.GetValue(index));
-                    const uint32_t q = CalTokenSendExpertCnt(expert, index);
+                    const uint32_t q = routeQ_.GetValue(index-routeQBegin_);
                     directTasks_.SetValue(directCount_ * 4U, token);
                     directTasks_.SetValue(directCount_ * 4U + 1U, k);
                     directTasks_.SetValue(directCount_ * 4U + 2U, expert);
@@ -513,7 +527,7 @@ private:
             if (mask & (uint32_t(1) << k)) {
                 const uint32_t routeIndex = (start_ + token) * k_ + k;
                 const uint32_t expert = uint32_t(routeIds_.GetValue(routeIndex));
-                const uint32_t q = CalTokenSendExpertCnt(expert, routeIndex);
+                const uint32_t q = routeQ_.GetValue(routeIndex-routeQBegin_);
                 ++entries;
                 index.SetValue(entries * 2U, expert | (q << 16U));
                 weights.SetValue(entries * 2U + 1U, routeWeights_.GetValue(token * k_ + k));
@@ -650,6 +664,8 @@ private:
     TBufPool<TPosition::VECCALC, 16>* scratch_ = nullptr;
     uint32_t sendCores_ = 0;
     uint32_t bs_ = 0, h_ = 0, k_ = 0, localExperts_ = 0, start_ = 0, count_ = 0;
+    uint32_t experts_=0U,routeQBegin_=0U;
+    LocalTensor<uint32_t> routeQ_;
     LlOverlapLayout overlap_{};
     uint32_t usedBytes_ = 0, lanes_ = 0, packets_ = 0, directCount_ = 0;
     LlOnePacketInput inputPrefetch_;

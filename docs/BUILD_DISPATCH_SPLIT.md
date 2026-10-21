@@ -134,3 +134,10 @@ S28/R28/jobs4 cold ON/OFF seconds: b2b2ed3 82.162/50.528; 0888f34 parallel
 and r0 79.895/50.462. All five full ON wheel builds passed. Final CPU/native
 suite381 passed. Evidence and target A/B steps: SHARED_PREFIX_VECTOR.md.
 These are compilation timings, not kernel speedups; no NPU execution.
+
+Private S-dedup q table, base3d400d7 plus the patch recorded in PRIVATE_ROUTE_Q.md:
+CPU/native385 passed. A3/O2/Ascend950/S28R28/jobs4 cold dispatch ON/OFF:
+parallel77.650/49.011s, r0 74.242/47.325s; both full ON wheels passed.
+Seven independent mode TUs retained. Logs: `.logs/private-route-q-001/`.
+Validation preceded the commit; revision.txt records the base, patch.sha256
+identifies the actual modified sources. No NPU execution or speedup claim.

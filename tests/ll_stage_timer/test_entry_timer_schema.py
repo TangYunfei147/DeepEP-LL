@@ -22,9 +22,9 @@ def test_current_timer_schema_passes_st_preflight():
     entry.validate_stage_timer_capability(dict(stage_timer=True, stage_timer_schema=timer.SCHEMA))
 
 
-@pytest.mark.parametrize('schema', [7, 9, 10, 11, 12, 13, 15, None])
+@pytest.mark.parametrize('schema', [7, 9, 10, 11, 12, 13, 14, 16, None])
 def test_stale_or_unknown_schema_is_rejected(schema):
-    with pytest.raises(RuntimeError, match=f'timer schema 14; got {schema}'):
+    with pytest.raises(RuntimeError, match=f'timer schema 15; got {schema}'):
         entry.validate_stage_timer_capability(dict(stage_timer=True, stage_timer_schema=schema))
 
 

@@ -21,7 +21,7 @@ constexpr uint32_t kLlDispatchRecvCoreNum = kLlActiveCoreNum;
 static_assert(DEEPEP_LL_PREFIX_R0 == 0 || DEEPEP_LL_PREFIX_R0 == 1, "prefix mode must be 0 or 1");
 constexpr bool kLlPrefixR0 = DEEPEP_LL_PREFIX_R0 != 0;
 // Encode the split so mismatched Host/device objects and rank identities differ.
-constexpr uint32_t kLlCoreProtocolVersion = (kLlPrefixR0 ? 17000U : 16000U) + kLlSendCoreNum;
+constexpr uint32_t kLlCoreProtocolVersion = (kLlPrefixR0 ? 19000U : 18000U) + kLlSendCoreNum;
 // Storage capacity remains separate from the fixed 56-core launch.
 constexpr uint32_t kLlMaxCoreNum = 72U;
 constexpr uint32_t kLlMaxRecvCoreNum = 56U;

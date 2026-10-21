@@ -6,14 +6,14 @@ import statistics
 COUNTS = {'sent': 'INITIAL_PACKETS', 'received': 'RECV_READY_TOKENS',
           'forwarded': 'RELAY_PACKETS', 'received_first_hop': 'RECV_FIRST_HOP',
           'received_forwarded': 'RECV_TERMINAL'}
-PHASES = ('INIT', 'STATIC_BEFORE_SEND', 'PREPARE_INPUT', 'COUNT_COMPUTE',
+PHASES = ('INIT', 'STATIC_BEFORE_SEND', 'PREPARE_INPUT', 'BUILD_Q_TABLE', 'COUNT_COMPUTE',
           'WAIT_RECV_COUNTS', 'BUILD_RECV_CUMSUM', 'WAIT_CUMSUM',
           'PREFIX_COMPLETE', 'PREFIX_LOAD_WAIT', 'PREFIX_READY_SPAN',
           'RECV_PREPARE', 'SEND_TOKENS', 'SEND_PACKET', 'RECV_POLL',
           'RECV_COPY', 'RECV_INPUT_WAIT', 'RELAY_ISSUE', 'OUTPUT_ISSUE',
           'RECV_BUFFER_WAIT', 'TOKEN_INPUT_WAIT', 'TOKEN_QUANT_WAIT',
           'RECV_COMPLETE_WAIT', 'FINAL_DRAIN')
-CLUES = ('PREPARE_INPUT', 'COUNT_COMPUTE', 'WAIT_RECV_COUNTS', 'BUILD_RECV_CUMSUM',
+CLUES = ('PREPARE_INPUT', 'BUILD_Q_TABLE', 'COUNT_COMPUTE', 'WAIT_RECV_COUNTS', 'BUILD_RECV_CUMSUM',
          'WAIT_CUMSUM', 'PREFIX_LOAD_WAIT', 'RECV_PREPARE', 'SEND_PACKET',
          'RECV_POLL', 'RECV_INPUT_WAIT', 'RECV_BUFFER_WAIT', 'TOKEN_INPUT_WAIT',
          'TOKEN_QUANT_WAIT', 'RELAY_ISSUE', 'OUTPUT_ISSUE', 'FINAL_DRAIN')
@@ -88,14 +88,14 @@ def write(output, result):
                      '|'.join(number(row[n+'_per_round']) for n in COUNTS)+'|')
     lines += ['', '## 各核时间（原始 ticks）', '',
               'INIT单列；STATIC_BEFORE_SEND从Process开始至本核第一次发送准备前，包括其间count/前缀等待，不能称为纯计算开销。',
-              'PREPARE_INPUT是发送缓冲/输入准备。SEND_PACKET从消费预取输入到提交一个初发包，含量化/打包/既有依赖等待，不含更早的输入预取提交。',
+              'BUILD_Q_TABLE是S核去重路径的一次建表（schema15），位于SEND_TOKENS之前；未出现不补零。PREPARE_INPUT是发送缓冲/输入准备。SEND_PACKET从消费预取输入到提交一个初发包，含量化/打包/既有依赖等待，不含更早的输入预取提交。',
               'RECV_PREPARE仅任务/缓冲准备；count、前缀准备分别见CSV。RECV_COPY从消费预取包到输出提交，包括转发、输出等子阶段。',
               'OUTPUT_ISSUE仅最终payload/scale/元数据写请求提交；RECV_INPUT_WAIT为原有MTE2_S等待。',
               '以上均不是网络到达延迟、远端消费确认或单包DMA完成时间；不增加同步以测这些量。',
               '每包均值为总ticks/总调用数；阶段均值只包含存在记录的轮次，覆盖轮次数在CSV。父子阶段不相加。', '',
-              '|rank|core|发送前跨度/轮|发送准备/轮|发送/包|接收准备/轮|接收消费/包|输出提交/包|输入等待/包|',
-              '|---|---|---|---|---|---|---|---|---|']
-    fields = ('STATIC_BEFORE_SEND_mean_ticks','PREPARE_INPUT_mean_ticks','SEND_PACKET_per_call_ticks',
+              '|rank|core|发送前跨度/轮|发送准备/轮|q建表/轮|发送/包|接收准备/轮|接收消费/包|输出提交/包|输入等待/包|',
+              '|---|---|---|---|---|---|---|---|---|---|']
+    fields = ('STATIC_BEFORE_SEND_mean_ticks','PREPARE_INPUT_mean_ticks','BUILD_Q_TABLE_mean_ticks','SEND_PACKET_per_call_ticks',
               'RECV_PREPARE_mean_ticks','RECV_COPY_per_call_ticks','OUTPUT_ISSUE_per_call_ticks','RECV_INPUT_WAIT_per_call_ticks')
     for row in result['per_core']:
         lines.append(f"|{row['rank']}|{row['core']}|"+'|'.join(number(row[f]) for f in fields)+'|')

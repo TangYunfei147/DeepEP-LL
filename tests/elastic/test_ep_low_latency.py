@@ -31,7 +31,7 @@ def validate_core_split_capability(capability):
     if (type(send) is not int or type(recv) is not int or send <= 0 or recv <= 0
             or send + recv != 56 or capability.get("active_aiv") != 56
             or capability.get('prefix_mode') not in ('parallel','r0')
-            or capability.get("core_protocol") != (17000 if capability.get('prefix_mode')=='r0' else 16000) + send):
+            or capability.get("core_protocol") != (19000 if capability.get('prefix_mode')=='r0' else 18000) + send):
         raise RuntimeError("Rebuild/install the matching configured 56-core split wheel on every rank")
 
 
@@ -51,8 +51,8 @@ def validate_overlap_stage_capability(capability):
 def validate_stage_timer_capability(capability):
     if not capability["stage_timer"]:
         raise RuntimeError("All ranks must install a DEEPEP_LL_STAGE_TIMER=ON wheel")
-    if capability['stage_timer_schema'] != 14:
-        raise RuntimeError('Detailed LL diagnostics require timer schema 14; '
+    if capability['stage_timer_schema'] != 15:
+        raise RuntimeError('Detailed LL diagnostics require timer schema 15; '
                            f'got {capability["stage_timer_schema"]}; '
                            'rebuild/install the matching wheel on every rank')
 

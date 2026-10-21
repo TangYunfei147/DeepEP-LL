@@ -1,4 +1,4 @@
-当前Stage5诊断使用schema14，见 [PACKET_TIMING.md](../../docs/PACKET_TIMING.md)：包级全量耗时/计数，细分observe探针只测前两次。前缀算法仍见 [PREFIX_PROGRESS.md](../../docs/PREFIX_PROGRESS.md)。历史四版schema12对照见OVERLAP_AB.md；独立S3基线为kernel/ll-g4-s3-baseline。
+当前S核私有q表版本使用schema15，新增BUILD_Q_TABLE，见 [PRIVATE_ROUTE_Q.md](../../docs/PRIVATE_ROUTE_Q.md)。包级全量耗时/计数和细分observe前两次规则沿用 [PACKET_TIMING.md](../../docs/PACKET_TIMING.md)。Stage5前缀演进见 [PREFIX_PROGRESS.md](../../docs/PREFIX_PROGRESS.md)。历史四版schema12对照见OVERLAP_AB.md；独立S3基线为kernel/ll-g4-s3-baseline。
 
 后续三个提交的R核计数/230KiB、共享前缀parallel/r0编译选择及接收表向量化，见
 [SHARED_PREFIX_VECTOR.md](../../docs/SHARED_PREFIX_VECTOR.md)。schema14保持，协议已区分新旧布局与prefix模式。

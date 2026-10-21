@@ -75,3 +75,8 @@ unchanged), common UB budget 230KiB. One shared GM prefix uses aligned producer
 slices, with compile-only DEEPEP_LL_PREFIX_MODE=parallel/r0. Receive table vector
 construction lives in common/ll_receive_task_fill.h and receive_tasks.Build;
 the final V_S is required before scalar consumers. Read docs/SHARED_PREFIX_VECTOR.md.
+
+S dedup private q: common/ll_private_route_q.h builds per-core route q once.
+qWork stays immutable through sender Flush/FillTail; qDst remains quant scratch.
+Read docs/PRIVATE_ROUTE_Q.md for the shared Host/device qSub histogram budget,
+schema15 BUILD_Q_TABLE and unchanged non-dedup/R paths.

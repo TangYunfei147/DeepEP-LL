@@ -109,8 +109,8 @@ def test_expert_decoder_uses_supplied_receive_boundary():
 
 def test_perf_entry_rejects_stale_wheel_without_requesting_timer():
     st=load('split_entry','tests/elastic/test_ep_low_latency.py')
-    st.validate_core_split_capability(dict(active_aiv=56,send_cores=20,recv_cores=36,core_protocol=16020,prefix_mode='parallel'))
-    st.validate_core_split_capability(dict(active_aiv=56,send_cores=20,recv_cores=36,core_protocol=17020,prefix_mode='r0'))
+    st.validate_core_split_capability(dict(active_aiv=56,send_cores=20,recv_cores=36,core_protocol=18020,prefix_mode='parallel'))
+    st.validate_core_split_capability(dict(active_aiv=56,send_cores=20,recv_cores=36,core_protocol=19020,prefix_mode='r0'))
     for identity in (dict(active_aiv=58,send_cores=10,recv_cores=48,core_protocol=6010),
                      dict(active_aiv=56,send_cores=28,recv_cores=28,core_protocol=5),
                      dict(active_aiv=56,send_cores=20,recv_cores=36,core_protocol=7028)):

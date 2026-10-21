@@ -56,7 +56,7 @@ def test_build_cache_and_invalid_modes(monkeypatch):
     for file in ('cmake/Device.cmake','cmake/CoreSplit.cmake','build_support.py'):
         assert 'DEEPEP_LL_PREFIX_MODE' in (ROOT/file).read_text()
     st=load('prefix_st','tests/elastic/test_ep_low_latency.py')
-    for mode,protocol in [('r0',16028),('parallel',17028),(None,16028),('r0',15028)]:
+    for mode,protocol in [('r0',18028),('parallel',19028),(None,18028),('r0',17028)]:
         with pytest.raises(RuntimeError):
             st.validate_core_split_capability(dict(active_aiv=56,send_cores=28,recv_cores=28,prefix_mode=mode,core_protocol=protocol))
 

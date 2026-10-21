@@ -37,7 +37,11 @@ schema14仅改诊断，见docs/PACKET_TIMING.md。dispatch observe的ID12/13、1
 S3独立基线kernel/ll-g4-s3-baseline精确ac876ba，不带当前S5/打点变更。
 
 后续R核计数/230KiB、单份共享前缀及向量化见docs/SHARED_PREFIX_VECTOR.md。
-DEEPEP_LL_PREFIX_MODE仅编译期parallel/r0，协议分别16000+S/17000+S；
+DEEPEP_LL_PREFIX_MODE仅编译期parallel/r0；私有q表版本协议分别18000+S/19000+S；
 Host/device缓存和全rank身份必须匹配。共享前缀生产片段按32B分界，消费者ready行独占。
 tokenPos只向量写对齐长段，pendingIdx使用int32视图；Build末尾V_S保护后续scalar读写，
 不得因为删除标量初始化而遗漏此依赖。二分保留，短段及uint32高位值保留标量路径。
+
+S核去重私有q表见docs/PRIVATE_ROUTE_Q.md：qWork持久只读表，qSub直方图，qDst量化工作区，
+不能混用生命周期。非去重和R核仍原算法；小路由大E时qSub预算扩大，Host/Device需一致。
+schema15追加BUILD_Q_TABLE=91，4608B容量已满；不能再无条件追加metric。

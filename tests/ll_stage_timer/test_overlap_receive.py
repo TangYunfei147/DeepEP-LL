@@ -8,10 +8,10 @@ def load(name,path):
     return module
 fixtures=load("overlap_segments","tests/ll_stage_timer/test_segments.py")
 timer=load("overlap_timer","deep_ep/utils/ll_stage_timer.py")
-def test_schema14_and_legacy():
-    for schema in (7,9,10,11,12,13,14):
+def test_schema15_and_legacy():
+    for schema in (7,9,10,11,12,13,14,15):
         assert timer.parse_records(fixtures.raw(schema=schema),"dispatch")["schema"]==schema
-    assert timer.SCHEMA==14
+    assert timer.SCHEMA==15
     assert timer.STAGES[70:84]==("SEND_COMPLETE_WAIT","TRANSITION_DRAIN","RECV_PREPARE","SEND_SUBMIT_END","OVERLAP_PATH","SERIAL_FALLBACK","SEND_LANES","RECV_LANES","PREFIX_COMPLETE","PREFIX_LOAD","RECV_COMPLETE_WAIT","PREFIX_LOAD_ISSUE","PREFIX_LOAD_WAIT","PREFIX_READY_SPAN")
     assert (8+2*timer.RECORDS)*8<=timer.SLOTS*timer.FIELDS*8
 
