@@ -139,7 +139,7 @@ def test_real_device_rules_recompile_only_ll_when_timer_changes(tmp_path):
     child.mkdir(parents=True)
     shutil.copyfile(ROOT / "cmake/device/CMakeLists.txt", child / "CMakeLists.txt")
     shutil.copyfile(ROOT / "cmake/Dependencies.cmake", source / "cmake/Dependencies.cmake")
-    units = ["notify/notify.cpp", "dispatch/dispatch.cpp", "combine/combine.cpp",
+    units = ["runtime/host_barrier.cpp", "notify/notify.cpp", "dispatch/dispatch.cpp", "combine/combine.cpp",
              "combine/reuse.cpp", "combine/combine_ep8_mte.cpp",
              "dispatch/low_latency.cpp", "combine/low_latency.cpp", *DISPATCH_VARIANTS]
     for unit in units:
@@ -205,7 +205,7 @@ if "-o" in args:
         return [json.loads(line) for line in commands.read_text().splitlines()[len(before):]]
 
     initial = run("OFF")
-    assert len(initial) == 22  # Five HT and sixteen LL objects plus the shared library.
+    assert len(initial) == 23  # Five HT, shared Host barrier, sixteen LL objects and the shared library.
     changed = run("ON")
     assert len(changed) == 17
     expected_ll = {"dispatch/low_latency.cpp", "combine/low_latency.cpp", *DISPATCH_VARIANTS}

@@ -21,6 +21,8 @@
 #include "host/data_plane/shmem_host_cc.h"
 #include <limits>
 
+extern "C" void deepep_ndr_host_barrier_launch(void* stream);
+
 namespace deepep {
 namespace {
 std::mutex runtime_mutex;
@@ -30,6 +32,20 @@ void check(int status, const char* operation)
     if (status != 0) {
         throw std::runtime_error(std::string(operation) + " failed (status=" + std::to_string(status) + ")");
     }
+}
+
+// The SDK's void Host barrier drops aclrtSynchronizeStream's error. Own the
+// stream here so a failed initialization/close barrier cannot look successful.
+void checked_barrier(bool hybrid)
+{
+    aclrtStream stream = nullptr;
+    check(aclrtCreateStream(&stream), "create SHMEM barrier stream");
+    if (hybrid) deepep_ndr_host_barrier_launch(stream);
+    else aclshmemx_barrier_all_on_stream(stream);
+    const int status = aclrtSynchronizeStream(stream);
+    const int destroy_status = aclrtDestroyStream(stream);
+    check(status, "SHMEM barrier completion");
+    check(destroy_status, "destroy SHMEM barrier stream");
 }
 }  // namespace
 
@@ -377,7 +393,7 @@ void Session::barrier()
 {
     std::lock_guard<std::mutex> guard(runtime_mutex);
     check_context();
-    aclshmem_barrier_all();
+    checked_barrier(ll_rdma_);
 }
 
 void Session::close()
@@ -387,7 +403,7 @@ void Session::close()
         return;
     }
     check_context();
-    aclshmem_barrier_all();
+    checked_barrier(ll_rdma_);
     if (workspace_ != nullptr && !use_1g_huge_pages_) {
         aclshmem_free(workspace_);
         workspace_ = nullptr;

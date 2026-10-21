@@ -12,6 +12,7 @@
 #include <string>
 #include <vector>
 extern "C" void ll_rdma_smoke_launch(uint32_t,void*,void*,void*,uint32_t,uint32_t,uint32_t);
+extern "C" void deepep_ndr_host_barrier_launch(void*);
 static void Check(int status,const char* op) {
     if(status) throw std::runtime_error(std::string(op)+" status="+std::to_string(status));
 }
@@ -70,13 +71,15 @@ int main(int argc,char** argv) {
                 Check(aclrtMemset(memory+rank*1024U,2U<<20,0,2U<<20),"clear packet slots");
                 Check(aclrtMemset(memory+rank*1024U+(4U<<20),cores*2048U,0,cores*2048U),"clear control slots");
                 Check(aclrtMemset(result,cores*32U,0xff,cores*32U),"result poison");
-                aclshmem_barrier_all();
+                deepep_ndr_host_barrier_launch(stream);
+                Check(aclrtSynchronizeStream(stream),"DeepEP initialization barrier completion");
                 ll_rdma_smoke_launch(cores,stream,deviceArgs,result,mode,epoch,size);
                 Check(aclrtSynchronizeStream(stream),"RDMA kernel completion");
                 Check(aclrtMemcpy(status.data(),status.size()*4U,result,status.size()*4U,ACL_MEMCPY_DEVICE_TO_HOST),"result download");
                 for(uint32_t core=0;core<cores;++core) if(status[core*8U])
                     throw std::runtime_error("publication/data mismatch: rank="+std::to_string(rank)+" core="+std::to_string(core)+" mode="+std::to_string(mode));
-                aclshmem_barrier_all();
+                deepep_ndr_host_barrier_launch(stream);
+                Check(aclrtSynchronizeStream(stream),"DeepEP completion barrier");
             }
         }
         Check(aclrtDestroyStream(stream),"destroy stream"); Check(aclrtFree(result),"free result"); Check(aclrtFree(deviceArgs),"free args");

@@ -7,7 +7,7 @@ set -u
 OUT=$(mktemp -d "$LL_TIMER_ROOT/.tmp/ll-timer-off-XXXXXXXX")
 SDK="$LL_TIMER_ROOT/third-party/shmem/install/shmem"
 test -f "$SDK/lib/libshmem.so"
-SOURCES=(dispatch/low_latency.cpp combine/low_latency.cpp)
+SOURCES=(runtime/host_barrier.cpp dispatch/low_latency.cpp combine/low_latency.cpp)
 for mode in prequant_e4m3 fp16 fp16_e4m3 fp16_e5m2 bf16 bf16_e4m3 bf16_e5m2; do
   for group in 4 16; do
     SOURCES+=("dispatch/low_latency/variants/${mode}_g${group}.cpp")

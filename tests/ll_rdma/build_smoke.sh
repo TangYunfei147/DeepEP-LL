@@ -19,6 +19,8 @@ INC=(-I"$LL_RDMA_ROOT/csrc" -I"$ASCEND_HOME_PATH/asc/include" -I"$ASCEND_HOME_PA
 FLAGS=(-DDEEPEP_LL_RDMA=1 -DACLSHMEMI_RDMA_K_BACKEND_HNS_1825=1 -DCATLASS_ARCH=3510 -DL2_CACHE_HINT)
 bisheng -O2 -std=c++17 -xasc --npu-arch=dav-3510 --cce-auto-infer-kernel-type=false \
     "${FLAGS[@]}" "${INC[@]}" -c "$HERE/smoke_device.cpp" -o "$OUT/smoke_device.o"
-bisheng -O2 -std=c++17 "${INC[@]}" "$HERE/smoke_host.cpp" "$OUT/smoke_device.o" --cce-fatobj-link \
+bisheng -O2 -std=c++17 -xasc --npu-arch=dav-3510 --cce-auto-infer-kernel-type=false \
+    "${FLAGS[@]}" "${INC[@]}" -c "$LL_RDMA_ROOT/csrc/kernels/runtime/host_barrier.cpp" -o "$OUT/host_barrier.o"
+bisheng -O2 -std=c++17 "${INC[@]}" "$HERE/smoke_host.cpp" "$OUT/smoke_device.o" "$OUT/host_barrier.o" --cce-fatobj-link \
     -L"$ASCEND_HOME_PATH/lib64" -L"$SDK/lib" -lascendcl -lruntime -lshmem -o "$OUT/rdma_smoke"
 printf 'Built %s\n' "$OUT/rdma_smoke"
