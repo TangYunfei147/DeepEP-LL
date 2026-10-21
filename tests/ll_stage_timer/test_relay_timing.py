@@ -1,5 +1,6 @@
 """Relay issue/completion mode integrity and distinct reporting."""
 import importlib.util
+import copy
 import json
 from pathlib import Path
 import shutil
@@ -55,6 +56,64 @@ def test_old_schema_is_unavailable_not_zero():
     row=analysis.relay_timing.report([(dict(rank=0,iteration=0),decoded)])['per_core'][0]
     assert row['status']=='unavailable'
     assert row['issue_ticks_total'] is None and row['groups'] is None
+    assert row['complete_kernel_ratio'] is None and row['relay_writes_per_group'] is None
+
+
+def test_cumulative_ratio_and_fanout_use_same_core_rounds():
+    first=timer.parse_records(raw(3),'dispatch',1e9)
+    second=copy.deepcopy(first)
+    for record in second['records']:
+        if record['core']!=0: continue
+        if record['stage']=='KERNEL':record['total_ticks']=1100
+        if record['stage']=='RELAY_COMPLETE':record.update(total_ticks=330,calls=4)
+        if record['stage']=='RELAY_ISSUE':record['calls']=4
+        if record['stage']=='RELAY_PACKETS':record['calls']=9
+    result=analysis.relay_timing.report([(dict(rank=0,iteration=0),first),
+                                         (dict(rank=0,iteration=1),second)])
+    row=result['per_core'][0]
+    assert row['samples']==2 and row['complete_ticks_total']==440
+    assert row['kernel_ticks_total']==11000
+    assert row['complete_us_total']==pytest.approx(.44)
+    assert row['kernel_us_total']==pytest.approx(11)
+    assert row['complete_kernel_ratio']==pytest.approx(.04)
+    assert row['relay_writes_per_group']==2
+    text=analysis.relay_timing.markdown(result)
+    assert '4.00%' in text and '累计KERNEL us' in text
+    assert '不能直接判定正常模式' in text
+
+
+def test_zero_relay_round_still_contributes_matching_kernel():
+    first=timer.parse_records(raw(3),'dispatch')
+    empty=timer.parse_records(fixtures.raw(schema=10,mode=3),'dispatch')
+    result=analysis.relay_timing.report([(dict(rank=0,iteration=0),first),
+                                         (dict(rank=0,iteration=1),empty)])
+    row=result['per_core'][0]
+    assert row['complete_ticks_total']==110 and row['kernel_ticks_total']==19800
+    assert row['complete_kernel_ratio']==pytest.approx(110/19800)
+    assert row['relay_writes_per_group']==1.5
+    assert row['complete_us_total'] is None
+    assert '累计完成 ticks' in analysis.relay_timing.markdown(result)
+    no_relay=result['per_core'][1]
+    assert no_relay['complete_kernel_ratio']==0
+    assert no_relay['relay_writes_per_group'] is None
+
+
+@pytest.mark.parametrize('kernel',[None,0])
+def test_missing_or_zero_kernel_does_not_produce_ratio(kernel):
+    decoded=timer.parse_records(raw(3),'dispatch')
+    for record in decoded['records']:
+        if record['core']==0 and record['stage']=='KERNEL':record['total_ticks']=kernel
+    row=analysis.relay_timing.report([(dict(rank=0,iteration=0),decoded)])['per_core'][0]
+    assert row['complete_kernel_ratio'] is None
+
+
+def test_observe_completion_stays_unmeasured_and_duplicate_round_rejected():
+    decoded=timer.parse_records(raw(1),'dispatch',1e9)
+    sample=(dict(rank=0,iteration=0),decoded)
+    row=analysis.relay_timing.report([sample])['per_core'][0]
+    assert row['kernel_ticks_total']==9900 and row['complete_us_total'] is None
+    assert row['complete_kernel_ratio'] is None and row['relay_writes_per_group']==1.5
+    with pytest.raises(ValueError,match='Duplicate'):analysis.relay_timing.report([sample,sample])
 
 
 def test_mixed_modes_and_missing_completion_rejected():
@@ -92,6 +151,10 @@ def test_analyzer_exports_distinct_relay_files(tmp_path):
     assert '不能相加' in (output/'relay_timing.md').read_text(encoding='utf-8')
     result=json.loads((output/'summary.json').read_text())
     assert result['relay_timing']['mode']=='relay-complete'
+    row=result['relay_timing']['per_core'][0]
+    assert row['kernel_ticks_total']==9900
+    assert row['complete_kernel_ratio']==pytest.approx(110/9900)
+    assert 'relay_writes_per_group' in (output/'relay_timing.csv').read_text(encoding='utf-8-sig')
 
 
 def test_observe_and_completion_are_not_compared_as_speedup():

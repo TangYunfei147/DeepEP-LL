@@ -86,11 +86,33 @@ python tests/ll_stage_timer/analyze.py results/relay-timing/relay-complete-001 -
 - relay_timing.csv：逐核汇总；保留ticks，已知频率时另输出us/组。
 - summary.json的relay_timing：上述结构化结果及解释。
 
+累计时间与比例（2026-10-21离线更新）：
+
+- 每个rank/core使用同一组采样轮次同时累加RELAY_COMPLETE和KERNEL，
+  包括新格式中有测量但没有relay的轮次，不用累计完成时间除以单轮均值。
+- `complete_ticks_total`/`complete_us_total`为累计转发完成时间；
+  `kernel_ticks_total`/`kernel_us_total`为对应累计KERNEL时间。
+- `complete_kernel_ratio`为前者除以后者，Markdown显示百分比；
+  `relay_writes_per_group`为总relay写次数/总首跳组数。
+- observe及旧schema的完成时间和占比为未测，不补零；缺KERNEL或分母为零
+  时不输出占比；零首跳组时不输出平均每组转发次数。
+- 分析器拒绝重复rank/core/iteration。累计值直接由原始ticks计算，
+  不通过Markdown中已经舍入的每组均值反推。
+
+占比只表示完成诊断模式下该核的时间构成。前后排空改变正常重叠，
+因此高占比不等于正常模式已确定为转发瓶颈，更不等于可获得同等加速；
+还需结合慢核/下游等待和timer OFF A/B。完成累计不含前置排空。
+本次仅更新离线分析，不改kernel/schema，无需重装wheel或重采已有schema10数据；
+使用新的`--output-dir`重跑分析，保留原报告。
+
 observe的完成列为未测，不能当零时延；新schema没有FIRST_HOP的核标为no_relay，
 不产生虚构的每组均值。按写次数摊销不是单条写延迟，跨核总工作量不是kernel时延。
 无NPU测量前不宣称实际转发开销或性能收益。
 
-本次完整本地回归：526 passed、48 skipped、9 deselected，包含带空格目录迁移。
+schema10诊断首次交付的完整本地回归：526 passed、48 skipped、9 deselected，包含带空格目录迁移。
 跳过项为缺C++编译器或POSIX环境。提供了原生诊断guard的OFF/ON mock，
 验证observe不发同步、完成模式前后各一次同步；本机缺编译器，该mock未执行。
 尚未CANN编译或NPU验证，Python协议/报表测试不能替代设备验收。
+
+2026-10-21累计比例离线更新：相关回归46 passed、2项原生mock缺编译器跳过，
+覆盖不等时长轮次、零转发轮次、旧格式/observe未测、缺失/零分母、重复轮次及目录迁移。
