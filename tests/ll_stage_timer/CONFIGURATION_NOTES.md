@@ -2,6 +2,11 @@
 
 ## 当前默认行为
 
+- 2026-10-21 NDR多机Host barrier修复：锁定SDK增加精确管理的`ndr-host-barrier-v1` overlay，
+  仅Host同步入口按MTE/ROCE可达性发布并本地轮询。首次更新须显式重建SDK及全rank wheel。
+  此项覆盖下文“仅原生源码”的历史要求；不恢复QP扩容，未知修改仍拒绝。
+  详见`tests/ll_rdma/HOST_BARRIER_FIX.md`。
+
 - NDR分支固定编入HNS_1825能力，SDK准备与wheel构建不再要求重复选择RDMA。旧DEEPEP_LL_RDMA=ON仍兼容，OFF或其他旧值给出弃用提示，不再作为构建开关。需要MTE对照使用运行时--backend mte；无RDMA能力的构建使用泛化分支。
 - 两分支的python scripts/build_shmem.py均自动校验后复用已有SDK。NDR默认HNS_1825；泛化默认MTE，也接受验证通过的HNS能力超集，仅接受锁定SDK原生源码，不应用QP扩容补丁。
 - 共同LL入口tests/ll_stage_timer/run.py和直接LL ST按分支选择后端；历史shell后端状态不会覆盖入口默认。泛化显式rdma请求报错；显式mte仍可对照。旧tests/ll_rdma/run_ll.py委托共同入口。

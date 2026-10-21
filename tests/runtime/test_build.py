@@ -11,6 +11,7 @@ from types import ModuleType
 import zipfile
 
 import pytest
+from scripts.shmem_barrier_patch import patch_identity
 
 ROOT = Path(__file__).resolve().parents[2]
 if not (ROOT / "build_support.py").is_file():
@@ -105,7 +106,7 @@ def test_ndr_sdk_identity_is_required(build, monkeypatch, tmp_path, fault):
     monkeypatch.setitem(sys.modules, "pybind11", SimpleNamespace(__version__=lock["python_build"]["pybind11"]))
     identity = {
         "revision": lock["shmem"]["revision"],
-        "build": {"rdma_backend": "HNS_1825", "cann_version": "test", "cann_timestamp": "test", "target": "Ascend950", "source_patches": []},
+        "build": {"rdma_backend": "HNS_1825", "cann_version": "test", "cann_timestamp": "test", "target": "Ascend950", "source_patches": [patch_identity()]},
         "sha256": {
             str(path.relative_to(sdk).as_posix()): hashlib.sha256(path.read_bytes()).hexdigest()
             for path in files
@@ -419,7 +420,7 @@ def test_compiler_symlink_keeps_invocation_name(build, monkeypatch, tmp_path):
     monkeypatch.setattr(build, "ROOT", source)
     manifest = {
         "revision": lock["shmem"]["revision"],
-        "build": {"rdma_backend": "HNS_1825", "cann_version": "test", "cann_timestamp": "test", "target": "Ascend950", "source_patches": []},
+        "build": {"rdma_backend": "HNS_1825", "cann_version": "test", "cann_timestamp": "test", "target": "Ascend950", "source_patches": [patch_identity()]},
         "sha256": {
             path.relative_to(sdk).as_posix(): hashlib.sha256(data.encode()).hexdigest()
             for path, data in files.items()

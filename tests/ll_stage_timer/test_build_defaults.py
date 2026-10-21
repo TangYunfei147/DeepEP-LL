@@ -40,10 +40,11 @@ def sdk_fixture(tmp_path, monkeypatch):
     manifest.parent.mkdir(parents=True)
     identity = {"revision": "pinned", "build": {
         "cann_version": "9.3.0", "cann_timestamp": "known", "target": "Ascend950",
-        "source_patches": [], "rdma_backend": "HNS_1825"}}
+        "source_patches": [build_shmem.shmem_barrier_patch.patch_identity()], "rdma_backend": "HNS_1825"}}
     manifest.write_text(json.dumps(identity))
     monkeypatch.setattr(build_shmem.platform, "system", lambda: "Linux")
-    monkeypatch.setattr(build_shmem, "source_patches", lambda _: [])
+    monkeypatch.setattr(build_shmem.shmem_barrier_patch, "apply", lambda _: None)
+    monkeypatch.setattr(build_shmem, "source_patches", lambda _: [build_shmem.shmem_barrier_patch.patch_identity()])
     monkeypatch.setattr(build_shmem, "cann_version", lambda _: {"Version": "9.3.0", "timestamp": "known"})
     monkeypatch.setattr(build_shmem.subprocess, "check_output", lambda args, **kw:
                         str(source) if args[-1] == "--show-toplevel" else "pinned")

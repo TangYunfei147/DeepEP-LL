@@ -15,6 +15,7 @@ from types import ModuleType, SimpleNamespace
 import zipfile
 
 import pytest
+from scripts.shmem_barrier_patch import patch_identity
 
 from tests.runtime.test_build import ROOT, load
 
@@ -289,7 +290,7 @@ def sdk_environment(build, monkeypatch, tmp_path):
         json.dumps(
             {
                 "revision": lock["shmem"]["revision"],
-                "build": {"rdma_backend": "HNS_1825", "cann_version": "test", "cann_timestamp": "test", "target": "Ascend950", "source_patches": []},
+                "build": {"rdma_backend": "HNS_1825", "cann_version": "test", "cann_timestamp": "test", "target": "Ascend950", "source_patches": [patch_identity()]},
                 "sha256": {
                     path.relative_to(sdk).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
                     for path in files

@@ -9,6 +9,8 @@ import sys
 from environment import environment
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT))
+from scripts.shmem_sdk_identity import validate_build_identity
 SYMBOLS = ("HcommEndpointCreate", "HcommEndpointDestroy", "HcommEndpointGetListenPort",
            "HcommMemReg", "HcommMemUnreg", "HcommChannelCreate", "HcommChannelDestroy", "HcommChannelGetStatus")
 
@@ -44,9 +46,10 @@ def inspect(args):
     manifest = ROOT / "third-party/shmem/install/shmem/deepep-sdk.json"
     try:
         report["sdk"] = json.loads(manifest.read_text())["build"]
+        validate_build_identity(report["sdk"], require_rdma=True)
         if report["sdk"].get("rdma_backend") != "HNS_1825":
             blocked.append("SDK was not built explicitly for HNS_1825")
-    except (OSError, KeyError, ValueError) as exc:
+    except (OSError, KeyError, ValueError, RuntimeError) as exc:
         blocked.append(f"SDK identity unavailable: {exc}")
     try:
         hcomm = ctypes.CDLL("libhcomm.so")

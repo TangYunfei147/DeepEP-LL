@@ -31,6 +31,19 @@ void check(int status, const char* operation)
         throw std::runtime_error(std::string(operation) + " failed (status=" + std::to_string(status) + ")");
     }
 }
+
+// The SDK's void Host barrier drops aclrtSynchronizeStream's error. Own the
+// stream here so a failed initialization/close barrier cannot look successful.
+void checked_barrier()
+{
+    aclrtStream stream = nullptr;
+    check(aclrtCreateStream(&stream), "create SHMEM barrier stream");
+    aclshmemx_barrier_all_on_stream(stream);
+    const int status = aclrtSynchronizeStream(stream);
+    const int destroy_status = aclrtDestroyStream(stream);
+    check(status, "SHMEM barrier completion");
+    check(destroy_status, "destroy SHMEM barrier stream");
+}
 }  // namespace
 
 bool Session::busy()
@@ -377,7 +390,7 @@ void Session::barrier()
 {
     std::lock_guard<std::mutex> guard(runtime_mutex);
     check_context();
-    aclshmem_barrier_all();
+    checked_barrier();
 }
 
 void Session::close()
@@ -387,7 +400,7 @@ void Session::close()
         return;
     }
     check_context();
-    aclshmem_barrier_all();
+    checked_barrier();
     if (workspace_ != nullptr && !use_1g_huge_pages_) {
         aclshmem_free(workspace_);
         workspace_ = nullptr;
