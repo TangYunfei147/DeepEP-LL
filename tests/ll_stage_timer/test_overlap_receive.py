@@ -113,3 +113,16 @@ def test_off_comparison_accepts_new_identity_but_rejects_mixed_diagnostics():
     left['stage_timer']=right['stage_timer']=True
     with pytest.raises(ValueError,match="different stage schemas"):
         parity.comparison.check_identity(left,right)
+
+
+def test_cooperative_device_callables_are_explicitly_annotated():
+    # CPU C++ cannot enforce Bisheng's Host/AICore call-domain rule. Guard the
+    # regression explicitly and leave CANN validation to the target build.
+    kernel=(ROOT/'csrc/kernels/dispatch/low_latency/dispatch_server_dedup_kernel.h').read_text(encoding='utf-8')
+    layout=(ROOT/'csrc/kernels/dispatch/low_latency/common/ll_overlap_layout.h').read_text(encoding='utf-8')
+    assert 'auto cooperate=' not in kernel
+    assert '__aicore__ inline void operator()() { kernel->AdvanceLocal(*prepared); }' in kernel
+    assert '__aicore__ inline void AdvanceLocal(bool& prepared)' in kernel
+    assert 'LocalProgress cooperate{this,&prepared};' in kernel
+    assert '[](' not in layout and '[&]' not in layout
+    assert 'DispatchDedupAlign(' in layout

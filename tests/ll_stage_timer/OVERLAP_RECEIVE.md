@@ -130,3 +130,13 @@ passes; the complete run's final total is 486 passed / 49 skipped.
 EP16 B256/H3584/K8/E384 BF16+FP8 CPU --plan succeeds. These checks do not prove
 CANN compilation, event execution on hardware, numerical device correctness or
 performance.
+
+## Target compile fix: explicit device callback
+
+The first target build of d4109a8 rejected the plain cooperative lambda as a Host
+callable (including its device timer Scope). The callback now uses a named
+LocalProgress functor and an explicitly __aicore__ AdvanceLocal method. The UB
+planner's alignment lambda also uses the existing Host/AICore-qualified
+DispatchDedupAlign helper. Scheduling, barriers, schema11 and protocol14000+S
+are unchanged. Rebuild the full wheel after updating; no SDK rebuild is required
+for this source fix. Local CPU tests cannot prove Bisheng call-domain compatibility.

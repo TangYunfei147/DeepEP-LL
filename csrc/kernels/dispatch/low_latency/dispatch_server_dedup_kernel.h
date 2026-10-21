@@ -45,6 +45,28 @@ public:
                        bs, h, topK, experts, pipe, magic, enableDedup, expertTimer);
     }
 
+    // Bisheng does not inherit __aicore__ on a plain lambda's operator().
+    // Keep the callback and the body explicitly device-callable; no std::function
+    // or indirect function pointer is needed for the templated sender callback.
+    struct LocalProgress {
+        DispatchMemoryServerDedupKernel* kernel;
+        bool* prepared;
+        __aicore__ inline void operator()() { kernel->AdvanceLocal(*prepared); }
+    };
+    __aicore__ inline void AdvanceLocal(bool& prepared)
+    {
+        if (!prepared) {
+            if (!counts_.TryRecvCnt()) return;
+            { LL_SEG_SCOPE(CAL_CUMSUM);
+            counts_.CalcCumsum();
+            counts_.CompleteCumsum(); }
+            receiver_.SetPrefix(counts_.Prefix());
+            receiver_.Prepare(timer_);
+            prepared=true;
+        }
+        receiver_.TryBatch();
+    }
+
     // S remote submission overlaps receive; R cooperatively advances local TX/counts/RX.
     // Sender可与接收核的计数前缀准备重叠，不能把提取阶段耗时直接相加当作完整时延。
     __aicore__ inline void Process()
@@ -59,18 +81,7 @@ public:
         if (overlap_.enabled && core_>=sendCores_) {
             counts_.PrepareRecvCnt();
             bool prepared=false;
-            auto cooperate=[&]() {
-                if (!prepared) {
-                    if (!counts_.TryRecvCnt()) return;
-                    { LL_SEG_SCOPE(CAL_CUMSUM);
-                    counts_.CalcCumsum();
-                    counts_.CompleteCumsum(); }
-                    receiver_.SetPrefix(counts_.Prefix());
-                    receiver_.Prepare(timer_);
-                    prepared=true;
-                }
-                receiver_.TryBatch();
-            };
+            LocalProgress cooperate{this,&prepared};
             const uint32_t tasks=counts_.LocalTaskCount();
             if (tasks) sender_.ProcessGroupLocal(counts_.LocalSendScratchPool(),counts_.ReservedBytes(),
                 counts_.LocalRouteIndices(),counts_.LocalExpertQ(),tasks,timer_,cooperate);
