@@ -385,7 +385,7 @@ __aicore__ inline void ServerDedupCounts::CompleteCumsum()
     // Every physical AIV has a private ready row and prefix replica.
     const uint32_t receiver = aivId_;
     // Retire send/count writes before reusing their UB. No cross-core barrier.
-    { LL_SEG_SCOPE(TRANSITION_DRAIN);
+    if (!overlap_.enabled) { LL_SEG_SCOPE(TRANSITION_DRAIN);
     PipeBarrier<PIPE_ALL>();
     }
     if (!overlap_.enabled) tpipe_->Reset();

@@ -60,6 +60,13 @@ public:
         weightOut_.SetGlobalBuffer(reinterpret_cast<__gm__ float*>(sourceWeights));
     }
 
+    // Consume outstanding sender events only after receiving. Sources remain
+    // allocated until the caller's final PIPE_ALL. Empty senders have zero lanes.
+    __aicore__ inline void Retire() {
+        if (overlap_.enabled) {
+            for (uint32_t lane=0;lane<lanes_;++lane) WaitFlag<HardEvent::MTE3_V>(lane);
+        }
+    }
     __aicore__ inline void ConfigureOverlap(LlOverlapLayout plan) { overlap_=plan; }
     // 摘要：执行本核发送主流程：准备 UB、优先发送去重首跳、再发送 DIRECT，最后写回源端元数据。
     __aicore__ inline void Process(TBufPool<TPosition::VECCALC, 16>& scratch, uint32_t reservedBytes,
@@ -168,16 +175,18 @@ public:
         // 6. 等待所有发送 lane 归还后，把本核 sourceMask 和 sourceWeights 写回 GM。
         // 只有 sourceMask 标记的权重位置才有效，未选中位置不应被下游消费。
         // 最后的 MTE3_S 依赖确保这两份源端输出完成后再返回。
+        if (!overlap_.enabled) {
         LL_SEG_BEGIN(sendDrainBegin, SEND_DRAIN);
         for (uint32_t lane = 0; lane < lanes_; ++lane) WaitFlag<HardEvent::MTE3_V>(lane);
         LL_SEG_END(sendDrainBegin, SEND_DRAIN);
+        }
         Sync<HardEvent::S_MTE3>();
         if (enableDedup_) DataCopyPad(maskOut_[start_], sourceMasks_, {1U, count_ * 4U, 0U, 0U, 0U});
         if (count_ != 0U)
             DataCopyPad(weightOut_[uint64_t(start_) * k_], enableDedup_ ? sourceWeights_ : routeWeights_,
                         {1U, count_ * k_ * 4U, 0U, 0U, 0U});
         { LL_SEG_SCOPE(SEND_SUBMIT_END); }
-        { LL_SEG_SCOPE(SEND_COMPLETE_WAIT);
+        if (!overlap_.enabled) { LL_SEG_SCOPE(SEND_COMPLETE_WAIT);
         Sync<HardEvent::MTE3_S>();
         }
     }
@@ -238,11 +247,12 @@ public:
             SendPacket(input,index/k_,index%k_,packed&0xffffU,packed>>16U,0U);
         }
         EndInputPrefetch(input);
+        if (!overlap_.enabled) {
         LL_SEG_BEGIN(localDrainBegin, SEND_DRAIN);
         // Retire all reads of packet scratch before RecvCnt overlays that UB.
         for (uint32_t lane=0;lane<lanes_;++lane) WaitFlag<HardEvent::MTE3_V>(lane);
         { LL_SEG_SCOPE(SEND_SUBMIT_END); }
-        { LL_SEG_SCOPE(SEND_COMPLETE_WAIT);
+        if (!overlap_.enabled) { LL_SEG_SCOPE(SEND_COMPLETE_WAIT);
         Sync<HardEvent::MTE3_S>();
         }
         if (!overlap_.enabled) scratch_->Reset();
@@ -250,6 +260,7 @@ public:
         // count-receive reductions require integer FP32 subnormals preserved.
         SetCtrlSpr<60,60>(0);
         LL_SEG_END(localDrainBegin, SEND_DRAIN);
+        }
 
     }
 

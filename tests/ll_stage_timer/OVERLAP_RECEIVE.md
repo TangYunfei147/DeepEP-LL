@@ -26,3 +26,13 @@ MTE3_V uses 7; immediate receive dependencies use 7. No allocator Reset occurs
 on the partitioned path. Serial fallback retains original allocation/reset.
 The second commit retains transition drains as a structural A/B baseline.
 Protocol 14000+S and implementation g4-overlap-recv require a full matched wheel.
+
+## 3. Receive before sender retirement
+
+S submits remote packets and source metadata, then acquires the prefix and starts
+receive without a tail MTE3_S, MTE3_V lane drain or transition PIPE_ALL.
+R publishes counts/prefix before local payload and likewise enters receive without
+retiring local sends. Original waits remain on SERIAL_FALLBACK cores. Sender
+events are consumed at final retirement; all DMA sources persist through final
+PIPE_ALL. First use of receive lanes bypasses reuse events; later uses remain
+protected. This overlaps preparation/MTE2/Scalar, not independent MTE3 engines.

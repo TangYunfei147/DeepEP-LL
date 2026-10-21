@@ -60,19 +60,27 @@ public:
             sender_.Process(counts_.ScratchPool(), counts_.ReservedBytes(), timer_);
 
         } else {
+            if (overlap_.enabled) {
+                // Publish prefix before queuing local payload on the same MTE3.
+                { LL_SEG_SCOPE(CAL_CUMSUM);
+                counts_.RecvCnt();
+                counts_.CalcCumsum(); }
+            }
             const uint32_t localTasks=counts_.LocalTaskCount();
             if (localTasks) sender_.ProcessGroupLocal(counts_.LocalSendScratchPool(),counts_.ReservedBytes(),
                                                        counts_.LocalRouteIndices(),counts_.LocalExpertQ(),localTasks,timer_);
-            LL_SEG_SCOPE(CAL_CUMSUM);
-            counts_.RecvCnt();
-            counts_.CalcCumsum();
+            if (!overlap_.enabled) {
+                LL_SEG_SCOPE(CAL_CUMSUM);
+                counts_.RecvCnt();
+                counts_.CalcCumsum();
+            }
         }
 
         // Every core joins receive after completing its own send or prefix work.
         // Prefix producers remain the original R cores. Each of the 56 consumers
         // has its own publication row and disjoint output/cleanup ownership.
         counts_.CompleteCumsum();
-        { LL_SEG_SCOPE(TRANSITION_DRAIN);
+        if (!overlap_.enabled) { LL_SEG_SCOPE(TRANSITION_DRAIN);
         PipeBarrier<PIPE_ALL>();
         }
         if (overlap_.enabled) receiver_.SetPrefix(counts_.Prefix());
@@ -81,6 +89,7 @@ public:
         }
 
         { LL_SEG_SCOPE(FINAL_DRAIN);
+        sender_.Retire();
         counts_.Finish();
         }
 
