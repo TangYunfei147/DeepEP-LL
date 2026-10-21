@@ -44,13 +44,13 @@ def test_group_local_preparation_and_retirement_have_separate_intervals():
     assert 'tasks,timer_,cooperate' in kernel
 
 
-def test_nondedup_remote_filter_is_measured_as_preparation():
+def test_shared_plan_is_measured_as_preparation():
     sender=(ROOT/'csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_send.h').read_text(encoding='utf-8')
-    body=sender[sender.index('inline void SendWithoutDedup('):sender.index('\nprivate:')]
-    build=body[body.index('inline uint32_t BuildGroupIndices('):body.index('struct CompactAccess')]
-    assert build.index('LL_SEG_SCOPE(PREPARE_INPUT)')<build.index('GatherMask(')
-    assert build.index('GatherMask(')<build.index('Sync<HardEvent::V_S>()')<build.index('return uint32_t(selected)')
-    assert body.index('BuildGroupIndices(group)')<body.index('LlVisitCompactGroup(')
+    build=sender[sender.index('inline void BuildAndPublishPlan('):sender.index('inline void ReadOwnedPlan(')]
+    read=sender[sender.index('inline void ReadOwnedPlan('):sender.index('private:')]
+    assert build.index('LL_SEG_SCOPE(PREPARE_INPUT)')<build.index('Classify(')
+    assert read.index('LL_SEG_SCOPE(PREPARE_INPUT)')<read.index('while (!ready)')
+    assert read.index('DataCopyPad(ownedPlan_')<read.index('SendPacket(')
 
 
 def test_intermittent_local_work_does_not_split_kernel_statistics(tmp_path):

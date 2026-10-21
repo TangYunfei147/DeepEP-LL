@@ -76,7 +76,7 @@ int main() {
    assert(threw && !calls);
  }
  bool threw=false;try {dispatch_server_dedup_kernel_do_v2(nullptr,nullptr,0);}catch(const std::invalid_argument&){threw=true;}assert(threw);
- assert(deepep_ll_core_protocol_version()==15028);
+ assert(deepep_ll_core_protocol_version()==16028);
  assert(deepep_ll_ranks_per_group()==4);
 #ifdef DEEPEP_LL_STAGE_TIMER
  assert(deepep_ll_stage_timer_enabled()==1);

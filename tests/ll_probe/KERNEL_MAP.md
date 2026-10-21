@@ -1,10 +1,10 @@
 # 泛化分支生产LL路径
 
-当前group-compact候选覆盖下方历史发送顺序说明：远端按目标组压紧route index，
-折叠FIRST_HOP后跨组连续分配给S核。common/ll_group_compact.h为CPU/Device共用helper；
-device/dispatch_server_dedup_send.h实现向量筛选、独立metadata写者和绝对token权重读取。
-common/ep_memory_server_dedup_layout.h及ll_overlap_layout.h同时核算新增UB。
-Stage3/schema12、协议15000+S；详见../ll_stage_timer/GROUP_COMPACT.md。
+当前group-compact候选：每个S核只分类原token分片一次，发布本卡共享描述符表。
+common/ll_group_compact.h为共享布局和owner切片helper；device/dispatch_server_dedup_send.h
+负责本核bucket排序、先数据后ready发布、S-only等待和只读自己描述符。
+Host/overlap UB和combine控制区前的GM边界一起核算，协议16000+S、Stage3/schema12。
+详见../ll_stage_timer/GROUP_COMPACT.md。
 
 该分支保留MTE传输和DEEPEP_LL_RANKS_PER_GROUP静态可配置分组，默认4。
 不要复制NDR的Session、ll_transport或tiling-key策略来替代这里的实现。

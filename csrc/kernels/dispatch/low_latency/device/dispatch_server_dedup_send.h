@@ -21,7 +21,7 @@
 namespace DispatchDedup {
 using namespace AscendC;
 
-// R02-01/R05-04 source path: first hops precede the cached DIRECT tasks on
+// Shared plan: first hops precede DIRECT tasks on
 // each core, sharing one packet sequence and ring of in-flight send buffers.
 template <class XType, bool WireFp8, bool E4M3, bool Prequantized = false>
 class ServerDedupSender {
@@ -43,6 +43,7 @@ public:
         sendCores_ = kLlSendCoreNum;
         pipe_ = pipe;
         enableDedup_ = enableDedup;
+        planMagic_=uint32_t(magic);
         bs_ = bs;
         h_ = h;
         k_ = k;
@@ -114,8 +115,8 @@ public:
         Allocate(weightInBuf_, uint32_t(DispatchDedupAlign(uint64_t(bs_) * k_ * 4U, 32U)));
         Allocate(weightOutBuf_, uint32_t(DispatchDedupAlign(uint64_t(count_) * k_ * 4U, 32U)));
         Allocate(maskBuf_, uint32_t(DispatchDedupAlign(uint64_t(count_) * 4U, 32U)));
-        // Stable compact indices survive q/quantization scratch reuse.
-        Allocate(directBuf_, qBytes);
+        plan_=LlMakeSharedGroupPlan(bs_,k_,args_->rankSize/kLlRanksPerGroup,sendCores_);
+        Allocate(directBuf_,plan_.ubBytes);
         // One uint32 state per server, including EP256's 16 host groups.
         const uint32_t serverBytes = uint32_t(DispatchDedupAlign(uint64_t(args_->rankSize / kLlRanksPerGroup) * 4U, 32U));
         Allocate(serverBuf_, serverBytes < 64U ? 64U : serverBytes);
@@ -136,7 +137,7 @@ public:
             sourceMasks_ = maskBuf_.Get<uint32_t>();
 
         }
-        directTasks_ = directBuf_.Get<uint32_t>();
+        InitSharedPlanViews();
         serverState_ = serverBuf_.Get<uint32_t>();
         if (maxGroups != 0U) firstHopMasks_ = firstHopBuf_.Get<uint32_t>();
         DataCopyPad(routeIds_, ids_, {1U, bs_ * k_ * 4U, 0U, 0U, 0U}, {false, 0U, 0U, 0});
@@ -272,90 +273,149 @@ public:
 
     }
 
-    // Original token owners alone publish source masks/weights. Packet owners
-    // are selected independently below; the minimum-k first hop is unchanged.
-    __aicore__ inline void SendWithDedup(TQue<QuePosition::VECIN, 1>& input)
-    {
-        LL_SEG_BEGIN(metadataBegin, PREPARE_INPUT);
-        for (uint32_t token=0; token<count_; ++token) {
-            uint32_t directMask=0, firstHopCount=0, localMask=0;
-            Classify(token,directMask,firstHopCount,localMask);
-            uint32_t sourceMask=directMask|localMask;
-            for (uint32_t group=0; group<firstHopCount; ++group) {
-                const uint32_t mask=firstHopMasks_.GetValue(group);
-                uint32_t firstK=0;
-                while ((mask & (uint32_t(1)<<firstK))==0U) ++firstK;
-                sourceMask |= uint32_t(1)<<firstK;
-                sourceWeights_.SetValue(token*k_+firstK,1.0f);
-            }
-            sourceMasks_.SetValue(token,sourceMask);
-        }
-        LL_SEG_END(metadataBegin, PREPARE_INPUT);
-        SendCompactGroups(input,true);
+    // Build each token's route classification ONCE on its original S owner.
+    // R local sends and the receive/count path do not join this planning wait.
+    __aicore__ inline void SendWithDedup(TQue<QuePosition::VECIN,1>& input) {
+        BuildAndPublishPlan(true);
+        ReadOwnedPlan(input);
     }
-
-    __aicore__ inline void SendWithoutDedup(TQue<QuePosition::VECIN, 1>& input)
-    {
-        SendCompactGroups(input,false);
+    __aicore__ inline void SendWithoutDedup(TQue<QuePosition::VECIN,1>& input) {
+        BuildAndPublishPlan(false);
+        ReadOwnedPlan(input);
     }
-
-    // Vector selection preserves original route order. Reuse q scratch only
-    // during selection; directTasks_ is separate from all q/quantization work.
-    __aicore__ inline uint32_t BuildGroupIndices(uint32_t group)
-    {
+    __aicore__ inline void InitSharedPlanViews() {
+        auto base=directBuf_.Get<uint32_t>();
+        rawPlan_=base;
+        sortedPlan_=base[plan_.descriptorBytes/4U];
+        planTable_=base[2U*plan_.descriptorBytes/4U];
+        planReady_=planTable_[plan_.tableBytes/4U];
+        planCursor_=planReady_[plan_.readyBytes/4U];
+        ownedPlan_=planCursor_[plan_.headerBytes/4U];
+        const auto counts=DispatchServerDedupCountLayout(localExperts_*args_->rankSize);
+        auto* own=args_->peerMems[args_->rank];
+        planGm_.SetGlobalBuffer(reinterpret_cast<__gm__ uint32_t*>(own+counts.stateBytes));
+        readyGm_.SetGlobalBuffer(reinterpret_cast<__gm__ uint32_t*>(own+kLlSharedPlanReadyOffset));
+        planGm_.SetL2CacheHint(CacheMode::CACHE_MODE_DISABLE);
+        readyGm_.SetL2CacheHint(CacheMode::CACHE_MODE_DISABLE);
+    }
+    __aicore__ inline void AppendPlan(uint32_t index,uint32_t mask,uint32_t bucket) {
+        // Host bounds route count below 2^16; high bits carry the temporary bucket.
+        rawPlan_.SetValue(planTasks_*2U,index|(bucket<<16U));
+        rawPlan_.SetValue(planTasks_*2U+1U,mask);
+        planTable_.SetValue(bucket+1U,planTable_.GetValue(bucket+1U)+1U);
+        ++planTasks_;
+    }
+    __aicore__ inline void BuildAndPublishPlan(bool dedup) {
         LL_SEG_SCOPE(PREPARE_INPUT);
-        const uint32_t routes=bs_*k_, first=group*localExperts_*kLlRanksPerGroup;
-        auto lower=qSubBuf_.Get<uint8_t>();
-        auto upper=qWorkBuf_.Get<uint8_t>();
-        auto indices=qDstBuf_.Get<int32_t>();
-        // q scratch may have just been used by scalar q reads or quantization.
-        Sync<HardEvent::S_V>();
-        Compares(lower,routeIds_,int32_t(first),CMPMODE::GE,routes);
-        Compares(upper,routeIds_,int32_t(first+localExperts_*kLlRanksPerGroup),CMPMODE::LT,routes);
-        PipeBarrier<PIPE_V>();
-        And(lower.ReinterpretCast<uint16_t>(),lower.ReinterpretCast<uint16_t>(),
-            upper.ReinterpretCast<uint16_t>(),(routes+15U)/16U);
-        CreateVecIndex(indices,0,routes);
-        PipeBarrier<PIPE_V>();
-        uint64_t selected=0;
-        GatherMask(directTasks_,indices.ReinterpretCast<uint32_t>(),lower.ReinterpretCast<uint32_t>(),
-                   true,routes,{1U,1U,0U,0U},selected);
-        Sync<HardEvent::V_S>();
-        return uint32_t(selected);
-    }
-
-    struct CompactAccess {
-        LocalTensor<uint32_t> indices;
-        __aicore__ inline uint32_t Index(uint32_t i) { return indices.GetValue(i); }
-    };
-    struct CompactEmit {
-        ServerDedupSender& sender;
-        TQue<QuePosition::VECIN,1>& input;
-        __aicore__ inline void operator()(uint32_t index,uint32_t mask) {
-            const uint32_t expert=uint32_t(sender.routeIds_.GetValue(index));
-            const uint32_t q=sender.CalTokenSendExpertCnt(expert,index);
-            sender.SendPacket(input,index/sender.k_,index%sender.k_,expert,q,mask);
-        }
-    };
-    __aicore__ inline void SendCompactGroups(TQue<QuePosition::VECIN,1>& input,bool dedup)
-    {
         const uint32_t groups=args_->rankSize/kLlRanksPerGroup;
-        const uint32_t own=args_->rank/kLlRanksPerGroup, core=GetBlockIdx();
+        const uint32_t own=args_->rank/kLlRanksPerGroup;
+        const uint32_t groupExperts=localExperts_*kLlRanksPerGroup;
+        Duplicate<uint32_t>(planTable_,0U,plan_.headerBytes/4U);
+        Sync<HardEvent::V_S>();
+        for (uint32_t token=0;token<count_;++token) {
+            uint32_t directMask=0,firstHops=0,localMask=0;
+            if (dedup) {
+                Classify(token,directMask,firstHops,localMask);
+                uint32_t sourceMask=directMask|localMask;
+                for (uint32_t group=0;group<firstHops;++group) {
+                    const uint32_t mask=firstHopMasks_.GetValue(group);
+                    uint32_t firstK=0;
+                    while ((mask & (uint32_t(1)<<firstK))==0U) ++firstK;
+                    const uint32_t index=(start_+token)*k_+firstK;
+                    const uint32_t expert=uint32_t(routeIds_.GetValue(index));
+                    AppendPlan(index,mask,expert/groupExperts);
+                    sourceMask |= uint32_t(1)<<firstK;
+                    sourceWeights_.SetValue(token*k_+firstK,1.0f);
+                }
+                sourceMasks_.SetValue(token,sourceMask);
+            }
+            for (uint32_t slot=0;slot<k_;++slot) {
+                const uint32_t index=(start_+token)*k_+slot;
+                const uint32_t expert=uint32_t(routeIds_.GetValue(index));
+                const uint32_t group=expert/groupExperts;
+                if (group==own || (dedup && !(directMask & (uint32_t(1)<<slot)))) continue;
+                AppendPlan(index,0U,groups+group);
+            }
+        }
+        // Local stable counting sort: descriptors, not routes, are visited once.
+        uint32_t prefix=0;
+        for (uint32_t bucket=0;bucket<2U*groups;++bucket) {
+            const uint32_t count=planTable_.GetValue(bucket+1U);
+            planCursor_.SetValue(bucket,prefix);
+            prefix+=count;
+            planTable_.SetValue(bucket+1U,prefix);
+        }
+        for (uint32_t i=0;i<planTasks_;++i) {
+            const uint32_t tagged=rawPlan_.GetValue(i*2U),bucket=tagged>>16U;
+            const uint32_t offset=planCursor_.GetValue(bucket);
+            planCursor_.SetValue(bucket,offset+1U);
+            sortedPlan_.SetValue(offset*2U,tagged&0xffffU);
+            sortedPlan_.SetValue(offset*2U+1U,rawPlan_.GetValue(i*2U+1U));
+        }
+        Sync<HardEvent::S_MTE3>();
+        const uint32_t core=GetBlockIdx();
+        if (planTasks_) DataCopyPad(planGm_[(plan_.tableBytes+core*plan_.descriptorBytes)/4U],
+            sortedPlan_,{1U,planTasks_*8U,0U,0U,0U});
+        DataCopy(planGm_[core*plan_.headerBytes/4U],planTable_,plan_.headerBytes/4U);
+        // Release all descriptor/header stores BEFORE the persistent ready flag.
+        Sync<HardEvent::MTE3_S>();
+        Duplicate<uint32_t>(planReady_,0U,8U);
+        Sync<HardEvent::V_S>();
+        planReady_.SetValue(0U,planMagic_);
+        Sync<HardEvent::S_MTE3>();
+        DataCopy(readyGm_[core*kEpServerDedupMagicStride/4U],planReady_,8U);
+        Sync<HardEvent::MTE3_S>(); // ready source can now be reused for polling
+    }
+    __aicore__ inline void ReadOwnedPlan(TQue<QuePosition::VECIN,1>& input) {
+        {
+        LL_SEG_SCOPE(PREPARE_INPUT);
+        bool ready=false;
+        while (!ready) {
+            DataCopy(planReady_,readyGm_,DataCopyParams{uint16_t(sendCores_),1U,
+                     uint16_t(kEpServerDedupMagicStride/32U-1U),0U});
+            Sync<HardEvent::MTE2_S>();
+            ready=true;
+            for (uint32_t producer=0;producer<sendCores_;++producer)
+                if (planReady_.GetValue(producer*8U)!=planMagic_) ready=false;
+        }
+        // Every producer, including empty shards, publishes each invocation.
+        // The fixed ready slots alternate 1/0; variable-shape table data is never
+        // treated as an epoch flag. No flag clear races and no R participation.
+        DataCopy(planTable_,planGm_,plan_.tableBytes/4U);
+        Sync<HardEvent::MTE2_S>();
+        const uint32_t groups=args_->rankSize/kLlRanksPerGroup;
+        const uint32_t own=args_->rank/kLlRanksPerGroup,core=GetBlockIdx();
         const uint32_t phase=uint32_t(args_->rank)%kLlRanksPerGroup;
         uint32_t owner=phase%sendCores_;
-        CompactAccess access{directTasks_};
-        CompactEmit emit{*this,input};
-        // First hops precede singleton DIRECT packets on every core. There is
-        // no inter-core barrier. A COMMON group order is required for ownership;
-        // rank phase varies, core phase does not. Carry the cursor across phases.
-        for (uint32_t pass=0; pass<(dedup?2U:1U); ++pass) {
-            for (uint32_t step=0; step<groups; ++step) {
+        for (uint32_t pass=enableDedup_?0U:1U;pass<2U;++pass) {
+            for (uint32_t step=0;step<groups;++step) {
                 const uint32_t group=LlDirectGroupOrder(groups,own,phase,0U,step);
-                if (group==own) continue; // R still owns local-group initial sends.
-                const uint32_t size=BuildGroupIndices(group);
-                LlVisitCompactGroup(access,size,k_,dedup,dedup && pass==0U,
-                                    sendCores_,core,owner,emit);
+                if (group==own) continue;
+                const uint32_t bucket=pass*groups+group;
+                for (uint32_t producer=0;producer<sendCores_;++producer) {
+                    const uint32_t row=producer*plan_.headerBytes/4U;
+                    const uint32_t start=planTable_.GetValue(row+bucket);
+                    const uint32_t count=planTable_.GetValue(row+bucket+1U)-start;
+                    const auto slice=LlOwnedGroupTasks(count,owner,core,sendCores_);
+                    owner=slice.nextOwner;
+                    if (!slice.count) continue;
+                    const uint32_t offset=(plan_.tableBytes+producer*plan_.descriptorBytes)/4U;
+                    // MTE2 pads each 8B block to 32B; fetch only our strided
+                    // descriptors. Queue all segments, then fence once below.
+                    DataCopyPad(ownedPlan_[ownedTasks_*8U],planGm_[offset+(start+slice.first)*2U],
+                        {uint16_t(slice.count),8U,(sendCores_-1U)*8U,0U,0U},
+                        {false,0U,0U,uint32_t(0)});
+                    ownedTasks_+=slice.count;
+                }
             }
+        }
+        Sync<HardEvent::MTE2_S>();
+        }
+        for (uint32_t task=0;task<ownedTasks_;++task) {
+            const uint32_t index=ownedPlan_.GetValue(task*8U);
+            const uint32_t mask=ownedPlan_.GetValue(task*8U+1U);
+            const uint32_t expert=uint32_t(routeIds_.GetValue(index));
+            SendPacket(input,index/k_,index%k_,expert,CalTokenSendExpertCnt(expert,index),mask);
         }
     }
 
@@ -615,7 +675,11 @@ private:
     TBuf<> weightInBuf_, weightOutBuf_, maskBuf_, directBuf_, serverBuf_, firstHopBuf_, outBuf_;
     LocalTensor<int32_t> routeIds_;
     LocalTensor<float> routeWeights_, sourceWeights_;
-    LocalTensor<uint32_t> sourceMasks_, directTasks_, serverState_, firstHopMasks_;
+    LocalTensor<uint32_t> sourceMasks_, serverState_, firstHopMasks_;
+    LlSharedGroupPlan plan_{};
+    uint32_t planMagic_=0,planTasks_=0,ownedTasks_=0;
+    LocalTensor<uint32_t> rawPlan_,sortedPlan_,planTable_,planReady_,planCursor_,ownedPlan_;
+    GlobalTensor<uint32_t> planGm_,readyGm_;
 };
 }  // namespace DispatchDedup
 #endif

@@ -1,47 +1,70 @@
 # G4 紧凑远端任务候选
 
 分支 `kernel/ll-g4-group-compact`，基线 `kernel/ll-g4-s3-baseline@ac876ba`。
-当前实现身份 `g4-group-compact`，核心协议 `15000+S`，阶段 schema12、Stage3。
+当前实现身份 `g4-group-compact`，核心协议 `16000+S`，阶段 schema12、Stage3。
 默认 G4/S28/R28、固定56 AIV；R本组初发、接收/relay、combine及七模式编译结构保留。
 这是待目标机验证的优化候选，不代表性能已经提升。
 
-## 调度方式
+## 当前版本：每个token只分类一次
 
-1. 每个S核加载完整原始路由与输入权重。原token分片仍唯一负责sourceMask和输出权重。
-2. 对当前目标组用向量比较和GatherMask生成稳定、升序的uint32原始route index。
-   索引使用独立UB，不能与q/量化scratch混用。
-3. M>32时按token合并当前组的相邻索引：多命中生成一个FIRST_HOP，
-   最小top-k位置仍是首跳，mask/目标专家/原始q/尾部权重不变；单命中生成DIRECT。
-   M<=32时每条远端route都是DIRECT。M指num_max_tokens_per_rank，不是实际B。
-4. 所有S核使用相同的组遍历次序，跨组和跨FIRST_HOP/DIRECT阶段持续推进owner游标。
-   核只发送owner等于自身的任务。无GM任务队列、原子认领、新跨核屏障或额外kernel。
-   每核先提交FIRST_HOP再提交DIRECT，阶段间仍无全核完成屏障。
-5. 本组不进入该任务表，仍由R核初发。S3前移前缀、延后退休及UB不足时串行回退保留。
+上一版613ae81在EP16/B256 FP8上被用户报告严重劣化。本版在同一候选分支替换重复规划，
+不回写S3基线；原始版本仍可通过Git提交取得。
 
-组遍历沿用原half-interleave排列及rank组内相位，去掉core相位：
-`LlDirectGroupOrder(groups, own, rank%G, 0, step)`。这是为所有核获得相同owner流；
-并不保留S3原先逐token FIRST_HOP旋转和逐core DIRECT错峰，也不加入dc_opt的组间配对。
+1. 每个S核仅对原token分片执行一次Classify，产生最多ceil(B/S)*K个
+   [原始route index, mask]描述符，同时保持sourceMask/权重的唯一写者。
+   非去重也按原token分片生成DIRECT描述符。本组初发仍归R。
+2. 本核按“FIRST_HOP/DIRECT × 目标组”计数、前缀和、稳定排序一次，
+   将连续描述符及bucket偏移发布到本卡GM。空分片也发布空表和ready。
+3. 描述符及偏移的MTE3写入完成后，才发布固定ready槽的当前magic。
+   所有S核等S个生产者就绪；这是新增的S-only规划依赖，R不参与，不调用SyncAll。
+4. 各S核读取小型偏移表，按跨producer/group/phase连续owner确定自己的strided slice。
+   用DataCopyPad只批量读取自己负责的8B描述符，每项在UB填充到32B；
+   排入全部段后统一MTE2_S，随后发包。不逐packet重新搬描述符、不遍历其他核路由。
+5. 保留S3前移前缀、发送末尾延后退休、原接收/relay/combine。
+   当前仍先发FIRST_HOP再发DIRECT；不在两个发送阶段之间增加完成屏障。
 
-总远端初发packet数在S核之间最多差1。FIRST_HOP总量及DIRECT总量分别最多差1；
-每个目标组的每一类型也最多差1，但该组两类型相加最多差2。
-FIRST_HOP的包尾成员数和q计算量不等，因此不承诺CPU工作、Scalar指令或真实时长均衡。
+组序仍为LlDirectGroupOrder(groups, own, rank%G, 0, step)。producer按原token分片顺序排列，
+因此实际packet所有权及顺序与613ae81一致；CPU报告与原包数均衡数据仍适用。
+每卡S核总远端初发包数最多差1；FIRST_HOP和DIRECT总量分别最多差1；
+每个组每种类型最多差1，两类型相加最多差2。不承诺q成本、包尾成员数或真实耗时均衡。
 
-## 成本与边界
+## 共享内存生命周期
 
-- 索引压紧/折叠由所有S核重复执行。去重为2*(EP/G-1)轮筛选，非去重为EP/G-1轮。
-  不发包的S核也要参与本地计划计算，不能沿用“没有原token分片就返回”。
-- 权重从每核原token片段扩大为整个B*K；sourceMask/输出权重仍仅保存原核片段。
-  输出权重用独立、从UB零偏移开始的搬入，避免任意K时使用不对齐的UB切片。
-- 远端任务缓存从最多ceil(B/S)*K个四word描述符改为B*K个一word索引。
-  两者都需要按shape核算，不能只宣称“索引更紧凑所以UB更少”。
-- Host的串行最低lane预算和Device overlap预算已一起修改；可能减少lane数、触发
-  SERIAL_FALLBACK，或拒绝比基线更大的shape。无静默越界、无自动减核。
-- q仍按原始路由计算，FIRST_HOP仍有组内relay依赖；没有降低通信包数或payload字节数。
-- 增加的S_V/V_S依赖属于新索引生成的必要本核同步，不是新增跨核barrier。
+- 任务表从DispatchServerDedupCountLayout.stateBytes之后开始，Host检查结束位置不超过
+  combine控制区起点1MiB；静态断言核对combine常量。没有占用第二个MiB或输出/return区域。
+- ready位固定在每核原512B magic槽的+32位置，原magic word0不变。
+  Host初始清零，各dispatch使用1/0交替；ready位置不随B/K/E改变，避免变shape时误认旧描述符。
+- descriptor/header/ready GM视图均禁用L2缓存。先完成数据写入，再发布ready。
+  同流下一次kernel必须等待本次结束，复用单份任务表；不支持同Session并发launch。
+- 无原子、动态抢任务、额外kernel或跨rank计划交换。新增了本卡S-only就绪等待和GM表读写，
+  不能宣称完全没有同步成本。
+
+## UB与开销
+
+每个S核不再做2*(EP/G-1)遍全量Compare/GatherMask，也不再全量折叠各目标组的路由。
+仍保留完整路由（供原q统计）和完整输入权重（跨原token分片发包所需），本次未改变q算法。
+
+用户配置EP16/B=M256/H3584/K8/E384、预量化FP8、S28/R28的源码规划值：
+
+| 项目 | S3/ac876ba | 重复规划/613ae81 | 当前共享计划 |
+|---|---|---|---|
+| S核总UB | 106 KiB | 120.4375 KiB | 118.6875 KiB |
+| R核总UB | 100.9375 KiB | 100.9375 KiB | 100.9375 KiB |
+| 发送/接收lane | 6/6 | 6/6 | 6/6 |
+| 回退核数 | 0 | 0 | 0 |
+
+当前S核计划缓冲6400B：本核双描述符缓冲1280B、偏移表1792B、ready快照896B、
+排序游标64B、自己负责的描述符缓存2368B。相对旧版8192B索引减少1792B。
+每rank共享GM表19712B；由387KiB处开始，结束于406.25KiB，低于combine起点1MiB。
+本次目标是减少重复Scalar和筛选，不是依赖UB下降恢复overlap。
+
+规划build/publish/wait/gather统一记录在PREPARE_INPUT中；当前schema12不能从此阶段
+单独提取ready等待耗时。最终判断必须看timer OFF完整kernel。新同步和GM读取仍可能抵消收益。
+Host最低UB、overlap预算、GM边界检查一起维护；超限拒绝，不覆盖combine或静默截断。
 
 ## 本地证据
 
-CPU生产调度helper检查覆盖EP16/32/64/128、S=1/10/28/55、B<S、K=32、
+CPU生产slice/布局helper及producer模型检查覆盖EP16/32/64/128、S=1/10/28/55、B<S、K=32、
 全本组/热点组、去重开关、原始路由覆盖和包尾成员。CPU预算/Host选择检查不能替代
 AscendC编译或NPU DMA正确性。最终验证数量见docs/BUILD_DISPATCH_SPLIT.md。
 
@@ -87,7 +110,7 @@ python -m pip install -v --force-reinstall --no-build-isolation --no-deps .
 ```
 
 已校验SDK可复用，不因本候选强制重建。全rank需要同提交、同S/R的完整wheel；
-ST在初始化SHMEM前检查身份、15000+S和Stage3，拒绝旧S3 wheel。
+ST在初始化SHMEM前检查身份、16000+S和Stage3，拒绝旧S3 wheel。
 
 ## 目标验收与A/B
 

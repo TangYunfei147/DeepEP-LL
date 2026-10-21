@@ -158,3 +158,27 @@ benchmark_compile.py ON/OFF procedure and full ON wheel link on the authorized
 target, then the correctness and OFF timing steps in
 tests/ll_stage_timer/GROUP_COMPACT.md. No production architecture or SDK changes
 were made.
+
+## Shared producer plan revision (2026-10-21)
+
+User reported severe slowdown in 613ae81 at EP16/B=M256/H3584/K8/E384/FP8.
+The repeated group filtering/folding has been removed: original S token owners
+classify once and publish bucketed descriptors, consumers read only their slices.
+Protocol16000+S rejects the old wheel; Stage3/schema12 and seven TUs remain.
+
+Validation:
+- Full CPU suite: 888 passed, 107 skipped (87.08s), including the shared-plan
+  packet oracle, native ownership slices, empty producer and alternating epoch checks.
+- Native Host selector/UB/Stage3/profiler checks: 13 passed (3.29s).
+- Additional Host shared-control/UB matrix at S=1/10/28/55: 4 passed (4.30s).
+  The two native batches overlap some skipped/full-suite fixtures; do not sum
+  all numbers as unique test coverage.
+- User shape: S UB121536B (118.6875KiB), R103360B, both six send/receive lanes,
+  zero serial fallback. GM plan19712B, starts after count state and ends before
+  the combine1MiB control boundary. Raw audit: .tmp/shared-plan-ub.csv.
+- Logs: .tmp/shared-plan-full-001.log, .tmp/shared-plan-native-001.log,
+  .tmp/shared-plan-bounds-001.log. CPU checks do not validate MTE visibility/order.
+- No CANN ON/OFF build, wheel linkage or NPU correctness/performance run.
+  Keep the existing target cold-compile and complete dispatch/combine acceptance
+  procedures. Added S-only ready wait and GM traffic are real candidate costs,
+  included in PREPARE_INPUT, not claimed to be free or separately timed.

@@ -375,7 +375,7 @@ def validate_source_contract():
     base=ROOT/'csrc/kernels/dispatch/low_latency'
     sender=(base/'device/dispatch_server_dedup_send.h').read_text(encoding='utf-8')
     receiver=(base/'device/dispatch_server_dedup_recv.h').read_text(encoding='utf-8')
-    if ('LlVisitCompactGroup(' not in sender or
+    if ('LlOwnedGroupTasks(' not in sender or
             'LlMakeReceivePriority' not in receiver or 'tasks_.PendingCount()' not in receiver):
         raise ValueError('CPU model requires earliest-topk FIRST_HOP and static relay-priority receive; inspect changed source')
 

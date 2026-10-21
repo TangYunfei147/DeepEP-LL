@@ -1,4 +1,4 @@
-本分支当前为 `kernel/ll-g4-group-compact`，身份 `g4-group-compact`、协议15000+S、Stage3/schema12。
+本分支当前为 `kernel/ll-g4-group-compact`，身份 `g4-group-compact`、协议16000+S、Stage3/schema12。
 构建、采样和CPU对照以 [GROUP_COMPACT.md](GROUP_COMPACT.md) 为准。
 下方保留历史分支资料，其clone分支名和安装身份断言不适用于当前候选。
 

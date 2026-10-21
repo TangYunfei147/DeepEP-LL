@@ -123,14 +123,16 @@ def test_skew_empty_groups_high_mask_and_foreign_tokens(native,dedup):
 
 def test_identity_and_workspace_contract():
     common=ROOT/'csrc/kernels/dispatch/low_latency/common'
-    assert '15000U + kLlSendCoreNum' in (common/'ll_core_config.h').read_text(encoding='utf-8')
+    assert '16000U + kLlSendCoreNum' in (common/'ll_core_config.h').read_text(encoding='utf-8')
     assert 'kLlOverlapExperimentStage = 3U' in (common/'ll_overlap_stage.h').read_text(encoding='utf-8')
     sender=(common.parent/'device/dispatch_server_dedup_send.h').read_text(encoding='utf-8')
     assert 'if (enableDedup_ && count_ == 0U) return;' not in sender
     assert 'token -= start_' not in sender
-    assert 'LlVisitCompactGroup(' in sender
+    assert 'LlOwnedGroupTasks(' in sender
     assert 'SyncAll' not in sender
-    assert 'Allocate(directBuf_, qBytes)' in sender
+    assert 'Allocate(directBuf_,plan_.ubBytes)' in sender
+    assert 'BuildGroupIndices' not in sender
+    assert 'GatherMask(' not in sender
 
 
 @pytest.mark.parametrize('world',[16,64])
@@ -150,3 +152,28 @@ def test_cpu_report_matches_native_ownership_and_baseline_packets(native,world,c
                 mask=sum(1<<after['routes'][j].slot for j in (i,*item.members)) if item.members else 0
                 expected.append((core,i-rank*3*8,mask))
         assert packets==expected
+
+def test_plan_publication_and_fixed_epochs_are_ordered():
+    source=(ROOT/'csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_send.h').read_text(encoding='utf-8')
+    publish=source[source.index('inline void BuildAndPublishPlan('):source.index('inline void ReadOwnedPlan(')]
+    body=publish.index('DataCopyPad(planGm_')
+    release=publish.index('Sync<HardEvent::MTE3_S>();',body)
+    ready=publish.index('DataCopy(readyGm_',release)
+    assert body<release<ready
+    assert 'for (uint32_t token=0;token<count_;++token)' in publish
+    assert 'if (!count_) return' not in publish
+    read=source[source.index('inline void ReadOwnedPlan('):source.index('private:')]
+    assert read.index('while (!ready)')<read.index('DataCopy(planTable_,planGm_')
+    assert 'producer<sendCores_' in read
+    assert 'CACHE_MODE_DISABLE' in source
+    assert 'InitSharedPlanViews' in source
+    # Persistent flags toggle independently of shape-dependent descriptor addresses.
+    previous=[0]*28
+    for invocation,empty in enumerate((set(range(4,28)),set(),set(range(28)),{0,7})):
+        epoch=1-invocation%2
+        assert all(flag!=epoch for flag in previous)
+        published=set()
+        for producer in reversed(range(28)):
+            published.add(producer)  # Includes empty producers.
+            previous[producer]=epoch
+            assert all(flag==epoch for flag in previous)==(len(published)==28)
