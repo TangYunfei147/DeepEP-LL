@@ -2,6 +2,7 @@
 #include <stdexcept>
 #include "../launch.hpp"
 #include "low_latency/launch.hpp"
+#include "low_latency/common/ll_core_config.h"
 #include "low_latency/common/ep_memory_server_dedup_protocol.h"
 #if CATLASS_ARCH == 3510
 extern "C" void dispatch_server_dedup_launch_prequant_e4m3(void*,const deepep::EpServerDedupKernelArgs*);
