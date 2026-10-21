@@ -12,14 +12,17 @@ ROOT=Path(__file__).resolve().parents[2]
 def plan(experts,ranks,rank,send,core,group):
     """CPU scheduling model, cross-checked against actual C++ when available."""
     recv=56-send; size=experts//ranks*group; first=rank//group*size
-    local=core>=send; total=size if local else experts-size
-    workers=recv if local else send; worker=core-send if local else core
+    if core<send:return []
+    workers=recv;worker=core-send
+    local_begin=worker*(size//recv)+min(worker,size%recv)
+    local_count=size//recv+(worker<size%recv)
+    result=[(first+local_begin,first+local_begin+local_count,0)] if local_count else []
+    total=experts-size
     begin=worker*(total//workers)+min(worker,total%workers)
     end=begin+total//workers+(worker<total%workers)
-    if local:return [(first+begin,first+end,0)] if begin<end else []
-    result=[]
-    if begin<min(end,first):result.append((begin,min(end,first),0))
-    if max(begin,first)<end:result.append((max(begin,first)+size,end+size,max(begin,first)-begin))
+
+    if begin<min(end,first):result.append((begin,min(end,first),local_count))
+    if max(begin,first)<end:result.append((max(begin,first)+size,end+size,local_count+max(begin,first)-begin))
     return result
 
 
@@ -43,16 +46,17 @@ int main(){
     const unsigned first=rank/kLlRanksPerGroup*groupSize;
     for(unsigned core=0;core<56;++core){
      auto p=LlMakeGroupCountPlan(experts,ranks,rank,core);
-     assert(p.size<=2 && p.local==(core>=kLlSendCoreNum));
+     assert(p.size<=3);
+     if(core<kLlSendCoreNum) assert(!p.size && !p.count && !p.local);
      unsigned records=0;
      for(unsigned part=0;part<p.size;++part){auto v=p.ranges[part];
       assert(v.record==records && v.begin<v.end && v.end<=experts);
       for(unsigned e=v.begin;e<v.end;++e){
-       assert(((first<=e && e<first+groupSize))==p.local);++hits[e];++records;
+       assert(((first<=e && e<first+groupSize))==v.local);assert(core>=kLlSendCoreNum);++hits[e];++records;
       }
      }
      assert(records==p.count);
-     assert(p.count<=LlGroupCountMaxRecords(experts,ranks,p.local));
+     assert(p.count<=LlGroupCountMaxRecords(experts,ranks,core>=kLlSendCoreNum));
     }
     for(auto hit:hits)assert(hit==1);
    }
@@ -101,7 +105,7 @@ def test_fused_local_tasks_match_original_route_slots(send,group,kind):
                 if start<=e<stop:
                     q=histogram[e] if i>=k else 0
                     histogram[e]+=1
-                    if core>=send:
+                    if first<=e<end:
                         assert (i,e) not in descriptors
                         descriptors[i,e]=(core,q)
                     else:remote_owners[i,e]=core

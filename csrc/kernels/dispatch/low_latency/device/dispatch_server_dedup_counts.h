@@ -210,7 +210,6 @@ private:
 // 摘要：统计完整原始路由的专家计数并异步发往专家所属 rank，同时保留仍被 MTE3 使用的记录 UB。
 __aicore__ inline void ServerDedupCounts::SendCnt()
 {
-    LL_SEG_SCOPE(SEND_COUNTS);
     statusCntAlign_=countPlan_.count==0U ? 0U : Ceil(countPlan_.count,UB_ALIGN_DATA_COUNT)*UB_ALIGN_DATA_COUNT;
     const uint32_t recordBytes=statusCntAlign_*kEpServerDedupCountRecordBytes;
     if (recordBytes) tpipe_->InitBuffer(statusBuf_,recordBytes);
@@ -224,6 +223,7 @@ __aicore__ inline void ServerDedupCounts::SendCnt()
     tpipe_->InitBufPool(stagePool_,overlap_.enabled ? overlap_.sendBytes : kEpServerDedupCountUbBytes-ReservedBytes());
     if (overlap_.enabled && overlap_.countBytes) tpipe_->InitBufPool(recvCountPool_,overlap_.countBytes);
     if (!countPlan_.count) return;
+    LL_SEG_SCOPE(SEND_COUNTS);
     LL_SEG_BEGIN(initCountBuffers, INIT_COUNT_BUFFERS);
     tpipe_->InitBufPool(countPool_,4U*routeBytes+statusCntAlign_*sizeof(int32_t),stagePool_);
     countPool_.InitBuffer(expertIdsBuf_,routeBytes);
@@ -243,12 +243,13 @@ __aicore__ inline void ServerDedupCounts::SendCnt()
     Duplicate<int32_t>(statusTensor_,0x3f800000,flagMask,statusCntAlign_/8U,1U,8U);
     SyncFunc<HardEvent::V_S>();
     LL_SEG_END(initCountBuffers, INIT_COUNT_BUFFERS);
-    if (countPlan_.local) {
-        BuildLocalTasks(countPlan_.ranges[0].begin,countPlan_.ranges[0].end);
-    } else {
-        const uint32_t maskBytes=Ceil(Ceil(expertIdsCnt_,8U),UB_ALIGN)*UB_ALIGN;
-        for (uint32_t part=0;part<countPlan_.size;++part) {
-            const auto range=countPlan_.ranges[part];
+    const uint32_t maskBytes=Ceil(Ceil(expertIdsCnt_,8U),UB_ALIGN)*UB_ALIGN;
+    for (uint32_t part=0;part<countPlan_.size;++part) {
+        const auto range=countPlan_.ranges[part];
+        if (range.local) {
+            // Local range is first, so BuildLocalTasks retains record base zero.
+            BuildLocalTasks(range.begin,range.end);
+        } else {
             if (expertIdsCnt_>=SIZE_ALIGN_256/sizeof(int32_t) && 2U*maskBytes<=routeBytes)
                 CountByVectorRange(range.begin,range.end,maskBytes,range.record);
             else CountByExpert(range.begin,range.end,range.record);

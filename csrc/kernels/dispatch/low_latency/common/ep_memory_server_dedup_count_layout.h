@@ -21,7 +21,7 @@ constexpr uint32_t kEpServerDedupAllCoreCountBsThreshold = DISPATCH_SERVER_DEDUP
 constexpr uint32_t kEpServerDedupMaxExperts = 1024U;
 constexpr uint32_t kEpServerDedupCountRecordBytes = 32U;
 constexpr uint32_t kEpServerDedupCountGmStride = 512U;
-constexpr uint32_t kEpServerDedupCountUbBytes = 190U * 1024U;
+constexpr uint32_t kEpServerDedupCountUbBytes = 230U * 1024U;
 // Persistent per-AIV state lives only in window 0's prefix, never in the
 // selected ping-pong bank. Keep identical count offsets in both windows.
 constexpr uint64_t kEpServerDedupMagicStride = 512U;

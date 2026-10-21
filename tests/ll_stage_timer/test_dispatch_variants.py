@@ -53,6 +53,7 @@ def test_real_host_selector_all_modes_and_rejections(tmp_path,timer):
 #include <stdexcept>
 #include <initializer_list>
 #include "csrc/kernels/dispatch/low_latency/common/ll_dispatch_variant.h"
+#include "csrc/kernels/dispatch/low_latency/common/ll_core_config.h"
 #include "csrc/kernels/dispatch/low_latency/launch.hpp"
 using namespace DispatchDedup;
 static unsigned calls=0,selected=99;
@@ -76,7 +77,7 @@ int main() {
    assert(threw && !calls);
  }
  bool threw=false;try {dispatch_server_dedup_kernel_do_v2(nullptr,nullptr,0);}catch(const std::invalid_argument&){threw=true;}assert(threw);
- assert(deepep_ll_core_protocol_version()==14028);
+ assert(deepep_ll_core_protocol_version()==kLlCoreProtocolVersion);
  assert(deepep_ll_ranks_per_group()==4);
 #ifdef DEEPEP_LL_STAGE_TIMER
  assert(deepep_ll_stage_timer_enabled()==1);
