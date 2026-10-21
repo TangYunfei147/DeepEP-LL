@@ -48,11 +48,6 @@ NIC 可写接收/控制/暂存视图保持 L2 bypass。机内读取不经 NIC，
 
 ## SDK 与验收边界
 
-2026-10-21例外：锁定revision不变，但Host barrier增加工程管理的精确overlay，
-修复ROCE peer被Scalar直接读取。只影响Host barrier translation unit，不改变QP容量；
-旧SDK身份拒绝，需显式重建。原“仅原生源码”要求在此补丁范围内更新，
-未知修改仍拒绝。实现、边界和验收见[HOST_BARRIER_FIX.md](HOST_BARRIER_FIX.md)。
-
 SHMEM 仍锁定 `4dd80e2129da42bd773982c2bb3758af1ed0bba8`。统一 `build_shmem.py` 构建 HNS_1825，使用锁定 SDK 原生每 peer 56 QP 限制（`include/host/shmem_host_def.h:34`），不应用或接受 QP 扩容修改，不另建 SDK 树。旧补丁 SDK 不可复用；保留产物，用户停止相关作业后显式 `--rebuild` 并重建全 rank wheel。普通 qp_put/qp_quiet 支持 HNS_1825，XSCALE aggregate 接口不使用。SDK 可能为机内 peer 也建立 ROCE 通道，但 kernel 机内数据不使用它们；资源容量仍需目标机验收。
 
 两 rank primitive 可显式描述同机两卡（每机 2 rank）或跨机各一卡（每机 1 rank），这是测试真实物理部署，不是伪造原生 LL rank 数。生产机界仍固定 16。A5 只允许前者、设备 0/1；跨机 RDMA 写、完整 LL EP16/32 和性能由用户在目标环境验收。

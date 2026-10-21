@@ -194,11 +194,6 @@ void aclshmem_barrier_all()
 {
     ++barriers;
 }
-int barrier_sync_status = 0, barrier_streams = 0;
-int aclrtCreateStream(aclrtStream* stream) { *stream = &storage; ++barrier_streams; return 0; }
-int aclrtSynchronizeStream(aclrtStream) { return barrier_sync_status; }
-int aclrtDestroyStream(aclrtStream) { --barrier_streams; return 0; }
-void aclshmemx_barrier_all_on_stream(void*) { ++barriers; }
 
 int main(int argc, char** argv)
 {
@@ -334,14 +329,6 @@ int main(int argc, char** argv)
             fails([&]() { session.close(); });
             fails([&]() { session.barrier(); });
             assert(finalized == 1 && frees == 1);
-            return 0;
-        }
-        if (mode == "barrier-fault") {
-            barrier_sync_status = -77;
-            fails([&]() { session.barrier(); });
-            assert(barrier_streams == 0 && frees == 0 && finalized == 0);
-            fails([&]() { session.close(); });
-            assert(barrier_streams == 0 && frees == 0 && finalized == 0);
             return 0;
         }
         session.barrier();

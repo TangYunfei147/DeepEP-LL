@@ -2,10 +2,6 @@
 
 维护分支：`kernel/ll-ndr-hns1825`。原泛化/打点分支 `kernel/ll-configurable-groups` 不包含此改动。
 
-2026-10-21：多机初始化 Host barrier 修复已纳入工程管理的锁定SDK overlay。
-**首次更新必须在停止SDK使用者后 `python scripts/build_shmem.py --rebuild`，再全rank重装wheel。**
-旧SDK不能复用；详见 [HOST_BARRIER_FIX.md](HOST_BARRIER_FIX.md)。
-
 **默认混合后端现在采用机内 MTE、跨机 RDMA put，禁止跨机 get。生产默认每机 16 个连续 rank。** Host tiling 选择 EP≤16 的 key/G=4，EP>16 的 key/G=16；两种模板在同一 wheel 中。原生 LL 仍不支持 EP2/4/8；M>32 的去重开关保持不变。详细路径和顺序见 [AUDIT.md](AUDIT.md)。
 
 ## Git 获取与构建

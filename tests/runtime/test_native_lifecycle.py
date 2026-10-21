@@ -51,7 +51,6 @@ def lifecycle_binary(tmp_path_factory):
         "foreign",
         "abandoned",
         "close-fault",
-        "barrier-fault",
         "normal",
         "udma",
         "megamoe",

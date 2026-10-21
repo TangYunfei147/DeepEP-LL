@@ -15,7 +15,6 @@ import subprocess
 import tempfile
 
 from record_shmem_sdk import record
-import shmem_barrier_patch
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -48,12 +47,7 @@ def source_patches(source):
         if path.is_symlink() or not path.resolve().is_relative_to(source.resolve()):
             raise RuntimeError(f"Untracked SHMEM input must be a local regular file: {path}")
         digest.update(name + b"\0" + hashlib.sha256(path.read_bytes()).digest())
-    if shmem_barrier_patch.is_managed_only(source):
-        return [shmem_barrier_patch.patch_identity()]
-    _, expected = shmem_barrier_patch.expected_source(source)
-    managed = ([shmem_barrier_patch.patch_identity()]
-               if (source / shmem_barrier_patch.TARGET).read_text(encoding="utf-8") == expected else [])
-    return managed + [{"kind": "local-worktree", "sha256": digest.hexdigest()}]
+    return [{"kind": "local-worktree", "sha256": digest.hexdigest()}]
 
 
 def prepare(root=ROOT, *, rebuild=False, if_needed=True, allow_local_changes=False, rdma_backend="HNS_1825"):
@@ -79,9 +73,8 @@ def prepare(root=ROOT, *, rebuild=False, if_needed=True, allow_local_changes=Fal
     revision = git("rev-parse", "HEAD")
     if revision != lock["shmem"]["revision"]:
         raise RuntimeError("SHMEM revision differs from dependencies.lock.json; do not build a moving branch")
-    shmem_barrier_patch.apply(source)
     patches = source_patches(source)
-    if any(patch != shmem_barrier_patch.patch_identity() for patch in patches) and not allow_local_changes:
+    if patches and not allow_local_changes:
         raise RuntimeError("SHMEM has local changes; pass --allow-local-changes to build them explicitly "
                            "(cluster launcher: --allow-local-shmem)")
 

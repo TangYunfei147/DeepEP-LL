@@ -10,7 +10,6 @@ recursive-include cmake *.cmake CMakeLists.txt
 recursive-include csrc *.cpp *.hpp *.h
 recursive-include docs *.md
 recursive-include scripts *.py *.sh
-recursive-include scripts/patches *.inc
 recursive-include tests *.py *.json *.cpp *.h *.md
 recursive-include benchmarks *.py *.json *.csv *.md
 include third-party/*.md third-party/*.LICENSE
