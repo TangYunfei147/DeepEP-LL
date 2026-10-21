@@ -201,16 +201,36 @@ def make_parser():
     return parser
 
 
+DISPATCH_PROFILER_ENTRIES = (
+    "dispatch_server_dedup_kernel",
+    *(f"dispatch_server_dedup_kernel_{mode}"
+      for mode in ("prequant_e4m3", "fp16", "fp16_e4m3", "fp16_e5m2",
+                   "bf16", "bf16_e4m3", "bf16_e5m2")
+),
+)
+
+
 def kernel_durations(root, kernel, expected):
     """Read only the requested device kernel from torch_npu text exports."""
     rows = []
+    entries = DISPATCH_PROFILER_ENTRIES if kernel == "dispatch_server_dedup_kernel" else (kernel,)
+    pattern = re.compile(r"\b(?:" + "|".join(map(re.escape, entries)) + r")\b")
+    actual_entries = set()
+    actual_task_names = set()
     for path in sorted(Path(root).rglob("kernel_details.csv")):
         with path.open(newline="", encoding="utf-8-sig") as stream:
             for row in csv.DictReader(stream):
                 normalized = {key.replace(" ", "").lower(): value for key, value in row.items() if key}
                 name = normalized.get("name", normalized.get("opname", ""))
-                if not re.search(r"\b" + re.escape(kernel) + r"\b", name):
+                matches = pattern.findall(name)
+                if not matches:
                     continue
+                actual_entries.update(matches)
+                if kernel == "dispatch_server_dedup_kernel" and len(actual_entries) > 1:
+                    raise ValueError(f"Mixed dispatch profiler entries in {root}: {sorted(actual_entries)}")
+                actual_task_names.add(name.strip())
+                if kernel == "dispatch_server_dedup_kernel" and len(actual_task_names) > 1:
+                    raise ValueError(f"Mixed dispatch profiler task names in {root}: {sorted(actual_task_names)}")
                 value = float(normalized.get("duration(us)", normalized.get("taskduration(us)", "nan")))
                 if not math.isfinite(value) or value <= 0:
                     raise ValueError(f"Invalid kernel duration in {path}: {value}")

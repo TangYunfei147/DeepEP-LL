@@ -58,3 +58,10 @@ allow R-local send quanta to yield; S enters receive without retiring remote DMA
 Schema11, protocol14000+S, implementation g4-overlap-recv. Read
 ../ll_stage_timer/OVERLAP_RECEIVE.md before modifying this path. The old dispatch
 non-probe token digest is intentionally no longer an algorithm-equivalence claim.
+
+Dispatch compilation now uses low_latency.cpp as Host selector,
+low_latency/variants/*.cpp as seven device entries, and
+low_latency/dispatch_variant_kernel.h for identical entry/timer wiring.
+Algorithms remain in dispatch_server_dedup_kernel.h and device/*.h.
+See docs/BUILD_DISPATCH_SPLIT.md; keep profiler name matching and compile_off.sh
+in sync when adding modes.

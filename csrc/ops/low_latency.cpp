@@ -3,6 +3,7 @@
 #include "ops/low_latency.hpp"
 #include <pybind11/stl.h>
 #include <climits>
+#include "../kernels/dispatch/low_latency/common/ll_dispatch_variant.h"
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -107,6 +108,16 @@ uint8_t dtype_code(const std::string& dtype)
     if (dtype == "float8_e4m3fn") return DispatchDedup::DISPATCH_DEDUP_DATA_TYPE_FP8E4M3;
     throw std::invalid_argument("LL dispatch supports BF16/FP16 or packed FP8 E4M3FN");
 }
+DispatchDedup::EpServerDedupTilingData dispatch_format_tiling(const std::string& dtype) {
+    DispatchDedup::EpServerDedupTilingData data{};
+    const bool fp8=dtype=="float8_e4m3fn";
+    data.dtype=dtype_code(dtype);
+    data.quantMode=fp8?4:0;
+    data.inputMode=static_cast<uint8_t>(fp8 ? DispatchDedup::EpServerDedupInputMode::PrequantizedFp8Packs :
+                                             DispatchDedup::EpServerDedupInputMode::Plain16);
+    data.expandXOutDtype=data.dtype;
+    return data;
+}
 }  // namespace
 
 void bind_low_latency(py::module_& module)
@@ -208,18 +219,13 @@ void bind_low_latency(py::module_& module)
                                                  int num_max_tokens_per_rank) {
         const bool fp8 = dtype == "float8_e4m3fn";
         layout(p, b, h, k, e, fp8);
-        DispatchDedup::EpServerDedupTilingData data{};
+        auto data=dispatch_format_tiling(dtype);
         data.bs = b;
         data.h = h;
         data.numMaxTokensPerRank = num_max_tokens_per_rank;
         data.topK = k;
         data.moeExpertNum = e;
         data.expertTokenNumsType = 1;
-        data.dtype = dtype_code(dtype);
-        data.quantMode = fp8 ? 4 : 0;
-        data.inputMode = static_cast<uint8_t>(fp8 ? DispatchDedup::EpServerDedupInputMode::PrequantizedFp8Packs
-                                                  : DispatchDedup::EpServerDedupInputMode::Plain16);
-        data.expandXOutDtype = data.dtype;
         return bytes(data);
     });
     module.def("low_latency_combine_tiling",
@@ -277,9 +283,12 @@ void bind_low_latency(py::module_& module)
         args.tilingData = get("tiling", {sizeof(DispatchDedup::EpServerDedupTilingData)}, "uint8");
         args.inputScales = fp8 ? get("scales", {b, (h + 127) / 128}, scale_dtype) : nullptr;
         session.workspace();  // Validate the owning context before launch.
+        const auto format=dispatch_format_tiling(dtype);
+        const auto variant=DispatchDedup::LlDispatchVariantForTiling(format.dtype,format.quantMode,
+                                                                    format.expandXOutDtype,format.inputMode);
         py::gil_scoped_release release;
         session.invalidate_dispatch_controls();
-        dispatch_server_dedup_kernel_do(reinterpret_cast<void*>(stream_address), &args);
+        dispatch_server_dedup_kernel_do_v2(reinterpret_cast<void*>(stream_address), &args, variant);
     });
     module.def("combine_low_latency", [](Session& session, py::dict tensors, int b, int h, int k, int e,
                                          const std::string& dtype, uintptr_t stream_address) {

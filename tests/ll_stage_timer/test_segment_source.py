@@ -28,7 +28,7 @@ def normalize(s):
 
 # Dispatch algorithms intentionally evolve on this branch; retain the immutable
 # combine/entry baseline guard, not a misleading updated dispatch hash.
-@pytest.mark.parametrize('relative',[p for p in MANIFEST['files'] if '/dispatch/low_latency/' not in p])
+@pytest.mark.parametrize('relative',[p for p in MANIFEST['files'] if '/dispatch/low_latency/' not in p and not p.endswith('/dispatch/low_latency.cpp')])
 def test_non_diagnostic_token_stream_matches_shared_receive_baseline(relative):
     tokens=normalize((ROOT/relative).read_text(encoding='utf-8'))
     assert hashlib.sha256(' '.join(tokens).encode()).hexdigest()==MANIFEST['files'][relative]
@@ -49,7 +49,7 @@ def test_no_gm_writes_or_new_barriers_at_measured_boundaries():
     device=(ROOT/'csrc/kernels/dispatch/low_latency/common/ll_stage_timer_device.h').read_text()
     measured=device[device.index('uint64_t Begin('):device.index('void Flush()')]
     assert not any(word in measured for word in ('GlobalTensor','DataCopy','PipeBarrier','SyncAll','FlushLine','__gm__'))
-    for relative in ('csrc/kernels/dispatch/low_latency.cpp','csrc/kernels/combine/low_latency.cpp'):
+    for relative in ('csrc/kernels/dispatch/low_latency/dispatch_variant_kernel.h','csrc/kernels/combine/low_latency.cpp'):
         source=(ROOT/relative).read_text()
         assert source.index('timer.End(LlStageTimer::KERNEL, kernelBegin)')<source.index('AscendC::SyncAll<true>()')<source.index('timer.Flush()')
         assert 'if (timer.Enabled())' in source
