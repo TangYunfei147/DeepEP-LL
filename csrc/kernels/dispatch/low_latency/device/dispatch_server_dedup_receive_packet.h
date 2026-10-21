@@ -15,8 +15,8 @@ using namespace AscendC;
 template <HardEvent event>
 __aicore__ inline void ServerDedupReceiveSync()
 {
-    SetFlag<event>(0U);
-    WaitFlag<event>(0U);
+    SetFlag<event>(7U);
+    WaitFlag<event>(7U);
 }
 
 __aicore__ inline uint32_t ServerDedupWireOffset(uint32_t logical)

@@ -4,6 +4,7 @@
 #ifndef DISPATCH_SERVER_DEDUP_RECV_H
 #define DISPATCH_SERVER_DEDUP_RECV_H
 #include "../common/ll_stage_timer_device.h"
+#include "../common/ll_overlap_layout.h"
 #include "../common/ll_expert_timer_device.h"
 
 #include "kernel_operator.h"
@@ -55,6 +56,8 @@ public:
         relayReadIndex_.SetGlobalBuffer(reinterpret_cast<__gm__ uint32_t*>(relayReadIndex));
     }
 
+    __aicore__ inline void ConfigureOverlap(LlOverlapLayout plan) { overlap_=plan; }
+    __aicore__ inline void SetPrefix(LocalTensor<int32_t> prefix) { sharedPrefix_=prefix; }
     // 摘要：执行接收主流程：加载前缀、构建任务、批量探测、预取并消费就绪包，最后清理本核槽位标记。
     __aicore__ inline void Process(LlStageTimer::DeviceTimer* timer = nullptr)
     {
@@ -66,17 +69,20 @@ public:
         // Caller has completed count-stage writes before this Reset. The GM
         // prefix belongs to this receive core; old count UB is no longer used.
         LL_SEG_BEGIN(recvPrepareBegin, RECV_PREPARE);
-        pipe_->Reset();
+        if (!overlap_.enabled) pipe_->Reset();
         const uint32_t prefixBytes = uint32_t(DispatchDedupAlign(uint64_t(experts_) * 4U, 32U));
+        LocalTensor<int32_t> prefix=sharedPrefix_;
+        if (!overlap_.enabled) {
         pipe_->InitBuffer(prefixBuf_, prefixBytes);
         GlobalTensor<int32_t> prefixGlobal;
         const auto counts = DispatchServerDedupCountLayout(experts_, coreNum_);
         prefixGlobal.SetGlobalBuffer(reinterpret_cast<__gm__ int32_t*>(args_->peerMems[args_->rank] + windowOffset_ +
                                                                        counts.cntOffset + counts.prefixOffset +
                                                                        uint64_t(receiver_) * counts.prefixStride));
-        auto prefix = prefixBuf_.Get<int32_t>();
+        prefix = prefixBuf_.Get<int32_t>();
         DataCopyPad(prefix, prefixGlobal, {1U, prefixBytes, 0U, 0U, 0U}, {false, 0U, 0U, 0});
         ServerDedupReceiveSync<HardEvent::MTE2_S>();
+        }
 
         // 2. 按前缀定义的接收输出行均分任务，建立稳定槽位表和可压缩的 pending 表。
         // j 始终标识固定输出行/槽位；pending 下标只表示尚未消费的任务位置。
@@ -111,9 +117,9 @@ public:
         // MTE3_MTE2 事件保护 lane：旧包的输出和 relay 读完后，下一次加载才可覆盖。
         laneStride_ = uint32_t(data_.tokenStride) + 64U;
         const uint32_t available = (kEpServerDedupCountUbBytes - fixed) / laneStride_;
-        lanes_ = available < 8U ? available : 8U;  // Safe inputs guarantee at least one lane.
+        lanes_ = overlap_.enabled ? overlap_.recvLanes : (available < 8U ? available : 8U);  // Safe inputs guarantee at least one lane.
         pipe_->InitBuffer(lanesBuf_, lanes_ * laneStride_);
-        for (uint32_t lane = 0; lane < lanes_; ++lane) SetFlag<HardEvent::MTE3_MTE2>(lane);
+        if (!overlap_.enabled) for (uint32_t lane = 0; lane < lanes_; ++lane) SetFlag<HardEvent::MTE3_MTE2>(lane);
 
         LL_SEG_END(recvPrepareBegin, RECV_PREPARE);
         auto snapshot = probeIdxBuf_.Get<uint32_t>();
@@ -149,7 +155,8 @@ public:
                 while (issued-consumed<depth && nextLoad<order.count) {
                     const uint32_t index=order.At(nextLoad++);
                     IssueLoad(snapshot.GetValue(index),issued%lanes_,
-                              (probe.keepFlagsMask&(uint32_t(1)<<index))!=0U);
+                              (probe.keepFlagsMask&(uint32_t(1)<<index))!=0U,
+                              !overlap_.enabled || issued>=lanes_);
                     ++issued;
                 }
                 const uint32_t index=order.At(current);
@@ -168,7 +175,7 @@ public:
         // 5. pending 清空后，等待各 lane 在途写入，随后统一清除本核所有槽位的块标记。
         // 清理使用稳定任务表，不能使用已压缩为空的 pending 表；payload 本身不清零。
 
-        for (uint32_t lane = 0; lane < lanes_; ++lane) WaitFlag<HardEvent::MTE3_MTE2>(lane);
+        for (uint32_t lane = 0; lane < (issued<lanes_ ? issued : lanes_); ++lane) WaitFlag<HardEvent::MTE3_MTE2>(lane);
         // This is the end of wait instruction submission, not a new Scalar
         // completion barrier. The existing final PIPE_ALL establishes completion.
 
@@ -218,10 +225,10 @@ private:
     }
 
     // 摘要：等待 lane 的旧输出完成后，将 packet 从 GM 预取到 UB，分别发布给 Scalar 和 MTE3 的依赖事件。
-    __aicore__ inline void IssueLoad(uint32_t j, uint32_t lane, bool keepFlags)
+    __aicore__ inline void IssueLoad(uint32_t j, uint32_t lane, bool keepFlags, bool reuse)
     {
         LL_SEG_BEGIN(segBegin1, RECV_BUFFER_WAIT);
-        WaitFlag<HardEvent::MTE3_MTE2>(lane);
+        if (reuse) WaitFlag<HardEvent::MTE3_MTE2>(lane);
         LL_SEG_END(segBegin1, RECV_BUFFER_WAIT);
         LL_SEG_BEGIN(segBegin2, RECV_INPUT);
         auto wire = lanesBuf_.Get<uint8_t>()[lane * laneStride_];
@@ -367,6 +374,8 @@ private:
     LlStageTimer::DeviceTimer* timer_ = nullptr;
     LlExpertTimer::DeviceTimer* expertTimer_ = nullptr;
     TPipe* pipe_ = nullptr;
+    LlOverlapLayout overlap_{};
+    LocalTensor<int32_t> sharedPrefix_;
     bool enableDedup_ = false;
     uint64_t windowOffset_ = 0;
     uint32_t recvCoreNum_ = 0, coreNum_ = 0;

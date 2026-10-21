@@ -1,0 +1,56 @@
+#pragma once
+#include "ep_memory_server_dedup_data_layout.h"
+#include "ep_memory_server_dedup_count_layout.h"
+namespace DispatchDedup {
+#if defined(__CCE__) && defined(__CCE_IS_AICORE__)
+#define LL_OVERLAP_INLINE __aicore__ inline
+#else
+#define LL_OVERLAP_INLINE inline
+#endif
+struct LlOverlapLayout {
+    uint32_t sendBytes=0, countBytes=0, sendLanes=0, recvLanes=0;
+    uint64_t totalBytes=0;
+    bool enabled=false;
+};
+LL_OVERLAP_INLINE uint64_t LlOverlapMax(uint64_t a,uint64_t b) { return a>b?a:b; }
+LL_OVERLAP_INLINE LlOverlapLayout LlMakeOverlapLayout(const EpServerDedupDataLayout& d,
+    uint32_t bs,uint32_t k,uint32_t e,uint32_t ranks,uint32_t rank,uint32_t core,
+    EpServerDedupInputMode mode) {
+    LlOverlapLayout p{};
+    const auto plan=LlMakeGroupCountPlan(e,ranks,rank,core);
+    const auto a=[](uint64_t n,uint64_t alignment) { return (n+alignment-1)/alignment*alignment; };
+    const uint64_t routes=a(uint64_t(bs)*k*4,256), q=a(uint64_t(bs)*k*4,32);
+    const uint64_t records=a(plan.count,8), reserved=records*32+(plan.local&&plan.count?2*routes:0);
+    const bool quant=mode==EpServerDedupInputMode::Quantize16;
+    const uint64_t input=quant?d.quantCount*2:d.packedPayloadBytes;
+    const uint64_t scales=d.quantCount/32, work=a(a(scales,32)*4+scales*2,32);
+    const uint64_t tokens=(bs+kLlSendCoreNum-1)/kLlSendCoreNum;
+    const uint64_t groups=(ranks/kLlRanksPerGroup-1)<k/2 ? ranks/kLlRanksPerGroup-1:k/2;
+    const uint64_t sendFixed=core<kLlSendCoreNum ?
+        2*input+routes+2*(quant?LlOverlapMax(q,work):q)+q+(quant?d.packedPayloadBytes:0)+
+        2*a(tokens*k*4,32)+a(tokens*4,32)+a(tokens*k*16,32)+
+        LlOverlapMax(64,a(ranks/kLlRanksPerGroup*4,32))+a(groups*4,32) :
+        2*input+q+(quant?work+d.packedPayloadBytes:0);
+    const uint64_t countScratch=plan.count?4*routes+records*4:0;
+    const uint64_t countRows=(e+kLlRecvCoreNum-1)/kLlRecvCoreNum;
+    const uint64_t countStage=core<kLlSendCoreNum?0:96+a(countRows*32+256,256)+a(e*4,32)+
+        ((kLlDispatchRecvCoreNum+7)/8)*256+((kLlRecvCoreNum+7)/8)*256+a(kLlRecvCoreNum*4,32);
+    const uint64_t active=e<kLlRecvCoreNum?e:kLlRecvCoreNum;
+    const uint64_t complete=96+a(active*32+256,256)+active*32+a(e*4,32)+a(uint64_t(e/ranks)*8,32);
+    const uint64_t maxRows=uint64_t(bs)*ranks*(k<e/ranks?k:e/ranks);
+    const uint64_t tasks=(maxRows+kLlDispatchRecvCoreNum-1)/kLlDispatchRecvCoreNum;
+    const uint64_t recvFixed=2*a(tasks*4,32)+16*d.blockCount*32+256+
+        16*a((d.blockCount+7)/8,32)*4+256+16*36;
+    const uint64_t fixed=reserved+countStage+complete+recvFixed;
+    // Select once per core, never per packet. Prefer equal lane depth, then use
+    // IDs 6/7 remain reserved for input/control dependencies. All bounds include the count scratch alias.
+    for (uint32_t lanes=1;lanes<=6;++lanes) {
+        const uint64_t send=LlOverlapMax(sendFixed+lanes*d.tokenStride,countScratch);
+        const uint64_t total=fixed+send+lanes*(d.tokenStride+64);
+        if (total>kEpServerDedupCountUbBytes) break;
+        p={uint32_t(send),uint32_t(countStage),lanes,lanes,total,true};
+    }
+    return p;
+}
+#undef LL_OVERLAP_INLINE
+}

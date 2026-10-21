@@ -6,6 +6,7 @@
 // prepare_snapshot.py仅在实验副本中截断SendPacket并加入观测输出，生产路径不受该提取影响。
 #ifndef DISPATCH_SERVER_DEDUP_SEND_H
 #define DISPATCH_SERVER_DEDUP_SEND_H
+#include "../common/ll_overlap_layout.h"
 #include "../common/ll_stage_timer_device.h"
 
 #include "kernel_operator.h"
@@ -59,6 +60,7 @@ public:
         weightOut_.SetGlobalBuffer(reinterpret_cast<__gm__ float*>(sourceWeights));
     }
 
+    __aicore__ inline void ConfigureOverlap(LlOverlapLayout plan) { overlap_=plan; }
     // 摘要：执行本核发送主流程：准备 UB、优先发送去重首跳、再发送 DIRECT，最后写回源端元数据。
     __aicore__ inline void Process(TBufPool<TPosition::VECCALC, 16>& scratch, uint32_t reservedBytes,
                                    LlStageTimer::DeviceTimer* timer = nullptr)
@@ -119,7 +121,7 @@ public:
         // 3. 用剩余 UB 构造最多 8 个发送 lane，每个 lane 容纳一个完整 wire packet。
         // lane 数由当前 shape 决定；输入容量校验需保证至少能容纳一个。
         const uint32_t available = (kEpServerDedupCountUbBytes - usedBytes_) / uint32_t(data_.tokenStride);
-        lanes_ = available < 8U ? available : 8U;
+        lanes_ = overlap_.enabled ? overlap_.sendLanes : (available < 8U ? available : 8U);
         Allocate(outBuf_, lanes_ * uint32_t(data_.tokenStride));
         routeIds_ = idsBuf_.Get<int32_t>();
         if (count_ != 0U) routeWeights_ = weightInBuf_.Get<float>();
@@ -220,7 +222,7 @@ public:
             Sync<HardEvent::MTE2_S>();
         }
         const uint32_t available=(kEpServerDedupCountUbBytes-usedBytes_)/uint32_t(data_.tokenStride);
-        lanes_=available<8U ? available : 8U;
+        lanes_=overlap_.enabled ? overlap_.sendLanes : (available<8U ? available : 8U);
         Allocate(outBuf_,lanes_*uint32_t(data_.tokenStride));
         uint64_t flagMask[2]={0xffU,0U};
         for (uint32_t lane=0;lane<lanes_;++lane) {
@@ -243,7 +245,7 @@ public:
         { LL_SEG_SCOPE(SEND_COMPLETE_WAIT);
         Sync<HardEvent::MTE3_S>();
         }
-        scratch_->Reset();
+        if (!overlap_.enabled) scratch_->Reset();
         // Packet packing may use a different control mode; the unchanged
         // count-receive reductions require integer FP32 subnormals preserved.
         SetCtrlSpr<60,60>(0);
@@ -500,8 +502,8 @@ private:
         inputPrefetch_.Reset();
         inputsIssued_=0U;
         if constexpr (!NeedQuantize) {
-            inputReady_[0]=pipe_->AllocEventID<HardEvent::MTE2_S>();
-            inputReady_[1]=pipe_->AllocEventID<HardEvent::MTE2_S>();
+            inputReady_[0]=overlap_.enabled ? TEventID(6) : pipe_->AllocEventID<HardEvent::MTE2_S>();
+            inputReady_[1]=overlap_.enabled ? TEventID(7) : pipe_->AllocEventID<HardEvent::MTE2_S>();
         }
     }
     __aicore__ inline void EndInputPrefetch(TQue<QuePosition::VECIN,1>& input)
@@ -509,8 +511,10 @@ private:
         PrefetchOps ops{*this,input};
         inputPrefetch_.Flush(ops); // Includes singleton and final packet.
         if constexpr (!NeedQuantize) {
+            if (!overlap_.enabled) {
             pipe_->ReleaseEventID<HardEvent::MTE2_S>(inputReady_[0]);
             pipe_->ReleaseEventID<HardEvent::MTE2_S>(inputReady_[1]);
+            }
         }
     }
     __aicore__ inline void IssueInput(TQue<QuePosition::VECIN,1>& input,uint32_t token)
@@ -613,6 +617,7 @@ private:
     TBufPool<TPosition::VECCALC, 16>* scratch_ = nullptr;
     uint32_t sendCores_ = 0;
     uint32_t bs_ = 0, h_ = 0, k_ = 0, localExperts_ = 0, start_ = 0, count_ = 0;
+    LlOverlapLayout overlap_{};
     uint32_t usedBytes_ = 0, lanes_ = 0, packets_ = 0, directCount_ = 0;
     LlOnePacketInput inputPrefetch_;
     LocalTensor<XType> pendingInput_;

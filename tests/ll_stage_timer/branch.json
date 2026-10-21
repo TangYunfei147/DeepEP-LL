@@ -1,1 +1,1 @@
-{"implementation":"g4-shared-recv","rdma":false}
+{"implementation":"g4-overlap-recv","rdma":false}

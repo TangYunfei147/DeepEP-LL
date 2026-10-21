@@ -29,6 +29,13 @@ public:
         core_ = GetBlockIdx();
         sendCores_ = kLlSendCoreNum;
         pipe_ = pipe;
+        constexpr auto mode=Prequantized ? EpServerDedupInputMode::PrequantizedFp8Packs :
+            (WireFp8 ? EpServerDedupInputMode::Quantize16 : EpServerDedupInputMode::Plain16);
+        overlap_=LlMakeOverlapLayout(DispatchServerDedupDataLayout(bs,h,topK,experts,mode),
+                                    bs,topK,experts,args_->rankSize,args_->rank,core_,mode);
+        counts_.ConfigureOverlap(overlap_);
+        sender_.ConfigureOverlap(overlap_);
+        receiver_.ConfigureOverlap(overlap_);
         const uint32_t magic = RotateDispatchServerDedupMagic(args_, core_, pipe);
         counts_.Init(commArgs, expertIds, expertTokenNumsOut, sendCountsOut, bs, topK, experts, expertTokenNumsType,
                      magic, pipe, timer);
@@ -42,6 +49,11 @@ public:
     // Sender可与接收核的计数前缀准备重叠，不能把提取阶段耗时直接相加当作完整时延。
     __aicore__ inline void Process()
     {
+        if (overlap_.enabled) {
+            LL_SEG_COUNT(OVERLAP_PATH,1);
+            LL_SEG_COUNT(SEND_LANES,overlap_.sendLanes);
+            LL_SEG_COUNT(RECV_LANES,overlap_.recvLanes);
+        } else { LL_SEG_COUNT(SERIAL_FALLBACK,1); }
         counts_.SendCnt();
 
         if (core_ < sendCores_) {
@@ -63,6 +75,7 @@ public:
         { LL_SEG_SCOPE(TRANSITION_DRAIN);
         PipeBarrier<PIPE_ALL>();
         }
+        if (overlap_.enabled) receiver_.SetPrefix(counts_.Prefix());
         { LL_SEG_SCOPE(LOCAL_WINDOW_COPY);
         receiver_.Process(timer_);
         }
@@ -82,6 +95,7 @@ private:
     ServerDedupReceiver<XType, WireFp8, E4M3, Prequantized> receiver_;
     const __gm__ DispatchDedup::CommArgs* args_ = nullptr;
     TPipe* pipe_ = nullptr;
+    LlOverlapLayout overlap_{};
     uint32_t core_ = 0, sendCores_ = 0;
 };
 }  // namespace DispatchDedup

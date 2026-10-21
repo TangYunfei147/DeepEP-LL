@@ -6,6 +6,7 @@
 
 #include "kernel_operator.h"
 #include "dispatch_frequency_histogram.h"
+#include "../common/ll_overlap_layout.h"
 #include "../common/ll_stage_timer_device.h"
 #include "adv_api/reduce/sum.h"
 #include "../common/ep_memory_server_dedup_count_layout.h"
@@ -59,6 +60,7 @@ public:
         SetCtrlSpr<60, 60>(0);
     }
 
+    __aicore__ inline void ConfigureOverlap(LlOverlapLayout plan) { overlap_=plan; }
     // 摘要：统计完整原始路由的专家计数并异步发往专家所属 rank，同时保留仍被 MTE3 使用的记录 UB。
     __aicore__ inline void SendCnt();
     // 摘要：将本 rank 的计数记录分给接收核，等待本片计数到齐并计算局部前缀与总数。
@@ -85,7 +87,7 @@ public:
     __aicore__ inline TBufPool<TPosition::VECCALC,16>& LocalSendScratchPool()
     {
         LL_SEG_SCOPE(PREPARE_INPUT);
-        tpipe_->InitBufPool(localSendPool_,kEpServerDedupCountUbBytes-ReservedBytes(),stagePool_);
+        tpipe_->InitBufPool(localSendPool_,overlap_.enabled ? overlap_.sendBytes : kEpServerDedupCountUbBytes-ReservedBytes(),stagePool_);
         return localSendPool_;
     }
     __aicore__ inline uint32_t LocalTaskCount() const { return localTaskCount_; }
@@ -116,7 +118,8 @@ private:
     // 摘要：用指定硬事件同步两个流水阶段，保护临时张量的生产与消费顺序。
     __aicore__ inline void SyncFunc()
     {
-        const TEventID id = tpipe_->FetchEventID(event);
+        const TEventID id = overlap_.enabled && event==HardEvent::MTE3_V ?
+            TEventID(7) : tpipe_->FetchEventID(event);
         SetFlag<event>(id);
         WaitFlag<event>(id);
     }
@@ -156,6 +159,11 @@ private:
     // 摘要：等待所有接收核的前缀写出标记到齐，并清除本核对应的标记行。
     __aicore__ inline void WaitCumSumFlag();
 
+    LlOverlapLayout overlap_{};
+    TBufPool<TPosition::VECCALC,16> recvCountPool_;
+    __aicore__ inline TBufPool<TPosition::VECCALC,16>& RecvPool() {
+        return overlap_.enabled ? recvCountPool_ : stagePool_;
+    }
     TPipe* tpipe_ = nullptr;
     const __gm__ DispatchDedup::CommArgs* args_ = nullptr;
     EpServerDedupCountLayout layout_{};
@@ -202,7 +210,8 @@ __aicore__ inline void ServerDedupCounts::SendCnt()
         tpipe_->InitBuffer(localRouteBuf_,routeBytes);
         tpipe_->InitBuffer(localExpertQBuf_,routeBytes);
     }
-    tpipe_->InitBufPool(stagePool_,kEpServerDedupCountUbBytes-ReservedBytes());
+    tpipe_->InitBufPool(stagePool_,overlap_.enabled ? overlap_.sendBytes : kEpServerDedupCountUbBytes-ReservedBytes());
+    if (overlap_.enabled && overlap_.countBytes) tpipe_->InitBufPool(recvCountPool_,overlap_.countBytes);
     if (!countPlan_.count) return;
     LL_SEG_BEGIN(initCountBuffers, INIT_COUNT_BUFFERS);
     tpipe_->InitBufPool(countPool_,4U*routeBytes+statusCntAlign_*sizeof(int32_t),stagePool_);
@@ -350,20 +359,20 @@ __aicore__ inline void ServerDedupCounts::RecvCnt()
     // Each count owns a 512B GM slot, so contiguous ownership can split at any
     // record. Keep all nonempty receivers active and their loads within one record.
     activeCumSumCores_ = rscvStatusNum_ < aivUsedCumSum_ ? rscvStatusNum_ : aivUsedCumSum_;
-    stagePool_.InitBuffer(scalarBuf_, 3U * UB_ALIGN);
+    RecvPool().InitBuffer(scalarBuf_, 3U * UB_ALIGN);
     const uint32_t receiver = aivId_ - aivUsedAllToAll_;
     // Inactive receivers only consume the final prefix in CompleteCumsum.
     if (receiver >= activeCumSumCores_) return;
     LL_SEG_BEGIN(recvBuffersBegin, INIT_COUNT_BUFFERS);
     SplitToCore(rscvStatusNum_, aivUsedCumSum_, receiver, startStatusIndex_, endStatusIndex_, recStatusNumPerCore_);
-    stagePool_.InitBuffer(waitStatusBuf_, Ceil(recStatusNumPerCore_ * UB_ALIGN + SIZE_ALIGN_256, SIZE_ALIGN_256) * SIZE_ALIGN_256);
-    stagePool_.InitBuffer(gatherMaskOutBuf_, Ceil(rscvStatusNum_ * sizeof(int32_t), UB_ALIGN) * UB_ALIGN);
+    RecvPool().InitBuffer(waitStatusBuf_, Ceil(recStatusNumPerCore_ * UB_ALIGN + SIZE_ALIGN_256, SIZE_ALIGN_256) * SIZE_ALIGN_256);
+    RecvPool().InitBuffer(gatherMaskOutBuf_, Ceil(rscvStatusNum_ * sizeof(int32_t), UB_ALIGN) * UB_ALIGN);
     // Vector publication/cleanup touches complete groups of eight 32B records.
     // Padding is UB-only; matrix strides and participation use actual core counts.
     const uint32_t sumBytes = Ceil(coreNum_, 8U) * SIZE_ALIGN_256;
-    stagePool_.InitBuffer(sumCoreBuf_, sumBytes);
-    stagePool_.InitBuffer(sumLocalBuf_, Ceil(aivUsedCumSum_, 8U) * SIZE_ALIGN_256);
-    stagePool_.InitBuffer(sumContinueBuf_, Ceil(aivUsedCumSum_ * sizeof(float), UB_ALIGN) * UB_ALIGN);
+    RecvPool().InitBuffer(sumCoreBuf_, sumBytes);
+    RecvPool().InitBuffer(sumLocalBuf_, Ceil(aivUsedCumSum_, 8U) * SIZE_ALIGN_256);
+    RecvPool().InitBuffer(sumContinueBuf_, Ceil(aivUsedCumSum_ * sizeof(float), UB_ALIGN) * UB_ALIGN);
     // 等待本片 ready 到齐后提取 count，并计算局部累计值、发布本片总数。
     // 本阶段不会等待 token payload；即使分到空片段也要发布总数 0，参与后续跨核汇总。
     LL_SEG_END(recvBuffersBegin, INIT_COUNT_BUFFERS);
@@ -379,7 +388,7 @@ __aicore__ inline void ServerDedupCounts::CompleteCumsum()
     { LL_SEG_SCOPE(TRANSITION_DRAIN);
     PipeBarrier<PIPE_ALL>();
     }
-    tpipe_->Reset();
+    if (!overlap_.enabled) tpipe_->Reset();
     // Ready flags use integer bit patterns reduced as FP32 subnormals.
     // Reassert the mode after Reset before the count-protocol reduction.
     SetCtrlSpr<60, 60>(0);

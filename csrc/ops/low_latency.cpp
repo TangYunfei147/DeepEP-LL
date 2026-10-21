@@ -9,6 +9,7 @@
 #include "runtime/session.hpp"
 #include "runtime/ll_core_config.hpp"
 #include "../kernels/dispatch/low_latency/common/ll_stage_timer_layout.h"
+#include "../kernels/dispatch/low_latency/common/ll_overlap_layout.h"
 #include "../kernels/dispatch/low_latency/common/ll_expert_timer_layout.h"
 #include "host/mem/shmem_host_heap.h"
 #include "host/data_plane/shmem_host_rma.h"
@@ -113,7 +114,7 @@ void bind_low_latency(py::module_& module)
     if (deepep_ll_core_protocol_version() != DispatchDedup::kLlCoreProtocolVersion)
         throw std::runtime_error("LL Host/device core protocol mismatch; rebuild and reinstall the complete wheel");
     module.attr("low_latency_core_protocol") = DispatchDedup::kLlCoreProtocolVersion;
-    module.attr("low_latency_implementation") = "g4-shared-recv";
+    module.attr("low_latency_implementation") = "g4-overlap-recv";
     module.attr("low_latency_rdma_enabled") = false;
     module.attr("low_latency_expert_timer_enabled") = false;
     module.attr("low_latency_stage_timer_enabled") = bool(deepep_ll_stage_timer_enabled());
@@ -136,6 +137,22 @@ void bind_low_latency(py::module_& module)
         for (const auto* name : LlStageTimer::kNames) names.emplace_back(name);
         result["stages"] = names;
         return result;
+    });
+    module.def("low_latency_overlap_layout", [](int64_t ranks,int64_t bs,int64_t h,int64_t k,int64_t experts,bool fp8) {
+        DispatchDedup::EpMemoryServerDedupLayout layout{};
+        const auto mode=fp8 ? DispatchDedup::EpServerDedupInputMode::Quantize16 : DispatchDedup::EpServerDedupInputMode::Plain16;
+        if (DispatchDedup::BuildDispatchServerDedupLayout(ranks,bs,h,k,experts,&layout,mode)!=0 ||
+            !DispatchDedup::DispatchDedupPacketUbFits(layout,bs,k,experts,ranks,DispatchDedup::kLlDefaultPlanCoreNum))
+            throw std::invalid_argument("Invalid LL shape");
+        py::list rows;
+        for (uint32_t rank=0;rank<uint32_t(ranks);++rank) for (uint32_t core=0;core<56;++core) {
+            const auto p=DispatchDedup::LlMakeOverlapLayout(layout.data,bs,k,experts,ranks,rank,core,mode);
+            py::dict row;
+            row["rank"]=rank;row["core"]=core;row["overlap"]=p.enabled;
+            row["send_lanes"]=p.sendLanes;row["recv_lanes"]=p.recvLanes;
+            row["ub_bytes"]=p.totalBytes; rows.append(row);
+        }
+        return rows;
     });
     module.def("low_latency_core_config", []() {
         const auto cfg = query_ll_core_config();
