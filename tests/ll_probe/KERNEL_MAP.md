@@ -51,3 +51,10 @@ Relay诊断：schema10追加RELAY_ISSUE/PRE_DRAIN/COMPLETE/PACKETS。
 纯CPU路由/分核报告：tests/elastic/inspect_dispatch_routes.py 复用ST路由生成，
 按静态接收和批内relay优先规则输出数量及因果顺序，不运行NPU。
 命令与统计口径见 ../elastic/CPU_DISPATCH_ROUTES.md。
+
+Overlap candidate: common/ll_overlap_layout.h plans disjoint persistent UB and
+event domains. Counts PrepareRecvCnt/TryRecvCnt and Receiver Prepare/TryBatch/Run
+allow R-local send quanta to yield; S enters receive without retiring remote DMA.
+Schema11, protocol14000+S, implementation g4-overlap-recv. Read
+../ll_stage_timer/OVERLAP_RECEIVE.md before modifying this path. The old dispatch
+non-probe token digest is intentionally no longer an algorithm-equivalence claim.

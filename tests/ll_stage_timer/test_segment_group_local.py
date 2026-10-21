@@ -35,12 +35,13 @@ def test_group_local_preparation_and_retirement_have_separate_intervals():
     body=sender[sender.index('inline void ProcessGroupLocal('):sender.index('inline void SendWithDedup(')]
     assert body.index('if (!tasks) return;')<body.index('LL_SEG_SCOPE(SEND_TOKENS)')
     assert body.index('LL_SEG_BEGIN(localPrepareBegin, PREPARE_INPUT)')<body.index('scratch_->InitBuffer(input')
-    assert body.index('LL_SEG_END(localPrepareBegin, PREPARE_INPUT)')<body.index('for (uint32_t task=0;task<tasks')
+    assert body.index('LL_SEG_END(localPrepareBegin, PREPARE_INPUT)')<body.index('for (uint32_t task=begin;task<end')
     assert body.index('LL_SEG_BEGIN(localDrainBegin, SEND_DRAIN)')<body.index('WaitFlag<HardEvent::MTE3_V>(lane)')
     assert body.index('scratch_->Reset()')<body.index('LL_SEG_END(localDrainBegin, SEND_DRAIN)')
     assert 'CAL_TOKEN' not in body
     kernel=(ROOT/'csrc/kernels/dispatch/low_latency/dispatch_server_dedup_kernel.h').read_text(encoding='utf-8')
-    assert kernel.index('sender_.ProcessGroupLocal(')<kernel.index('LL_SEG_SCOPE(CAL_CUMSUM)')<kernel.index('counts_.RecvCnt()')
+    assert kernel.index('counts_.TryRecvCnt()')<kernel.index('counts_.CalcCumsum()')<kernel.index('receiver_.Prepare(timer_)')
+    assert 'tasks,timer_,cooperate' in kernel
 
 
 def test_nondedup_remote_filter_is_measured_as_preparation():

@@ -92,6 +92,41 @@ def input_wait_markdown(report):
     return '\n'.join(lines)+'\n'
 
 
+def overlap_receive_report(samples):
+    """Paired same-core issue boundaries; never infer DMA completion."""
+    rows=[]
+    for meta,decoded in samples:
+        if decoded['operation']!='dispatch': continue
+        cores={}
+        for metric in decoded['records']:
+            cores.setdefault(metric['core'],{})[metric['stage']]=metric
+        for core,metrics in sorted(cores.items()):
+            available=decoded['schema']==11
+            overlap='OVERLAP_PATH' in metrics
+            intervals=[i for i in decoded.get('intervals',[]) if i['core']==core]
+            def first(name,field):
+                values=[i[field] for i in intervals if i['stage']==name]
+                return min(values) if values else None
+            submit=first('SEND_SUBMIT_END','last_tick')
+            recv=first('RECV_INPUT','first_tick')
+            kernel=metrics.get('KERNEL',{}).get('total_ticks')
+            wait=sum(metrics.get(n,{}).get('total_ticks',0) for n in
+                     ('SEND_COMPLETE_WAIT','TRANSITION_DRAIN')) if available else None
+            status='unavailable'
+            if available:
+                status='serial_fallback' if 'SERIAL_FALLBACK' in metrics else 'partition_baseline_or_no_receive'
+                if overlap and recv is not None and not wait:
+                    status='receive_before_last_send_submission' if submit is not None and recv<submit else 'receive_without_transition_drain'
+            rows.append(dict(rank=meta['rank'],iteration=meta['iteration'],core=core,status=status,
+                diagnostic_mode=decoded.get('boundary_mode','observe'),
+                send_lanes=metrics.get('SEND_LANES',{}).get('calls'),
+                recv_lanes=metrics.get('RECV_LANES',{}).get('calls'),
+                transition_wait_ticks=wait,transition_wait_kernel_ratio=wait/kernel if wait is not None and kernel else None,
+                send_submit_end_tick=submit,first_recv_load_tick=recv,
+                recv_minus_submit_ticks=recv-submit if recv is not None and submit is not None else None))
+    return rows
+
+
 def analyze(paths, frequency_hz=None):
     configurations={};ranks={};groups={};identity=None;stage_max={};measured={};worker_roles={}
     wait_samples=[]
@@ -145,6 +180,7 @@ def analyze(paths, frequency_hz=None):
             for name in ('mean','minimum','maximum','p50','p90','p99'): rows[-1][name]=None
     return dict(schema=identity[9],world_size=identity[0],boundary_mode=identity[3],frequency_hz=identity[4],comparison=identity[10],
                 configurations=configurations,sampling=identity[8],per_rank_core_stage=rows,
+                overlap_receive=overlap_receive_report(wait_samples),
                 input_wait_bottleneck=input_wait_report(wait_samples),
                 relay_timing=relay_timing.report(wait_samples),
                 per_rank_stage_max=[dict(operation=op,rank=rank,stage=stage,unit=unit,**stats(list(values.values())))
@@ -237,6 +273,15 @@ def process_directory(source, output, frequency_hz, trace_iteration, lane_layout
     report['expert_interpretation']='Per executing rank and expert; core durations are summed work, not latency. Packet stage counts deliveries only. Shared FIRST_HOP preparation and batch waiting are not assigned. Only samples with executed records enter stage statistics.'
     output.mkdir(parents=True, exist_ok=False)
     (output/'summary.json').write_text(json.dumps(report, indent=2))
+    overlap_rows=report['overlap_receive']
+    if overlap_rows:
+        with (output/'overlap_receive.csv').open('w',newline='',encoding='utf-8-sig') as stream:
+            writer=csv.DictWriter(stream,fieldnames=list(overlap_rows[0]));writer.writeheader();writer.writerows(overlap_rows)
+        counts={}
+        for row in overlap_rows: counts[row['status']]=counts.get(row['status'],0)+1
+        text='# Dispatch overlap receive\n\n'+ '\n'.join(f'- {key}: {value} core-rounds' for key,value in sorted(counts.items()))
+        text+='\n\nIssue boundaries are sampled; missing boundaries remain blank. Negative recv_minus_submit_ticks means receive load was submitted before the last initial send, not that DMA completed. No cross-rank subtraction. Lane counts describe reserved capacity, including empty senders. Transition waits are paired with the same core/round KERNEL. relay-complete deliberately serializes DMA and is not a throughput baseline.\n'
+        (output/'overlap_receive.md').write_text(text,encoding='utf-8')
     relay_report=report['relay_timing']
     (output/'relay_timing.md').write_text(relay_timing.markdown(relay_report),encoding='utf-8')
     for filename,values in (('relay_samples.csv',relay_report['samples']),('relay_timing.csv',relay_report['per_core'])):

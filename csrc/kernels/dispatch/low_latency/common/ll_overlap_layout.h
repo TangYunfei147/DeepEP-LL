@@ -42,14 +42,17 @@ LL_OVERLAP_INLINE LlOverlapLayout LlMakeOverlapLayout(const EpServerDedupDataLay
     const uint64_t recvFixed=2*a(tasks*4,32)+16*d.blockCount*32+256+
         16*a((d.blockCount+7)/8,32)*4+256+16*36;
     const uint64_t fixed=reserved+countStage+complete+recvFixed;
-    // Select once per core, never per packet. Prefer equal lane depth, then use
-    // IDs 6/7 remain reserved for input/control dependencies. All bounds include the count scratch alias.
-    for (uint32_t lanes=1;lanes<=6;++lanes) {
-        const uint64_t send=LlOverlapMax(sendFixed+lanes*d.tokenStride,countScratch);
-        const uint64_t total=fixed+send+lanes*(d.tokenStride+64);
-        if (total>kEpServerDedupCountUbBytes) break;
-        p={uint32_t(send),uint32_t(countStage),lanes,lanes,total,true};
-    }
+    // Solve both inequalities for max(sendFixed + L*P, countScratch).
+    // Two divisions once at initialization; no lane search or per-packet plan.
+    if (fixed+sendFixed+d.tokenStride*2+64>kEpServerDedupCountUbBytes ||
+        fixed+countScratch+d.tokenStride+64>kEpServerDedupCountUbBytes) return p;
+    const uint64_t sendLimit=(kEpServerDedupCountUbBytes-fixed-sendFixed)/(2*d.tokenStride+64);
+    const uint64_t countLimit=(kEpServerDedupCountUbBytes-fixed-countScratch)/(d.tokenStride+64);
+    uint64_t lanes=sendLimit<countLimit?sendLimit:countLimit;
+    if (lanes>6) lanes=6; // 6/7 are reserved for input/control event IDs.
+    const uint64_t send=LlOverlapMax(sendFixed+lanes*d.tokenStride,countScratch);
+    p={uint32_t(send),uint32_t(countStage),uint32_t(lanes),uint32_t(lanes),
+       fixed+send+lanes*(d.tokenStride+64),true};
     return p;
 }
 #undef LL_OVERLAP_INLINE

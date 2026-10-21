@@ -45,7 +45,7 @@ public:
                        bs, h, topK, experts, pipe, magic, enableDedup, expertTimer);
     }
 
-    // 完整dispatch：S核跨组初发；R核本组初发后按原流程准备前缀；全部核接收。
+    // S remote submission overlaps receive; R cooperatively advances local TX/counts/RX.
     // Sender可与接收核的计数前缀准备重叠，不能把提取阶段耗时直接相加当作完整时延。
     __aicore__ inline void Process()
     {
@@ -56,42 +56,45 @@ public:
         } else { LL_SEG_COUNT(SERIAL_FALLBACK,1); }
         counts_.SendCnt();
 
-        if (core_ < sendCores_) {
-            sender_.Process(counts_.ScratchPool(), counts_.ReservedBytes(), timer_);
-
+        if (overlap_.enabled && core_>=sendCores_) {
+            counts_.PrepareRecvCnt();
+            bool prepared=false;
+            auto cooperate=[&]() {
+                if (!prepared) {
+                    if (!counts_.TryRecvCnt()) return;
+                    { LL_SEG_SCOPE(CAL_CUMSUM);
+                    counts_.CalcCumsum();
+                    counts_.CompleteCumsum(); }
+                    receiver_.SetPrefix(counts_.Prefix());
+                    receiver_.Prepare(timer_);
+                    prepared=true;
+                }
+                receiver_.TryBatch();
+            };
+            const uint32_t tasks=counts_.LocalTaskCount();
+            if (tasks) sender_.ProcessGroupLocal(counts_.LocalSendScratchPool(),counts_.ReservedBytes(),
+                counts_.LocalRouteIndices(),counts_.LocalExpertQ(),tasks,timer_,cooperate);
+            while (!prepared) cooperate();
+            receiver_.Run();
         } else {
-            if (overlap_.enabled) {
-                // Publish prefix before queuing local payload on the same MTE3.
-                { LL_SEG_SCOPE(CAL_CUMSUM);
-                counts_.RecvCnt();
-                counts_.CalcCumsum(); }
-            }
-            const uint32_t localTasks=counts_.LocalTaskCount();
-            if (localTasks) sender_.ProcessGroupLocal(counts_.LocalSendScratchPool(),counts_.ReservedBytes(),
-                                                       counts_.LocalRouteIndices(),counts_.LocalExpertQ(),localTasks,timer_);
-            if (!overlap_.enabled) {
+            if (core_<sendCores_) {
+                sender_.Process(counts_.ScratchPool(),counts_.ReservedBytes(),timer_);
+            } else {
+                const uint32_t tasks=counts_.LocalTaskCount();
+                if (tasks) sender_.ProcessGroupLocal(counts_.LocalSendScratchPool(),counts_.ReservedBytes(),
+                    counts_.LocalRouteIndices(),counts_.LocalExpertQ(),tasks,timer_);
                 LL_SEG_SCOPE(CAL_CUMSUM);
                 counts_.RecvCnt();
                 counts_.CalcCumsum();
             }
+            counts_.CompleteCumsum();
+            if (!overlap_.enabled) { LL_SEG_SCOPE(TRANSITION_DRAIN); PipeBarrier<PIPE_ALL>(); }
+            if (overlap_.enabled) receiver_.SetPrefix(counts_.Prefix());
+            receiver_.Process(timer_);
         }
-
-        // Every core joins receive after completing its own send or prefix work.
-        // Prefix producers remain the original R cores. Each of the 56 consumers
-        // has its own publication row and disjoint output/cleanup ownership.
-        counts_.CompleteCumsum();
-        if (!overlap_.enabled) { LL_SEG_SCOPE(TRANSITION_DRAIN);
-        PipeBarrier<PIPE_ALL>();
-        }
-        if (overlap_.enabled) receiver_.SetPrefix(counts_.Prefix());
-        { LL_SEG_SCOPE(LOCAL_WINDOW_COPY);
-        receiver_.Process(timer_);
-        }
-
         { LL_SEG_SCOPE(FINAL_DRAIN);
         sender_.Retire();
-        counts_.Finish();
-        }
+        counts_.Finish(); }
 
         // No shared work follows local completion. Same-stream kernel completion
         // orders the next launch after all cores finish their writes and cleanup.

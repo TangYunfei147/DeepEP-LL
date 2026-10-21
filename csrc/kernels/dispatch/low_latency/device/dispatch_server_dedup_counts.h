@@ -65,6 +65,8 @@ public:
     __aicore__ inline void SendCnt();
     // 摘要：将本 rank 的计数记录分给接收核，等待本片计数到齐并计算局部前缀与总数。
     __aicore__ inline void RecvCnt();
+    __aicore__ inline void PrepareRecvCnt();
+    __aicore__ inline bool TryRecvCnt();
     // 摘要：汇合接收核片段总数，补齐跨核前缀偏移并发布完整前缀表的就绪标记。
     __aicore__ inline void CalcCumsum()
     {
@@ -118,7 +120,7 @@ private:
     // 摘要：用指定硬事件同步两个流水阶段，保护临时张量的生产与消费顺序。
     __aicore__ inline void SyncFunc()
     {
-        const TEventID id = overlap_.enabled && event==HardEvent::MTE3_V ?
+        const TEventID id = overlap_.enabled ?
             TEventID(7) : tpipe_->FetchEventID(event);
         SetFlag<event>(id);
         WaitFlag<event>(id);
@@ -153,7 +155,6 @@ private:
     // 摘要：等待所有接收核总数就绪，求本核之前各片段之和，再清理本核消费的汇总标记。
     __aicore__ inline uint32_t GetCumSum(uint32_t newAivId);
     // 摘要：轮询本片所有来源计数的 ready 标记；到齐后提取计数、发布片段总数并清除 ready。
-    __aicore__ inline void WaitDispatch();
     // 摘要：为本片局部前缀加上跨核偏移，写出 sendCountsOut 与各核前缀副本，再发布完成标记。
     __aicore__ inline void CalRecvAndSetFlag();
     // 摘要：等待所有接收核的前缀写出标记到齐，并清除本核对应的标记行。
@@ -352,7 +353,7 @@ __aicore__ inline void ServerDedupCounts::SendExpertCntRange(uint32_t start, uin
 }
 
 // 摘要：将本 rank 的计数记录分给接收核，等待本片计数到齐并计算局部前缀与总数。
-__aicore__ inline void ServerDedupCounts::RecvCnt()
+__aicore__ inline void ServerDedupCounts::PrepareRecvCnt()
 {
     // 接收端控制区共有 localExperts×worldSize（等于 experts）条记录，
     // 按“本地专家 → 来源 rank”排列；每个接收核负责一段连续记录。
@@ -376,7 +377,13 @@ __aicore__ inline void ServerDedupCounts::RecvCnt()
     // 等待本片 ready 到齐后提取 count，并计算局部累计值、发布本片总数。
     // 本阶段不会等待 token payload；即使分到空片段也要发布总数 0，参与后续跨核汇总。
     LL_SEG_END(recvBuffersBegin, INIT_COUNT_BUFFERS);
-    WaitDispatch();
+}
+
+__aicore__ inline void ServerDedupCounts::RecvCnt()
+{
+    PrepareRecvCnt();
+    LL_SEG_SCOPE(WAIT_RECV_COUNTS);
+    while (!TryRecvCnt()) {}
 }
 
 // 摘要：等待所有前缀片段就绪，加载本核前缀副本，并由首个接收核输出各专家计数。
@@ -598,36 +605,27 @@ __aicore__ inline uint32_t ServerDedupCounts::GetCumSum(uint32_t newAivId)
 }
 
 // 摘要：轮询本片所有来源计数的 ready 标记；到齐后提取计数、发布片段总数并清除 ready。
-__aicore__ inline void ServerDedupCounts::WaitDispatch()
+// One bounded snapshot. Once true, the caller must not call this again:
+// its count flags have been consumed and its sum has been published.
+__aicore__ inline bool ServerDedupCounts::TryRecvCnt()
 {
-        LL_SEG_SCOPE(WAIT_RECV_COUNTS);
-    LocalTensor<float> gatherMaskOutTensor = gatherMaskOutBuf_.Get<float>();
-    LocalTensor<uint32_t> gatherTmpTensor = scalarBuf_.GetWithOffset<uint32_t>(UB_ALIGN / sizeof(uint32_t), 0);
-    LocalTensor<float> statusSumOutTensor = scalarBuf_.GetWithOffset<float>(UB_ALIGN / sizeof(float), UB_ALIGN);
-    statusFp32Tensor_ = waitStatusBuf_.Get<float>();
-    uint32_t mask = 1U;
-    gatherTmpTensor.SetValue(0, 1U);
-    float compareTarget = static_cast<float>(1.0) * recStatusNumPerCore_;
-    float sumOfFlag = static_cast<float>(-1.0);
-
-    DataCopyParams intriParams{static_cast<uint16_t>(recStatusNumPerCore_), 1,
-                               static_cast<uint16_t>(CNT_GM_STRIDE_BLOCKS - 1U), 0};
-    SyncFunc<AscendC::HardEvent::S_V>();
-    LL_SEG_BEGIN(recvCountPollBegin, POLL_RECV_COUNTS);
-    while (sumOfFlag != compareTarget) {
-        LL_SEG_COUNT(POLL_RECV_COUNTS_ITERATIONS, 1U);
-        DataCopy(statusFp32Tensor_,
-                 windowInstatusFp32Tensor_[startStatusIndex_ * kEpServerDedupCountGmStride / sizeof(float)],
-                 intriParams);
-        SyncFunc<AscendC::HardEvent::MTE2_V>();
-        ReduceSum(statusSumOutTensor, statusFp32Tensor_, gatherMaskOutTensor, mask, recStatusNumPerCore_, 1U);
-        SyncFunc<AscendC::HardEvent::V_S>();
-        sumOfFlag = statusSumOutTensor.GetValue(0);
-    }
-
-    LL_SEG_END(recvCountPollBegin, POLL_RECV_COUNTS);
-    GatherSumRecvCnt(gatherMaskOutTensor, gatherTmpTensor, statusSumOutTensor);
+    if (recStatusNumPerCore_==0U) return true;
+    LL_SEG_SCOPE(POLL_RECV_COUNTS);
+    LL_SEG_COUNT(POLL_RECV_COUNTS_ITERATIONS, 1U);
+    // No Reset occurs between cooperative steps; Init preserves CTRL[60]=0.
+    auto gather=gatherMaskOutBuf_.Get<float>();
+    auto pattern=scalarBuf_.GetWithOffset<uint32_t>(UB_ALIGN/sizeof(uint32_t),0);
+    auto sum=scalarBuf_.GetWithOffset<float>(UB_ALIGN/sizeof(float),UB_ALIGN);
+    statusFp32Tensor_=waitStatusBuf_.Get<float>();
+    DataCopy(statusFp32Tensor_,windowInstatusFp32Tensor_[startStatusIndex_*kEpServerDedupCountGmStride/sizeof(float)],
+             DataCopyParams{uint16_t(recStatusNumPerCore_),1,uint16_t(CNT_GM_STRIDE_BLOCKS-1U),0});
+    SyncFunc<HardEvent::MTE2_V>();
+    ReduceSum(sum,statusFp32Tensor_,gather,1U,recStatusNumPerCore_,1U);
+    SyncFunc<HardEvent::V_S>();
+    if (sum.GetValue(0)!=float(recStatusNumPerCore_)) return false;
+    GatherSumRecvCnt(gather,pattern,sum);
     WaitDispatchClearStatus();
+    return true;
 }
 
 // 摘要：为本片局部前缀加上跨核偏移，写出 sendCountsOut 与各核前缀副本，再发布完成标记。

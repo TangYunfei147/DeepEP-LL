@@ -1,3 +1,5 @@
+本分支为独立 overlap receive 实验，构建、协议和验证命令以 [OVERLAP_RECEIVE.md](OVERLAP_RECEIVE.md) 为准（schema11、14000+S）。下方旧分支身份示例不适用于本分支。
+
 > 当前relay诊断使用 **schema10、70阶段**，保留原ID；observe仅测下发，显式relay-complete测前置排空后的本核MTE3完成。采集与独立报表见 [RELAY_TIMING.md](RELAY_TIMING.md)。旧schema7/9可离线读取。
 
 > 输入/量化等待最初由schema9追加ID64/65，当前schema10保留。扩展采样使用JSON/CSV/Chrome trace，不导出仅支持64阶段的参考format5二进制。输入瓶颈报告见 [INPUT_WAIT.md](INPUT_WAIT.md)。

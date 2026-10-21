@@ -172,9 +172,8 @@ public:
             SendWithoutDedup(input);
         EndInputPrefetch(input);
 
-        // 6. 等待所有发送 lane 归还后，把本核 sourceMask 和 sourceWeights 写回 GM。
-        // 只有 sourceMask 标记的权重位置才有效，未选中位置不应被下游消费。
-        // 最后的 MTE3_S 依赖确保这两份源端输出完成后再返回。
+        // Keep metadata sources alive through receive. Only the serial fallback
+        // drains here; overlap retires all lane events at final kernel completion.
         if (!overlap_.enabled) {
         LL_SEG_BEGIN(sendDrainBegin, SEND_DRAIN);
         for (uint32_t lane = 0; lane < lanes_; ++lane) WaitFlag<HardEvent::MTE3_V>(lane);
@@ -192,16 +191,17 @@ public:
     }
 
 
-    // Run only on original receive cores, before their unchanged RecvCnt path.
+    // Original R cores; optional bounded callbacks advance counts and receive.
     // Descriptors came from the source-count pass and remain outside scratch.
+    struct NoCooperate { __aicore__ inline void operator()() {} };
+    template<class Cooperate=NoCooperate>
     __aicore__ inline void ProcessGroupLocal(TBufPool<TPosition::VECCALC,16>& scratch,
                                             uint32_t reservedBytes,LocalTensor<uint32_t> indices,
                                             LocalTensor<uint32_t> expertQ,uint32_t tasks,
-                                            LlStageTimer::DeviceTimer* timer=nullptr)
+                                            LlStageTimer::DeviceTimer* timer=nullptr, Cooperate cooperate=Cooperate{})
     {
         if (!tasks) return;
         timer_=timer;
-        LL_SEG_SCOPE(SEND_TOKENS);
         LL_SEG_BEGIN(localPrepareBegin, PREPARE_INPUT);
         scratch_=&scratch;
         start_=0U; count_=bs_;
@@ -240,18 +240,29 @@ public:
             SetFlag<HardEvent::MTE3_V>(lane);
         }
         PipeBarrier<PIPE_V>();
-        BeginInputPrefetch();
         LL_SEG_END(localPrepareBegin, PREPARE_INPUT);
-        for (uint32_t task=0;task<tasks;++task) {
-            const uint32_t index=indices.GetValue(task),packed=expertQ.GetValue(task);
-            SendPacket(input,index/k_,index%k_,packed&0xffffU,packed>>16U,0U);
+        // Only the cooperative overlap path yields. Serial fallback keeps one
+        // continuous lookahead stream. Eight tasks amortize the callback/flush.
+        cooperate();
+        const uint32_t quantum=overlap_.enabled ? 8U:tasks;
+        for (uint32_t begin=0;begin<tasks;) {
+            const uint32_t end=tasks-begin<quantum ? tasks:begin+quantum;
+            { LL_SEG_SCOPE(SEND_TOKENS);
+            BeginInputPrefetch();
+            for (uint32_t task=begin;task<end;++task) {
+                const uint32_t index=indices.GetValue(task),packed=expertQ.GetValue(task);
+                SendPacket(input,index/k_,index%k_,packed&0xffffU,packed>>16U,0U);
+            }
+            EndInputPrefetch(input);
+            }
+            begin=end;
+            if (begin==tasks) { LL_SEG_SCOPE(SEND_SUBMIT_END); }
+            cooperate();
         }
-        EndInputPrefetch(input);
         if (!overlap_.enabled) {
         LL_SEG_BEGIN(localDrainBegin, SEND_DRAIN);
         // Retire all reads of packet scratch before RecvCnt overlays that UB.
         for (uint32_t lane=0;lane<lanes_;++lane) WaitFlag<HardEvent::MTE3_V>(lane);
-        { LL_SEG_SCOPE(SEND_SUBMIT_END); }
         if (!overlap_.enabled) { LL_SEG_SCOPE(SEND_COMPLETE_WAIT);
         Sync<HardEvent::MTE3_S>();
         }

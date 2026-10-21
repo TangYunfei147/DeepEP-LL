@@ -115,8 +115,8 @@ def test_input_capacity_output_lanes_and_event_lifetime_contract():
     source=(ROOT/'csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_send.h').read_text()
     assert 'InitBuffer(input, 2U, inputBytes)' in source
     assert 'InitBuffer(input,2U,inputBytes)' in source
-    assert 'lanes_ = available < 8U ? available : 8U' in source
-    assert 'lanes_=available<8U ? available : 8U' in source
+    assert 'lanes_ = overlap_.enabled ? overlap_.sendLanes : (available < 8U ? available : 8U)'  in source
+    assert 'lanes_=overlap_.enabled ? overlap_.sendLanes : (available<8U ? available : 8U)'  in source
     assert source.count('BeginInputPrefetch();')==2
     assert source.count('EndInputPrefetch(input);')==2
     assert source.count('AllocEventID<HardEvent::MTE2_S>()')==2

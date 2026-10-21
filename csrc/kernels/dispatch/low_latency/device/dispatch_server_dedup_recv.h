@@ -59,16 +59,17 @@ public:
     __aicore__ inline void ConfigureOverlap(LlOverlapLayout plan) { overlap_=plan; }
     __aicore__ inline void SetPrefix(LocalTensor<int32_t> prefix) { sharedPrefix_=prefix; }
     // 摘要：执行接收主流程：加载前缀、构建任务、批量探测、预取并消费就绪包，最后清理本核槽位标记。
-    __aicore__ inline void Process(LlStageTimer::DeviceTimer* timer = nullptr)
+    __aicore__ inline void Process(LlStageTimer::DeviceTimer* timer = nullptr) {
+        Prepare(timer);
+        Run();
+    }
+    __aicore__ inline void Prepare(LlStageTimer::DeviceTimer* timer = nullptr)
     {
         timer_ = timer;
         LL_SEG_SCOPE(FORMAT_OUTPUT);
-        // 1. 调用方已完成计数阶段的写入，才能 Reset TPipe 回收旧计数 UB。
-        // 从当前 magic 窗口加载本接收核的完整前缀副本，MTE2_S 后 Scalar 才能使用。
-
-        // Caller has completed count-stage writes before this Reset. The GM
-        // prefix belongs to this receive core; old count UB is no longer used.
-        LL_SEG_BEGIN(recvPrepareBegin, RECV_PREPARE);
+        // Overlap retains all send/count DMA sources and shares the already
+        // acquired prefix. Only the drained fallback may Reset/reload.
+        LL_SEG_SCOPE(RECV_PREPARE);
         if (!overlap_.enabled) pipe_->Reset();
         const uint32_t prefixBytes = uint32_t(DispatchDedupAlign(uint64_t(experts_) * 4U, 32U));
         LocalTensor<int32_t> prefix=sharedPrefix_;
@@ -93,7 +94,6 @@ public:
 
         // 空任务核没有拥有的接收槽，完成打点后直接返回，无需参与 packet 轮询。
         if (tasks_.Count() == 0U) {
-            LL_SEG_END(recvPrepareBegin, RECV_PREPARE);
             return;
         }
 
@@ -121,28 +121,25 @@ public:
         pipe_->InitBuffer(lanesBuf_, lanes_ * laneStride_);
         if (!overlap_.enabled) for (uint32_t lane = 0; lane < lanes_; ++lane) SetFlag<HardEvent::MTE3_MTE2>(lane);
 
-        LL_SEG_END(recvPrepareBegin, RECV_PREPARE);
-        auto snapshot = probeIdxBuf_.Get<uint32_t>();
-        // Fill every allocated lane (up to eight); reuse still waits for MTE3.
-        const uint32_t depth = lanes_;
-        // 4. issued/consumed 是跨批累计的加载/消费序号，二者之差限制在 lane 深度内。
-        // 它们按相同顺序推进，保证 consumed % lanes_ 对应之前预取的同一个 packet。
-        uint32_t scan = 0U, issued = 0U, consumed = 0U;
-        while (tasks_.PendingCount() != 0U) {
-            // Include all empty scans in one wait interval. Recording every
-            // retry perturbs the polling loop and can exhaust the trace buffer.
-            // 从 pending 表分批循环探测；一批没有就绪项就继续扫描，直到至少一个包到齐。
-            // Probe 对每个 packet 检查全部块标记，不是只看到首块就认为数据可读。
+    }
+
+    // At most one 16-slot snapshot; no ready packet means return to local TX.
+    __aicore__ inline bool TryBatch() {
+        if (!tasks_.PendingCount()) return false;
+        LL_SEG_SCOPE(LOCAL_WINDOW_COPY);
+        LL_SEG_SCOPE(FORMAT_OUTPUT);
+        auto snapshot=probeIdxBuf_.Get<uint32_t>();
+        const uint32_t depth=lanes_;
+            // One bounded scan; empty batches return to the cooperative caller.
+            // Probe checks every block marker before exposing a packet.
 
             uint32_t count;
             ProbeResult probe;
-            do {
-                if (scan >= tasks_.PendingCount()) scan = 0U;
-                const uint32_t remaining = tasks_.PendingCount() - scan;
-                count = remaining < kProbeBatch ? remaining : kProbeBatch;
-                probe = Probe(scan, count);
-                if (probe.readyMask == 0U) scan += count;
-            } while (probe.readyMask == 0U);
+            if (scan_>=tasks_.PendingCount()) scan_=0U;
+            const uint32_t remaining=tasks_.PendingCount()-scan_;
+            count=remaining<kProbeBatch ? remaining:kProbeBatch;
+            probe=Probe(scan_,count);
+            if (probe.readyMask==0U) { scan_+=count; return false; }
 
             // Current senders mark only FIRST_HOP with KeepFlags; forwarded
             // terminals are Compact. Probe already validated every block flag.
@@ -151,31 +148,35 @@ public:
             uint32_t nextLoad=0U;
             for (uint32_t current=0U;current<order.count;++current) {
                 // Load and consume in exactly the same priority order, so the
-                // global issued/consumed lane ring keeps its original ownership.
-                while (issued-consumed<depth && nextLoad<order.count) {
+                // global issued_/consumed_ lane ring keeps its original ownership.
+                while (issued_-consumed_<depth && nextLoad<order.count) {
                     const uint32_t index=order.At(nextLoad++);
-                    IssueLoad(snapshot.GetValue(index),issued%lanes_,
+                    IssueLoad(snapshot.GetValue(index),issued_%lanes_,
                               (probe.keepFlagsMask&(uint32_t(1)<<index))!=0U,
-                              !overlap_.enabled || issued>=lanes_);
-                    ++issued;
+                              !overlap_.enabled || issued_>=lanes_);
+                    ++issued_;
                 }
                 const uint32_t index=order.At(current);
-                ConsumeLoaded(snapshot.GetValue(index),consumed%lanes_,
+                ConsumeLoaded(snapshot.GetValue(index),consumed_%lanes_,
                               (probe.keepFlagsMask&(uint32_t(1)<<index))!=0U);
-                ++consumed;
+                ++consumed_;
             }
             // Do NOT remove entries in priority order: swap-with-last would
             // invalidate the remaining original pending positions. After all
             // snapshot work is issued, remove by descending original index.
             for (uint32_t n=count;n>0U;--n) {
                 const uint32_t index=n-1U;
-                if (probe.readyMask&(uint32_t(1)<<index)) tasks_.RemovePending(scan+index);
+                if (probe.readyMask&(uint32_t(1)<<index)) tasks_.RemovePending(scan_+index);
             }
-        }
+        return true;
+    }
+    __aicore__ inline void Run() {
+        while (tasks_.PendingCount()) TryBatch();
+        if (!tasks_.Count()) return;
         // 5. pending 清空后，等待各 lane 在途写入，随后统一清除本核所有槽位的块标记。
         // 清理使用稳定任务表，不能使用已压缩为空的 pending 表；payload 本身不清零。
 
-        for (uint32_t lane = 0; lane < (issued<lanes_ ? issued : lanes_); ++lane) WaitFlag<HardEvent::MTE3_MTE2>(lane);
+        for (uint32_t lane = 0; lane < (!overlap_.enabled || issued_>=lanes_ ? lanes_ : issued_); ++lane) WaitFlag<HardEvent::MTE3_MTE2>(lane);
         // This is the end of wait instruction submission, not a new Scalar
         // completion barrier. The existing final PIPE_ALL establishes completion.
 
@@ -380,6 +381,7 @@ private:
     uint64_t windowOffset_ = 0;
     uint32_t recvCoreNum_ = 0, coreNum_ = 0;
     uint32_t bs_ = 0U, k_ = 0U, experts_ = 0U, localExperts_ = 0U, receiver_ = 0U;
+    uint32_t scan_=0U, issued_=0U, consumed_=0U;
     uint32_t hiddenBytes_ = 0U, laneStride_ = 0U, lanes_ = 0U;
     EpServerDedupDataLayout data_{};
     ServerDedupReceiveTasks tasks_;
