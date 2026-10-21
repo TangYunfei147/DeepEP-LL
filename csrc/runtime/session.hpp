@@ -120,6 +120,7 @@ private:
     void allocate_huge_workspace(uint64_t bytes);
     void release_huge_workspace();
     uint32_t low_latency_cores_ = 0;
+    unsigned barrier_timeout_seconds_ = 120;
     bool ll_rdma_ = false;
     uint32_t ll_rdma_qps_ = 0;
     void* ll_rdma_stage_ = nullptr;

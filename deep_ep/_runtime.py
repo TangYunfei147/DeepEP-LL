@@ -189,8 +189,12 @@ class Runtime:
                             local_values, dtype=torch.int64, device=f"npu:{self.device}" if backend == "hccl" else "cpu"
                         )
                         peers = [torch.empty_like(local) for _ in range(size)]
+                    if os.environ.get("DEEPEP_LL_INIT_TRACE") == "1":
+                        print(f"[DeepEP init] rank={rank} runtime configuration all_gather enter", flush=True)
                     dist.all_gather(peers, local, group=group)
                     values = [value.cpu().tolist() for value in peers]
+                    if os.environ.get("DEEPEP_LL_INIT_TRACE") == "1":
+                        print(f"[DeepEP init] rank={rank} runtime configuration all_gather return", flush=True)
                 if any(value[3] for value in values):
                     raise RuntimeError("A rank already owns a SHMEM runtime; destroy it collectively first")
                 if any(value[:3] != values[0][:3] for value in values):

@@ -20,8 +20,9 @@
 #include "host/mem/shmem_host_heap.h"
 #include "host/data_plane/shmem_host_cc.h"
 #include <limits>
+#include <cstdio>
 
-extern "C" void deepep_ndr_host_barrier_launch(void* stream);
+extern "C" void deepep_ndr_host_barrier_launch_v2(void* stream, uint64_t wait_cycles, uint32_t trace);
 
 namespace deepep {
 namespace {
@@ -36,13 +37,29 @@ void check(int status, const char* operation)
 
 // The SDK's void Host barrier drops aclrtSynchronizeStream's error. Own the
 // stream here so a failed initialization/close barrier cannot look successful.
-void checked_barrier(bool hybrid)
+bool init_trace_enabled()
 {
+    const char* value = std::getenv("DEEPEP_LL_INIT_TRACE");
+    return value && std::strcmp(value, "1") == 0;
+}
+void init_trace(int rank, const char* stage)
+{
+    if (init_trace_enabled()) {
+        std::fprintf(stderr, "[DeepEP init] rank=%d %s\n", rank, stage);
+        std::fflush(stderr);
+    }
+}
+void checked_barrier(bool hybrid, int rank, unsigned timeout)
+{
+    init_trace(rank, "barrier enter");
     aclrtStream stream = nullptr;
     check(aclrtCreateStream(&stream), "create SHMEM barrier stream");
-    if (hybrid) deepep_ndr_host_barrier_launch(stream);
+    // Target Ascend950 GetSystemCycle is 1GHz. Reuse the Session timeout.
+    if (hybrid) deepep_ndr_host_barrier_launch_v2(stream, uint64_t(timeout) * 1000000000ULL, init_trace_enabled());
     else aclshmemx_barrier_all_on_stream(stream);
+    init_trace(rank, "barrier launched; synchronize enter");
     const int status = aclrtSynchronizeStream(stream);
+    init_trace(rank, "barrier synchronize return");
     const int destroy_status = aclrtDestroyStream(stream);
     check(status, "SHMEM barrier completion");
     check(destroy_status, "destroy SHMEM barrier stream");
@@ -58,6 +75,7 @@ bool Session::busy()
 Session::Session(int rank, int size, uint64_t bytes, const std::string& endpoint, unsigned timeout, bool udma,
                  bool megamoe, bool mpi, bool combine_only, bool use_1g_huge_pages)
 {
+    init_trace(rank, "Session constructor enter");
     const char* backend_env = std::getenv("DEEPEP_LL_BACKEND");
     const std::string backend = backend_env ? backend_env : "mte";
     if (backend != "mte" && backend != "rdma") throw std::invalid_argument("DEEPEP_LL_BACKEND must be mte or rdma");
@@ -134,6 +152,7 @@ Session::Session(int rank, int size, uint64_t bytes, const std::string& endpoint
     attr.option_attr.shm_init_timeout = timeout;
     attr.option_attr.shm_create_timeout = timeout;
     attr.option_attr.control_operation_timeout = timeout;
+    barrier_timeout_seconds_ = timeout;
     using SetPeerQpMasks = int (*)(const uint64_t*, uint32_t);
     auto set_masks =
         udma ? reinterpret_cast<SetPeerQpMasks>(dlsym(RTLD_DEFAULT, "aclshmemx_set_udma_peer_qp_masks")) : nullptr;
@@ -190,17 +209,23 @@ Session::Session(int rank, int size, uint64_t bytes, const std::string& endpoint
                 throw std::runtime_error("SHMEM returned an unaligned 1 GiB workspace");
         } else {
             init_attempted = true;
+            init_trace(rank, "SHMEM init enter");
             check(aclshmemx_init_attr(mode, &attr), "aclshmemx_init_attr");
+            init_trace(rank, "SHMEM init return");
             runtime_started = true;
             // Peer-table aggregate packets require physical 512B boundaries.
+            init_trace(rank, "workspace allocation enter");
             workspace_ = (udma || ll_rdma_) ? aclshmem_align(512U, allocation_bytes) : aclshmem_malloc(allocation_bytes);
+            init_trace(rank, "workspace allocation return");
         }
         if (workspace_ == nullptr) {
             throw std::runtime_error("SHMEM workspace allocation or translation failed");
         }
         if (ll_rdma_ && reinterpret_cast<uintptr_t>(workspace_) % 512U)
             throw std::runtime_error("RDMA workspace requires 512-byte alignment");
+        init_trace(rank, "workspace memset enter");
         check(aclrtMemset(workspace_, allocation_bytes, 0, allocation_bytes), "aclrtMemset");
+        init_trace(rank, "workspace memset return");
         if (staging_bytes) ll_rdma_stage_ = static_cast<uint8_t*>(workspace_) + workspace_bytes;
         bytes_ = bytes;
         allocation_bytes_ = allocation_bytes;
@@ -393,7 +418,7 @@ void Session::barrier()
 {
     std::lock_guard<std::mutex> guard(runtime_mutex);
     check_context();
-    checked_barrier(ll_rdma_);
+    checked_barrier(ll_rdma_, rank_, barrier_timeout_seconds_);
 }
 
 void Session::close()
@@ -403,7 +428,7 @@ void Session::close()
         return;
     }
     check_context();
-    checked_barrier(ll_rdma_);
+    checked_barrier(ll_rdma_, rank_, barrier_timeout_seconds_);
     if (workspace_ != nullptr && !use_1g_huge_pages_) {
         aclshmem_free(workspace_);
         workspace_ = nullptr;

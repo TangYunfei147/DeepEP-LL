@@ -199,7 +199,7 @@ int aclrtCreateStream(aclrtStream* stream) { *stream = &storage; ++barrier_strea
 int aclrtSynchronizeStream(aclrtStream) { return barrier_sync_status; }
 int aclrtDestroyStream(aclrtStream) { --barrier_streams; return 0; }
 void aclshmemx_barrier_all_on_stream(void*) { ++barriers; }
-extern "C" void deepep_ndr_host_barrier_launch(void*) { ++barriers; }
+extern "C" void deepep_ndr_host_barrier_launch_v2(void*, uint64_t, uint32_t) { ++barriers; }
 
 int main(int argc, char** argv)
 {

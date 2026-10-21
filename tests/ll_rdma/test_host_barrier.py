@@ -24,10 +24,23 @@ def test_project_build_owns_barrier():
     launcher = (ROOT / "csrc/kernels/runtime/host_barrier.cpp").read_text()
     assert "deepep_ndr_host_barrier_kernel" in launcher
     session = (ROOT / "csrc/runtime/session.cpp").read_text()
-    assert "if (hybrid) deepep_ndr_host_barrier_launch(stream);" in session
+    assert "if (hybrid) deepep_ndr_host_barrier_launch_v2(stream," in session
     assert "SHMEM barrier completion" in session
     assert not (ROOT / "scripts/shmem_barrier_patch.py").exists()
     assert "source_patches" in (ROOT / "scripts/shmem_sdk_identity.py").read_text()
+
+
+def test_initialization_diagnostics_and_bounded_local_poll():
+    helper = (ROOT / "csrc/kernels/runtime/host_barrier.h").read_text()
+    wait = helper.split("void deepep_barrier_wait", 1)[1].split("void deepep_host_barrier", 1)[0]
+    assert "GetSystemCycle()" in wait and ">= wait_cycles" in wait
+    assert "AscendC::Trap()" in wait and "predecessor=%d slot=%d" in wait
+    session = (ROOT / "csrc/runtime/session.cpp").read_text()
+    for phase in ("SHMEM init enter", "SHMEM init return", "workspace allocation enter",
+                  "workspace memset return", "barrier launched; synchronize enter"):
+        assert phase in session
+    launcher = (ROOT / "tests/elastic/test_ep_low_latency.py").read_text()
+    assert "if args.trace_ops:" in launcher and "os.environ['DEEPEP_LL_INIT_TRACE'] = '1'" in launcher
 
 
 @pytest.mark.parametrize("size", [2, 3, 16, 17, 32, 64, 128, 256])

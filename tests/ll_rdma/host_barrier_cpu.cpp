@@ -4,6 +4,8 @@
 #include <atomic>
 #include <cassert>
 #include <cstdint>
+#include <chrono>
+#include <cstdio>
 #include <cstring>
 #include <mutex>
 #include <stdexcept>
@@ -57,6 +59,11 @@ enum class CacheMode { CACHE_MODE_DISABLE };
 enum class CacheLine { SINGLE_CACHE_LINE };
 enum class DcciDst { CACHELINE_OUT };
 inline int GetBlockIdx() { return 0; }
+inline unsigned GetSubBlockIdx() { return 0; }
+inline uint64_t GetSystemCycle() {
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+template<class... Args> void printf(const char* fmt, Args... args) { std::printf(fmt, args...); }
 inline void Trap() { throw std::runtime_error("device trap"); }
 template<class T> struct GlobalTensor {
     T* p = nullptr;
@@ -130,4 +137,11 @@ int main() {
     for (int p = 0; p < 16; ++p) { teams[0].pe_mapping[p] = p; states[0].topo_list[p] = ACLSHMEM_TRANSPORT_MTE; }
     deepep_host_barrier(0);
     assert(fallback == 1);
+    memory[0].slots[0][0] = 0;
+    bool timeout = false;
+    try { deepep_barrier_wait(memory[0].slots[0], 1, 0, 0, 1, 0); }
+    catch (const std::runtime_error&) { timeout = true; }
+    assert(timeout);
+    memory[0].slots[0][0] = 2;
+    deepep_barrier_wait(memory[0].slots[0], 1, 0, 0, 1, 0);
 }

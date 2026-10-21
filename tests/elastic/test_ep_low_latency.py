@@ -651,7 +651,7 @@ def trace_call(args, label, action, *values, **kwargs):
             + json.dumps(
                 {
                     "time": datetime.now().isoformat(timespec="milliseconds"),
-                    "rank": dist.get_rank(),
+                    "rank": dist.get_rank() if dist.is_initialized() else getattr(args, "trace_rank", None),
                     "case_id": getattr(args, "case_id", None),
                     "phase": getattr(args, "_case_phase", None),
                     "op": label,
@@ -1065,6 +1065,7 @@ def worker(local_rank, args):
 
     world, identity, external_local = launch_config(args, os.environ)
     rank = identity if external_local is not None else identity + local_rank
+    args.trace_rank = rank
     m = validate_args(args, world)
     cases = list(matrix_cases(args))
     torch.npu.set_device(local_rank)
@@ -1079,7 +1080,7 @@ def worker(local_rank, args):
     if not callable(getattr(native, "dispatch_low_latency", None)):
         raise RuntimeError("Installed wheel has no LL native entry; rebuild and install the migrated package")
     validate_native_cases(native, cases, world)
-    dist.init_process_group(
+    trace_call(args, "process_group.init", dist.init_process_group,
         args.group_backend,
         init_method="env://",
         rank=rank,
@@ -1095,6 +1096,8 @@ def worker(local_rank, args):
         # One CLI choice drives Python and native initialization; stale shell state
         # does not change the selected branch's default in this experiment entry.
         os.environ['DEEPEP_LL_BACKEND']=backend
+        if args.trace_ops:
+            os.environ['DEEPEP_LL_INIT_TRACE'] = '1'
         capability = {"active_aiv": core_config["active_aiv"],
                       "transport": backend,
                       "rdma_compiled": bool(getattr(native, "low_latency_rdma_enabled", False)),
@@ -1105,7 +1108,7 @@ def worker(local_rank, args):
                       "stage_timer_schema": native.low_latency_stage_timer_layout()["schema"],
                       "expert_timer_requested": bool(args.ll_expert_timer)}
         capabilities = [None] * world
-        dist.all_gather_object(capabilities, capability)
+        trace_call(args, "capability.all_gather", dist.all_gather_object, capabilities, capability)
         if any(item != capabilities[0] for item in capabilities):
             raise RuntimeError("LL AIV/group/protocol/timer build differs across ranks")
         if capability['implementation'] not in ('ndr-hns1825','configurable-groups'):
