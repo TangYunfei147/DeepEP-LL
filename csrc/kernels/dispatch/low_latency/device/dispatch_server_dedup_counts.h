@@ -721,10 +721,18 @@ __aicore__ inline void ServerDedupCounts::CalRecvAndSetFlag()
     if constexpr (!kLlPrefixR0) offset=GetCumSum(newAivId);
 
     if (recStatusNumPerCore_ != 0U) {
-        for (uint32_t i = 0; i < recStatusNumPerCore_; ++i) {
-            outCountLocal.SetValue(i, uint32_t(outCountLocal.GetValue(i)) + offset);
+        if (offset && recStatusNumPerCore_>=32U) {
+            // An affine update, unlike the scalar recurrence that built the
+            // local prefix. Preserve scalar->vector and vector->MTE3 ordering.
+            SyncFunc<AscendC::HardEvent::S_V>();
+            Adds(outCountLocal,outCountLocal,int32_t(offset),recStatusNumPerCore_);
+            SyncFunc<AscendC::HardEvent::V_MTE3>();
+        } else {
+            if (offset) for (uint32_t i = 0; i < recStatusNumPerCore_; ++i) {
+                outCountLocal.SetValue(i, uint32_t(outCountLocal.GetValue(i)) + offset);
+            }
+            SyncFunc<AscendC::HardEvent::S_MTE3>();
         }
-        SyncFunc<AscendC::HardEvent::S_MTE3>();
         GlobalTensor<int32_t> sendCountsGlobal, workspaceGlobal;
         sendCountsGlobal.SetGlobalBuffer(reinterpret_cast<__gm__ int32_t*>(sendCountsOutGM_));
         workspaceGlobal.SetGlobalBuffer(reinterpret_cast<__gm__ int32_t*>(recvCntWorkspaceGM_));

@@ -6,6 +6,7 @@
 
 #include "kernel_operator.h"
 #include "../common/ep_memory_server_dedup_data_layout.h"
+#include "../common/ll_receive_task_fill.h"
 
 namespace DispatchDedup {
 using namespace AscendC;
@@ -30,6 +31,9 @@ public:
         pipe->InitBuffer(pendingIdxBuf_, bytes);
         tokenPos_ = tokenPosBuf_.Get<uint32_t>();
         pendingIdx_ = pendingIdxBuf_.Get<uint32_t>();
+        // The checked UB budget bounds count far below INT32_MAX. Generate via
+        // the API-supported int32 view; the nonnegative uint32 bits are equal.
+        CreateVecIndex(pendingIdx_.ReinterpretCast<int32_t>(),int32_t(0),count_);
 
         const uint32_t localExperts = experts / ranks;
         // Upper bound skips records ending at begin_, including zero-count runs.
@@ -51,13 +55,15 @@ public:
             const uint32_t source = record % ranks;
             const uint32_t localExpert = record / ranks;
             const uint32_t region = ((source + rank) % ranks) * localExperts + localExpert;
-            for (uint32_t row = first; row < last; ++row) {
-                const uint32_t j = row - begin_;
-                tokenPos_.SetValue(j, region * bs + row - previous);
-                pendingIdx_.SetValue(j, j);
-            }
+            if (first<last)
+                LlFillTaskRange(tokenPos_,first-begin_,region*bs+first-previous,last-first);
             previous = cumulative;
         }
+        // PendingIndex/Position and RemovePending are scalar consumers. Do not
+        // assume CreateVecIndex is completed when the API returns.
+        const auto event=pipe->FetchEventID(HardEvent::V_S);
+        SetFlag<HardEvent::V_S>(event);
+        WaitFlag<HardEvent::V_S>(event);
     }
 
     __aicore__ inline uint32_t Begin() const

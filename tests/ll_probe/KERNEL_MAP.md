@@ -69,3 +69,9 @@ in sync when adding modes.
 Stage5 prefix progression: Counts::PreparePrefix/TryCompletePrefix with event5
 consumed before Receiver::Prepare; R count/prefix publication precedes local TX.
 See docs/PREFIX_PROGRESS.md (schema13); check Source Sync<MTE2_S> control ID7.
+
+Latest evolution: source count ownership is all R cores (local descriptor split
+unchanged), common UB budget 230KiB. One shared GM prefix uses aligned producer
+slices, with compile-only DEEPEP_LL_PREFIX_MODE=parallel/r0. Receive table vector
+construction lives in common/ll_receive_task_fill.h and receive_tasks.Build;
+the final V_S is required before scalar consumers. Read docs/SHARED_PREFIX_VECTOR.md.

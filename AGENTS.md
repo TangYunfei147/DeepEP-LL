@@ -35,3 +35,9 @@ schema14仅改诊断，见docs/PACKET_TIMING.md。dispatch observe的ID12/13、1
 只测前两次，coverage=first_two_only，不能当全量累计或用于阶段占比。
 包级/主阶段和包数仍全量；旧schema13保持离线兼容。不得为测单包DMA完成增加同步。
 S3独立基线kernel/ll-g4-s3-baseline精确ac876ba，不带当前S5/打点变更。
+
+后续R核计数/230KiB、单份共享前缀及向量化见docs/SHARED_PREFIX_VECTOR.md。
+DEEPEP_LL_PREFIX_MODE仅编译期parallel/r0，协议分别16000+S/17000+S；
+Host/device缓存和全rank身份必须匹配。共享前缀生产片段按32B分界，消费者ready行独占。
+tokenPos只向量写对齐长段，pendingIdx使用int32视图；Build末尾V_S保护后续scalar读写，
+不得因为删除标量初始化而遗漏此依赖。二分保留，短段及uint32高位值保留标量路径。

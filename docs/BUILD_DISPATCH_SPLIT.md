@@ -127,3 +127,10 @@ All seven mode TUs remain independent. CPU/native suite: 322 passed.
 Evidence: `.logs/packet-timing-002/`; details in PACKET_TIMING.md.
 The ON measurement is above the recorded Stage5 schema13 73.987s; no claim
 of compile-time speedup or NPU runtime improvement is made.
+
+R-count/230KiB and shared-prefix/vector follow-ups retain seven TUs/O2. A3
+S28/R28/jobs4 cold ON/OFF seconds: b2b2ed3 82.162/50.528; 0888f34 parallel
+82.833/51.262 and r0 79.471/49.522; vector code5af523e parallel84.058/51.806
+and r0 79.895/50.462. All five full ON wheel builds passed. Final CPU/native
+suite381 passed. Evidence and target A/B steps: SHARED_PREFIX_VECTOR.md.
+These are compilation timings, not kernel speedups; no NPU execution.
