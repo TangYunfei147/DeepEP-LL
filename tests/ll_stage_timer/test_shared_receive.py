@@ -122,10 +122,10 @@ def test_production_wiring_keeps_producers_separate_from_consumers():
     kernel=(base/'dispatch_server_dedup_kernel.h').read_text(encoding='utf-8')
     counts=(base/'device/dispatch_server_dedup_counts.h').read_text(encoding='utf-8')
     receiver=(base/'device/dispatch_server_dedup_recv.h').read_text(encoding='utf-8')
-    assert kernel.index('sender_.Process(')<kernel.rindex('counts_.CompleteCumsum();')<kernel.index('receiver_.Process(timer_);')
-    assert kernel.count('receiver_.Process(timer_);')==1
-    assert 'recvCoreNum_ = kLlDispatchRecvCoreNum;' in receiver
-    assert 'receiver_ = GetBlockIdx();' in receiver
+    assert kernel.index('sender_.Process(')<kernel.rindex('counts_.CompleteCumsum();')<kernel.rindex('receiver_.Process(timer_);')
+    assert kernel.count('receiver_.Process(timer_);')==2
+    assert 'recvCoreNum_ = enableDedup ? kLlDispatchRecvCoreNum : kLlRecvCoreNum;' in receiver
+    assert 'receiver_ = enableDedup ? GetBlockIdx()' in receiver
     assert 'if (aivId_!=kLlSendCoreNum) return;' in counts
     assert 'DataCopyPad(workspace,prefix,copy)' in counts
     assert 'for (uint32_t index = 0; index < coreNum_; index++)' not in counts

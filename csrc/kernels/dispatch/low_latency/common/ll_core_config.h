@@ -17,7 +17,7 @@ constexpr uint32_t kLlDispatchUbBytes = 230U * 1024U;
 // Dispatch senders join receive after their own sends; combine retains S/R.
 constexpr uint32_t kLlDispatchRecvCoreNum = kLlActiveCoreNum;
 // Encode the split so mismatched Host/device objects and rank identities differ.
-constexpr uint32_t kLlCoreProtocolVersion = 17000U + kLlSendCoreNum;
+constexpr uint32_t kLlCoreProtocolVersion = 18000U + kLlSendCoreNum;
 // Storage capacity remains separate from the fixed 56-core launch.
 constexpr uint32_t kLlMaxCoreNum = 72U;
 constexpr uint32_t kLlMaxRecvCoreNum = 56U;

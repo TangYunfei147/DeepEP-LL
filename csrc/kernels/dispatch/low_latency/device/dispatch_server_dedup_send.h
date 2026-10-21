@@ -347,54 +347,31 @@ public:
     // 摘要：非去重发送流程：直接在原始展平路由上做连续核区间切分，每核只发自己的路由。
     __aicore__ inline void SendWithoutDedup(TQue<QuePosition::VECIN, 1>& input)
     {
-        const uint32_t total=bs_*k_,core=GetBlockIdx();
-        const uint32_t base=total/sendCores_,remainder=total%sendCores_;
-        const uint32_t begin=core*base+(core<remainder ? core : remainder);
-        const uint32_t count=base+(core<remainder ? 1U : 0U);
-        if (!count) return;
-        LL_SEG_BEGIN(remotePrepareBegin, PREPARE_INPUT);
-        const uint32_t expertsPerGroup=localExperts_*kLlRanksPerGroup;
-        const uint32_t ownGroup=args_->rank/kLlRanksPerGroup;
-        const uint32_t ownBegin=ownGroup*expertsPerGroup;
-        auto lower=qSubBuf_.Get<uint8_t>();
-        auto upper=qWorkBuf_.Get<uint8_t>();
-        const uint32_t alignedBegin=begin/8U*8U,span=begin+count-alignedBegin;
-        auto indices=qDstBuf_.Get<int32_t>();
-        Sync<HardEvent::MTE2_V>();
-        Compares(lower,routeIds_[alignedBegin],int32_t(ownBegin),CMPMODE::LT,span);
-        Compares(upper,routeIds_[alignedBegin],int32_t(ownBegin+expertsPerGroup),CMPMODE::GE,span);
-        PipeBarrier<PIPE_V>();
-        Or(lower.ReinterpretCast<uint16_t>(),lower.ReinterpretCast<uint16_t>(),
-           upper.ReinterpretCast<uint16_t>(),(span+15U)/16U);
-        CreateVecIndex(indices,int32_t(alignedBegin),span);
-        PipeBarrier<PIPE_V>();
-        Compares(upper,indices,int32_t(begin),CMPMODE::GE,span);
-        PipeBarrier<PIPE_V>();
-        And(lower.ReinterpretCast<uint16_t>(),lower.ReinterpretCast<uint16_t>(),
-            upper.ReinterpretCast<uint16_t>(),(span+15U)/16U);
-        PipeBarrier<PIPE_V>();
-        uint64_t remoteCount=0;
-        GatherMask(directTasks_,indices.ReinterpretCast<uint32_t>(),lower.ReinterpretCast<uint32_t>(),true,span,{1U,1U,0U,0U},remoteCount);
-        Sync<HardEvent::V_S>();
-        LL_SEG_END(remotePrepareBegin, PREPARE_INPUT);
-        const uint32_t serverNum=args_->rankSize/kLlRanksPerGroup;
-        if (serverNum<16U) {
-            for (uint32_t task=0;task<remoteCount;++task) {
-                const uint32_t i=directTasks_.GetValue(task);
-                const uint32_t expert=uint32_t(routeIds_.GetValue(i));
-                SendPacket(input,i/k_,i%k_,expert,CalTokenSendExpertCnt(expert,i),0U);
+        // Route ownership is independent of the token partition used to copy weights.
+        const uint32_t total = bs_ * k_, core = GetBlockIdx();
+        const uint32_t base = total / sendCores_;
+        const uint32_t remainder = total % sendCores_;
+        const uint32_t begin = core * base + (core < remainder ? core : remainder);
+        const uint32_t count = base + (core < remainder ? 1U : 0U);
+        const uint32_t serverNum = args_->rankSize / 8U;
+        if (serverNum < 16U) {
+            for (uint32_t i = begin; i < begin + count; ++i) {
+                const uint32_t expert = uint32_t(routeIds_.GetValue(i));
+                SendPacket(input, i / k_, i % k_, expert, CalTokenSendExpertCnt(expert, i), 0U);
             }
             return;
         }
-        for (uint32_t step=0;step<serverNum;++step) {
-            const uint32_t server=EpServerOrder::ServerDedupDispatchDirectOrder(serverNum,ownGroup,step);
-            if (server==ownGroup) continue;
-            const uint32_t first=server*expertsPerGroup;
-            for (uint32_t task=0;task<remoteCount;++task) {
-                const uint32_t i=directTasks_.GetValue(task);
-                const uint32_t expert=uint32_t(routeIds_.GetValue(i));
-                if (expert<first || expert>=first+expertsPerGroup) continue;
-                SendPacket(input,i/k_,i%k_,expert,CalTokenSendExpertCnt(expert,i),0U);
+        // Keep the original route ownership and q slots. Only reorder this
+        // core's sends by the same 128P+ server order used by dedup DIRECT.
+        const uint32_t expertsPerServer = localExperts_ * 8U;
+        const uint32_t ownServer = args_->rank / 8U;
+        for (uint32_t step = 0; step < serverNum; ++step) {
+            const uint32_t server = EpServerOrder::ServerDedupDispatchDirectOrder(serverNum, ownServer, step);
+            const uint32_t firstExpert = server * expertsPerServer;
+            for (uint32_t i = begin; i < begin + count; ++i) {
+                const uint32_t expert = uint32_t(routeIds_.GetValue(i));
+                if (expert < firstExpert || expert >= firstExpert + expertsPerServer) continue;
+                SendPacket(input, i / k_, i % k_, expert, CalTokenSendExpertCnt(expert, i), 0U);
             }
         }
     }

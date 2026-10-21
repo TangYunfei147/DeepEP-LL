@@ -30,7 +30,7 @@ def validate_core_split_capability(capability):
     send, recv = capability.get("send_cores"), capability.get("recv_cores")
     if (type(send) is not int or type(recv) is not int or send <= 0 or recv <= 0
             or send + recv != 56 or capability.get("active_aiv") != 56
-            or capability.get("core_protocol") != 17000 + send):
+            or capability.get("core_protocol") != 18000 + send):
         raise RuntimeError("Rebuild/install the matching configured 56-core split wheel on every rank")
 
 
@@ -1126,6 +1126,7 @@ def worker(local_rank, args):
         capability = {"active_aiv": core_config["active_aiv"],
                       "send_cores": core_config["send_cores"], "recv_cores": core_config["recv_cores"],
                       "dispatch_recv_cores": core_config["dispatch_recv_cores"],
+                      "nondedup_dispatch_recv_cores": core_config["recv_cores"],
                       "transport": backend,
                       "rdma_compiled": bool(getattr(native, "low_latency_rdma_enabled", False)),
                       "logical_group": compiled_group(native,world),

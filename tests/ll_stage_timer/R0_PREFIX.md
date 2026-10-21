@@ -1,10 +1,20 @@
+当前增量：非去重M<=32恢复S发送全部路由、R专职接收，协议18000+S。
+去重M>32保持4ec82a5的原始路径。下文所有核共享接收仅适用于去重。
+非去重R核仍负责SEND_COUNTS和R0前缀，不建本组发送描述符；S不等待前缀。
+发送顺序恢复主线main@07af8ea非去重实现（保留其8-rank分组排序阈值），核数采用当前编译S。
+Host与Device接收预算按R核数核算。230KiB、R0前缀、现有输入预取和lane上限不回退。
+这次不是恢复主线全部实现，不包含q预计算或combine修改。
+ST能力记录额外nondedup_dispatch_recv_cores=R，dispatch_recv_cores保留去重容量56；离线inspect_dispatch_routes.py仍是旧S3
+所有权模型，不能用于当前非去重分核/时序结论。原始timer头的核容量也不等于接收参与核数。
+需全rank重装完整wheel，SDK无需仅因此重建。
+
 # R0共享前缀与接收任务表向量化
 
 分支kernel/ll-g4-group-compact。本次在一个提交中撤销613ae81、a5ce3f7的
 紧凑任务重分配/共享任务表实验，恢复S3/ac876ba发送算法，再叠加以下三项。
 不改写历史，不修改kernel/ll-g4-s3-baseline工作区。
 
-当前identity=g4-r0-prefix，协议17000+S，Stage3/schema12，默认S28/R28、56核、G4。
+当前identity=g4-r0-prefix，协议18000+S，Stage3/schema12，默认S28/R28、56核、G4。
 所有rank必须完整重装相同wheel。
 
 ## 三项修改

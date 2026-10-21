@@ -31,8 +31,8 @@ int main() {
  for(unsigned h:{128U,3584U,7168U}) for(unsigned k:{1U,8U}) {
    unsigned e=p*6;
    auto data=DispatchServerDedupDataLayout(bs,h,k,e,mode);
-   for(unsigned core=0;core<56;++core) {
-    auto l=LlMakeOverlapLayout(data,bs,k,e,p,0,core,mode);
+   for(bool dedup:{false,true}) for(unsigned core=0;core<56;++core) {
+    auto l=LlMakeOverlapLayout(data,bs,k,e,p,0,core,mode,dedup);
     if(!l.enabled) {++fallback;continue;}
     ++enabled;assert(l.totalBytes<=kLlDispatchUbBytes);
     assert(l.sendLanes>=1 && l.sendLanes<=6 && l.recvLanes>=1 && l.recvLanes<=6);

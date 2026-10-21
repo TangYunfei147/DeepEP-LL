@@ -143,3 +143,26 @@ Validation evidence:
   measurement for this revision. Historical A3 timings above do not apply.
   Follow the existing cold-build protocol and tests/ll_stage_timer/R0_PREFIX.md
   for complete target correctness and OFF profiling.
+
+## Non-dedup dedicated S/R revision (2026-10-22)
+
+Independent commit on top of4ec82a5, selected strictly by existing M<=32.
+S sends every original route and returns without prefix/receive. R publishes
+counts and reads the R0 prefix, then receives with core-S and R workers.
+No R local payload descriptors are built for this mode. Dedup sender and
+ProcessGroupLocal bodies are byte-identical to4ec82a5. No q optimization.
+Non-dedup loop restored from local main07af8ea with configured S core count;
+its8-rank large-domain ordering threshold is preserved.
+Protocol18000+S;230KiB and R0 prefix remain. Full rank wheel rebuild required.
+
+Validation:
+- Full suite initial run847pass/108skip/3 old source-policy assertions failed.
+  Updated the assertions for the intentionally changed mode split.
+- Targeted regression122pass; native mode-isolation/receive-table/Host tests21pass.
+- Final actual native layout matrix covers both dedup flags plus ST contracts28pass.
+  Counts overlap; do not sum as unique coverage.
+- Host non-dedup receiver minimum UB and Device overlap budget both use R workers.
+- No CANN compilation, wheel linkage or NPU correctness/performance verification.
+- Logs .tmp/nondedup-full-001.log and .tmp/nondedup-native-001.log.
+  Existing CPU inspect_dispatch_routes.py retains historical S3 allocation;
+  do not use it to assert current non-dedup core ownership. See R0_PREFIX.md.

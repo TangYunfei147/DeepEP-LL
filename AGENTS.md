@@ -34,3 +34,6 @@ kernel/ll-g4-group-compact现基于S3/ac876ba，撤销两轮compact改动。
 固定epoch槽为R0 magic槽+32，先完成表写入再发布；消费者不清共享flag。
 dispatch UB预算230KiB、combine独立预算不变。接收表向量化须处理32B对齐及V_S依赖。
 当前指南tests/ll_stage_timer/R0_PREFIX.md。
+
+非去重M<=32专用路径：S发所有route后退出，R仅计数/前缀/接收，不生成本组描述符。
+去重路径不变，协议18000+S；Host/Device按M选择实际接收核数，不能仅按B判断。

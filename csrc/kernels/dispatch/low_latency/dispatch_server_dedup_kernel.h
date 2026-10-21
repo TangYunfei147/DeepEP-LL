@@ -25,6 +25,7 @@ public:
                                 LlExpertTimer::DeviceTimer* expertTimer = nullptr)
     {
         timer_ = timer;
+        enableDedup_=enableDedup;
         args_ = reinterpret_cast<const __gm__ DispatchDedup::CommArgs*>(commArgs);
         core_ = GetBlockIdx();
         sendCores_ = kLlSendCoreNum;
@@ -32,13 +33,13 @@ public:
         constexpr auto mode=Prequantized ? EpServerDedupInputMode::PrequantizedFp8Packs :
             (WireFp8 ? EpServerDedupInputMode::Quantize16 : EpServerDedupInputMode::Plain16);
         overlap_=LlMakeOverlapLayout(DispatchServerDedupDataLayout(bs,h,topK,experts,mode),
-                                    bs,topK,experts,args_->rankSize,args_->rank,core_,mode);
+                                    bs,topK,experts,args_->rankSize,args_->rank,core_,mode,enableDedup);
         counts_.ConfigureOverlap(overlap_);
         sender_.ConfigureOverlap(overlap_);
         receiver_.ConfigureOverlap(overlap_);
         const uint32_t magic = RotateDispatchServerDedupMagic(args_, core_, pipe);
         counts_.Init(commArgs, expertIds, expertTokenNumsOut, sendCountsOut, bs, topK, experts, expertTokenNumsType,
-                     magic, pipe, timer);
+                     magic, pipe, timer, enableDedup);
         sender_.Init(args_, x, expertIds, expertScales, sourceMaskOut, expertScalesOut, bs, h, topK, experts, pipe,
                      magic, inputScales, enableDedup);
         receiver_.Init(args_, expandXOut, dynamicScalesOut, tokenTypeOut, destinationIndexOut, relayReadIndexOut,
@@ -77,6 +78,21 @@ public:
         } else { LL_SEG_COUNT(SERIAL_FALLBACK,1); }
         counts_.SendCnt();
 
+        if (!enableDedup_) {
+            if (core_<sendCores_) {
+                sender_.Process(counts_.ScratchPool(),counts_.ReservedBytes(),timer_);
+                sender_.Retire();
+                counts_.Finish();
+                return; // S owns all source routes and never waits for receive prefix.
+            }
+            counts_.RecvCnt();
+            counts_.CalcCumsum();
+            counts_.CompleteCumsum();
+            if (overlap_.enabled) receiver_.SetPrefix(counts_.Prefix());
+            receiver_.Process(timer_);
+            counts_.Finish();
+            return;
+        }
         if (overlap_.Cooperative() && core_>=sendCores_) {
             counts_.PrepareRecvCnt();
             bool prepared=false;
@@ -120,6 +136,7 @@ private:
     TPipe* pipe_ = nullptr;
     LlOverlapLayout overlap_{};
     uint32_t core_ = 0, sendCores_ = 0;
+    bool enableDedup_=true;
 };
 }  // namespace DispatchDedup
 #endif

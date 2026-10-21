@@ -221,7 +221,10 @@ void bind_low_latency(py::module_& module)
     module.def("low_latency_dispatch_tiling", [](int p, int b, int h, int k, int e, const std::string& dtype,
                                                  int num_max_tokens_per_rank) {
         const bool fp8 = dtype == "float8_e4m3fn";
-        layout(p, b, h, k, e, fp8);
+        auto checked=layout(p, b, h, k, e, fp8);
+        if (!DispatchDedup::EpServerDedupEnabled(num_max_tokens_per_rank) &&
+            !DispatchDedup::DispatchDedupPacketUbFits(checked,b,k,e,p,DispatchDedup::kLlDefaultPlanCoreNum,false))
+            throw std::invalid_argument("Non-dedup R-only receive exceeds UB budget");
         auto data=dispatch_format_tiling(dtype);
         data.bs = b;
         data.h = h;

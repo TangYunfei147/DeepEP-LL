@@ -69,3 +69,5 @@ in sync when adding modes.
 当前R0候选：counts.h删除片段总数/逐核前缀广播，ll_group_local_send.h仅给R核分配计数。
 receive_tasks.h按记录段生成tokenPos、一次生成pendingIdx；Host和overlap核算R0峰值。
 详见../ll_stage_timer/R0_PREFIX.md。发送算法恢复S3，compact共享任务表已删除。
+
+非去重模式在主Process前置独立分支，Recv编号core-S且接收核数R；去重保持56核共享接收。

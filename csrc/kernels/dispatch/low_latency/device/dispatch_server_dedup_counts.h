@@ -27,9 +27,10 @@ public:
     // 摘要：绑定路由与计数输出，选择本轮控制区；保存并调整 CTRL[60]，供整数位模式的 FP32 归约使用。
     __aicore__ inline void Init(GM_ADDR commArgs, GM_ADDR expertIds, GM_ADDR expertTokenNumsOut, GM_ADDR sendCountsOut,
                                 uint32_t bs, uint32_t topK, uint32_t experts, uint32_t expertTokenNumsType,
-                                int64_t magic, TPipe* pipe, LlStageTimer::DeviceTimer* timer = nullptr)
+                                int64_t magic, TPipe* pipe, LlStageTimer::DeviceTimer* timer = nullptr, bool enableDedup = true)
     {
         timer_ = timer;
+        buildLocalTasks_=enableDedup;
         tpipe_ = pipe;
         args_ = reinterpret_cast<const __gm__ DispatchDedup::CommArgs*>(commArgs);
         epRankId_ = args_->rank;
@@ -156,6 +157,7 @@ private:
     __aicore__ inline void WaitCumSumFlag();
 
     LlOverlapLayout overlap_{};
+    bool buildLocalTasks_=true;
     TBufPool<TPosition::VECCALC,16> recvCountPool_;
     __aicore__ inline TBufPool<TPosition::VECCALC,16>& RecvPool() {
         return overlap_.enabled ? recvCountPool_ : stagePool_;
@@ -201,7 +203,7 @@ __aicore__ inline void ServerDedupCounts::SendCnt()
     const uint32_t recordBytes=statusCntAlign_*kEpServerDedupCountRecordBytes;
     if (recordBytes) tpipe_->InitBuffer(statusBuf_,recordBytes);
     const uint32_t routeBytes=Ceil(expertIdsCnt_*sizeof(int32_t),SIZE_ALIGN_256)*SIZE_ALIGN_256;
-    if (countPlan_.local && countPlan_.count) {
+    if (buildLocalTasks_ && countPlan_.local && countPlan_.count) {
         // Persistent descriptors are outside the overlay used by packet packing.
         localTaskBytes_=2U*routeBytes;
         tpipe_->InitBuffer(localRouteBuf_,routeBytes);
@@ -233,7 +235,7 @@ __aicore__ inline void ServerDedupCounts::SendCnt()
     const uint32_t maskBytes=Ceil(Ceil(expertIdsCnt_,8U),UB_ALIGN)*UB_ALIGN;
     for (uint32_t part=0;part<countPlan_.size;++part) {
         const auto range=countPlan_.ranges[part];
-        if (range.local) BuildLocalTasks(range.begin,range.end,range.record);
+        if (buildLocalTasks_ && range.local) BuildLocalTasks(range.begin,range.end,range.record);
         else if (expertIdsCnt_>=SIZE_ALIGN_256/sizeof(int32_t) && 2U*maskBytes<=routeBytes)
             CountByVectorRange(range.begin,range.end,maskBytes,range.record);
         else CountByExpert(range.begin,range.end,range.record);

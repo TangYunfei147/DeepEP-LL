@@ -167,7 +167,7 @@ inline int ValidateDispatchServerDedupAllocations(const EpServerDedupAllocation*
 namespace DispatchDedup {
 // Matches each input mode, including quantization scratch or packed scale staging.
 inline bool DispatchDedupPacketUbFits(const EpMemoryServerDedupLayout& layout, int64_t b, int64_t k,
-                                      int64_t num_experts, int64_t world_size, uint32_t coreNum = kLlDefaultPlanCoreNum)
+                                      int64_t num_experts, int64_t world_size, uint32_t coreNum = kLlDefaultPlanCoreNum, bool enableDedup=true)
 {
     if (!LlCoreCountValid(coreNum)) return false;
     const auto align = [](uint64_t n, uint64_t a) { return (n + a - 1) / a * a; };
@@ -190,7 +190,8 @@ inline bool DispatchDedupPacketUbFits(const EpMemoryServerDedupLayout& layout, i
     const uint64_t serverStateExtra = std::max<uint64_t>(64U, align(world_size / kLlRanksPerGroup * 4U, 32U)) - 64U;
     const uint64_t localSender=localReserved+2U*inputBytes+align(b*k*4U,32U)+
                                (needQuantize ? quantWork+layout.data.packedPayloadBytes : 0U)+layout.data.tokenStride;
-    const uint64_t receiver = align(num_experts * 4, 32) + 2 * align(((layout.capacityRows + kLlDispatchRecvCoreNum - 1U) / kLlDispatchRecvCoreNum) * 4, 32) +
+    const uint64_t receiveCores=enableDedup?kLlDispatchRecvCoreNum:kLlRecvCoreNum;
+    const uint64_t receiver = align(num_experts * 4, 32) + 2 * align(((layout.capacityRows + receiveCores - 1U) / receiveCores) * 4, 32) +
                               16 * layout.data.blockCount * 32 + 256 +
                               16 * align((layout.data.blockCount + 7) / 8, 32) * 4 + 256 + 16 * 36 +
                               layout.data.tokenStride + 64;
