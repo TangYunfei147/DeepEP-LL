@@ -34,6 +34,15 @@ def validate_core_split_capability(capability):
         raise RuntimeError("Rebuild/install the matching configured 56-core split wheel on every rank")
 
 
+def validate_stage_timer_capability(capability):
+    if not capability["stage_timer"]:
+        raise RuntimeError("All ranks must install a DEEPEP_LL_STAGE_TIMER=ON wheel")
+    if capability['stage_timer_schema'] != 11:
+        raise RuntimeError('Detailed LL diagnostics require timer schema 11; '
+                           f'got {capability["stage_timer_schema"]}; '
+                           'rebuild/install the matching wheel on every rank')
+
+
 MATRIX_FIELDS = ("num_tokens", "dtype", "num_experts", "hidden", "num_topk", "do_cpu_sync", "fp8_scale_dtype")
 
 
@@ -1124,10 +1133,8 @@ def worker(local_rank, args):
             raise RuntimeError('Installed wheel belongs to a different kernel branch')
         if capability['transport']=='rdma' and not capability['rdma_compiled']:
             raise RuntimeError('Requested RDMA is not compiled in this wheel; no MTE fallback')
-        if args.ll_stage_timer and not capability["stage_timer"]:
-            raise RuntimeError("All ranks must install a DEEPEP_LL_STAGE_TIMER=ON wheel")
-        if args.ll_stage_timer and capability['stage_timer_schema'] != 10:
-            raise RuntimeError('Detailed LL diagnostics require timer schema 10; rebuild/install the matching wheel on every rank')
+        if args.ll_stage_timer:
+            validate_stage_timer_capability(capability)
         if args.ll_expert_timer and not 8001 <= capability['core_protocol'] <= 8055:
             raise RuntimeError('Expert diagnostics require a matching configured-split wheel on every rank')
         args.ll_stage_timer_capabilities = capabilities
