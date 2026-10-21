@@ -44,13 +44,11 @@ def test_group_local_preparation_and_retirement_have_separate_intervals():
     assert 'tasks,timer_,cooperate' in kernel
 
 
-def test_shared_plan_is_measured_as_preparation():
+def test_nondedup_remote_filter_is_measured_as_preparation():
     sender=(ROOT/'csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_send.h').read_text(encoding='utf-8')
-    build=sender[sender.index('inline void BuildAndPublishPlan('):sender.index('inline void ReadOwnedPlan(')]
-    read=sender[sender.index('inline void ReadOwnedPlan('):sender.index('private:')]
-    assert build.index('LL_SEG_SCOPE(PREPARE_INPUT)')<build.index('Classify(')
-    assert read.index('LL_SEG_SCOPE(PREPARE_INPUT)')<read.index('while (!ready)')
-    assert read.index('DataCopyPad(ownedPlan_')<read.index('SendPacket(')
+    body=sender[sender.index('inline void SendWithoutDedup('):sender.index('\nprivate:')]
+    assert body.index('LL_SEG_BEGIN(remotePrepareBegin, PREPARE_INPUT)')<body.index('GatherMask(')
+    assert body.index('GatherMask(')<body.index('LL_SEG_END(remotePrepareBegin, PREPARE_INPUT)')<body.index('SendPacket(')
 
 
 def test_intermittent_local_work_does_not_split_kernel_statistics(tmp_path):

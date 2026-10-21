@@ -31,6 +31,8 @@ public:
         tokenPos_ = tokenPosBuf_.Get<uint32_t>();
         pendingIdx_ = pendingIdxBuf_.Get<uint32_t>();
 
+        // UB base is 32B aligned and padded; make the identity pending list once.
+        CreateVecIndex(pendingIdx_.ReinterpretCast<int32_t>(),int32_t(0),count_);
         const uint32_t localExperts = experts / ranks;
         // Upper bound skips records ending at begin_, including zero-count runs.
         // A nonempty partition has begin_ < total, so the result is < experts.
@@ -51,13 +53,29 @@ public:
             const uint32_t source = record % ranks;
             const uint32_t localExpert = record / ranks;
             const uint32_t region = ((source + rank) % ranks) * localExperts + localExpert;
-            for (uint32_t row = first; row < last; ++row) {
-                const uint32_t j = row - begin_;
-                tokenPos_.SetValue(j, region * bs + row - previous);
-                pendingIdx_.SetValue(j, j);
+            uint32_t row=first;
+            // Each record is an arithmetic progression, but its output start
+            // need not be 32B aligned. Peel at most seven entries at either end.
+            while (row<last && ((row-begin_)&7U)) {
+                tokenPos_.SetValue(row-begin_,region*bs+row-previous);
+                ++row;
+            }
+            const uint32_t vectorCount=(last-row)/8U*8U;
+            if (vectorCount) {
+                CreateVecIndex(tokenPos_.ReinterpretCast<int32_t>()[row-begin_],
+                               int32_t(region*bs+row-previous),vectorCount);
+                row+=vectorCount;
+            }
+            while (row<last) {
+                tokenPos_.SetValue(row-begin_,region*bs+row-previous);
+                ++row;
             }
             previous = cumulative;
         }
+        // The next reader uses scalar GetValue; this dependency is necessary.
+        const auto ready=pipe->FetchEventID(HardEvent::V_S);
+        SetFlag<HardEvent::V_S>(ready);
+        WaitFlag<HardEvent::V_S>(ready);
     }
 
     __aicore__ inline uint32_t Begin() const

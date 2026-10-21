@@ -202,7 +202,6 @@ def test_relocated_project_with_spaces_and_matrix(tmp_path):
     project=tmp_path/'project with spaces';project.mkdir()
     files=['tests/elastic/test_ep_low_latency.py','tests/elastic/inspect_dispatch_routes.py',
            'csrc/kernels/dispatch/low_latency/common/ll_core_config.h',
-           'csrc/kernels/dispatch/low_latency/common/ll_group_compact.h',
            'csrc/kernels/dispatch/low_latency/common/ll_group_local_send.h',
            'csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_receive_tasks.h',
            'csrc/kernels/dispatch/low_latency/common/ep_memory_server_dedup_protocol.h',

@@ -78,8 +78,8 @@ public:
         GlobalTensor<int32_t> prefixGlobal;
         const auto counts = DispatchServerDedupCountLayout(experts_, coreNum_);
         prefixGlobal.SetGlobalBuffer(reinterpret_cast<__gm__ int32_t*>(args_->peerMems[args_->rank] + windowOffset_ +
-                                                                       counts.cntOffset + counts.prefixOffset +
-                                                                       uint64_t(receiver_) * counts.prefixStride));
+                                                                       counts.cntOffset + counts.prefixOffset));
+        prefixGlobal.SetL2CacheHint(CacheMode::CACHE_MODE_DISABLE);
         prefix = prefixBuf_.Get<int32_t>();
         DataCopyPad(prefix, prefixGlobal, {1U, prefixBytes, 0U, 0U, 0U}, {false, 0U, 0U, 0});
         ServerDedupReceiveSync<HardEvent::MTE2_S>();

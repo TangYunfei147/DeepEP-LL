@@ -1,11 +1,5 @@
 # 泛化分支生产LL路径
 
-当前group-compact候选：每个S核只分类原token分片一次，发布本卡共享描述符表。
-common/ll_group_compact.h为共享布局和owner切片helper；device/dispatch_server_dedup_send.h
-负责本核bucket排序、先数据后ready发布、S-only等待和只读自己描述符。
-Host/overlap UB和combine控制区前的GM边界一起核算，协议16000+S、Stage3/schema12。
-详见../ll_stage_timer/GROUP_COMPACT.md。
-
 该分支保留MTE传输和DEEPEP_LL_RANKS_PER_GROUP静态可配置分组，默认4。
 不要复制NDR的Session、ll_transport或tiling-key策略来替代这里的实现。
 
@@ -71,3 +65,7 @@ low_latency/dispatch_variant_kernel.h for identical entry/timer wiring.
 Algorithms remain in dispatch_server_dedup_kernel.h and device/*.h.
 See docs/BUILD_DISPATCH_SPLIT.md; keep profiler name matching and compile_off.sh
 in sync when adding modes.
+
+当前R0候选：counts.h删除片段总数/逐核前缀广播，ll_group_local_send.h仅给R核分配计数。
+receive_tasks.h按记录段生成tokenPos、一次生成pendingIdx；Host和overlap核算R0峰值。
+详见../ll_stage_timer/R0_PREFIX.md。发送算法恢复S3，compact共享任务表已删除。

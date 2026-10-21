@@ -57,8 +57,8 @@ def test_no_gm_writes_or_new_barriers_at_measured_boundaries():
 
 def test_poll_count_and_input_quant_pack_boundaries_are_present():
     counts=(ROOT/'csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_counts.h').read_text(encoding='utf-8')
-    for name in ('POLL_CORE_SUMS_ITERATIONS','POLL_RECV_COUNTS_ITERATIONS','WAIT_CUMSUM_ITERATIONS'):
-        assert f'LL_SEG_COUNT({name}, 1U)' in counts
+    for name in ('POLL_RECV_COUNTS_ITERATIONS','WAIT_CUMSUM_ITERATIONS'):
+        assert f'LL_SEG_COUNT({name},1U)' in counts.replace(', ',',')
     sender=(ROOT/'csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_send.h').read_text(encoding='utf-8')
     for name in ('TOKEN_INPUT','TOKEN_QUANT','TOKEN_METADATA','TOKEN_BUFFER_WAIT','TOKEN_PACK','TOKEN_SEND_ISSUE','CAL_TOKEN','SEND_DRAIN'):
         assert name in sender

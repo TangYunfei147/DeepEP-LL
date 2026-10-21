@@ -11,16 +11,19 @@ ROOT=Path(__file__).resolve().parents[2]
 
 def plan(experts,ranks,rank,send,core,group):
     """CPU scheduling model, cross-checked against actual C++ when available."""
-    recv=56-send; size=experts//ranks*group; first=rank//group*size
-    local=core>=send; total=size if local else experts-size
-    workers=recv if local else send; worker=core-send if local else core
-    begin=worker*(total//workers)+min(worker,total%workers)
-    end=begin+total//workers+(worker<total%workers)
-    if local:return [(first+begin,first+end,0)] if begin<end else []
+    if core<send:return []
+    recv=56-send; size=experts//ranks*group; first=rank//group*size; worker=core-send
+    total=experts-size
+    begin=worker*(total//recv)+min(worker,total%recv)
+    end=begin+total//recv+(worker<total%recv)
     result=[]
     if begin<min(end,first):result.append((begin,min(end,first),0))
     if max(begin,first)<end:result.append((max(begin,first)+size,end+size,max(begin,first)-begin))
+    lo=worker*(size//recv)+min(worker,size%recv)
+    hi=lo+size//recv+(worker<size%recv)
+    if lo<hi:result.append((first+lo,first+hi,end-begin))
     return result
+
 
 
 @pytest.mark.parametrize('send',[1,10,28,55])
@@ -30,6 +33,9 @@ def test_actual_cpp_count_ownership_and_ub_bounds(tmp_path,send,group):
     if compiler is None:pytest.skip('C++ compiler unavailable; source plan/layout requires target compiler check')
     source=tmp_path/'plan.cpp'
     source.write_text(r'''
+#ifdef NDEBUG
+#undef NDEBUG
+#endif
 #include <cassert>
 #include <vector>
 #include "csrc/kernels/dispatch/low_latency/common/ep_memory_server_dedup_layout.h"
@@ -43,16 +49,20 @@ int main(){
     const unsigned first=rank/kLlRanksPerGroup*groupSize;
     for(unsigned core=0;core<56;++core){
      auto p=LlMakeGroupCountPlan(experts,ranks,rank,core);
-     assert(p.size<=2 && p.local==(core>=kLlSendCoreNum));
+     assert(p.size<=3);
+     if(core<kLlSendCoreNum)assert(p.count==0 && p.size==0 && !p.local);
+     bool hasLocal=false;
      unsigned records=0;
      for(unsigned part=0;part<p.size;++part){auto v=p.ranges[part];
       assert(v.record==records && v.begin<v.end && v.end<=experts);
       for(unsigned e=v.begin;e<v.end;++e){
-       assert(((first<=e && e<first+groupSize))==p.local);++hits[e];++records;
+       assert(core>=kLlSendCoreNum);
+       assert(((first<=e && e<first+groupSize))==v.local);++hits[e];++records;
+       hasLocal=hasLocal||v.local;
       }
      }
-     assert(records==p.count);
-     assert(p.count<=LlGroupCountMaxRecords(experts,ranks,p.local));
+     assert(records==p.count && hasLocal==p.local);
+     assert(p.count<=LlGroupCountMaxRecords(experts,ranks,core>=kLlSendCoreNum));
     }
     for(auto hit:hits)assert(hit==1);
    }
@@ -101,7 +111,7 @@ def test_fused_local_tasks_match_original_route_slots(send,group,kind):
                 if start<=e<stop:
                     q=histogram[e] if i>=k else 0
                     histogram[e]+=1
-                    if core>=send:
+                    if first<=e<end:
                         assert (i,e) not in descriptors
                         descriptors[i,e]=(core,q)
                     else:remote_owners[i,e]=core

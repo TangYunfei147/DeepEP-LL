@@ -27,11 +27,10 @@
 仅通过ll_overlap_stage.h的提交常量选择阶段；不得让四个版本各自修改打点范围。
 保留Host/device stage校验、各rank一致性及ST对安装wheel/checkout的校验。
 
-## kernel/ll-g4-group-compact
+## 当前R0前缀候选
 
-从S3/ac876ba派生。当前身份g4-group-compact、协议16000+S，Stage3/schema12不变。
-共享计划布局/所有权使用common/ll_group_compact.h；每token由原S核分类一次。
-Host最低UB、overlap UB和1MiB前GM边界必须一起维护；S-only ready等待不能变成R参与屏障。
-元数据仍按原token分片唯一写回，packet所有权独立；FillTail权重使用全局token索引。
-保留R本组发送、首跳最小top-k、q、wire、接收/relay和combine。
-先读tests/ll_stage_timer/GROUP_COMPACT.md；不能把packet均衡表述为设备性能收益。
+kernel/ll-g4-group-compact现基于S3/ac876ba，撤销两轮compact改动。
+身份g4-r0-prefix、协议17000+S。SEND_COUNTS仅R核，前缀仅R0生产，所有核读同一表。
+固定epoch槽为R0 magic槽+32，先完成表写入再发布；消费者不清共享flag。
+dispatch UB预算230KiB、combine独立预算不变。接收表向量化须处理32B对齐及V_S依赖。
+当前指南tests/ll_stage_timer/R0_PREFIX.md。

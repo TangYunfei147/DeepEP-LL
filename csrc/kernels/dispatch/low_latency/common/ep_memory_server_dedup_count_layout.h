@@ -21,7 +21,7 @@ constexpr uint32_t kEpServerDedupAllCoreCountBsThreshold = DISPATCH_SERVER_DEDUP
 constexpr uint32_t kEpServerDedupMaxExperts = 1024U;
 constexpr uint32_t kEpServerDedupCountRecordBytes = 32U;
 constexpr uint32_t kEpServerDedupCountGmStride = 512U;
-constexpr uint32_t kEpServerDedupCountUbBytes = 190U * 1024U;
+constexpr uint32_t kEpServerDedupCountUbBytes = kLlDispatchUbBytes;
 // Persistent per-AIV state lives only in window 0's prefix, never in the
 // selected ping-pong bank. Keep identical count offsets in both windows.
 constexpr uint64_t kEpServerDedupMagicStride = 512U;
@@ -81,6 +81,13 @@ DISPATCH_DEDUP_EP_DEDUP_INLINE EpServerDedupCountLayout DispatchServerDedupCount
     layout.counterOffset = (bytes + 1023U) / 1024U * 1024U;
     layout.stateBytes = layout.counterOffset + 1024U;
     return layout;
+}
+
+// R0 only: scalar/release records, all incoming status rows, gather and reduce work.
+DISPATCH_DEDUP_EP_DEDUP_INLINE uint64_t DispatchSinglePrefixStageUbBytes(uint32_t experts)
+{
+    return 128U+((uint64_t(experts)*32U+256U+255U)/256U)*256U+
+           2U*((uint64_t(experts)*4U+31U)/32U)*32U;
 }
 
 // Peak sendCnt allocation: four route-sized UB buffers plus count records/histogram.

@@ -5,6 +5,7 @@
 #define DISPATCH_DEDUP_COMM_ARGS_H
 #include <cstdint>
 #include <cstddef>
+#include "ll_core_config.h"
 
 #if defined(__CCE__) && defined(__CCE_IS_AICORE__)
 #define DISPATCH_DEDUP_ASCENDC_AICORE_COMPILE 1
@@ -47,7 +48,7 @@ constexpr int64_t SYNC_FLAG_BIT_NUM = 10;             // cce 算子在用
 constexpr int64_t MEM_DMA_UNIT_INT_NUM = 4;
 constexpr int64_t EVENT_ID_MASK = 0xFFFFFFFF;
 constexpr int64_t PING_PONG_SIZE = 2;
-constexpr int64_t UB_SINGLE_DMA_SIZE_MAX = 190 * 1024;
+constexpr int64_t UB_SINGLE_DMA_SIZE_MAX = kLlDispatchUbBytes;
 constexpr int64_t SMALL_DATA_SIZE = 1 * 1024 * 1024;
 constexpr int64_t UB_SINGLE_PING_PONG_ADD_SIZE_MAX = UB_SINGLE_DMA_SIZE_MAX / 2;
 constexpr int UB_ALIGN_SIZE = 32;

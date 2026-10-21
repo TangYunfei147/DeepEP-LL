@@ -1,0 +1,73 @@
+# R0共享前缀与接收任务表向量化
+
+分支kernel/ll-g4-group-compact。本次在一个提交中撤销613ae81、a5ce3f7的
+紧凑任务重分配/共享任务表实验，恢复S3/ac876ba发送算法，再叠加以下三项。
+不改写历史，不修改kernel/ll-g4-s3-baseline工作区。
+
+当前identity=g4-r0-prefix，协议17000+S，Stage3/schema12，默认S28/R28、56核、G4。
+所有rank必须完整重装相同wheel。
+
+## 三项修改
+
+1. SEND_COUNTS只由原R核执行。每个R核保留原本组专家分片，同时承担远端专家
+   分片计数，最多形成两个远端区间加一个本组区间。原S核只初始化发送scratch，
+   不扫描计数、不发送count记录。本组payload初发归属不变。
+   R0（物理核S）接收所有专家×来源rank计数，计算全表前缀，只写一份共享表。
+   其他核等待R0发布后读取同一表；删除R×R片段和交换、逐核前缀副本广播及消费清flag。
+   保留现有控制区预留布局，combine与原始payload wire不变。
+   dispatch UB规划预算统一为230*1024B；combine各阶段原有独立预算未调整。
+2. pendingIdx使用CreateVecIndex一次向量初始化，随后V_S完成后才允许标量读取。
+3. tokenPos按记录段生成等差序列：32B对齐的中段使用CreateVecIndex，
+   未对齐头尾各至多7项保留SetValue。避免对任意UB偏移使用向量指令。
+   空分片不分配/不发向量；pending的后续swap-remove仍为标量。
+
+## 协议及生命周期
+
+R0的发布位位于其固定512B magic槽+32，原word0仍由RotateDispatchServerDedupMagic独占。
+初值为0，各dispatch交替发布1/0，不随shape或bank改变位置。
+先完成前缀与输入计数flag清理，再发布epoch；消费者只读、不清理共享epoch。
+共享前缀和epoch视图禁用L2。无新的SyncAll；R0仍有必要的MTE3完成依赖。
+同Session沿用同流串行调用，不支持并发复用控制区。
+回退路径在Reset前排空，再从同一GM前缀读取；不能重新使用旧receiver副本偏移。
+R0会集中承担前缀轮询/扫描，其他R核多承担远端count工作，不能保证所有shape收益。
+
+## UB和计时
+
+Host最低预算、R计数记录/本组描述符峰值、R0全表轮询缓冲及overlap预算一起更新。
+230KiB是软件预算，不是硬件可用容量的设备验证结论。
+原发送q计算、发送顺序、G4首跳/relay和combine算法没有引入额外优化。
+schema12保持；POLL_CORE_SUMS等删除路径的阶段不再有样本，不补零。
+CAL_CUMSUM只在R0有实际工作，SEND_COUNTS只在R核出现。
+计时阶段位置变化，不能把同编号核的阶段耗时比当作完整kernel加速比。
+
+## 获取和验证
+
+在已有且干净的候选checkout中依次执行：
+
+    git fetch origin kernel/ll-g4-group-compact
+    git merge --ff-only FETCH_HEAD
+    source scripts/ll_timer_env.sh
+    source .venv-ll-timer/bin/activate
+    export DEEPEP_NPU_ARCH=Ascend950
+    export DEEPEP_LL_SEND_CORES=28 DEEPEP_LL_RECV_CORES=28
+    export DEEPEP_LL_STAGE_TIMER=OFF
+    unset SHMEM_ROOT CATLASS_ROOT
+    python scripts/build_shmem.py
+    python -m pip install -r requirements-build.txt
+    python -m pip install -v --force-reinstall --no-build-isolation --no-deps .
+
+已校验SDK可以复用，不因本次修改强制重建。首次部署遵循DEPLOYMENT.md依赖流程。
+
+沿用原EP16、B=M256/H3584/K8/E384/FP8命令，换新run-name，先检查完整dispatch+combine
+多seed正确性，再测OFF profiler（10预热/100采集/尾50）。
+ON分析观察SEND_COUNTS、CAL_CUMSUM、PREFIX_COMPLETE、BUILD_EXPERT_TASKS、KERNEL，
+不要只比较发送阶段。目标性能测试由用户执行。
+
+CPU检查：
+
+    python -m pytest tests/ll_stage_timer tests/elastic -q
+    python -m pytest tests/ll_stage_timer/test_r0_prefix.py tests/elastic/test_ll_group_local_send.py tests/ll_stage_timer/test_dispatch_variants.py tests/ll_stage_timer/test_overlap_receive.py::test_native_layout_matrix -q
+
+原生CPU用真实receive_tasks头配合延迟vector模拟，校验对齐、空段、跨记录段及V_S依赖；
+R计数计划检查每专家恰好一个R写者，保留本组初发归属。均不能代替AscendC/NPU验收。
+本版未做CANN编译、完整wheel链接或设备验证。冷编译ON/OFF方法见docs/BUILD_DISPATCH_SPLIT.md。

@@ -107,7 +107,7 @@ def packet_layout(h,k,dtype):
     return blocks,blocks*512
 
 
-def build_plan(topk,experts,send,recv,group,capacity,hidden=3584,dtype='fp8',send_policy='s3'):
+def build_plan(topk,experts,send,recv,group,capacity,hidden=3584,dtype='fp8'):
     if not topk or not topk[0] or not topk[0][0]:raise ValueError('Empty route tensor')
     world=len(topk);b=len(topk[0]);k=len(topk[0][0])
     if not 1<=k<=32 or not b<=capacity or not experts>=world:raise ValueError('Invalid B/M/K/E')
@@ -145,7 +145,7 @@ def build_plan(topk,experts,send,recv,group,capacity,hidden=3584,dtype='fp8',sen
         if not count:continue
         fixed=(align(experts*4)+2*align(count*4)+BATCH*blocks*32+256+
                BATCH*align((blocks+7)//8)*4+256+BATCH*36)
-        worker.lanes=min(8,(190*1024-fixed)//(stride+64))
+        worker.lanes=min(8,(230*1024-fixed)//(stride+64))
         if worker.lanes<1:raise ValueError('Actual receive partition does not fit native UB budget')
     # R source ownership is by local-group expert interval, NOT by token.
     for item in routes:
@@ -194,25 +194,7 @@ def build_plan(topk,experts,send,recv,group,capacity,hidden=3584,dtype='fp8',sen
                     for ordinal in range(groups):
                         g=direct_group_order(groups,own,ordinal)
                         if g!=own:worker.initial.extend(i for i in ids if routes[i].expert//group_experts==g)
-    if send_policy not in ('s3','group-compact'):raise ValueError('Unknown send policy')
-    if send_policy=='group-compact':
-        for rank in range(world):
-            roots=sorted((i for core in range(send) for i in workers[rank,core].initial),
-                         key=lambda i:(routes[i].token,routes[i].slot))
-            for core in range(send):workers[rank,core].initial.clear()
-            owner=rank%group%send
-            for first_hop in ((True,False) if dedup else (False,)):
-                for step in range(groups):
-                    g=direct_group_order(groups,rank//group,(step+rank%group)%groups)
-                    if g==rank//group:continue
-                    for i in roots:
-                        item=routes[i]
-                        if (item.kind=='FIRST_HOP')!=first_hop or item.expert//group_experts!=g:continue
-                        workers[rank,owner].initial.append(i)
-                        item.initial_core=owner
-                        for member in item.members:routes[member].initial_core=owner
-                        owner=(owner+1)%send
-    return dict(send_policy=send_policy,routes=routes,workers=workers,topk=topk,world=world,b=b,k=k,experts=experts,
+    return dict(routes=routes,workers=workers,topk=topk,world=world,b=b,k=k,experts=experts,
                 send=send,recv=recv,group=group,capacity=capacity,dedup=dedup,packet_stride=stride)
 
 
@@ -319,8 +301,6 @@ def parse_args(argv=None):
         parser.add_argument('--send-cores',type=int,help='Source S workers; infer R=56-S when R is omitted')
         parser.add_argument('--recv-cores',type=int,help='Source R workers; infer S=56-R when S is omitted')
         parser.add_argument('--ranks-per-group',type=int,default=source_defaults()[2],help='Assumed compiled logical G')
-        parser.add_argument('--send-policy',choices=('s3','group-compact'),default='group-compact',
-                            help='CPU ownership policy; default matches this candidate, s3 models ac876ba')
         parser.add_argument('--route-phase',choices=('timed','initial','all'),default='timed',
                             help='Match final ST routes after correctness repeats (default), initial check, or every seed')
     extra=argparse.ArgumentParser(add_help=False)
@@ -336,7 +316,6 @@ def parse_args(argv=None):
     if options.recv_cores is not None:r=options.recv_cores;s=TOTAL_CORES-r if options.send_cores is None else s
     args.send_cores,args.recv_cores,args.ranks_per_group=s,r,options.ranks_per_group
     args.route_phase=options.route_phase
-    args.send_policy=options.send_policy
     if min(s,r)<=0 or s+r!=TOTAL_CORES:raise ValueError('S/R must be positive and S+R=56')
     if args.num_processes<1 or args.num_nodes<1 or not 0<=args.node_rank<args.num_nodes:
         raise ValueError('Invalid num-processes/num-nodes/node-rank')
@@ -375,7 +354,7 @@ def validate_source_contract():
     base=ROOT/'csrc/kernels/dispatch/low_latency'
     sender=(base/'device/dispatch_server_dedup_send.h').read_text(encoding='utf-8')
     receiver=(base/'device/dispatch_server_dedup_recv.h').read_text(encoding='utf-8')
-    if ('LlOwnedGroupTasks(' not in sender or
+    if ('while ((mask & (uint32_t(1) << firstK)) == 0U) ++firstK;' not in sender or
             'LlMakeReceivePriority' not in receiver or 'tasks_.PendingCount()' not in receiver):
         raise ValueError('CPU model requires earliest-topk FIRST_HOP and static relay-priority receive; inspect changed source')
 
@@ -383,7 +362,6 @@ def validate_source_contract():
 def provenance():
     paths=['tests/elastic/test_ep_low_latency.py','tests/elastic/inspect_dispatch_routes.py',
            'csrc/kernels/dispatch/low_latency/common/ll_core_config.h',
-           'csrc/kernels/dispatch/low_latency/common/ll_group_compact.h',
            'csrc/kernels/dispatch/low_latency/common/ep_memory_server_dedup_protocol.h',
            'csrc/kernels/dispatch/low_latency/common/ll_group_local_send.h',
            'csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_receive_tasks.h',
@@ -420,7 +398,7 @@ def main(argv=None):
     # Never overwrite an earlier CPU report or original NPU result files.
     output.mkdir(parents=True,exist_ok=False)
     manifest=dict(schema=1,mode='cpu_only',world_size=world,num_nodes=args.num_nodes,local_processes=args.num_processes,
-        send_cores=args.send_cores,recv_cores=args.recv_cores,dispatch_receive_cores=TOTAL_CORES,send_policy=args.send_policy,
+        send_cores=args.send_cores,recv_cores=args.recv_cores,dispatch_receive_cores=TOTAL_CORES,
         group=args.ranks_per_group,seed=args.seed,source=provenance(),arguments=vars(args),cases=[],
         ordering='A deterministic legal causal replay; NOT measured/predicted arrival order or time. '
                  'One initial packet/core/round, one ready snapshot/receiver/round; publications ready next round. '
@@ -428,14 +406,14 @@ def main(argv=None):
                  'No global S-send-complete barrier. Timer/perf/network options are metadata only. '
                  'Counts are per ONE dispatch, not multiplied by warmup/iters/timer-iters.',
         forbidden_modules_loaded=[n for n in ('torch','torch_npu','deep_ep') if n in sys.modules])
-    sections=['# CPU dispatch 路由与分核统计','',f'Send policy: {args.send_policy}',manifest['ordering'],'',
+    sections=['# CPU dispatch 路由与分核统计','',manifest['ordering'],'',
               'packet数按一次投递计数，同一原始token可计入多个packet；unique_tokens按(origin_rank, token)去重。',
               'S/R仅表示初发分工，全部56核静态分片接收。轮次是模型步，不是ticks或耗时。','']
     for index,(st_case_id,case,offset,phase) in enumerate(expanded):
         effective_seed=case.seed+offset
         m=case.num_max_tokens_per_rank if case.num_max_tokens_per_rank is not None else case.num_tokens
         topk=ST.make_routes(world,case.num_tokens,case.num_topk,case.num_experts,effective_seed,case.route)
-        plan=build_plan(topk,case.num_experts,args.send_cores,args.recv_cores,args.ranks_per_group,m,case.hidden,case.dtype,send_policy=args.send_policy)
+        plan=build_plan(topk,case.num_experts,args.send_cores,args.recv_cores,args.ranks_per_group,m,case.hidden,case.dtype)
         directory=output/f'case_{index:04d}';directory.mkdir()
         (directory/'topk_ids.json').write_text(json.dumps(dict(seed=effective_seed,base_seed=case.seed,route_phase=phase,shape=[world,case.num_tokens,case.num_topk],
             topk_ids=topk),indent=2),encoding='utf-8')

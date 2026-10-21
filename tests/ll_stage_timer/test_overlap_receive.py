@@ -34,10 +34,10 @@ int main() {
    for(unsigned core=0;core<56;++core) {
     auto l=LlMakeOverlapLayout(data,bs,k,e,p,0,core,mode);
     if(!l.enabled) {++fallback;continue;}
-    ++enabled;assert(l.totalBytes<=190*1024);
+    ++enabled;assert(l.totalBytes<=kLlDispatchUbBytes);
     assert(l.sendLanes>=1 && l.sendLanes<=6 && l.recvLanes>=1 && l.recvLanes<=6);
     assert(l.sendBytes>=l.sendLanes*data.tokenStride);
-    assert((core<kLlSendCoreNum)==(l.countBytes==0));
+    assert((core==kLlSendCoreNum)==(l.countBytes!=0));
    }
  }
  assert(fallback || enabled);

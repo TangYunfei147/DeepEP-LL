@@ -114,71 +114,32 @@ existing ST correctness and observe commands in OVERLAP_RECEIVE.md. The updated
 parser recognizes the specialized profiler entry names. Device correctness and
 performance remain target-machine validation tasks.
 
-## G4 group-compact candidate (2026-10-21)
+## R0 prefix / vector receive tables (2026-10-22)
 
-Base: kernel/ll-g4-s3-baseline@ac876bab5c1f18155e9b47fc6446cc1d9bec7bc1.
-Candidate: kernel/ll-g4-group-compact, implementation g4-group-compact,
-protocol15000+S, unchanged Stage3/schema12 and seven translation units.
+One commit restores S3/ac876ba send scheduling, removing both compact revisions,
+then adds R-only SEND_COUNTS, a single R0-produced prefix, dispatch230KiB budget,
+and vector pending/token-position initialization. Identity g4-r0-prefix,
+protocol17000+S, Stage3/schema12; seven dispatch TUs unchanged.
+Combine source and dispatch sender are byte-identical to S3.
 
-Local validation after changes:
-
-- Full tests/ll_stage_timer + tests/elastic: 887 passed, 107 skipped, 172.41s.
-  Skips are unavailable Torch/device/POSIX or C++ fixtures, not device passes.
-  This includes 39 new tests; 38 execute the production compact scheduling
-  helper or compare its results with the CPU route report, and one guards wiring.
-- Separate existing Zig C++ checks for UB layout matrix, seven-mode Host selector,
-  profiler matching and Stage3 policy: 13 passed, 29.47s. These overlap some
-  tests above and must not be added to the full-suite total as distinct cases.
-- EP16 B8/M256/H3584/K8/E384 BF16+FP8 CPU --plan passed; no NPU initialization.
-- Source receiver/counts/local-send/combine algorithms retained. Only remote
-  packet ownership, related source metadata access and UB planning changed.
-- Pure CPU route accounting: EP16/64, B8/32/48/256, normal/hotspot, seed2;
-  q/packet membership/receive row/receive core and total packet counts equal.
-
-Reproduction:
-python -m pytest tests/ll_stage_timer tests/elastic -q
-python -m pytest tests/ll_stage_timer/test_dispatch_variants.py tests/ll_stage_timer/test_overlap_receive.py::test_native_layout_matrix tests/ll_stage_timer/test_overlap_ab.py::test_real_cpp_stage_policy -q
-
-The new helper test accepts an existing CXX command. Local tests used an existing
-Zig toolchain; it does not compile AscendC APIs or enforce AICore call domains.
-Logs are under the candidate's .tmp/full-002.log, .tmp/native-001.log and
-.tmp/plan-001.log. Generated files and raw route counts are not committed.
-
-Initial local runs failed because pytest was absent from the runtime, its
-subprocess isolation dropped PYTHONPATH, and sandboxed compiler temp-file access
-failed. A project-local test venv with existing dependencies and project-local
-temp/cache paths resolved these environment issues. Older source-policy tests
-and the CPU report were adapted to the new owner stream; stale wheel rejection
-now expects 15000+S.
-
-No CANN ON/OFF cold build, full ON wheel, NPU correctness, or profiler A/B was
-performed for this candidate. The historical A3 numbers above belong to the
-earlier split-entry change, NOT this algorithm. Before adoption, run the same
-benchmark_compile.py ON/OFF procedure and full ON wheel link on the authorized
-target, then the correctness and OFF timing steps in
-tests/ll_stage_timer/GROUP_COMPACT.md. No production architecture or SDK changes
-were made.
-
-## Shared producer plan revision (2026-10-21)
-
-User reported severe slowdown in 613ae81 at EP16/B=M256/H3584/K8/E384/FP8.
-The repeated group filtering/folding has been removed: original S token owners
-classify once and publish bucketed descriptors, consumers read only their slices.
-Protocol16000+S rejects the old wheel; Stage3/schema12 and seven TUs remain.
-
-Validation:
-- Full CPU suite: 888 passed, 107 skipped (87.08s), including the shared-plan
-  packet oracle, native ownership slices, empty producer and alternating epoch checks.
-- Native Host selector/UB/Stage3/profiler checks: 13 passed (3.29s).
-- Additional Host shared-control/UB matrix at S=1/10/28/55: 4 passed (4.30s).
-  The two native batches overlap some skipped/full-suite fixtures; do not sum
-  all numbers as unique test coverage.
-- User shape: S UB121536B (118.6875KiB), R103360B, both six send/receive lanes,
-  zero serial fallback. GM plan19712B, starts after count state and ends before
-  the combine1MiB control boundary. Raw audit: .tmp/shared-plan-ub.csv.
-- Logs: .tmp/shared-plan-full-001.log, .tmp/shared-plan-native-001.log,
-  .tmp/shared-plan-bounds-001.log. CPU checks do not validate MTE visibility/order.
-- No CANN ON/OFF build, wheel linkage or NPU correctness/performance run.
-  Keep the existing target cold-compile and complete dispatch/combine acceptance
-  procedures. Added S-only ready wait and GM traffic are real candidate costs,
-  included in PREPARE_INPUT, not claimed to be free or separately timed.
+Validation evidence:
+- Full CPU suite first run: 848 passed,108 skipped,1 failed (177.54s).
+  The failure required the intentionally removed per-core prefix broadcast.
+  Updated to assert single publication/shared reading and retained fallback drain.
+- Targeted repaired/source/epoch suites:26 passed,1 compiler skip.
+- Native CPU batch with assertions enabled:64 passed (24.53s), including actual
+  receive_tasks.h with delayed vector writes/alignment checks, R ownership over
+  S1/10/28/55 and G1/4/16, Host dispatch selector and UB matrix.
+  CPU stubs do not validate AscendC instruction support or real DMA ordering.
+- EP16/B=M256/H3584/K8/E384/FP8 --plan passed, no device launch.
+- Native layout for that shape, S28/R28: S105792B, R0 111776B, other R96032B,
+  send/receive lanes6/6, no serial fallback. Software budget230*1024B.
+- Logs inside candidate: .tmp/r0-full-final.log, .tmp/r0-native-final.log,
+  .tmp/r0-ub.csv, .tmp/r0-plan.log. Generated data are not committed.
+- Prior session approval review failed from account quota; that final command
+  did not execute. Existing earlier native result63pass was recovered; resumed
+  native batch64pass supersedes it.
+- No CANN ON/OFF cold compile, full wheel linkage, NPU correctness or performance
+  measurement for this revision. Historical A3 timings above do not apply.
+  Follow the existing cold-build protocol and tests/ll_stage_timer/R0_PREFIX.md
+  for complete target correctness and OFF profiling.

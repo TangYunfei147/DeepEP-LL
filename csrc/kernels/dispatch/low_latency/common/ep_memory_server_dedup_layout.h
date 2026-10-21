@@ -8,14 +8,8 @@
 #include <cstdint>
 #include "ep_memory_server_dedup_data_layout.h"
 #include "ll_core_config.h"
-#include "ll_group_compact.h"
-#include "../../../combine/low_latency/ep_memory_server_dedup_buffer_layout.h"
 
 namespace DispatchDedup {
-static_assert(kLlSharedPlanControlLimit == COMBINE_DEDUP_EP_SERVER_DEDUP_COMBINE_CONTROL_OFFSET,
-              "Shared dispatch plan must stop before combine control");
-static_assert(kLlSharedPlanReadyOffset + 32U <= kEpServerDedupMagicStride,
-              "Shared ready flag must fit the persistent per-core slot");
 struct EpMemoryServerDedupLayout {
     uint64_t globalBs = 0;
     uint64_t localExpertNum = 0;
@@ -106,9 +100,7 @@ inline int BuildDispatchServerDedupLayout(int64_t rankSize, int64_t bs, int64_t 
     next.localExpertNum = static_cast<uint64_t>(moeExpertNum / rankSize);
     next.countStateBytes = DispatchServerDedupCountLayout(uint32_t(moeExpertNum), coreNum).stateBytes;
     next.data = DispatchServerDedupDataLayout(uint32_t(bs), uint32_t(h), uint32_t(topK), uint32_t(moeExpertNum), mode);
-    if (uint64_t(bs)*topK>=65536U ||
-        next.countStateBytes+LlMakeSharedGroupPlan(uint32_t(bs),uint32_t(topK),
-            uint32_t(rankSize)/kLlRanksPerGroup,kLlSendCoreNum).gmBytes>kLlSharedPlanControlLimit ||
+    if (next.countStateBytes > kEpServerDedupControlBytes ||
         next.data.requiredBytes > kEpServerDedupWindowUsableBytes) {
         return DispatchDedup::DISPATCH_DEDUP_ERROR_PARA_CHECK_FAIL;
     }
@@ -192,10 +184,8 @@ inline bool DispatchDedupPacketUbFits(const EpMemoryServerDedupLayout& layout, i
     const uint64_t quantWork = align(align(scaleCount, 32) * 4U + scaleCount * 2U, 32);
     const uint64_t scratchBytes = needQuantize ? std::max(qBytes, quantWork) : qBytes;
     const uint64_t sender = reserved + 2 * inputBytes + (needQuantize ? layout.data.packedPayloadBytes : 0U) +
-                            align(b * k * 4, 256) + 2 * scratchBytes + qBytes + qBytes + align(tokens * k * 4, 32) +
-                            align(tokens * 4, 32) +
-                            LlMakeSharedGroupPlan(uint32_t(b),uint32_t(k),uint32_t(world_size)/kLlRanksPerGroup,kLlSendCoreNum).ubBytes +
-                            64 + align(groups * 4, 32) +
+                            align(b * k * 4, 256) + 2 * scratchBytes + qBytes + 2 * align(tokens * k * 4, 32) +
+                            align(tokens * 4, 32) + align(tokens * k * 16, 32) + 64 + align(groups * 4, 32) +
                             layout.data.tokenStride;
     const uint64_t serverStateExtra = std::max<uint64_t>(64U, align(world_size / kLlRanksPerGroup * 4U, 32U)) - 64U;
     const uint64_t localSender=localReserved+2U*inputBytes+align(b*k*4U,32U)+
@@ -206,7 +196,8 @@ inline bool DispatchDedupPacketUbFits(const EpMemoryServerDedupLayout& layout, i
                               layout.data.tokenStride + 64;
     return layout.data.blockCount > 0 && layout.data.blockCount <= UINT8_MAX &&
            sender + serverStateExtra <= kEpServerDedupCountUbBytes &&
-           localSender <= kEpServerDedupCountUbBytes && receiver <= kEpServerDedupCountUbBytes;
+           localSender <= kEpServerDedupCountUbBytes && receiver <= kEpServerDedupCountUbBytes &&
+           localReserved+DispatchSinglePrefixStageUbBytes(uint32_t(num_experts))<=kEpServerDedupCountUbBytes;
 }
 }  // namespace DispatchDedup
 

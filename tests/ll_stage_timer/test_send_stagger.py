@@ -115,12 +115,17 @@ def test_ep16_direct_start_groups_spread_across_cards_and_cores():
         assert {rotated(count, token)[0] for token in range(count)} == set(range(count))
 
 
-def test_shared_plan_wiring_preserves_phase_and_lane_lifetime():
-    source=(ROOT/'csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_send.h').read_text()
-    assert 'BuildAndPublishPlan(true)' in source and 'BuildAndPublishPlan(false)' in source
-    assert 'LlDirectGroupOrder(groups,own,phase,0U,step)' in source
-    assert 'LlOwnedGroupTasks(' in source and 'SyncAll' not in source
-    assert source.index('uint32_t owner=phase%sendCores_')<source.index('for (uint32_t pass=enableDedup_')
+def test_production_wiring_preserves_nondedup_and_lane_lifetime():
+    source = (ROOT / 'csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_send.h').read_text()
+    dedup = source.split('inline void SendWithDedup(', 1)[1].split('inline void SendWithoutDedup(', 1)[0]
+    assert 'LlFirstHopOrder(firstHopCount, rankInGroup, sendCore,' in dedup
+    assert 'start_ + token, group)' in dedup
+    assert 'firstHopMasks_.GetValue(scheduled)' in dedup
+    assert 'LlDirectGroupOrder(serverNum, ownServer, rankInGroup, sendCore, step)' in dedup
+    assert 'while ((mask & (uint32_t(1) << firstK)) == 0U) ++firstK;' in dedup
+    assert 'WaitFlag' not in dedup and 'PipeBarrier' not in dedup
+    nondedup = source.split('inline void SendWithoutDedup(', 1)[1].split('private:', 1)[0]
+    assert 'LlFirstHopOrder' not in nondedup and 'LlDirectGroupOrder' not in nondedup
 
 
 def test_production_order_helpers_cpp(tmp_path):

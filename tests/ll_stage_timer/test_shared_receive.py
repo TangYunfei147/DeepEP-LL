@@ -126,9 +126,10 @@ def test_production_wiring_keeps_producers_separate_from_consumers():
     assert kernel.count('receiver_.Process(timer_);')==1
     assert 'recvCoreNum_ = kLlDispatchRecvCoreNum;' in receiver
     assert 'receiver_ = GetBlockIdx();' in receiver
-    assert 'aivId_ * aivUsedCumSum_ * UB_ALIGN' in counts
-    assert 'for (uint32_t index = 0; index < coreNum_; index++)' in counts
+    assert 'if (aivId_!=kLlSendCoreNum) return;' in counts
+    assert 'DataCopyPad(workspace,prefix,copy)' in counts
+    assert 'for (uint32_t index = 0; index < coreNum_; index++)' not in counts
     complete=counts[counts.index('inline void ServerDedupCounts::CompleteCumsum()'):]
     assert complete.index('PipeBarrier<PIPE_ALL>();')<complete.index('tpipe_->Reset();')<complete.index('WaitCumSumFlag();')
 
-    assert complete.index("tpipe_->Reset();")<complete.index("SetCtrlSpr<60, 60>(0);")<complete.index("WaitCumSumFlag();")
+    assert complete.index("tpipe_->Reset();")<complete.index("SetCtrlSpr<60,60>(0);")<complete.index("WaitCumSumFlag();")

@@ -1,7 +1,6 @@
 #pragma once
 #include "ep_memory_server_dedup_data_layout.h"
 #include "ll_overlap_stage.h"
-#include "ll_group_compact.h"
 #include "ep_memory_server_dedup_count_layout.h"
 namespace DispatchDedup {
 #if defined(__CCE__) && defined(__CCE_IS_AICORE__)
@@ -32,16 +31,12 @@ LL_OVERLAP_INLINE LlOverlapLayout LlMakeOverlapLayout(const EpServerDedupDataLay
     const uint64_t groups=(ranks/kLlRanksPerGroup-1)<k/2 ? ranks/kLlRanksPerGroup-1:k/2;
     const uint64_t sendFixed=core<kLlSendCoreNum ?
         2*input+routes+2*(quant?LlOverlapMax(q,work):q)+q+(quant?d.packedPayloadBytes:0)+
-        q+DispatchDedupAlign(tokens*k*4,32)+DispatchDedupAlign(tokens*4,32)+
-        LlMakeSharedGroupPlan(bs,k,ranks/kLlRanksPerGroup,kLlSendCoreNum).ubBytes+
+        2*DispatchDedupAlign(tokens*k*4,32)+DispatchDedupAlign(tokens*4,32)+DispatchDedupAlign(tokens*k*16,32)+
         LlOverlapMax(64,DispatchDedupAlign(ranks/kLlRanksPerGroup*4,32))+DispatchDedupAlign(groups*4,32) :
         2*input+q+(quant?work+d.packedPayloadBytes:0);
     const uint64_t countScratch=plan.count?4*routes+records*4:0;
-    const uint64_t countRows=(e+kLlRecvCoreNum-1)/kLlRecvCoreNum;
-    const uint64_t countStage=core<kLlSendCoreNum?0:96+DispatchDedupAlign(countRows*32+256,256)+DispatchDedupAlign(e*4,32)+
-        ((kLlDispatchRecvCoreNum+7)/8)*256+((kLlRecvCoreNum+7)/8)*256+DispatchDedupAlign(kLlRecvCoreNum*4,32);
-    const uint64_t active=e<kLlRecvCoreNum?e:kLlRecvCoreNum;
-    const uint64_t complete=96+DispatchDedupAlign(active*32+256,256)+active*32+DispatchDedupAlign(e*4,32)+DispatchDedupAlign(uint64_t(e/ranks)*8,32);
+    const uint64_t countStage=core==kLlSendCoreNum ? DispatchSinglePrefixStageUbBytes(e):0;
+    const uint64_t complete=32+DispatchDedupAlign(e*4,32)+DispatchDedupAlign(uint64_t(e/ranks)*8,32);
     const uint64_t maxRows=uint64_t(bs)*ranks*(k<e/ranks?k:e/ranks);
     const uint64_t tasks=(maxRows+kLlDispatchRecvCoreNum-1)/kLlDispatchRecvCoreNum;
     const uint64_t recvFixed=2*DispatchDedupAlign(tasks*4,32)+16*d.blockCount*32+256+
