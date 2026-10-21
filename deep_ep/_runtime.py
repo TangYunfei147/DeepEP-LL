@@ -150,6 +150,10 @@ class Runtime:
         npu = npu_api()
         self.device = npu.current_device()
         self.group = group
+        self.host_coordinated = self.ll_backend == "rdma"
+        self.coordination_failed = False
+        if self.host_coordinated and (group is None or store_group or backend != "hccl"):
+            raise ValueError("NDR requires the existing HCCL ProcessGroup for Host coordination")
         self.low_latency_comm_args = None
         self.closed = False
         with _LOCK:
@@ -224,12 +228,23 @@ class Runtime:
                                 f"{peer_rank} use local device {value[6]} on the same Linux host"
                             )
                         devices[key] = peer_rank
+                if self.host_coordinated:
+                    topology = [None] * size
+                    mapping = tuple(os.environ.get(key, "") for key in (
+                        "ASCEND_RT_VISIBLE_DEVICES", "ASCEND_VISIBLE_DEVICES",
+                        "CUDA_VISIBLE_DEVICES", "PROBE_VISIBLE_DEVICES"))
+                    dist.all_gather_object(topology, (_host_boot_id(), mapping, self.device), group=group)
+                    validate_ndr_topology(topology)
             self.rank, self.world_size = rank, size
             self.capacity = capacity
             self.notify_lock = threading.RLock()
             self.notify_failed = False
             self.notify_inflight = None
             self.stream = npu.Stream(device=self.device)
+            if self.host_coordinated:
+                # Keep a failed collective constructor reserved until process exit.
+                _OWNER = self
+                self.coordination_failed = True
             self.native = (
                 native.create_combine_runtime(
                     rank, size, capacity, address, timeout, bootstrap == "mpi", use_1g_huge_pages
@@ -244,13 +259,19 @@ class Runtime:
                 )
             )
             _OWNER = self
+            self.coordination_failed = False
             if capacity == 8 << 30 and 16 <= size <= 256:
                 # LL peers must finish initialization before any payload writes.
-                self.native.barrier()
+                if self.host_coordinated:
+                    self._host_collective("barrier")
+                else:
+                    self.native.barrier()
 
     def ensure_alive(self):
         if self.closed:
             raise RuntimeError("Buffer runtime has been destroyed")
+        if getattr(self, "coordination_failed", False):
+            raise RuntimeError("NDR coordination failed; restart the distributed job")
         if npu_api().current_device() != self.device:
             raise RuntimeError("Use Buffer on its creating NPU device")
 
@@ -259,19 +280,76 @@ class Runtime:
         with getattr(self, "notify_lock", nullcontext()), _LOCK:
             if self.closed:
                 return
-            self.ensure_alive()
-            self.stream.synchronize()
-            self.native.close()
+            if getattr(self, "host_coordinated", False):
+                self._host_collective("close")
+            else:
+                self.ensure_alive()
+                self.stream.synchronize()
+                self.native.close()
             self.notify_inflight = None
             self.low_latency_comm_args = None
             self.closed = True
             _OWNER = None
 
     def barrier(self):
+        if getattr(self, "host_coordinated", False):
+            with self.notify_lock:
+                self._host_collective("barrier")
+            return
         self.ensure_alive()
         npu_api().current_stream(self.device).synchronize()
         self.stream.synchronize()
         self.native.barrier()
+
+    def _host_collective(self, operation):
+        # No new submissions may race this collective. Device completion covers
+        # all streams; LL kernels quiet their owned QPs before returning.
+        if self.coordination_failed:
+            raise RuntimeError("NDR coordination failed; restart the distributed job")
+        import torch.distributed as dist
+        try:
+            error = None
+            try:
+                self.ensure_alive()
+                npu_api().synchronize(self.device)
+            except Exception as exc:
+                error = f"{type(exc).__name__}: {exc}"
+            peers = [None] * self.world_size
+            if os.environ.get("DEEPEP_LL_INIT_TRACE") == "1":
+                print(f"[DeepEP init] rank={self.rank} HCCL {operation} completion exchange enter", flush=True)
+            dist.all_gather_object(peers, (operation, error), group=self.group)
+            if any(peer[0] != operation for peer in peers):
+                raise RuntimeError(f"NDR collective order mismatch: {peers}")
+            failures = [(rank, peer[1]) for rank, peer in enumerate(peers) if peer[1] is not None]
+            if failures:
+                raise RuntimeError(f"NDR device completion failed: {failures}")
+            getattr(self.native, operation)(host_coordinated=True)
+            if os.environ.get("DEEPEP_LL_INIT_TRACE") == "1":
+                print(f"[DeepEP init] rank={self.rank} HCCL {operation} complete", flush=True)
+        except Exception:
+            self.coordination_failed = True
+            raise
+
+
+def validate_ndr_topology(topology):
+    if not topology or len(topology) % 16:
+        raise ValueError("NDR requires 16 contiguous ranks per physical host")
+    hosts = {}
+    devices = set()
+    mappings = {}
+    for rank, (host, mapping, device) in enumerate(topology):
+        if not host:
+            raise ValueError("NDR cannot establish Linux host identity")
+        hosts.setdefault(host, []).append(rank)
+        if host in mappings and mappings[host] != mapping:
+            raise ValueError("NDR visible-device mappings differ within a host")
+        mappings[host] = mapping
+        if (host, device) in devices:
+            raise ValueError("NDR ranks must use distinct local devices")
+        devices.add((host, device))
+    expected = [list(range(start, start + 16)) for start in range(0, len(topology), 16)]
+    if sorted(hosts.values()) != expected:
+        raise ValueError("NDR requires 16 contiguous ranks per physical host")
 
 
 def runtime_of(buffer):

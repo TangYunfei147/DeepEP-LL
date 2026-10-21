@@ -51,8 +51,8 @@ PYBIND11_MODULE(_C, module)
              }),
              py::arg("rank"), py::arg("size"), py::arg("bytes"), py::arg("endpoint"), py::arg("timeout"),
              py::arg("udma") = false, py::arg("use_1g_huge_pages") = false, py::call_guard<py::gil_scoped_release>())
-        .def("barrier", &deepep::Session::barrier, py::call_guard<py::gil_scoped_release>())
-        .def("close", &deepep::Session::close, py::call_guard<py::gil_scoped_release>())
+        .def("barrier", &deepep::Session::barrier, py::arg("host_coordinated") = false, py::call_guard<py::gil_scoped_release>())
+        .def("close", &deepep::Session::close, py::arg("host_coordinated") = false, py::call_guard<py::gil_scoped_release>())
         .def_property_readonly("closed", &deepep::Session::closed)
         .def_property_readonly("capacity", &deepep::Session::capacity)
         .def_property_readonly("use_1g_huge_pages", &deepep::Session::use_1g_huge_pages)

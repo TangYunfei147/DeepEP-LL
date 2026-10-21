@@ -1,69 +1,59 @@
-# NDR Host barrier：只修改 DeepEP，SDK 保持原样
+# NDR 初始化和销毁：现有 HCCL Host 协调
 
-此方案取代已撤回的 `4a2d736` SDK overlay 方案。**禁止对 SHMEM 应用补丁；
-SHMEM锁定revision、源码、构建脚本和SDK身份规则保持原样。无需重建原SDK。**
+2026-10-22方案，参考 DJLRY/DeepEP 的
+`codex/megamoe-hierarchical-roce@bfb6fe8935df07e52d5768e73426dab03050fbd0`。
+SHMEM源码、gitlink、SDK、构建脚本和身份校验规则全部保持原样。
+本方案替代此前生产路径的DeepEP设备barrier；不需要重建SDK。
 
-锁定SDK的Host barrier在EP32上直接轮询跨机peer地址，不适用于本作业的
-MTE | ROCE混合拓扑。DeepEP现在自己编译并启动
-`deepep_ndr_host_barrier_kernel`，不调用或修改SDK的跨机Host barrier。
+## 生命周期
 
-实现：`csrc/kernels/runtime/host_barrier.{cpp,h}`，编入DeepEP共享Device对象，
-timer ON/OFF复用同一对象。Session初始化/关闭在独立stream执行并检查完成状态，
-错误不再被SDK的void barrier吞掉。RDMA测试原语也使用同一DeepEP实现。
+NDR (`DEEPEP_LL_BACKEND=rdma`) 必须使用已建立的HCCL ProcessGroup，
+不新建Gloo、TCPStore或任何通信域。无group/其他backend在SHMEM建域前明确拒绝。
 
-- 全MTE team沿用SDK设备同步算法；含ROCE peer时使用binary dissemination。
-- 仅AIV0推进generation和使用SDK UB/QP，两端保留核内同步。
-- 机内使用MTE可达GM写，跨机只调用原SDK的QP put/quiet，无RDMA get/atomic。
-- 所有轮询均读本地同步槽，NIC可写视图绕过L2。put完成后才能复用generation源。
-- 使用显式team映射，每轮独立缓存行；排空ROCE peer已有QP写入后发布到达。
-- 不支持的peer、generation溢出和槽位越界明确trap；原SDK CQ异常/超时处理保留。
+1. 配置一致性检查后，利用同一HCCL组交换Linux boot_id、四个可见性变量和本地设备号。
+2. 校验每物理主机恰好16个连续global rank、同主机映射一致及设备不重复。
+   缺失host身份、交错rank、每机8卡、单机32rank均拒绝。
+3. 创建SHMEM Session及workspace；NDR构造失败保留进程owner，禁止新建runtime。
+4. 初始化barrier/公开barrier/销毁均先调用设备级synchronize，等待本卡所有stream。
+5. HCCL all_gather_object交换操作名及完成/失败状态；操作顺序不一致或任一rank失败，
+   不进入native释放。HCCL自身异常同样失败封锁，不回退。
+6. 全rank成功后调用native barrier/close(host_coordinated=True)。NDR native不再启动
+   设备barrier。直接native调用不带协调确认会拒绝；该参数是内部契约，不可用它绕过协调。
 
-Host barrier必须与本rank通信kernel串行。没有修改dispatch/combine算法、ABI5、
-核数、G策略或SDK原生每peer 56 QP限制。SDK自身其他barrier接口仍保持原行为。
+失败后Python runtime永久封锁，保留owner及尚未释放资源；ensure_alive/barrier/close
+均拒绝重入，必须重启作业。native清理失败仍保留已有poisoned保护。
+已成功完成的部分清理无法回滚，不声称所有清理异常都能保留完整workspace。
 
-## 部署
+所有rank须按同一顺序调用，不允许其他线程并发提交算子。LL kernel内部的QP quiet
+和body/flag顺序保持原样，device完成才能作为Host汇合前提。设备故障后HCCL可能也失败，
+此时受原ProcessGroup超时约束，不能保证收齐所有rank的错误描述，但不会当作成功释放。
 
-每台机器在原测试环境和仓库根目录执行，保持原先通过校验的未修改SDK：
+生产libdeepep_kernels不再编入host_barrier.cpp；该文件仅保留给独立双rank RDMA
+原语诊断程序，其设备测试不能替代HCCL生命周期验收。
+
+## 更新与测试
+
+每台机器使用原Python环境及未修改SDK：
 
 ```bash
 git pull --ff-only
 source tests/ll_rdma/env.sh
 unset SHMEM_ROOT CATLASS_ROOT
 export DEEPEP_NPU_ARCH=Ascend950
-export DEEPEP_LL_STAGE_TIMER=OFF  # 打点时全rank统一ON
+export DEEPEP_LL_STAGE_TIMER=OFF
 python -m pip install -v --force-reinstall --no-build-isolation --no-deps .
-bash tests/ll_rdma/build_smoke.sh
 ```
 
-不要执行上一版文档的SDK `--rebuild` 或overlay步骤。
-若已经执行过已撤回版本的SDK修改，应先核实SDK状态；不能把被改SDK当作原SDK。
-所有rank更新完整wheel；新的Host依赖新的DeepEP Device导出符号，禁止Host/Device混装。
-使用新的run-name，先执行跨机双rank原语及两机各16卡EP32 B1正确性，再恢复性能矩阵。
+全rank必须更新完整wheel，Python/native接口一起更新。不要运行旧SDK overlay，
+不要为此执行SDK --rebuild。若曾执行已撤回SDK修改，应先核实SDK状态。
 
-## 验证范围
+保留原EP32/每机16进程配置，使用新run-name、先B1，加
+`--skip-perf-test --trace-ops`。日志将经过SHMEM建域/分配，然后输出
+`HCCL barrier completion exchange enter`；生产路径不应出现DeepEP设备barrier kernel。
+正确性通过后恢复原B矩阵和性能采样。
 
-CPU模型覆盖延迟消息、连续generation、非连续team映射和EP2..256。
-提供直接编译实际DeepEP helper的C++线程模拟及Session同步失败故障注入测试。
-本地无C++/CANN/NPU，相关编译/设备项未验收；CPU模型不能替代目标机验证。
+## 验证边界
 
-## 初始化卡住的诊断（Host barrier v2）
-
-未进入case不等于一定卡在barrier：Session先经过SHMEM建域和对称分配。
-启动命令增加`--trace-ops`，会自动启用`DEEPEP_LL_INIT_TRACE=1`。
-自写程序可在启动前显式设置该环境变量。
-各节点完整保存stdout/stderr以及工程`.logs/ascend`设备日志。
-
-Host输出包含`SHMEM init enter/return`、`workspace allocation enter/return`、
-`workspace memset enter/return`、`barrier launched; synchronize enter/return`。
-设备输出包含AIV/block/subblock入口、两次核间同步、逐peer全部QP排空、
-逐轮标志发布及本地等待。设备printf可能缓冲，缺少一行不能单独证明停在该处，
-应结合plog及其他rank日志判断。
-
-本地标志等待不再无限循环：复用Session timeout（测试入口
-`--num-cpu-timeout-secs`，默认120秒），按目标Ascend950的1GHz计数器换算。
-超时打印rank、predecessor、slot、expected及observed后trap，不重试、不回退。
-SDK内部QP quiet保留SDK自己的60秒CQ超时，核间同步及原全MTE分支不受该本地轮询超时保护。
-本轮仅增强诊断和本地轮询失败退出，不改变同步拓扑/通信顺序，也不宣称已解决实机卡住。
-
-全rank更新完整wheel，新的Host/Device导出符号为`deepep_ndr_host_barrier_launch_v2`，
-kernel名为`deepep_ndr_host_barrier_kernel_v2`。SDK仍不修改、不重建。
+CPU故障注入运行生产Python生命周期方法，覆盖全部流完成顺序、peer失败、HCCL失败、
+操作错序、native错误、重复调用封锁和拓扑校验。C++/CANN/NPU未在本机验收。
+参考分支也不是目标机已通过证明，仍需两机设备验证。

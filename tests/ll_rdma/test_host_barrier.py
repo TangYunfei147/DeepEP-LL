@@ -20,11 +20,12 @@ def test_real_helper_against_cpu_transport_doubles(tmp_path):
 def test_project_build_owns_barrier():
     cmake = (ROOT / "cmake/device/CMakeLists.txt").read_text()
     common = cmake.split("add_library(deepep_kernel_common OBJECT", 1)[1].split("set(_ll_sources", 1)[0]
-    assert "csrc/kernels/runtime/host_barrier.cpp" in common
+    assert "csrc/kernels/runtime/host_barrier.cpp" not in common
     launcher = (ROOT / "csrc/kernels/runtime/host_barrier.cpp").read_text()
     assert "deepep_ndr_host_barrier_kernel" in launcher
     session = (ROOT / "csrc/runtime/session.cpp").read_text()
-    assert "if (hybrid) deepep_ndr_host_barrier_launch_v2(stream," in session
+    assert "deepep_ndr_host_barrier_launch_v2" not in session
+    assert "NDR barrier requires HCCL Host coordination" in session
     assert "SHMEM barrier completion" in session
     assert not (ROOT / "scripts/shmem_barrier_patch.py").exists()
     assert "source_patches" in (ROOT / "scripts/shmem_sdk_identity.py").read_text()

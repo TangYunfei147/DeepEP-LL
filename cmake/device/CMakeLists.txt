@@ -30,7 +30,6 @@ find_path(DEVICE_RT_INCLUDE rt.h HINTS
 # Share HT objects and retain both LL diagnostic variants. Only the selected
 # variant is built, so repeated timer switches reuse dependency-tracked objects.
 add_library(deepep_kernel_common OBJECT
-    "${DEEPEP_SOURCE_DIR}/csrc/kernels/runtime/host_barrier.cpp"
     "${DEEPEP_SOURCE_DIR}/csrc/kernels/notify/notify.cpp"
     "${DEEPEP_SOURCE_DIR}/csrc/kernels/dispatch/dispatch.cpp"
     "${DEEPEP_SOURCE_DIR}/csrc/kernels/combine/combine.cpp"

@@ -22,8 +22,6 @@
 #include <limits>
 #include <cstdio>
 
-extern "C" void deepep_ndr_host_barrier_launch_v2(void* stream, uint64_t wait_cycles, uint32_t trace);
-
 namespace deepep {
 namespace {
 std::mutex runtime_mutex;
@@ -49,14 +47,12 @@ void init_trace(int rank, const char* stage)
         std::fflush(stderr);
     }
 }
-void checked_barrier(bool hybrid, int rank, unsigned timeout)
+void checked_barrier(int rank)
 {
     init_trace(rank, "barrier enter");
     aclrtStream stream = nullptr;
     check(aclrtCreateStream(&stream), "create SHMEM barrier stream");
-    // Target Ascend950 GetSystemCycle is 1GHz. Reuse the Session timeout.
-    if (hybrid) deepep_ndr_host_barrier_launch_v2(stream, uint64_t(timeout) * 1000000000ULL, init_trace_enabled());
-    else aclshmemx_barrier_all_on_stream(stream);
+    aclshmemx_barrier_all_on_stream(stream);
     init_trace(rank, "barrier launched; synchronize enter");
     const int status = aclrtSynchronizeStream(stream);
     init_trace(rank, "barrier synchronize return");
@@ -152,7 +148,6 @@ Session::Session(int rank, int size, uint64_t bytes, const std::string& endpoint
     attr.option_attr.shm_init_timeout = timeout;
     attr.option_attr.shm_create_timeout = timeout;
     attr.option_attr.control_operation_timeout = timeout;
-    barrier_timeout_seconds_ = timeout;
     using SetPeerQpMasks = int (*)(const uint64_t*, uint32_t);
     auto set_masks =
         udma ? reinterpret_cast<SetPeerQpMasks>(dlsym(RTLD_DEFAULT, "aclshmemx_set_udma_peer_qp_masks")) : nullptr;
@@ -414,21 +409,29 @@ uintptr_t Session::workspace_address() const
     return reinterpret_cast<uintptr_t>(workspace_);
 }
 
-void Session::barrier()
+void Session::barrier(bool host_coordinated)
 {
     std::lock_guard<std::mutex> guard(runtime_mutex);
     check_context();
-    checked_barrier(ll_rdma_, rank_, barrier_timeout_seconds_);
+    if (ll_rdma_) {
+        if (!host_coordinated) throw std::runtime_error("NDR barrier requires HCCL Host coordination");
+        return;
+    }
+    try { checked_barrier(rank_); }
+    catch (...) { poisoned_ = true; throw; }
 }
 
-void Session::close()
+void Session::close(bool host_coordinated)
 {
     std::lock_guard<std::mutex> guard(runtime_mutex);
     if (closed_) {
         return;
     }
     check_context();
-    checked_barrier(ll_rdma_, rank_, barrier_timeout_seconds_);
+    if (ll_rdma_ && !host_coordinated)
+        throw std::runtime_error("NDR close requires HCCL Host coordination");
+    try { if (!ll_rdma_) checked_barrier(rank_); }
+    catch (...) { poisoned_ = true; throw; }
     if (workspace_ != nullptr && !use_1g_huge_pages_) {
         aclshmem_free(workspace_);
         workspace_ = nullptr;
