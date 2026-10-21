@@ -376,7 +376,9 @@ __aicore__ inline void ServerDedupCounts::CompleteCumsum()
     // Every physical AIV has a private ready row and prefix replica.
     const uint32_t receiver = aivId_;
     // Retire send/count writes before reusing their UB. No cross-core barrier.
+    { LL_SEG_SCOPE(TRANSITION_DRAIN);
     PipeBarrier<PIPE_ALL>();
+    }
     tpipe_->Reset();
     // Ready flags use integer bit patterns reduced as FP32 subnormals.
     // Reassert the mode after Reset before the count-protocol reduction.

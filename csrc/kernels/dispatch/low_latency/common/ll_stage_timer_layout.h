@@ -5,9 +5,9 @@
 #pragma once
 #include <cstdint>
 namespace LlStageTimer {
-constexpr uint32_t kSchema = 10U;
+constexpr uint32_t kSchema = 11U;
 constexpr uint64_t kMagic = 0x4c4c5431ULL;
-constexpr uint32_t kTraceRecords = 192U, kMetrics = 70U;
+constexpr uint32_t kTraceRecords = 192U, kMetrics = 78U;
 constexpr uint32_t kRecords = kTraceRecords + kMetrics;
 // Same 16-byte event/metric records as dc_seg. LL keeps per-core 512B alignment.
 constexpr uint32_t kSlots = 72U, kFields = 8U;
@@ -84,6 +84,14 @@ enum Stage : uint32_t {
     RELAY_PRE_DRAIN = 67,
     RELAY_COMPLETE = 68,
     RELAY_PACKETS = 69,
+    SEND_COMPLETE_WAIT = 70,
+    TRANSITION_DRAIN = 71,
+    RECV_PREPARE = 72,
+    SEND_SUBMIT_END = 73,
+    OVERLAP_PATH = 74,
+    SERIAL_FALLBACK = 75,
+    SEND_LANES = 76,
+    RECV_LANES = 77,
     StageCount = kMetrics
 };
 constexpr const char* kNames[] = {
@@ -157,6 +165,15 @@ constexpr const char* kNames[] = {
     "RELAY_PRE_DRAIN",
     "RELAY_COMPLETE",
     "RELAY_PACKETS",
+    "SEND_COMPLETE_WAIT",
+    "TRANSITION_DRAIN",
+    "RECV_PREPARE",
+    "SEND_SUBMIT_END",
+    "OVERLAP_PATH",
+    "SERIAL_FALLBACK",
+    "SEND_LANES",
+    "RECV_LANES",
+
 };
 static_assert(kRecordWordOffset + kRecords * 2U <= kWordsPerCore, "segment capacity");
 static_assert(kWordsPerCore * sizeof(uint64_t) % 512U == 0U, "core alignment");

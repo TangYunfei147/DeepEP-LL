@@ -39,7 +39,7 @@ def input_wait_report(samples):
             bucket=buckets.setdefault((meta['rank'],core,name),dict(values=[],missing=0))
             packet=st.get('TOKEN_INPUT');wait=st.get(name)
             send=st['SEND_TOKENS']['total_ticks'];kernel=st.get('KERNEL',{}).get('total_ticks',0)
-            if (decoded['schema'] not in (9,10) or decoded.get('boundary_mode','observe')!='observe' or not packet or not wait or
+            if (decoded['schema'] not in (9,10,11) or decoded.get('boundary_mode','observe')!='observe' or not packet or not wait or
                     wait['calls']!=packet['calls'] or send<=0 or kernel<=0 or
                     not 0<=wait['total_ticks']<=min(send,kernel)):
                 bucket['missing']+=1
@@ -115,7 +115,7 @@ def analyze(paths, frequency_hz=None):
         for row in report['records']:
             initial_role=row.get('initial_role',row['role'])
             key=(op,rank,row['core'],initial_role,row['stage'])
-            if report['schema'] in (7,9,10):
+            if report['schema'] in (7,9,10,11):
                 worker_roles.setdefault((op,rank,row['core']),set()).add(row['role'])
             duration=row['total_us'] if unit=='us' else row['total_ticks']
             groups.setdefault(key,[]).append((duration,row['calls']))
@@ -185,7 +185,7 @@ def expert_reports(paths, frequency_hz):
         if payload['experts'] != meta['config'].get('num_experts',payload['experts']):
             raise ValueError('Expert count differs from case configuration')
         header=saved['raw'][0][0]
-        if header[1] in (7,9,10): raise ValueError('Segment capture cannot contain legacy expert instrumentation')
+        if header[1] in (7,9,10,11): raise ValueError('Segment capture cannot contain legacy expert instrumentation')
         expected_send=header[5] >> 8 if header[1] in (5,6) else len(saved['raw'])//2
         if (header[1] in (5,6) and 'send_cores' not in payload) or payload.get('send_cores',expected_send)!=expected_send:
             raise ValueError('Expert/stage core split mismatch')

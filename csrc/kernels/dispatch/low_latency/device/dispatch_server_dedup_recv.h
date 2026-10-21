@@ -65,6 +65,7 @@ public:
 
         // Caller has completed count-stage writes before this Reset. The GM
         // prefix belongs to this receive core; old count UB is no longer used.
+        LL_SEG_BEGIN(recvPrepareBegin, RECV_PREPARE);
         pipe_->Reset();
         const uint32_t prefixBytes = uint32_t(DispatchDedupAlign(uint64_t(experts_) * 4U, 32U));
         pipe_->InitBuffer(prefixBuf_, prefixBytes);
@@ -86,6 +87,7 @@ public:
 
         // 空任务核没有拥有的接收槽，完成打点后直接返回，无需参与 packet 轮询。
         if (tasks_.Count() == 0U) {
+            LL_SEG_END(recvPrepareBegin, RECV_PREPARE);
             return;
         }
 
@@ -113,6 +115,7 @@ public:
         pipe_->InitBuffer(lanesBuf_, lanes_ * laneStride_);
         for (uint32_t lane = 0; lane < lanes_; ++lane) SetFlag<HardEvent::MTE3_MTE2>(lane);
 
+        LL_SEG_END(recvPrepareBegin, RECV_PREPARE);
         auto snapshot = probeIdxBuf_.Get<uint32_t>();
         // Fill every allocated lane (up to eight); reuse still waits for MTE3.
         const uint32_t depth = lanes_;

@@ -60,7 +60,9 @@ public:
         // Prefix producers remain the original R cores. Each of the 56 consumers
         // has its own publication row and disjoint output/cleanup ownership.
         counts_.CompleteCumsum();
+        { LL_SEG_SCOPE(TRANSITION_DRAIN);
         PipeBarrier<PIPE_ALL>();
+        }
         { LL_SEG_SCOPE(LOCAL_WINDOW_COPY);
         receiver_.Process(timer_);
         }

@@ -174,7 +174,10 @@ public:
         if (count_ != 0U)
             DataCopyPad(weightOut_[uint64_t(start_) * k_], enableDedup_ ? sourceWeights_ : routeWeights_,
                         {1U, count_ * k_ * 4U, 0U, 0U, 0U});
+        { LL_SEG_SCOPE(SEND_SUBMIT_END); }
+        { LL_SEG_SCOPE(SEND_COMPLETE_WAIT);
         Sync<HardEvent::MTE3_S>();
+        }
     }
 
 
@@ -236,7 +239,10 @@ public:
         LL_SEG_BEGIN(localDrainBegin, SEND_DRAIN);
         // Retire all reads of packet scratch before RecvCnt overlays that UB.
         for (uint32_t lane=0;lane<lanes_;++lane) WaitFlag<HardEvent::MTE3_V>(lane);
+        { LL_SEG_SCOPE(SEND_SUBMIT_END); }
+        { LL_SEG_SCOPE(SEND_COMPLETE_WAIT);
         Sync<HardEvent::MTE3_S>();
+        }
         scratch_->Reset();
         // Packet packing may use a different control mode; the unchanged
         // count-receive reductions require integer FP32 subnormals preserved.
