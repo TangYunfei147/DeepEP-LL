@@ -113,3 +113,48 @@ wheel on all ranks; no SDK rebuild is required solely for this change. Use the
 existing ST correctness and observe commands in OVERLAP_RECEIVE.md. The updated
 parser recognizes the specialized profiler entry names. Device correctness and
 performance remain target-machine validation tasks.
+
+## G4 group-compact candidate (2026-10-21)
+
+Base: kernel/ll-g4-s3-baseline@ac876bab5c1f18155e9b47fc6446cc1d9bec7bc1.
+Candidate: kernel/ll-g4-group-compact, implementation g4-group-compact,
+protocol15000+S, unchanged Stage3/schema12 and seven translation units.
+
+Local validation after changes:
+
+- Full tests/ll_stage_timer + tests/elastic: 887 passed, 107 skipped, 172.41s.
+  Skips are unavailable Torch/device/POSIX or C++ fixtures, not device passes.
+  This includes 39 new tests; 38 execute the production compact scheduling
+  helper or compare its results with the CPU route report, and one guards wiring.
+- Separate existing Zig C++ checks for UB layout matrix, seven-mode Host selector,
+  profiler matching and Stage3 policy: 13 passed, 29.47s. These overlap some
+  tests above and must not be added to the full-suite total as distinct cases.
+- EP16 B8/M256/H3584/K8/E384 BF16+FP8 CPU --plan passed; no NPU initialization.
+- Source receiver/counts/local-send/combine algorithms retained. Only remote
+  packet ownership, related source metadata access and UB planning changed.
+- Pure CPU route accounting: EP16/64, B8/32/48/256, normal/hotspot, seed2;
+  q/packet membership/receive row/receive core and total packet counts equal.
+
+Reproduction:
+python -m pytest tests/ll_stage_timer tests/elastic -q
+python -m pytest tests/ll_stage_timer/test_dispatch_variants.py tests/ll_stage_timer/test_overlap_receive.py::test_native_layout_matrix tests/ll_stage_timer/test_overlap_ab.py::test_real_cpp_stage_policy -q
+
+The new helper test accepts an existing CXX command. Local tests used an existing
+Zig toolchain; it does not compile AscendC APIs or enforce AICore call domains.
+Logs are under the candidate's .tmp/full-002.log, .tmp/native-001.log and
+.tmp/plan-001.log. Generated files and raw route counts are not committed.
+
+Initial local runs failed because pytest was absent from the runtime, its
+subprocess isolation dropped PYTHONPATH, and sandboxed compiler temp-file access
+failed. A project-local test venv with existing dependencies and project-local
+temp/cache paths resolved these environment issues. Older source-policy tests
+and the CPU report were adapted to the new owner stream; stale wheel rejection
+now expects 15000+S.
+
+No CANN ON/OFF cold build, full ON wheel, NPU correctness, or profiler A/B was
+performed for this candidate. The historical A3 numbers above belong to the
+earlier split-entry change, NOT this algorithm. Before adoption, run the same
+benchmark_compile.py ON/OFF procedure and full ON wheel link on the authorized
+target, then the correctness and OFF timing steps in
+tests/ll_stage_timer/GROUP_COMPACT.md. No production architecture or SDK changes
+were made.

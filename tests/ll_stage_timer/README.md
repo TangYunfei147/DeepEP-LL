@@ -1,4 +1,6 @@
-本A/B分支使用schema12和分阶段提交，请先读 [OVERLAP_AB.md](../../docs/OVERLAP_AB.md)。
+本分支当前为 `kernel/ll-g4-group-compact`，身份 `g4-group-compact`、协议15000+S、Stage3/schema12。
+构建、采样和CPU对照以 [GROUP_COMPACT.md](GROUP_COMPACT.md) 为准。
+下方保留历史分支资料，其clone分支名和安装身份断言不适用于当前候选。
 
 本分支为独立 overlap receive 实验，构建、协议和验证命令以 [OVERLAP_RECEIVE.md](OVERLAP_RECEIVE.md) 为准（schema11、14000+S）。下方旧分支身份示例不适用于本分支。
 

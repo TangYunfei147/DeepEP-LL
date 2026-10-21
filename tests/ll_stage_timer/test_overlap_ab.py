@@ -11,11 +11,11 @@ st=load('ab_entry','tests/elastic/test_ep_low_latency.py')
 
 def test_stale_wheel_stage_rejected_even_without_timer():
     stage=st.expected_overlap_stage()
-    st.validate_overlap_stage_capability(dict(implementation='g4-overlap-ab',overlap_stage=stage))
+    st.validate_overlap_stage_capability(dict(implementation='g4-group-compact',overlap_stage=stage))
     for wrong in (0,1,2,3,4,5,None):
         if wrong==stage:continue
         with pytest.raises(RuntimeError,match='Rebuild/install'):
-            st.validate_overlap_stage_capability(dict(implementation='g4-overlap-ab',overlap_stage=wrong))
+            st.validate_overlap_stage_capability(dict(implementation='g4-group-compact',overlap_stage=wrong))
     with pytest.raises(RuntimeError):
         st.validate_overlap_stage_capability(dict(implementation='g4-overlap-recv',overlap_stage=stage))
 
@@ -53,6 +53,6 @@ int main(){using namespace DispatchDedup; LlOverlapLayout p{};
 
 def test_stage_is_allowed_difference_only_between_valid_runs():
     fixture=load('ab_parity','tests/ll_stage_timer/test_parity.py')
-    left=fixture.identity();left.update(implementation='g4-overlap-ab',overlap_stage=1,
+    left=fixture.identity();left.update(implementation='g4-group-compact',overlap_stage=1,
         active_aiv=56,send_cores=28,recv_cores=28,dispatch_recv_cores=56,core_protocol=14028,stage_timer_schema=12)
     fixture.comparison.check_identity(left,dict(left,overlap_stage=4))

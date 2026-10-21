@@ -47,8 +47,10 @@ def test_group_local_preparation_and_retirement_have_separate_intervals():
 def test_nondedup_remote_filter_is_measured_as_preparation():
     sender=(ROOT/'csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_send.h').read_text(encoding='utf-8')
     body=sender[sender.index('inline void SendWithoutDedup('):sender.index('\nprivate:')]
-    assert body.index('LL_SEG_BEGIN(remotePrepareBegin, PREPARE_INPUT)')<body.index('GatherMask(')
-    assert body.index('GatherMask(')<body.index('LL_SEG_END(remotePrepareBegin, PREPARE_INPUT)')<body.index('SendPacket(')
+    build=body[body.index('inline uint32_t BuildGroupIndices('):body.index('struct CompactAccess')]
+    assert build.index('LL_SEG_SCOPE(PREPARE_INPUT)')<build.index('GatherMask(')
+    assert build.index('GatherMask(')<build.index('Sync<HardEvent::V_S>()')<build.index('return uint32_t(selected)')
+    assert body.index('BuildGroupIndices(group)')<body.index('LlVisitCompactGroup(')
 
 
 def test_intermittent_local_work_does_not_split_kernel_statistics(tmp_path):

@@ -30,7 +30,7 @@ def validate_core_split_capability(capability):
     send, recv = capability.get("send_cores"), capability.get("recv_cores")
     if (type(send) is not int or type(recv) is not int or send <= 0 or recv <= 0
             or send + recv != 56 or capability.get("active_aiv") != 56
-            or capability.get("core_protocol") != 14000 + send):
+            or capability.get("core_protocol") != 15000 + send):
         raise RuntimeError("Rebuild/install the matching configured 56-core split wheel on every rank")
 
 
@@ -43,7 +43,7 @@ def expected_overlap_stage():
 
 def validate_overlap_stage_capability(capability):
     expected=expected_overlap_stage()
-    if capability.get('implementation')!='g4-overlap-ab' or capability.get('overlap_stage')!=expected:
+    if capability.get('implementation')!='g4-group-compact' or capability.get('overlap_stage')!=expected:
         raise RuntimeError(f'Rebuild/install overlap A/B stage {expected} from this checkout on every rank')
 
 
@@ -1140,7 +1140,7 @@ def worker(local_rank, args):
         if any(item != capabilities[0] for item in capabilities):
             raise RuntimeError("LL AIV/group/protocol/timer build differs across ranks")
         validate_core_split_capability(capability)
-        if capability['implementation'] not in ('ndr-hns1825','configurable-groups','g4-shared-recv','g4-overlap-recv','g4-overlap-ab'):
+        if capability['implementation'] not in ('ndr-hns1825','configurable-groups','g4-shared-recv','g4-overlap-recv','g4-group-compact'):
             raise RuntimeError('Rebuild the wheel with the shared experiment implementation identity')
         validate_overlap_stage_capability(capability)
         requested_impl=os.environ.get('DEEPEP_LL_EXPECT_IMPLEMENTATION')

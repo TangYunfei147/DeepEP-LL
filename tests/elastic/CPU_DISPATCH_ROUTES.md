@@ -1,5 +1,10 @@
 # 纯 CPU 查看 dispatch 路由、分核数量与阶段顺序
 
+当前group-compact分支CLI默认`--send-policy group-compact`，可用`--send-policy s3`
+比较ac876ba的发送所有权。原始路由、q、FIRST_HOP成员及接收行相同，只重新分配S初发。
+manifest记录策略；Python build_plan API默认仍为s3，调用时显式指定候选。
+下方回放是逻辑因果模型，不是S3 DMA重叠/UB lane性能模拟。
+
 入口 `tests/elastic/inspect_dispatch_routes.py`，依据
 `kernel/ll-g4-relay-priority@550b423` 的源端分工、静态接收和 relay 优先逻辑。
 只用 Python 标准库：不导入 Torch/torch_npu/deep_ep，不调用设备、建连、

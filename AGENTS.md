@@ -26,3 +26,11 @@
 四版策略、统一schema12口径和切换方式见docs/OVERLAP_AB.md。
 仅通过ll_overlap_stage.h的提交常量选择阶段；不得让四个版本各自修改打点范围。
 保留Host/device stage校验、各rank一致性及ST对安装wheel/checkout的校验。
+
+## kernel/ll-g4-group-compact
+
+从S3/ac876ba派生。当前身份g4-group-compact、协议15000+S，Stage3/schema12不变。
+远端压紧/所有权使用common/ll_group_compact.h；Host最低UB和overlap UB必须一起维护。
+元数据仍按原token分片唯一写回，packet所有权独立；FillTail权重使用全局token索引。
+保留R本组发送、首跳最小top-k、q、wire、接收/relay和combine。
+先读tests/ll_stage_timer/GROUP_COMPACT.md；不能把packet均衡表述为设备性能收益。

@@ -31,7 +31,7 @@ LL_OVERLAP_INLINE LlOverlapLayout LlMakeOverlapLayout(const EpServerDedupDataLay
     const uint64_t groups=(ranks/kLlRanksPerGroup-1)<k/2 ? ranks/kLlRanksPerGroup-1:k/2;
     const uint64_t sendFixed=core<kLlSendCoreNum ?
         2*input+routes+2*(quant?LlOverlapMax(q,work):q)+q+(quant?d.packedPayloadBytes:0)+
-        2*DispatchDedupAlign(tokens*k*4,32)+DispatchDedupAlign(tokens*4,32)+DispatchDedupAlign(tokens*k*16,32)+
+        q+DispatchDedupAlign(tokens*k*4,32)+DispatchDedupAlign(tokens*4,32)+q+
         LlOverlapMax(64,DispatchDedupAlign(ranks/kLlRanksPerGroup*4,32))+DispatchDedupAlign(groups*4,32) :
         2*input+q+(quant?work+d.packedPayloadBytes:0);
     const uint64_t countScratch=plan.count?4*routes+records*4:0;

@@ -128,7 +128,7 @@ void bind_low_latency(py::module_& module)
         throw std::runtime_error("LL A/B stage differs between Host and device library");
     module.attr("low_latency_overlap_stage")=DispatchDedup::kLlOverlapExperimentStage;
     module.attr("low_latency_core_protocol") = DispatchDedup::kLlCoreProtocolVersion;
-    module.attr("low_latency_implementation") = "g4-overlap-ab";
+    module.attr("low_latency_implementation") = "g4-group-compact";
     module.attr("low_latency_rdma_enabled") = false;
     module.attr("low_latency_expert_timer_enabled") = false;
     module.attr("low_latency_stage_timer_enabled") = bool(deepep_ll_stage_timer_enabled());
