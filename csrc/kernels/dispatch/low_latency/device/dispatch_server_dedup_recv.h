@@ -255,9 +255,9 @@ private:
     {
         LL_SEG_SCOPE(RECV_COPY);
         LL_SEG_COUNT(RECV_READY_TOKENS, 1U);
-        LL_SEG_BEGIN(segBegin3, RECV_INPUT);
+        LL_SEG_BEGIN(segBegin3, RECV_INPUT_WAIT);
         WaitFlag<HardEvent::MTE2_S>(lane);
-        LL_SEG_END(segBegin3, RECV_INPUT);
+        LL_SEG_END(segBegin3, RECV_INPUT_WAIT);
         LL_SEG_SCOPE(RECV_OUTPUT);
         uint32_t expert = 0;
         if (expertTimer_ && expertTimer_->Enabled()) {
@@ -276,6 +276,7 @@ private:
             WaitFlag<HardEvent::MTE2_MTE3>(lane);
             LL_SEG_END(segBegin4, RECV_BUFFER_WAIT);
             if (expertTimer_) expertTimer_->Start(expert, LlExpertTimer::OutputWrite);
+            LL_SEG_BEGIN(compactOutputBegin, OUTPUT_ISSUE);
             DataCopyPad(expandX_[uint64_t(row) * hiddenBytes_], wire, {1U, hiddenBytes_, 0U, 0U, 0U});
             if constexpr (WireFp8)
                 DataCopyPad(dynamicScales_[uint64_t(row) * data_.scaleBytes], wire[uint32_t(data_.quantCount)],
@@ -287,6 +288,7 @@ private:
             if (expertTimer_) expertTimer_->Start(expert, LlExpertTimer::OutputWrite);
             DataCopyPad(destinationIndex_[uint64_t(row) * 3U], header, {1U, 12U, 0U, 0U, 0U});
             SetFlag<HardEvent::MTE3_MTE2>(lane);
+            LL_SEG_END(compactOutputBegin, OUTPUT_ISSUE);
             if (expertTimer_) expertTimer_->End(expert, LlExpertTimer::OutputWrite);
             return;
         }
@@ -296,6 +298,13 @@ private:
         ServerDedupPacketTail tail(wire, headerOffset,
                                    uint32_t(keepFlags ? data_.relayReadIndexWireOffset : data_.readIndexPayloadOffset));
         const bool firstHop = enableDedup_ && tail.Header().GetValue(3U) == uint32_t(EpServerDedupTokenType::FirstHop);
+        // Read before PrepareServerDedupForward rewrites FIRST_HOP to TERMINAL.
+        if (timer_ && timer_->Enabled()) {
+            if (firstHop) { LL_SEG_COUNT(RECV_FIRST_HOP, 1U); }
+            else if (enableDedup_ && tail.Header().GetValue(3U) == uint32_t(EpServerDedupTokenType::Terminal)) {
+                LL_SEG_COUNT(RECV_TERMINAL, 1U);
+            }
+        }
         if (enableDedup_)
             BuildServerDedupMetadata(type, destination, tail, tasks_.Position(j));
         else
@@ -339,6 +348,7 @@ private:
             }
         }
         if (expertTimer_) expertTimer_->Start(expert, LlExpertTimer::OutputWrite);
+        LL_SEG_BEGIN(finalOutputBegin, OUTPUT_ISSUE);
         if (keepFlags) {
             WriteServerDedupPayloadRange(expandX_[uint64_t(row) * hiddenBytes_], wire, 0U, hiddenBytes_);
             if constexpr (WireFp8)
@@ -357,6 +367,7 @@ private:
             DataCopyPad(relayReadIndex_[uint64_t(row) * k_ * 2U], tail.ReadIndex(), {1U, k_ * 8U, 0U, 0U, 0U});
         }
         SetFlag<HardEvent::MTE3_MTE2>(lane);
+        LL_SEG_END(finalOutputBegin, OUTPUT_ISSUE);
     }
 
     // 摘要：仅清零本核拥有的所有接收槽中的 32B 块标记，保留 payload；完成等待由调用方负责。

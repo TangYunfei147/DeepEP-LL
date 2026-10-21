@@ -44,7 +44,9 @@ int main(){
  DeviceTimer timer;timer.Init(reinterpret_cast<uint8_t*>(words.data()),1,1);
  auto kernel=timer.Begin(KERNEL);
  for(uint32_t stage=1;stage<kMetrics;++stage){
-  if((stage>=51 && stage<=55) || stage==69){timer.Count(static_cast<Stage>(stage),17);continue;}
+  if((stage>=51 && stage<=55) || stage==69 || (stage>=74 && stage<=77) || (stage>=87 && stage<=89)){
+   timer.Count(static_cast<Stage>(stage),17);continue;
+  }
   for(unsigned i=0;i<5;++i){auto begin=timer.Begin(static_cast<Stage>(stage));timer.End(static_cast<Stage>(stage),begin);}
  }
  timer.End(KERNEL,kernel);
@@ -55,10 +57,14 @@ int main(){
  assert(AscendC::flushes>0);
  auto* data=words.data()+55*kWordsPerCore;
  assert(data[0]==kMagic && data[1]==kSchema && data[6]<=kRecords && data[7]>0);
+ assert(AscendC::flushes==(data[6]+3)/4+1);
  unsigned kernelBegins=0,kernelEnds=0,kernelMetrics=0;
  for(unsigned i=0;i<data[6];++i){
   auto event=uint32_t(data[8+i*2]);
   kernelBegins+=event==0;kernelEnds+=event==1;kernelMetrics+=event==0x8000;
+  if(event==0x8000+TOKEN_INPUT) assert((data[8+i*2]>>32)==2);
+  if(event==0x8000+SEND_PACKET) assert((data[8+i*2]>>32)==5);
+  if(event==0x8000+TOKEN_INPUT_WAIT || event==0x8000+RECV_BUFFER_WAIT) assert((data[8+i*2]>>32)==5);
  }
  assert(kernelBegins==1 && kernelEnds==1 && kernelMetrics==1);
  assert(std::all_of(words.begin(),words.begin()+55*kWordsPerCore,[](auto value){return value==0;}));

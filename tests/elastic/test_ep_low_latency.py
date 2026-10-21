@@ -50,8 +50,8 @@ def validate_overlap_stage_capability(capability):
 def validate_stage_timer_capability(capability):
     if not capability["stage_timer"]:
         raise RuntimeError("All ranks must install a DEEPEP_LL_STAGE_TIMER=ON wheel")
-    if capability['stage_timer_schema'] != 13:
-        raise RuntimeError('Detailed LL diagnostics require timer schema 13; '
+    if capability['stage_timer_schema'] != 14:
+        raise RuntimeError('Detailed LL diagnostics require timer schema 14; '
                            f'got {capability["stage_timer_schema"]}; '
                            'rebuild/install the matching wheel on every rank')
 

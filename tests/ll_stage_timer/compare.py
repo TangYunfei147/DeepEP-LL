@@ -28,12 +28,12 @@ def check_identity(left,right):
         for item in (left,right):
             shared = item['core_protocol']//1000 >= 8
             expected = 56 if shared else item['recv_cores']
-            if item.get('dispatch_recv_cores',expected)!=expected or item['stage_timer_schema'] not in {7:(5,),8:(6,),9:(7,),10:(7,9,10),14:(11,12,13)}[item['core_protocol']//1000]:
+            if item.get('dispatch_recv_cores',expected)!=expected or item['stage_timer_schema'] not in {7:(5,),8:(6,),9:(7,),10:(7,9,10),14:(11,12,13,14)}[item['core_protocol']//1000]:
                 raise ValueError('Invalid receive participation/schema identity')
         if (left['core_protocol']//1000 in (9,10,14))!=(right['core_protocol']//1000 in (9,10,14)):
             if any(item['stage_timer'] or item['stage_capture'] or item['expert_capture'] for item in (left,right)):
                 raise ValueError('Incomparable diagnostic semantics: segment and legacy timers')
-        if any(item['stage_timer_schema'] in (9,10,11,12,13) for item in (left,right)) and left['stage_timer_schema']!=right['stage_timer_schema'] and any(
+        if any(item['stage_timer_schema'] in (9,10,11,12,13,14) for item in (left,right)) and left['stage_timer_schema']!=right['stage_timer_schema'] and any(
                 item['stage_timer'] or item['stage_capture'] or item['expert_capture'] for item in (left,right)):
             raise ValueError('Incomparable diagnostic semantics: different stage schemas')
         differences.update(('send_cores','recv_cores','dispatch_recv_cores','core_protocol','stage_timer_schema'))

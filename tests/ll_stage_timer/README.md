@@ -1,4 +1,4 @@
-当前Stage5使用schema13，见 [PREFIX_PROGRESS.md](../../docs/PREFIX_PROGRESS.md)。历史四版的schema12对照仍见OVERLAP_AB.md。
+当前Stage5诊断使用schema14，见 [PACKET_TIMING.md](../../docs/PACKET_TIMING.md)：包级全量耗时/计数，细分observe探针只测前两次。前缀算法仍见 [PREFIX_PROGRESS.md](../../docs/PREFIX_PROGRESS.md)。历史四版schema12对照见OVERLAP_AB.md；独立S3基线为kernel/ll-g4-s3-baseline。
 
 历史Stage1..4使用schema12和分阶段提交，参见 [OVERLAP_AB.md](../../docs/OVERLAP_AB.md)。
 

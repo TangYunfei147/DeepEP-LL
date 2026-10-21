@@ -73,6 +73,7 @@ public:
             LL_SEG_COUNT(SEND_LANES,overlap_.sendLanes);
             LL_SEG_COUNT(RECV_LANES,overlap_.recvLanes);
         } else { LL_SEG_COUNT(SERIAL_FALLBACK,1); }
+        if (timer_) timer_->StartStatic();
         counts_.SendCnt();
 
         if (overlap_.Cooperative() && core_>=sendCores_) {

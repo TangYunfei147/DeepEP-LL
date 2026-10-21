@@ -76,6 +76,7 @@ public:
         // reservedBytes 对应仍可能被计数发送读取的 UB，不能当作可用空间覆盖。
         if (enableDedup_ && count_ == 0U) return;
         timer_ = timer;
+        if (timer_) timer_->EndStatic();
         LL_SEG_BEGIN(segBegin1, PREPARE_INPUT);
         scratch_ = &scratch;
         TQue<QuePosition::VECIN, 1> input;
@@ -185,6 +186,7 @@ public:
         if (count_ != 0U)
             DataCopyPad(weightOut_[uint64_t(start_) * k_], enableDedup_ ? sourceWeights_ : routeWeights_,
                         {1U, count_ * k_ * 4U, 0U, 0U, 0U});
+        LL_SEG_COUNT(INITIAL_PACKETS, packets_);
         { LL_SEG_SCOPE(SEND_SUBMIT_END); }
         if (!overlap_.Async()) { LL_SEG_SCOPE(SEND_COMPLETE_WAIT);
         Sync<HardEvent::MTE3_S>();
@@ -203,6 +205,7 @@ public:
     {
         if (!tasks) return;
         timer_=timer;
+        if (timer_) timer_->EndStatic();
         LL_SEG_BEGIN(localPrepareBegin, PREPARE_INPUT);
         scratch_=&scratch;
         start_=0U; count_=bs_;
@@ -257,7 +260,10 @@ public:
             EndInputPrefetch(input);
             }
             begin=end;
-            if (begin==tasks) { LL_SEG_SCOPE(SEND_SUBMIT_END); }
+            if (begin==tasks) {
+                LL_SEG_COUNT(INITIAL_PACKETS, packets_);
+                LL_SEG_SCOPE(SEND_SUBMIT_END);
+            }
             cooperate();
         }
         if (!overlap_.Async()) {
@@ -579,6 +585,7 @@ private:
     __aicore__ inline void ConsumePacket(TQue<QuePosition::VECIN,1>& input,LocalTensor<XType> x,
                                         const LlSendPacketTask& task)
     {
+        LL_SEG_SCOPE(SEND_PACKET);
         const uint32_t token=task.token,firstK=task.firstK,expert=task.expert,q=task.q,mask=task.mask;
         const uint32_t destination=expert/localExperts_;
         LocalTensor<uint8_t> payload;

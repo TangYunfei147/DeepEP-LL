@@ -14,7 +14,7 @@ def report(samples):
             key=(meta['rank'],core,meta['iteration'])
             if key in seen: raise ValueError('Duplicate relay rank/core/iteration')
             seen.add(key)
-            available=schema in (10,11,12,13)
+            available=schema in (10,11,12,13,14)
             issue=stages.get('RELAY_ISSUE')
             groups=issue['calls'] if issue else 0 if available else None
             packets=stages.get('RELAY_PACKETS',{}).get('calls',0) if available else None

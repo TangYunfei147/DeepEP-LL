@@ -36,7 +36,11 @@ public:
     __aicore__ inline uint64_t Begin(Stage stage) const {
         (void)stage;
 #ifdef DEEPEP_LL_STAGE_TIMER
-        return Enabled() ? AscendC::GetSystemCycle() : 0U;
+        if (!Enabled()) return 0U;
+        // Fine-grained dispatch probes stop after two observations. Keep full
+        // packet/phase totals; do not pay clocks/accumulation for every substep.
+        if (operation_ == 1U && mode_ == 1U && SampleOnly(stage) && calls_[stage] >= 2U) return 0U;
+        return AscendC::GetSystemCycle();
 #else
         return 0U;
 #endif
@@ -50,7 +54,7 @@ public:
     }
     __aicore__ inline void End(Stage stage, uint64_t begin) {
 #ifdef DEEPEP_LL_STAGE_TIMER
-        if (!Enabled()) return;
+        if (!Enabled() || !begin) return;
         const uint64_t end = AscendC::GetSystemCycle();
         sums_[stage] += end - begin;
         ++calls_[stage];
@@ -61,6 +65,16 @@ public:
         } else { ++omitted_; }
 #else
         (void)stage; (void)begin;
+#endif
+    }
+    __aicore__ inline void StartStatic() {
+#ifdef DEEPEP_LL_STAGE_TIMER
+        staticBegin_ = Begin(STATIC_BEFORE_SEND);
+#endif
+    }
+    __aicore__ inline void EndStatic() {
+#ifdef DEEPEP_LL_STAGE_TIMER
+        if (staticBegin_) { End(STATIC_BEFORE_SEND, staticBegin_); staticBegin_=0U; }
 #endif
     }
     __aicore__ inline void Flush() {
@@ -74,6 +88,10 @@ public:
             if (calls_[stage]) Write(words + kRecordWordOffset + records++ * 2U,
                 (uint64_t(calls_[stage]) << 32U) | (0x8000U + stage), sums_[stage]);
         }
+        // Four 16-byte records share one aligned 64-byte cache line. Export
+        // each completed line once, still after the existing all-core sync.
+        for (uint32_t i = kRecordWordOffset; i < kRecordWordOffset + records * 2U; i += 8U)
+            FlushLine(words + i);
         // Commit header last. No device-side GM record writes occur before Flush.
         const uint32_t role = operation_ == 1U ? (core < DispatchDedup::kLlSendCoreNum ? 3U : 2U)
                                                : (core < DispatchDedup::kLlSendCoreNum ? 1U : 4U);
@@ -85,6 +103,11 @@ public:
     }
 private:
 #ifdef DEEPEP_LL_STAGE_TIMER
+    __aicore__ inline bool SampleOnly(Stage stage) const {
+        return stage == LOCAL_WINDOW_COPY || stage == FORMAT_OUTPUT ||
+               (stage >= TOKEN_INPUT && stage <= TOKEN_SEND_ISSUE) ||
+               (stage >= RECV_INPUT && stage <= COMBINE_INDEX_INPUT);
+    }
     __aicore__ inline void FlushLine(__gm__ uint64_t* words) {
         AscendC::GlobalTensor<uint32_t> tensor;
         tensor.SetGlobalBuffer(reinterpret_cast<__gm__ uint32_t*>(words), 16U);
@@ -92,9 +115,10 @@ private:
                                           AscendC::DcciDst::CACHELINE_OUT>(tensor);
     }
     __aicore__ inline void Write(__gm__ uint64_t* words, uint64_t event, uint64_t value) {
-        words[0]=event; words[1]=value; FlushLine(words);
+        words[0]=event; words[1]=value;
     }
     GM_ADDR address_ = nullptr;
+    uint64_t staticBegin_ = 0U;
     uint32_t mode_ = 1U, operation_ = 0, count_ = 0, omitted_ = 0;
     uint64_t sums_[kMetrics]{};
     uint32_t calls_[kMetrics]{};

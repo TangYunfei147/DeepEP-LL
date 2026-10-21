@@ -11,6 +11,8 @@ spec=importlib.util.spec_from_file_location('ll_stage_timer_parser',ROOT/'deep_e
 timer=importlib.util.module_from_spec(spec);spec.loader.exec_module(timer)
 relay_spec=importlib.util.spec_from_file_location('ll_relay_timing',Path(__file__).with_name('relay_timing.py'))
 relay_timing=importlib.util.module_from_spec(relay_spec);relay_spec.loader.exec_module(relay_timing)
+packet_spec=importlib.util.spec_from_file_location('ll_packet_timing',Path(__file__).with_name('packet_timing.py'))
+packet_timing=importlib.util.module_from_spec(packet_spec);packet_spec.loader.exec_module(packet_timing)
 
 
 def stats(values):
@@ -37,9 +39,9 @@ def input_wait_report(samples):
             quant=st.get('TOKEN_QUANT',{}).get('calls',0)>0
             name='TOKEN_QUANT_WAIT' if quant else 'TOKEN_INPUT_WAIT'
             bucket=buckets.setdefault((meta['rank'],core,name),dict(values=[],missing=0))
-            packet=st.get('TOKEN_INPUT');wait=st.get(name)
+            packet=st.get('SEND_PACKET' if decoded['schema']>=14 else 'TOKEN_INPUT');wait=st.get(name)
             send=st['SEND_TOKENS']['total_ticks'];kernel=st.get('KERNEL',{}).get('total_ticks',0)
-            if (decoded['schema'] not in (9,10,11,12,13) or decoded.get('boundary_mode','observe')!='observe' or not packet or not wait or
+            if (decoded['schema'] not in (9,10,11,12,13,14) or decoded.get('boundary_mode','observe')!='observe' or not packet or not wait or
                     wait['calls']!=packet['calls'] or send<=0 or kernel<=0 or
                     not 0<=wait['total_ticks']<=min(send,kernel)):
                 bucket['missing']+=1
@@ -101,7 +103,7 @@ def overlap_receive_report(samples):
         for metric in decoded['records']:
             cores.setdefault(metric['core'],{})[metric['stage']]=metric
         for core,metrics in sorted(cores.items()):
-            available=decoded['schema'] in (11,12,13)
+            available=decoded['schema'] in (11,12,13,14)
             overlap='OVERLAP_PATH' in metrics
             intervals=[i for i in decoded.get('intervals',[]) if i['core']==core]
             def first(name,field):
@@ -128,7 +130,7 @@ def overlap_receive_report(samples):
 
 
 def analyze(paths, frequency_hz=None):
-    configurations={};ranks={};groups={};identity=None;stage_max={};measured={};worker_roles={}
+    configurations={};ranks={};groups={};identity=None;stage_max={};measured={};worker_roles={};coverage={}
     wait_samples=[]
     for path in paths:
         saved=json.loads(path.read_text())
@@ -150,12 +152,13 @@ def analyze(paths, frequency_hz=None):
         for row in report['records']:
             initial_role=row.get('initial_role',row['role'])
             key=(op,rank,row['core'],initial_role,row['stage'])
-            if report['schema'] in (7,9,10,11,12,13):
+            if report['schema'] in (7,9,10,11,12,13,14):
                 worker_roles.setdefault((op,rank,row['core']),set()).add(row['role'])
             duration=row['total_us'] if unit=='us' else row['total_ticks']
             groups.setdefault(key,[]).append((duration,row['calls']))
             measured[key]=row.get('time_measured',True)
-            if not measured[key]: continue
+            coverage[key]=row.get('coverage','all_calls')
+            if not measured[key] or coverage[key]!='all_calls': continue
             stage_key=(op,rank,row['stage'])
             per_iteration=stage_max.setdefault(stage_key,{})
             per_iteration[iteration]=max(per_iteration.get(iteration,0),duration)
@@ -175,7 +178,7 @@ def analyze(paths, frequency_hz=None):
         display_role='send_and_recv' if 'send_and_recv' in worker_roles.get((op,rank,core),set()) else role
         rows.append(dict(operation=op,rank=rank,core=core,role=display_role,initial_role=role,stage=stage,unit=unit,
                          **stats([v for v,n in values]),mean_calls=statistics.mean(n for v,n in values),
-                         time_measured=measured[(op,rank,core,role,stage)]))
+                         time_measured=measured[(op,rank,core,role,stage)],coverage=coverage[(op,rank,core,role,stage)]))
         if not rows[-1]['time_measured']:
             for name in ('mean','minimum','maximum','p50','p90','p99'): rows[-1][name]=None
     return dict(schema=identity[9],world_size=identity[0],boundary_mode=identity[3],frequency_hz=identity[4],comparison=identity[10],
@@ -183,6 +186,7 @@ def analyze(paths, frequency_hz=None):
                 overlap_receive=overlap_receive_report(wait_samples),
                 input_wait_bottleneck=input_wait_report(wait_samples),
                 relay_timing=relay_timing.report(wait_samples),
+                packet_timing=packet_timing.report(wait_samples),
                 per_rank_stage_max=[dict(operation=op,rank=rank,stage=stage,unit=unit,**stats(list(values.values())))
                                     for (op,rank,stage),values in sorted(stage_max.items())],
                 note='Per-call diagnostic stage totals; nested/parallel stages cannot be added. No cross-rank timestamp subtraction.')
@@ -221,7 +225,7 @@ def expert_reports(paths, frequency_hz):
         if payload['experts'] != meta['config'].get('num_experts',payload['experts']):
             raise ValueError('Expert count differs from case configuration')
         header=saved['raw'][0][0]
-        if header[1] in (7,9,10,11,12,13): raise ValueError('Segment capture cannot contain legacy expert instrumentation')
+        if header[1] in (7,9,10,11,12,13,14): raise ValueError('Segment capture cannot contain legacy expert instrumentation')
         expected_send=header[5] >> 8 if header[1] in (5,6) else len(saved['raw'])//2
         if (header[1] in (5,6) and 'send_cores' not in payload) or payload.get('send_cores',expected_send)!=expected_send:
             raise ValueError('Expert/stage core split mismatch')
@@ -273,6 +277,7 @@ def process_directory(source, output, frequency_hz, trace_iteration, lane_layout
     report['expert_interpretation']='Per executing rank and expert; core durations are summed work, not latency. Packet stage counts deliveries only. Shared FIRST_HOP preparation and batch waiting are not assigned. Only samples with executed records enter stage statistics.'
     output.mkdir(parents=True, exist_ok=False)
     (output/'summary.json').write_text(json.dumps(report, indent=2))
+    packet_timing.write(output, report['packet_timing'])
     overlap_rows=report['overlap_receive']
     if overlap_rows:
         with (output/'overlap_receive.csv').open('w',newline='',encoding='utf-8-sig') as stream:
@@ -304,7 +309,7 @@ def process_directory(source, output, frequency_hz, trace_iteration, lane_layout
     for path in paths:
         saved=json.loads(path.read_text());meta=saved['metadata']
         decoded=timer.parse_records(saved['raw'],saved['operation'],frequency_hz)
-        if decoded['schema'] not in (7,9,10,11,12,timer.SCHEMA): continue
+        if decoded['schema'] not in (7,9,10,11,12,13,timer.SCHEMA): continue
         shared=dict(operation=saved['operation'],rank=meta['rank'],iteration=meta['iteration'])
         segment_metrics.extend(dict(**shared,**row) for row in decoded['records'])
         segment_intervals.extend(dict(**shared,**row) for row in decoded['intervals'])

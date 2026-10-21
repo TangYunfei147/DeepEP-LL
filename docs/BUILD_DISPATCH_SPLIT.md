@@ -120,3 +120,10 @@ A/B分支的四阶段schema12验证另见OVERLAP_AB.md。四版均保持拆分/O
 Stage5 prefix progression retains seven separate entries/O2. A3 cold dispatch
 compile ON73.987s/OFF50.493s and complete ON wheel passed; see PREFIX_PROGRESS.md.
 No compilation regression observed relative to the recorded Stage4 baseline.
+
+Schema14 packet diagnostics (code f7075ad): A3/CANN9.3.0/O2/dav-3510,
+S28/R28/jobs4, cold dispatch ON81.602s/OFF50.332s; full ON wheel passed.
+All seven mode TUs remain independent. CPU/native suite: 322 passed.
+Evidence: `.logs/packet-timing-002/`; details in PACKET_TIMING.md.
+The ON measurement is above the recorded Stage5 schema13 73.987s; no claim
+of compile-time speedup or NPU runtime improvement is made.

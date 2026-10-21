@@ -30,3 +30,8 @@
 Stage5是额外单提交实验：R前置计数/前缀发布，随后有界ready检查与异步prefix搬入，
 诊断schema13与历史四版schema12不同，见docs/PREFIX_PROGRESS.md。
 事件5只在接收开始前供prefix使用，禁止和在途输入6/7或接收lane重叠复用。
+
+schema14仅改诊断，见docs/PACKET_TIMING.md。dispatch observe的ID12/13、16..21、60..63
+只测前两次，coverage=first_two_only，不能当全量累计或用于阶段占比。
+包级/主阶段和包数仍全量；旧schema13保持离线兼容。不得为测单包DMA完成增加同步。
+S3独立基线kernel/ll-g4-s3-baseline精确ac876ba，不带当前S5/打点变更。
