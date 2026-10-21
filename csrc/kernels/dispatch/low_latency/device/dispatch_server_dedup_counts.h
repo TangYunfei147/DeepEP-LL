@@ -42,7 +42,7 @@ public:
         axisK_ = topK;
         expertIdsCnt_ = bs * topK;
         rscvStatusNum_ = experts;
-        activeCumSumCores_ = experts < aivUsedCumSum_ ? experts : aivUsedCumSum_;
+        activeCumSumCores_ = LlMakePrefixPartition(experts,0U).active;
         moeExpertNumPerRank_ = experts / epWorldSize_;
         expertTokenNumsType_ = expertTokenNumsType;
         countPlan_ = LlMakeGroupCountPlan(experts, epWorldSize_, epRankId_, aivId_);
@@ -370,13 +370,16 @@ __aicore__ inline void ServerDedupCounts::PrepareRecvCnt()
     // 按“本地专家 → 来源 rank”排列；每个接收核负责一段连续记录。
     // Each count owns a 512B GM slot, so contiguous ownership can split at any
     // record. Keep all nonempty receivers active and their loads within one record.
-    activeCumSumCores_ = rscvStatusNum_ < aivUsedCumSum_ ? rscvStatusNum_ : aivUsedCumSum_;
+    activeCumSumCores_ = LlMakePrefixPartition(rscvStatusNum_,0U).active;
     RecvPool().InitBuffer(scalarBuf_, 3U * UB_ALIGN);
     const uint32_t receiver = aivId_ - aivUsedAllToAll_;
     // Inactive receivers only consume the final prefix in CompleteCumsum.
     if (receiver >= activeCumSumCores_) return;
     LL_SEG_BEGIN(recvBuffersBegin, INIT_COUNT_BUFFERS);
-    SplitToCore(rscvStatusNum_, aivUsedCumSum_, receiver, startStatusIndex_, endStatusIndex_, recStatusNumPerCore_);
+    const auto partition=LlMakePrefixPartition(rscvStatusNum_,receiver);
+    startStatusIndex_=partition.begin;
+    recStatusNumPerCore_=partition.count;
+    endStatusIndex_=partition.begin+partition.count;
     RecvPool().InitBuffer(waitStatusBuf_, Ceil(recStatusNumPerCore_ * UB_ALIGN + SIZE_ALIGN_256, SIZE_ALIGN_256) * SIZE_ALIGN_256);
     RecvPool().InitBuffer(gatherMaskOutBuf_, Ceil(rscvStatusNum_ * sizeof(int32_t), UB_ALIGN) * UB_ALIGN);
     // Vector publication/cleanup touches complete groups of eight 32B records.
@@ -404,7 +407,7 @@ __aicore__ inline void ServerDedupCounts::PreparePrefix()
 #ifdef DEEPEP_LL_STAGE_TIMER
     prefixBegin_=timer_ ? timer_->Begin(LlStageTimer::PREFIX_READY_SPAN) : 0U;
 #endif
-    // Every physical AIV has a private ready row and prefix replica.
+    // Every AIV has a private ready row and UB copy of the shared GM prefix.
     // Retire send/count writes before reusing their UB. No cross-core barrier.
     if (!overlap_.Async()) { LL_SEG_SCOPE(TRANSITION_DRAIN);
     PipeBarrier<PIPE_ALL>();
@@ -441,7 +444,6 @@ __aicore__ inline bool ServerDedupCounts::TryCompletePrefix()
 
 __aicore__ inline void ServerDedupCounts::IssuePrefixLoad()
 {
-    const uint32_t receiver=aivId_;
 #ifdef DEEPEP_LL_STAGE_TIMER
     prefixLoadBegin_=timer_ ? timer_->Begin(LlStageTimer::PREFIX_LOAD) : 0U;
 #endif
@@ -451,7 +453,7 @@ __aicore__ inline void ServerDedupCounts::IssuePrefixLoad()
     const DataCopyExtParams copy{1U, rscvStatusNum_ * uint32_t(sizeof(int32_t)), 0U, 0U, 0U};
     const DataCopyPadExtParams<int32_t> pad{false, 0U, 0U, 0};
     LL_SEG_SCOPE(PREFIX_LOAD_ISSUE);
-    DataCopyPad(prefix, workspace[receiver * rscvStatusNum_], copy, pad);
+    DataCopyPad(prefix, workspace, copy, pad);
     SetFlag<HardEvent::MTE2_S>(kLlPrefixLoadEvent);
 }
 
@@ -575,7 +577,7 @@ __aicore__ inline void ServerDedupCounts::GatherSumRecvCnt(LocalTensor<float>& g
         cumulative += uint32_t(prefix.GetValue(i));
         prefix.SetValue(i, cumulative);
     }
-    PublishRecvCntSum(sumOfRecvCnt);
+    if constexpr (!kLlPrefixR0) PublishRecvCntSum(sumOfRecvCnt);
 }
 
 // 摘要：将本核片段总数和就绪标记写入本 rank 的跨核汇总矩阵；空片段也必须发布。
@@ -686,7 +688,19 @@ __aicore__ inline bool ServerDedupCounts::TryRecvCnt()
     DataCopy(statusFp32Tensor_,windowInstatusFp32Tensor_[startStatusIndex_*kEpServerDedupCountGmStride/sizeof(float)],
              DataCopyParams{uint16_t(recStatusNumPerCore_),1,uint16_t(CNT_GM_STRIDE_BLOCKS-1U),0});
     SyncFunc<HardEvent::MTE2_V>();
-    ReduceSum(sum,statusFp32Tensor_,gather,1U,recStatusNumPerCore_,1U);
+    if (recStatusNumPerCore_<=255U) {
+        ReduceSum(sum,statusFp32Tensor_,gather,1U,recStatusNumPerCore_,1U);
+    } else {
+        // R0 can own all 1024 records; the basic ReduceSum repeat field is
+        // only 8 bits. Compact ready fields, then use the long-count Sum API.
+        pattern.SetValue(0U,1U);
+        SyncFunc<HardEvent::S_V>();
+        uint64_t selected=0;
+        GatherMask(gather,statusFp32Tensor_,pattern,true,1U,
+                   {1U,uint16_t(recStatusNumPerCore_),1U,0U},selected);
+        PipeBarrier<PIPE_V>();
+        Sum(sum,gather,SumParams{1U,Ceil(recStatusNumPerCore_,8U)*8U,recStatusNumPerCore_});
+    }
     SyncFunc<HardEvent::V_S>();
     if (sum.GetValue(0)!=float(recStatusNumPerCore_)) return false;
     GatherSumRecvCnt(gather,pattern,sum);
@@ -703,7 +717,8 @@ __aicore__ inline void ServerDedupCounts::CalRecvAndSetFlag()
     uint32_t newAivId = aivId_ - aivUsedAllToAll_;
     // 当前 UB 中是片段内前缀；先等待所有片段总数，再累加编号更小接收核的总数。
     // 这样得到全 rank 接收表中的基址，各核可独立修正自己负责的片段。
-    const uint32_t offset = GetCumSum(newAivId);
+    uint32_t offset=0U;
+    if constexpr (!kLlPrefixR0) offset=GetCumSum(newAivId);
 
     if (recStatusNumPerCore_ != 0U) {
         for (uint32_t i = 0; i < recStatusNumPerCore_; ++i) {
@@ -719,10 +734,8 @@ __aicore__ inline void ServerDedupCounts::CalRecvAndSetFlag()
         DataCopyPad(sendCountsGlobal[startStatusIndex_], outCountLocal, dataCopyOutParams);
 
         LL_SEG_BEGIN(broadcastBegin, BROADCAST_PREFIX);
-        // 全部56核各持一份完整前缀副本；生产核向所有副本写入自己的片段。
-        for (uint32_t index = 0; index < coreNum_; index++) {
-            DataCopyPad(workspaceGlobal[index * rscvStatusNum_ + startStatusIndex_], outCountLocal, dataCopyOutParams);
-        }
+        // Disjoint aligned producer slices form one shared GM table.
+        DataCopyPad(workspaceGlobal[startStatusIndex_], outCountLocal, dataCopyOutParams);
         LL_SEG_END(broadcastBegin, BROADCAST_PREFIX);
     }
     LL_SEG_BEGIN(flagsBegin, PUBLISH_PREFIX_FLAGS);

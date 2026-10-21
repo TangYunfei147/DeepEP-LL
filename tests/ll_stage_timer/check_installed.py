@@ -16,7 +16,8 @@ torch.npu.set_device(0)
 native=require_native('LL timer schema validation')
 cfg=native.low_latency_core_config()
 assert native.low_latency_stage_timer_enabled
-assert native.low_latency_core_protocol==15000+cfg["send_cores"]
+assert native.low_latency_prefix_mode in ('parallel','r0')
+assert native.low_latency_core_protocol==(17000 if native.low_latency_prefix_mode=='r0' else 16000)+cfg["send_cores"]
 assert native.low_latency_stage_timer_layout()==dict(schema=SCHEMA,slots=SLOTS,fields=FIELDS,stages=list(STAGES))
 trace=StageTrace(object(),'dispatch')
 cfg=native.low_latency_core_config()

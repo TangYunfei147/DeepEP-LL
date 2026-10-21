@@ -30,7 +30,8 @@ def validate_core_split_capability(capability):
     send, recv = capability.get("send_cores"), capability.get("recv_cores")
     if (type(send) is not int or type(recv) is not int or send <= 0 or recv <= 0
             or send + recv != 56 or capability.get("active_aiv") != 56
-            or capability.get("core_protocol") != 15000 + send):
+            or capability.get('prefix_mode') not in ('parallel','r0')
+            or capability.get("core_protocol") != (17000 if capability.get('prefix_mode')=='r0' else 16000) + send):
         raise RuntimeError("Rebuild/install the matching configured 56-core split wheel on every rank")
 
 
@@ -1131,6 +1132,7 @@ def worker(local_rank, args):
                       "logical_group": compiled_group(native,world),
                       "implementation": implementation,
                       "overlap_stage": getattr(native,"low_latency_overlap_stage",0),
+                      "prefix_mode": getattr(native,"low_latency_prefix_mode",None),
                       "core_protocol": native.low_latency_core_protocol,
                       "stage_timer": bool(getattr(native, "low_latency_stage_timer_enabled", False)),
                       "stage_timer_schema": native.low_latency_stage_timer_layout()["schema"],

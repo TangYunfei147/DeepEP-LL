@@ -22,6 +22,9 @@ def main():
            '-DDEEPEP_LL_SEND_CORES='+os.environ.get('DEEPEP_LL_SEND_CORES','28'),
            '-DDEEPEP_LL_RECV_CORES='+os.environ.get('DEEPEP_LL_RECV_CORES','28')]
     if args.timer=='ON':flags.append('-DDEEPEP_LL_STAGE_TIMER=1')
+    prefix_mode=os.environ.get('DEEPEP_LL_PREFIX_MODE','parallel')
+    if prefix_mode not in ('parallel','r0'):parser.error('DEEPEP_LL_PREFIX_MODE must be parallel or r0')
+    flags.append('-DDEEPEP_LL_PREFIX_R0='+str(int(prefix_mode=='r0')))
     for path in [cann/'include',cann/'asc/include',sdk/'include',sdk/'src',sdk/'src/device',sdk/'src/device_simt']:
         flags+=['-I'+str(path)]
     sources=[ROOT/'csrc/kernels/dispatch/low_latency.cpp']

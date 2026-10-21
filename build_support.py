@@ -206,6 +206,10 @@ def build_configuration(environment=None):
     if send <= 0 or recv <= 0 or send + recv != 56:
         raise ValueError("DEEPEP_LL_SEND_CORES and DEEPEP_LL_RECV_CORES must be positive and sum to 56")
     result["ll_send_cores"], result["ll_recv_cores"] = send, recv
+    prefix_mode=env.get("DEEPEP_LL_PREFIX_MODE", "parallel")
+    if prefix_mode not in ("parallel", "r0"):
+        raise ValueError("DEEPEP_LL_PREFIX_MODE must be parallel or r0")
+    result["ll_prefix_mode"]=prefix_mode
     result["ll_stage_timer"] = enabled("DEEPEP_LL_STAGE_TIMER", env)
     result["build_type"] = env.get("DEEPEP_BUILD_TYPE", "RelWithDebInfo" if lineinfo else "Release")
     if result["build_type"] not in {"Release", "RelWithDebInfo", "Debug"}:
@@ -404,6 +408,7 @@ class CMakeBuild(build_ext):
             f"-DDEEPEP_LL_STAGE_TIMER={'ON' if configuration.get('ll_stage_timer', False) else 'OFF'}",
             f"-DDEEPEP_LL_SEND_CORES={configuration.get('ll_send_cores', 28)}",
             f"-DDEEPEP_LL_RECV_CORES={configuration.get('ll_recv_cores', 28)}",
+            f"-DDEEPEP_LL_PREFIX_MODE={configuration.get('ll_prefix_mode', 'parallel')}",
             f"-DPython_EXECUTABLE={sys.executable}",
             f"-Dpybind11_DIR={pybind11.get_cmake_dir()}",
             f"-DCMAKE_CXX_COMPILER={configuration['compiler_path']}",

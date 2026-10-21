@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 
 ROOT=Path(__file__).resolve().parents[2]
-DIFFERENCES={'implementation','transport','rdma_compiled','source_revision','source_dirty','logical_group','overlap_stage'}
+DIFFERENCES={'implementation','transport','rdma_compiled','source_revision','source_dirty','logical_group','overlap_stage','prefix_mode'}
 REQUIRED={'implementation','transport','world_size','logical_group','active_aiv','core_protocol',
           'case','warmup','num_iters','perf_tail','delay_rows','delay_cols','stage_capture','expert_capture',
           'timer_mode','stage_timer','stage_timer_schema','frequency_hz','seed','route','use_1g_huge_pages',
@@ -20,7 +20,7 @@ def check_identity(left,right):
                                                for key in ('world_size','logical_group','active_aiv','core_protocol')):
             raise ValueError('Unknown or invalid runtime comparison identity')
     differences=set(DIFFERENCES)
-    if all(7001 <= item['core_protocol'] <= 7055 or 8001 <= item['core_protocol'] <= 8055 or 9001 <= item['core_protocol'] <= 9055 or 10001 <= item['core_protocol'] <= 10055 or 14001 <= item['core_protocol'] <= 14055 or 15001 <= item['core_protocol'] <= 15055 for item in (left,right)):
+    if all(item['core_protocol']//1000 in (7,8,9,10,14,15,16,17) and 1<=item['core_protocol']%1000<=55 for item in (left,right)):
         for item in (left,right):
             if (item.get('send_cores',0)+item.get('recv_cores',0)!=56 or item['active_aiv']!=56
                     or item['core_protocol']!=(item['core_protocol']//1000)*1000+item.get('send_cores',0)):
@@ -28,9 +28,12 @@ def check_identity(left,right):
         for item in (left,right):
             shared = item['core_protocol']//1000 >= 8
             expected = 56 if shared else item['recv_cores']
-            if item.get('dispatch_recv_cores',expected)!=expected or item['stage_timer_schema'] not in {7:(5,),8:(6,),9:(7,),10:(7,9,10),14:(11,12,13,14),15:(14,)}[item['core_protocol']//1000]:
+            family=item['core_protocol']//1000
+            if family in (16,17) and item.get('prefix_mode')!=('r0' if family==17 else 'parallel'):
+                raise ValueError('Invalid prefix mode identity')
+            if item.get('dispatch_recv_cores',expected)!=expected or item['stage_timer_schema'] not in {7:(5,),8:(6,),9:(7,),10:(7,9,10),14:(11,12,13,14),15:(14,),16:(14,),17:(14,)}[family]:
                 raise ValueError('Invalid receive participation/schema identity')
-        if (left['core_protocol']//1000 in (9,10,14,15))!=(right['core_protocol']//1000 in (9,10,14,15)):
+        if (left['core_protocol']//1000 in (9,10,14,15,16,17))!=(right['core_protocol']//1000 in (9,10,14,15,16,17)):
             if any(item['stage_timer'] or item['stage_capture'] or item['expert_capture'] for item in (left,right)):
                 raise ValueError('Incomparable diagnostic semantics: segment and legacy timers')
         if any(item['stage_timer_schema'] in (9,10,11,12,13,14) for item in (left,right)) and left['stage_timer_schema']!=right['stage_timer_schema'] and any(

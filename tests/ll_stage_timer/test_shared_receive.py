@@ -127,7 +127,8 @@ def test_production_wiring_keeps_producers_separate_from_consumers():
     assert 'recvCoreNum_ = kLlDispatchRecvCoreNum;' in receiver
     assert 'receiver_ = GetBlockIdx();' in receiver
     assert 'aivId_ * aivUsedCumSum_ * UB_ALIGN' in counts
-    assert 'for (uint32_t index = 0; index < coreNum_; index++)' in counts
+    assert 'DataCopyPad(workspaceGlobal[startStatusIndex_], outCountLocal, dataCopyOutParams)' in counts
+    assert 'for (uint32_t index = 0; index < coreNum_; index++)' not in counts
     complete=counts[counts.index('inline void ServerDedupCounts::PreparePrefix()'):]
     assert complete.index('PipeBarrier<PIPE_ALL>();')<complete.index('tpipe_->Reset();')<complete.index('TryCumSumFlag()')
 
