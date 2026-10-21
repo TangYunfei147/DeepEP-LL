@@ -183,7 +183,9 @@ public:
         ClearFlags();
 
         // 最终流水屏障确保输出、relay 和标记清理完成。
+        { LL_SEG_SCOPE(RECV_COMPLETE_WAIT);
         PipeBarrier<PIPE_ALL>();
+        }
     }
 
 private:

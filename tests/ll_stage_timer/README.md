@@ -1,3 +1,5 @@
+本A/B分支使用schema12和分阶段提交，请先读 [OVERLAP_AB.md](../../docs/OVERLAP_AB.md)。
+
 本分支为独立 overlap receive 实验，构建、协议和验证命令以 [OVERLAP_RECEIVE.md](OVERLAP_RECEIVE.md) 为准（schema11、14000+S）。下方旧分支身份示例不适用于本分支。
 
 > 当前relay诊断使用 **schema10、70阶段**，保留原ID；observe仅测下发，显式relay-complete测前置排空后的本核MTE3完成。采集与独立报表见 [RELAY_TIMING.md](RELAY_TIMING.md)。旧schema7/9可离线读取。

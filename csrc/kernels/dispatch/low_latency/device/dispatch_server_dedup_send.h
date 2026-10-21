@@ -63,7 +63,7 @@ public:
     // Consume outstanding sender events only after receiving. Sources remain
     // allocated until the caller's final PIPE_ALL. Empty senders have zero lanes.
     __aicore__ inline void Retire() {
-        if (overlap_.enabled) {
+        if (overlap_.Async()) {
             for (uint32_t lane=0;lane<lanes_;++lane) WaitFlag<HardEvent::MTE3_V>(lane);
         }
     }
@@ -76,7 +76,6 @@ public:
         // reservedBytes 对应仍可能被计数发送读取的 UB，不能当作可用空间覆盖。
         if (enableDedup_ && count_ == 0U) return;
         timer_ = timer;
-        LL_SEG_SCOPE(SEND_TOKENS);
         LL_SEG_BEGIN(segBegin1, PREPARE_INPUT);
         scratch_ = &scratch;
         TQue<QuePosition::VECIN, 1> input;
@@ -164,17 +163,19 @@ public:
         }
         PipeBarrier<PIPE_V>();
 
-        BeginInputPrefetch();
         LL_SEG_END(segBegin1, PREPARE_INPUT);
+        { LL_SEG_SCOPE(SEND_TOKENS);
+        BeginInputPrefetch();
         if (enableDedup_)
             SendWithDedup(input);
         else
             SendWithoutDedup(input);
         EndInputPrefetch(input);
+        }
 
         // Keep metadata sources alive through receive. Only the serial fallback
         // drains here; overlap retires all lane events at final kernel completion.
-        if (!overlap_.enabled) {
+        if (!overlap_.Async()) {
         LL_SEG_BEGIN(sendDrainBegin, SEND_DRAIN);
         for (uint32_t lane = 0; lane < lanes_; ++lane) WaitFlag<HardEvent::MTE3_V>(lane);
         LL_SEG_END(sendDrainBegin, SEND_DRAIN);
@@ -185,7 +186,7 @@ public:
             DataCopyPad(weightOut_[uint64_t(start_) * k_], enableDedup_ ? sourceWeights_ : routeWeights_,
                         {1U, count_ * k_ * 4U, 0U, 0U, 0U});
         { LL_SEG_SCOPE(SEND_SUBMIT_END); }
-        if (!overlap_.enabled) { LL_SEG_SCOPE(SEND_COMPLETE_WAIT);
+        if (!overlap_.Async()) { LL_SEG_SCOPE(SEND_COMPLETE_WAIT);
         Sync<HardEvent::MTE3_S>();
         }
     }
@@ -244,7 +245,7 @@ public:
         // Only the cooperative overlap path yields. Serial fallback keeps one
         // continuous lookahead stream. Eight tasks amortize the callback/flush.
         cooperate();
-        const uint32_t quantum=overlap_.enabled ? 8U:tasks;
+        const uint32_t quantum=overlap_.Cooperative() ? 8U:tasks;
         for (uint32_t begin=0;begin<tasks;) {
             const uint32_t end=tasks-begin<quantum ? tasks:begin+quantum;
             { LL_SEG_SCOPE(SEND_TOKENS);
@@ -259,11 +260,11 @@ public:
             if (begin==tasks) { LL_SEG_SCOPE(SEND_SUBMIT_END); }
             cooperate();
         }
-        if (!overlap_.enabled) {
+        if (!overlap_.Async()) {
         LL_SEG_BEGIN(localDrainBegin, SEND_DRAIN);
         // Retire all reads of packet scratch before RecvCnt overlays that UB.
         for (uint32_t lane=0;lane<lanes_;++lane) WaitFlag<HardEvent::MTE3_V>(lane);
-        if (!overlap_.enabled) { LL_SEG_SCOPE(SEND_COMPLETE_WAIT);
+        if (!overlap_.Async()) { LL_SEG_SCOPE(SEND_COMPLETE_WAIT);
         Sync<HardEvent::MTE3_S>();
         }
         if (!overlap_.enabled) scratch_->Reset();

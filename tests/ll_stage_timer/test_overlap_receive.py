@@ -8,11 +8,11 @@ def load(name,path):
     return module
 fixtures=load("overlap_segments","tests/ll_stage_timer/test_segments.py")
 timer=load("overlap_timer","deep_ep/utils/ll_stage_timer.py")
-def test_schema11_and_legacy():
-    for schema in (7,9,10,11):
+def test_schema12_and_legacy():
+    for schema in (7,9,10,11,12):
         assert timer.parse_records(fixtures.raw(schema=schema),"dispatch")["schema"]==schema
-    assert timer.SCHEMA==11
-    assert timer.STAGES[70:]==("SEND_COMPLETE_WAIT","TRANSITION_DRAIN","RECV_PREPARE","SEND_SUBMIT_END","OVERLAP_PATH","SERIAL_FALLBACK","SEND_LANES","RECV_LANES")
+    assert timer.SCHEMA==12
+    assert timer.STAGES[70:]==("SEND_COMPLETE_WAIT","TRANSITION_DRAIN","RECV_PREPARE","SEND_SUBMIT_END","OVERLAP_PATH","SERIAL_FALLBACK","SEND_LANES","RECV_LANES","PREFIX_COMPLETE","PREFIX_LOAD","RECV_COMPLETE_WAIT")
     assert (8+2*timer.RECORDS)*8<=timer.SLOTS*timer.FIELDS*8
 
 
@@ -40,7 +40,9 @@ int main() {
     assert((core<kLlSendCoreNum)==(l.countBytes==0));
    }
  }
- assert(enabled && fallback);
+ assert(fallback || enabled);
+ if(kLlOverlapExperimentStage==1) assert(!enabled);
+ else assert(enabled && fallback);
 }''',encoding="utf-8")
     exe=tmp_path/"layout"
     subprocess.run([cc,"-std=c++17","-include","initializer_list","-I",str(ROOT),str(source),"-o",str(exe)],check=True)

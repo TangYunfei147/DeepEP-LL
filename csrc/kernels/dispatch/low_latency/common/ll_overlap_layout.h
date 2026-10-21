@@ -1,5 +1,6 @@
 #pragma once
 #include "ep_memory_server_dedup_data_layout.h"
+#include "ll_overlap_stage.h"
 #include "ep_memory_server_dedup_count_layout.h"
 namespace DispatchDedup {
 #if defined(__CCE__) && defined(__CCE_IS_AICORE__)
@@ -11,12 +12,15 @@ struct LlOverlapLayout {
     uint32_t sendBytes=0, countBytes=0, sendLanes=0, recvLanes=0;
     uint64_t totalBytes=0;
     bool enabled=false;
+    LL_OVERLAP_INLINE bool Async() const { return enabled && kLlOverlapExperimentStage>=3U; }
+    LL_OVERLAP_INLINE bool Cooperative() const { return enabled && kLlOverlapExperimentStage>=4U; }
 };
 LL_OVERLAP_INLINE uint64_t LlOverlapMax(uint64_t a,uint64_t b) { return a>b?a:b; }
 LL_OVERLAP_INLINE LlOverlapLayout LlMakeOverlapLayout(const EpServerDedupDataLayout& d,
     uint32_t bs,uint32_t k,uint32_t e,uint32_t ranks,uint32_t rank,uint32_t core,
     EpServerDedupInputMode mode) {
     LlOverlapLayout p{};
+    if constexpr (kLlOverlapExperimentStage<2U) return p;
     const auto plan=LlMakeGroupCountPlan(e,ranks,rank,core);
     const uint64_t routes=DispatchDedupAlign(uint64_t(bs)*k*4,256), q=DispatchDedupAlign(uint64_t(bs)*k*4,32);
     const uint64_t records=DispatchDedupAlign(plan.count,8), reserved=records*32+(plan.local&&plan.count?2*routes:0);

@@ -2,6 +2,7 @@
 #include <stdexcept>
 #include "../launch.hpp"
 #include "low_latency/launch.hpp"
+#include "low_latency/common/ll_overlap_stage.h"
 #include "low_latency/common/ll_core_config.h"
 #include "low_latency/common/ep_memory_server_dedup_protocol.h"
 #if CATLASS_ARCH == 3510
@@ -12,6 +13,9 @@ extern "C" void dispatch_server_dedup_launch_fp16_e5m2(void*,const deepep::EpSer
 extern "C" void dispatch_server_dedup_launch_bf16(void*,const deepep::EpServerDedupKernelArgs*);
 extern "C" void dispatch_server_dedup_launch_bf16_e4m3(void*,const deepep::EpServerDedupKernelArgs*);
 extern "C" void dispatch_server_dedup_launch_bf16_e5m2(void*,const deepep::EpServerDedupKernelArgs*);
+extern "C" DEEPEP_EXPORT uint32_t deepep_ll_overlap_stage() {
+    return DispatchDedup::kLlOverlapExperimentStage;
+}
 extern "C" DEEPEP_EXPORT uint32_t deepep_ll_stage_timer_enabled()
 {
 #ifdef DEEPEP_LL_STAGE_TIMER

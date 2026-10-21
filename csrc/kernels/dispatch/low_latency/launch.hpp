@@ -54,3 +54,5 @@ extern "C" void dispatch_server_dedup_kernel_do_v2(void* stream, const deepep::E
 extern "C" uint32_t deepep_ll_core_protocol_version();
 extern "C" uint32_t deepep_ll_ranks_per_group();
 extern "C" uint32_t deepep_ll_stage_timer_enabled();
+
+extern "C" uint32_t deepep_ll_overlap_stage();

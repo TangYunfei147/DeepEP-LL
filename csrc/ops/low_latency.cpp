@@ -124,8 +124,11 @@ void bind_low_latency(py::module_& module)
 {
     if (deepep_ll_core_protocol_version() != DispatchDedup::kLlCoreProtocolVersion)
         throw std::runtime_error("LL Host/device core protocol mismatch; rebuild and reinstall the complete wheel");
+    if (deepep_ll_overlap_stage()!=DispatchDedup::kLlOverlapExperimentStage)
+        throw std::runtime_error("LL A/B stage differs between Host and device library");
+    module.attr("low_latency_overlap_stage")=DispatchDedup::kLlOverlapExperimentStage;
     module.attr("low_latency_core_protocol") = DispatchDedup::kLlCoreProtocolVersion;
-    module.attr("low_latency_implementation") = "g4-overlap-recv";
+    module.attr("low_latency_implementation") = "g4-overlap-ab";
     module.attr("low_latency_rdma_enabled") = false;
     module.attr("low_latency_expert_timer_enabled") = false;
     module.attr("low_latency_stage_timer_enabled") = bool(deepep_ll_stage_timer_enabled());

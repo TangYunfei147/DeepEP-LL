@@ -54,7 +54,8 @@ public:
         const uint64_t end = AscendC::GetSystemCycle();
         sums_[stage] += end - begin;
         ++calls_[stage];
-        if (calls_[stage] <= 2U && count_ + 2U <= kTraceRecords - (stage == KERNEL ? 0U : 2U)) {
+        if (calls_[stage] <= 2U && count_ + 2U <= kTraceRecords - ((stage != KERNEL && calls_[KERNEL]==0U ? 2U : 0U) +
+            (operation_==1U && stage!=SEND_SUBMIT_END && calls_[SEND_SUBMIT_END]==0U ? 2U : 0U))) {
             events_[count_] = uint32_t(stage) * 2U; cycles_[count_++] = begin;
             events_[count_] = uint32_t(stage) * 2U + 1U; cycles_[count_++] = end;
         } else { ++omitted_; }

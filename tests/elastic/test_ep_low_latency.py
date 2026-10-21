@@ -34,11 +34,24 @@ def validate_core_split_capability(capability):
         raise RuntimeError("Rebuild/install the matching configured 56-core split wheel on every rank")
 
 
+def expected_overlap_stage():
+    source=(PROJECT_ROOT/'csrc/kernels/dispatch/low_latency/common/ll_overlap_stage.h').read_text(encoding='utf-8')
+    match=re.search(r'kLlOverlapExperimentStage\s*=\s*([1-4])U;',source)
+    if not match: raise RuntimeError('Cannot identify A/B stage from this checkout')
+    return int(match.group(1))
+
+
+def validate_overlap_stage_capability(capability):
+    expected=expected_overlap_stage()
+    if capability.get('implementation')!='g4-overlap-ab' or capability.get('overlap_stage')!=expected:
+        raise RuntimeError(f'Rebuild/install overlap A/B stage {expected} from this checkout on every rank')
+
+
 def validate_stage_timer_capability(capability):
     if not capability["stage_timer"]:
         raise RuntimeError("All ranks must install a DEEPEP_LL_STAGE_TIMER=ON wheel")
-    if capability['stage_timer_schema'] != 11:
-        raise RuntimeError('Detailed LL diagnostics require timer schema 11; '
+    if capability['stage_timer_schema'] != 12:
+        raise RuntimeError('Detailed LL diagnostics require timer schema 12; '
                            f'got {capability["stage_timer_schema"]}; '
                            'rebuild/install the matching wheel on every rank')
 
@@ -1117,6 +1130,7 @@ def worker(local_rank, args):
                       "rdma_compiled": bool(getattr(native, "low_latency_rdma_enabled", False)),
                       "logical_group": compiled_group(native,world),
                       "implementation": implementation,
+                      "overlap_stage": getattr(native,"low_latency_overlap_stage",0),
                       "core_protocol": native.low_latency_core_protocol,
                       "stage_timer": bool(getattr(native, "low_latency_stage_timer_enabled", False)),
                       "stage_timer_schema": native.low_latency_stage_timer_layout()["schema"],
@@ -1126,8 +1140,9 @@ def worker(local_rank, args):
         if any(item != capabilities[0] for item in capabilities):
             raise RuntimeError("LL AIV/group/protocol/timer build differs across ranks")
         validate_core_split_capability(capability)
-        if capability['implementation'] not in ('ndr-hns1825','configurable-groups','g4-shared-recv','g4-overlap-recv'):
+        if capability['implementation'] not in ('ndr-hns1825','configurable-groups','g4-shared-recv','g4-overlap-recv','g4-overlap-ab'):
             raise RuntimeError('Rebuild the wheel with the shared experiment implementation identity')
+        validate_overlap_stage_capability(capability)
         requested_impl=os.environ.get('DEEPEP_LL_EXPECT_IMPLEMENTATION')
         if requested_impl and capability['implementation']!=requested_impl:
             raise RuntimeError('Installed wheel belongs to a different kernel branch')

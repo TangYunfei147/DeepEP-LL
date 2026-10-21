@@ -70,6 +70,7 @@ public:
     // 摘要：汇合接收核片段总数，补齐跨核前缀偏移并发布完整前缀表的就绪标记。
     __aicore__ inline void CalcCumsum()
     {
+        LL_SEG_SCOPE(CAL_CUMSUM);
         CalRecvAndSetFlag();
     }
     // 摘要：等待所有前缀片段就绪，加载本核前缀副本，并由首个接收核输出各专家计数。
@@ -382,17 +383,17 @@ __aicore__ inline void ServerDedupCounts::PrepareRecvCnt()
 __aicore__ inline void ServerDedupCounts::RecvCnt()
 {
     PrepareRecvCnt();
-    LL_SEG_SCOPE(WAIT_RECV_COUNTS);
     while (!TryRecvCnt()) {}
 }
 
 // 摘要：等待所有前缀片段就绪，加载本核前缀副本，并由首个接收核输出各专家计数。
 __aicore__ inline void ServerDedupCounts::CompleteCumsum()
 {
+    LL_SEG_SCOPE(PREFIX_COMPLETE);
     // Every physical AIV has a private ready row and prefix replica.
     const uint32_t receiver = aivId_;
     // Retire send/count writes before reusing their UB. No cross-core barrier.
-    if (!overlap_.enabled) { LL_SEG_SCOPE(TRANSITION_DRAIN);
+    if (!overlap_.Async()) { LL_SEG_SCOPE(TRANSITION_DRAIN);
     PipeBarrier<PIPE_ALL>();
     }
     if (!overlap_.enabled) tpipe_->Reset();
@@ -412,8 +413,10 @@ __aicore__ inline void ServerDedupCounts::CompleteCumsum()
     workspace.SetGlobalBuffer(reinterpret_cast<__gm__ int32_t*>(recvCntWorkspaceGM_));
     const DataCopyExtParams copy{1U, rscvStatusNum_ * uint32_t(sizeof(int32_t)), 0U, 0U, 0U};
     const DataCopyPadExtParams<int32_t> pad{false, 0U, 0U, 0};
+    { LL_SEG_SCOPE(PREFIX_LOAD);
     DataCopyPad(prefix, workspace[receiver * rscvStatusNum_], copy, pad);
     SyncFunc<HardEvent::MTE2_S>();
+    }
     // 仅接收组的第 0 核写公开专家计数，避免多核重复写同一输出。
     // 每个专家最后一个来源 rank 的前缀即该专家结束位置；type=0 输出累计数，
     // 其他已验证类型输出与上一专家累计数之差，即该专家自己的接收条数。
@@ -610,6 +613,7 @@ __aicore__ inline uint32_t ServerDedupCounts::GetCumSum(uint32_t newAivId)
 __aicore__ inline bool ServerDedupCounts::TryRecvCnt()
 {
     if (recStatusNumPerCore_==0U) return true;
+    LL_SEG_SCOPE(WAIT_RECV_COUNTS);
     LL_SEG_SCOPE(POLL_RECV_COUNTS);
     LL_SEG_COUNT(POLL_RECV_COUNTS_ITERATIONS, 1U);
     // No Reset occurs between cooperative steps; Init preserves CTRL[60]=0.

@@ -57,9 +57,8 @@ public:
     {
         if (!prepared) {
             if (!counts_.TryRecvCnt()) return;
-            { LL_SEG_SCOPE(CAL_CUMSUM);
             counts_.CalcCumsum();
-            counts_.CompleteCumsum(); }
+            counts_.CompleteCumsum();
             receiver_.SetPrefix(counts_.Prefix());
             receiver_.Prepare(timer_);
             prepared=true;
@@ -78,7 +77,7 @@ public:
         } else { LL_SEG_COUNT(SERIAL_FALLBACK,1); }
         counts_.SendCnt();
 
-        if (overlap_.enabled && core_>=sendCores_) {
+        if (overlap_.Cooperative() && core_>=sendCores_) {
             counts_.PrepareRecvCnt();
             bool prepared=false;
             LocalProgress cooperate{this,&prepared};
@@ -91,15 +90,16 @@ public:
             if (core_<sendCores_) {
                 sender_.Process(counts_.ScratchPool(),counts_.ReservedBytes(),timer_);
             } else {
+                // Stage3 publishes prefix before local TX. Stage1/2 retain
+                // the original local-send -> count/prefix order.
+                if (overlap_.Async()) { counts_.RecvCnt(); counts_.CalcCumsum(); }
                 const uint32_t tasks=counts_.LocalTaskCount();
                 if (tasks) sender_.ProcessGroupLocal(counts_.LocalSendScratchPool(),counts_.ReservedBytes(),
                     counts_.LocalRouteIndices(),counts_.LocalExpertQ(),tasks,timer_);
-                LL_SEG_SCOPE(CAL_CUMSUM);
-                counts_.RecvCnt();
-                counts_.CalcCumsum();
+                if (!overlap_.Async()) { counts_.RecvCnt(); counts_.CalcCumsum(); }
             }
             counts_.CompleteCumsum();
-            if (!overlap_.enabled) { LL_SEG_SCOPE(TRANSITION_DRAIN); PipeBarrier<PIPE_ALL>(); }
+            if (!overlap_.Async()) { LL_SEG_SCOPE(TRANSITION_DRAIN); PipeBarrier<PIPE_ALL>(); }
             if (overlap_.enabled) receiver_.SetPrefix(counts_.Prefix());
             receiver_.Process(timer_);
         }

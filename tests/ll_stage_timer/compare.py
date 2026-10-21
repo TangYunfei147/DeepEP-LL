@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 
 ROOT=Path(__file__).resolve().parents[2]
-DIFFERENCES={'implementation','transport','rdma_compiled','source_revision','source_dirty','logical_group'}
+DIFFERENCES={'implementation','transport','rdma_compiled','source_revision','source_dirty','logical_group','overlap_stage'}
 REQUIRED={'implementation','transport','world_size','logical_group','active_aiv','core_protocol',
           'case','warmup','num_iters','perf_tail','delay_rows','delay_cols','stage_capture','expert_capture',
           'timer_mode','stage_timer','stage_timer_schema','frequency_hz','seed','route','use_1g_huge_pages',
@@ -28,12 +28,12 @@ def check_identity(left,right):
         for item in (left,right):
             shared = item['core_protocol']//1000 >= 8
             expected = 56 if shared else item['recv_cores']
-            if item.get('dispatch_recv_cores',expected)!=expected or item['stage_timer_schema'] not in {7:(5,),8:(6,),9:(7,),10:(7,9,10),14:(11,)}[item['core_protocol']//1000]:
+            if item.get('dispatch_recv_cores',expected)!=expected or item['stage_timer_schema'] not in {7:(5,),8:(6,),9:(7,),10:(7,9,10),14:(11,12)}[item['core_protocol']//1000]:
                 raise ValueError('Invalid receive participation/schema identity')
         if (left['core_protocol']//1000 in (9,10,14))!=(right['core_protocol']//1000 in (9,10,14)):
             if any(item['stage_timer'] or item['stage_capture'] or item['expert_capture'] for item in (left,right)):
                 raise ValueError('Incomparable diagnostic semantics: segment and legacy timers')
-        if any(item['stage_timer_schema'] in (9,10,11) for item in (left,right)) and left['stage_timer_schema']!=right['stage_timer_schema'] and any(
+        if any(item['stage_timer_schema'] in (9,10,11,12) for item in (left,right)) and left['stage_timer_schema']!=right['stage_timer_schema'] and any(
                 item['stage_timer'] or item['stage_capture'] or item['expert_capture'] for item in (left,right)):
             raise ValueError('Incomparable diagnostic semantics: different stage schemas')
         differences.update(('send_cores','recv_cores','dispatch_recv_cores','core_protocol','stage_timer_schema'))
