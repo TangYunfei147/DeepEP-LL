@@ -25,6 +25,7 @@ AICore 回调修复、schema 入口校验和编译防回退要求。原分支不
 Stage3有两个绑定变化，若3→2差异显著再拆分二者，不把结果归因于其中单项。
 Stage1是现代框架下的串行消融基线，不是历史781b1aa的逐字恢复。
 Stage2..4沿用同一 UB 规划器和1..6 lane选择；不足时显式SERIAL_FALLBACK。
+OVERLAP_PATH仅表示启用独立分区，Stage2仍保留排空，不能仅凭此计数认定已重叠。
 Stage1也记SERIAL_FALLBACK，表示此核走串行路径；结合overlap_stage区分主动基线与UB不足。
 
 Host/device校验stage一致；ST检查安装wheel与当前checkout相符，并在创建SHMEM前
@@ -49,6 +50,8 @@ Host/device校验stage一致；ST检查安装wheel与当前checkout相符，并�
 建议先测1和4；确有变化后补2和3定位，或四版全部测齐。每版先正确性再OFF性能，
 需要归因时重建ON采集observe；不要使用relay-complete作性能对照。
 
+下面以28/28为例；若当前实验使用其他配比，四版均沿用相同实际值。
+
 ```bash
 git fetch origin experiment/ll-g4-overlap-ab
 # 工作区有改动时先保存；不用reset --hard。
@@ -56,6 +59,7 @@ git switch --detach <该stage的提交号>
 source scripts/ll_timer_env.sh
 export DEEPEP_LL_SEND_CORES=28 DEEPEP_LL_RECV_CORES=28
 export DEEPEP_NPU_ARCH=Ascend950 DEEPEP_LL_STAGE_TIMER=OFF
+export DEEPEP_LL_EXPECT_IMPLEMENTATION=g4-overlap-ab
 python -m pip install -v --force-reinstall --no-build-isolation --no-deps .
 ```
 
@@ -68,4 +72,40 @@ python -m pip install -v --force-reinstall --no-build-isolation --no-deps .
 T4-T3衡量协作调度净效应。阶段耗时用于解释，不代替T值。若T3最优，可以停在stage3；
 若T2显著退化且3/4补不回来，先回stage1，再单独优化分区/lane预算。
 
-各版本提交号和编译验证记录在完成后补充。
+## 精确提交
+
+| Stage | Commit |
+|---|---|
+| 1 | `93e33f0` |
+| 2 | `21f5e0e` |
+| 3 | `ac876ba` |
+| 4 | `fbd1509` |
+
+2、3、4各提交仅改变stage常量；公共打点/构建/身份框架均在1中。
+Stage4仍保留当前CalcCumsum/CompleteCumsum的阻塞式前缀等待，本次不混入
+“所有前缀等待都可让出发送”的额外优化。
+
+建议记录一张表：stage、commit、OFF dispatch尾50均值、最慢rank、正确性、
+ON诊断kernel跨度、发送/接收lane数、SEND_COMPLETE_WAIT、WAIT_CUMSUM、
+PREFIX_LOAD、RECV_BUFFER_WAIT、RECV_COMPLETE_WAIT和FINAL_DRAIN。ON与OFF结果分列，不能混算。
+对于接近噪声的差异，按1→2→3→4→3→2→1顺序复测，保持同一设备/路由/shape，
+先判断重复运行的波动，再判断优劣。不要根据单个阶段的缩短直接选择版本。
+
+## 编译验证记录（2026-10-21）
+
+A3_docker / CANN9.3.0 / O2 / Ascend950 / S28R28 / jobs4。
+四个精确提交各自完成311项CPU/C++检查、完整ON wheel及dispatch全部模式ON/OFF编译。
+未安装wheel或运行NPU；这些结果不能替代目标机正确性与性能测试。
+
+| Stage | ON冷编译秒 | OFF冷编译秒 | 完整ON wheel |
+|---|---:|---:|---|
+| 1 | 48.756 | 40.618 | 通过 |
+| 2 | 49.338 | 41.113 | 通过 |
+| 3 | 51.572 | 42.139 | 通过 |
+| 4 | 79.302 | 53.695 | 通过 |
+
+上表是dispatch编译墙钟时间，不是算子运行耗时T1..T4。所有产物使用独立目录。
+远端原工程 /home/tyf/Q4_remote_test/DeepEP-LL-g4-overlap-recv 下：
+`.logs/overlap-ab-001/stageN-cpu.log`、`stageN-wheel.log`、`stageN-on/timing.json`、
+`stageN-off/timing.json`；wheel在`.artifacts/overlap-ab-001/stageN/`。
+验证结束已恢复原远端kernel/ll-g4-overlap-recv分支。

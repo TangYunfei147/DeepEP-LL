@@ -113,3 +113,6 @@ wheel on all ranks; no SDK rebuild is required solely for this change. Use the
 existing ST correctness and observe commands in OVERLAP_RECEIVE.md. The updated
 parser recognizes the specialized profiler entry names. Device correctness and
 performance remain target-machine validation tasks.
+
+A/B分支的四阶段schema12验证另见OVERLAP_AB.md。四版均保持拆分/O2，
+完整ON wheel及ON/OFF dispatch编译通过；不要将编译耗时当成阶段运行性能。
