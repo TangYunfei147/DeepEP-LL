@@ -65,3 +65,7 @@ low_latency/dispatch_variant_kernel.h for identical entry/timer wiring.
 Algorithms remain in dispatch_server_dedup_kernel.h and device/*.h.
 See docs/BUILD_DISPATCH_SPLIT.md; keep profiler name matching and compile_off.sh
 in sync when adding modes.
+
+Stage5 prefix progression: Counts::PreparePrefix/TryCompletePrefix with event5
+consumed before Receiver::Prepare; R count/prefix publication precedes local TX.
+See docs/PREFIX_PROGRESS.md (schema13); check Source Sync<MTE2_S> control ID7.

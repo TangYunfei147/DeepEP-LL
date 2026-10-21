@@ -404,7 +404,10 @@ private:
     template <HardEvent event>
     __aicore__ inline void Sync()
     {
-        const TEventID id = pipe_->FetchEventID(event);
+        // Prefix load may already own MTE2_S 5 during local sender preparation.
+        // Explicit control ID7 is consumed here before input events 6/7 start.
+        const TEventID id = overlap_.enabled && event==HardEvent::MTE2_S ?
+            TEventID(7) : pipe_->FetchEventID(event);
         SetFlag<event>(id);
         WaitFlag<event>(id);
     }

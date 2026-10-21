@@ -128,7 +128,7 @@ def test_production_wiring_keeps_producers_separate_from_consumers():
     assert 'receiver_ = GetBlockIdx();' in receiver
     assert 'aivId_ * aivUsedCumSum_ * UB_ALIGN' in counts
     assert 'for (uint32_t index = 0; index < coreNum_; index++)' in counts
-    complete=counts[counts.index('inline void ServerDedupCounts::CompleteCumsum()'):]
-    assert complete.index('PipeBarrier<PIPE_ALL>();')<complete.index('tpipe_->Reset();')<complete.index('WaitCumSumFlag();')
+    complete=counts[counts.index('inline void ServerDedupCounts::PreparePrefix()'):]
+    assert complete.index('PipeBarrier<PIPE_ALL>();')<complete.index('tpipe_->Reset();')<complete.index('TryCumSumFlag()')
 
-    assert complete.index("tpipe_->Reset();")<complete.index("SetCtrlSpr<60, 60>(0);")<complete.index("WaitCumSumFlag();")
+    assert complete.index("tpipe_->Reset();")<complete.index("SetCtrlSpr<60, 60>(0);")<complete.index("TryCumSumFlag()")

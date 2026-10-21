@@ -36,7 +36,7 @@ def validate_core_split_capability(capability):
 
 def expected_overlap_stage():
     source=(PROJECT_ROOT/'csrc/kernels/dispatch/low_latency/common/ll_overlap_stage.h').read_text(encoding='utf-8')
-    match=re.search(r'kLlOverlapExperimentStage\s*=\s*([1-4])U;',source)
+    match=re.search(r'kLlOverlapExperimentStage\s*=\s*([1-5])U;',source)
     if not match: raise RuntimeError('Cannot identify A/B stage from this checkout')
     return int(match.group(1))
 
@@ -50,8 +50,8 @@ def validate_overlap_stage_capability(capability):
 def validate_stage_timer_capability(capability):
     if not capability["stage_timer"]:
         raise RuntimeError("All ranks must install a DEEPEP_LL_STAGE_TIMER=ON wheel")
-    if capability['stage_timer_schema'] != 12:
-        raise RuntimeError('Detailed LL diagnostics require timer schema 12; '
+    if capability['stage_timer_schema'] != 13:
+        raise RuntimeError('Detailed LL diagnostics require timer schema 13; '
                            f'got {capability["stage_timer_schema"]}; '
                            'rebuild/install the matching wheel on every rank')
 

@@ -75,6 +75,8 @@ public:
     }
     // 摘要：等待所有前缀片段就绪，加载本核前缀副本，并由首个接收核输出各专家计数。
     __aicore__ inline void CompleteCumsum();
+    __aicore__ inline void PreparePrefix();
+    __aicore__ inline bool TryCompletePrefix();
     // 摘要：返回后续阶段可复用的 UB 池；在途计数发送使用的 statusBuf_ 不在复用范围内。
     __aicore__ inline TBufPool<TPosition::VECCALC, 16>& ScratchPool()
     {
@@ -159,7 +161,14 @@ private:
     // 摘要：为本片局部前缀加上跨核偏移，写出 sendCountsOut 与各核前缀副本，再发布完成标记。
     __aicore__ inline void CalRecvAndSetFlag();
     // 摘要：等待所有接收核的前缀写出标记到齐，并清除本核对应的标记行。
-    __aicore__ inline void WaitCumSumFlag();
+    __aicore__ inline bool TryCumSumFlag();
+    __aicore__ inline void IssuePrefixLoad();
+    __aicore__ inline void FinishPrefixLoad();
+    enum class PrefixState : uint32_t { Unprepared, Polling, Loading, Ready };
+    PrefixState prefixState_=PrefixState::Unprepared;
+#ifdef DEEPEP_LL_STAGE_TIMER
+    uint64_t prefixBegin_=0U, prefixLoadBegin_=0U;
+#endif
 
     LlOverlapLayout overlap_{};
     TBufPool<TPosition::VECCALC,16> recvCountPool_;
@@ -387,11 +396,14 @@ __aicore__ inline void ServerDedupCounts::RecvCnt()
 }
 
 // 摘要：等待所有前缀片段就绪，加载本核前缀副本，并由首个接收核输出各专家计数。
-__aicore__ inline void ServerDedupCounts::CompleteCumsum()
+__aicore__ inline void ServerDedupCounts::PreparePrefix()
 {
+    if (prefixState_!=PrefixState::Unprepared) return;
     LL_SEG_SCOPE(PREFIX_COMPLETE);
+#ifdef DEEPEP_LL_STAGE_TIMER
+    prefixBegin_=timer_ ? timer_->Begin(LlStageTimer::PREFIX_READY_SPAN) : 0U;
+#endif
     // Every physical AIV has a private ready row and prefix replica.
-    const uint32_t receiver = aivId_;
     // Retire send/count writes before reusing their UB. No cross-core barrier.
     if (!overlap_.Async()) { LL_SEG_SCOPE(TRANSITION_DRAIN);
     PipeBarrier<PIPE_ALL>();
@@ -406,17 +418,52 @@ __aicore__ inline void ServerDedupCounts::CompleteCumsum()
     tpipe_->InitBuffer(prefixBuf_, Ceil(rscvStatusNum_ * sizeof(int32_t), UB_ALIGN) * UB_ALIGN);
     statusFp32Tensor_ = readyBuf_.Get<float>();
     statusCleanFp32Tensor_ = cleanBuf_.Get<float>();
-    // 各核先写前缀再发完成标记；全部标记到齐后，读取才不会混入未更新片段。
-    WaitCumSumFlag();
+    prefixState_=PrefixState::Polling;
+}
+
+// A single readiness snapshot or completion of an already issued load. No
+// retry loop here: the caller may submit its next local-send quantum instead.
+__aicore__ inline bool ServerDedupCounts::TryCompletePrefix()
+{
+    if (prefixState_==PrefixState::Ready) return true;
+    LL_SEG_SCOPE(PREFIX_COMPLETE);
+    if (prefixState_==PrefixState::Loading) {
+        FinishPrefixLoad();
+        return true;
+    }
+    if (prefixState_!=PrefixState::Polling) { AscendC::Trap(); return false; }
+    if (!TryCumSumFlag()) return false;
+    IssuePrefixLoad();
+    prefixState_=PrefixState::Loading;
+    return false;
+}
+
+__aicore__ inline void ServerDedupCounts::IssuePrefixLoad()
+{
+    const uint32_t receiver=aivId_;
+#ifdef DEEPEP_LL_STAGE_TIMER
+    prefixLoadBegin_=timer_ ? timer_->Begin(LlStageTimer::PREFIX_LOAD) : 0U;
+#endif
     LocalTensor<int32_t> prefix = prefixBuf_.Get<int32_t>();
     GlobalTensor<int32_t> workspace;
     workspace.SetGlobalBuffer(reinterpret_cast<__gm__ int32_t*>(recvCntWorkspaceGM_));
     const DataCopyExtParams copy{1U, rscvStatusNum_ * uint32_t(sizeof(int32_t)), 0U, 0U, 0U};
     const DataCopyPadExtParams<int32_t> pad{false, 0U, 0U, 0};
-    { LL_SEG_SCOPE(PREFIX_LOAD);
+    LL_SEG_SCOPE(PREFIX_LOAD_ISSUE);
     DataCopyPad(prefix, workspace[receiver * rscvStatusNum_], copy, pad);
-    SyncFunc<HardEvent::MTE2_S>();
+    SetFlag<HardEvent::MTE2_S>(kLlPrefixLoadEvent);
+}
+
+__aicore__ inline void ServerDedupCounts::FinishPrefixLoad()
+{
+    { LL_SEG_SCOPE(PREFIX_LOAD_WAIT);
+    WaitFlag<HardEvent::MTE2_S>(kLlPrefixLoadEvent);
     }
+#ifdef DEEPEP_LL_STAGE_TIMER
+    if (timer_) timer_->End(LlStageTimer::PREFIX_LOAD,prefixLoadBegin_);
+#endif
+    const uint32_t receiver=aivId_;
+    LocalTensor<int32_t> prefix=prefixBuf_.Get<int32_t>();
     // 仅接收组的第 0 核写公开专家计数，避免多核重复写同一输出。
     // 每个专家最后一个来源 rank 的前缀即该专家结束位置；type=0 输出累计数，
     // 其他已验证类型输出与上一专家累计数之差，即该专家自己的接收条数。
@@ -434,7 +481,21 @@ __aicore__ inline void ServerDedupCounts::CompleteCumsum()
         const DataCopyExtParams output{1U, moeExpertNumPerRank_ * uint32_t(sizeof(int64_t)), 0U, 0U, 0U};
         DataCopyPad(expertTokenNumsOutGMTensor_, expertCounts, output);
     }
-    // No listening table or payload receive/copy is constructed in this increment.
+    prefixState_=PrefixState::Ready;
+#ifdef DEEPEP_LL_STAGE_TIMER
+    if (timer_) timer_->End(LlStageTimer::PREFIX_READY_SPAN,prefixBegin_);
+#endif
+}
+
+// S cores and serial fallback still use blocking completion. The R cooperative
+// path calls PreparePrefix/TryCompletePrefix around useful local-send work.
+__aicore__ inline void ServerDedupCounts::CompleteCumsum()
+{
+    PreparePrefix();
+    LL_SEG_SCOPE(PREFIX_COMPLETE);
+    while (!TryCumSumFlag()) {}
+    IssuePrefixLoad();
+    FinishPrefixLoad();
 }
 
 // 摘要：对原始路由执行逐专家匹配与归约，得到该专家的路由条数。
@@ -684,7 +745,7 @@ __aicore__ inline void ServerDedupCounts::CalRecvAndSetFlag()
 }
 
 // 摘要：等待所有接收核的前缀写出标记到齐，并清除本核对应的标记行。
-__aicore__ inline void ServerDedupCounts::WaitCumSumFlag()
+__aicore__ inline bool ServerDedupCounts::TryCumSumFlag()
 {
         LL_SEG_SCOPE(WAIT_CUMSUM);
     int32_t cumSumFlag = 0;
@@ -695,7 +756,7 @@ __aicore__ inline void ServerDedupCounts::WaitCumSumFlag()
     SumParams sumFlagParams{1, innerSumParams, activeCumSumCores_ * UB_ALIGN_DATA_COUNT};
     LocalTensor<float> statusSumOutTensor = scalarBuf_.Get<float>();
 
-    while (true) {
+    {
         LL_SEG_COUNT(WAIT_CUMSUM_ITERATIONS, 1U);
         DataCopy(statusFp32Tensor_, selfRankWinInGMTensor_[cumSumFlagOffset], activeCumSumCores_ * UB_ALIGN_DATA_COUNT);
         SyncFunc<AscendC::HardEvent::MTE2_V>();
@@ -703,9 +764,7 @@ __aicore__ inline void ServerDedupCounts::WaitCumSumFlag()
         SyncFunc<AscendC::HardEvent::V_S>();
         cumSumFlag = statusSumOutTensor.ReinterpretCast<int32_t>().GetValue(0);
 
-        if (cumSumFlag == targetFlag) {
-            break;
-        }
+        if (cumSumFlag != targetFlag) return false;
     }
     Duplicate<float>(statusCleanFp32Tensor_, static_cast<float>(0), activeCumSumCores_ * UB_ALIGN_DATA_COUNT);
     SyncFunc<HardEvent::S_MTE3>();
@@ -713,6 +772,7 @@ __aicore__ inline void ServerDedupCounts::WaitCumSumFlag()
     SyncFunc<HardEvent::V_MTE3>();
     DataCopy(selfRankWinInGMTensor_[cumSumFlagOffset], statusCleanFp32Tensor_,
              activeCumSumCores_ * UB_ALIGN_DATA_COUNT);
+    return true;
 }
 
 }  // namespace DispatchDedup

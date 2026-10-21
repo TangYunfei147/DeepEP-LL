@@ -1,6 +1,8 @@
-本A/B分支使用schema12和分阶段提交，请先读 [OVERLAP_AB.md](../../docs/OVERLAP_AB.md)。
+当前Stage5使用schema13，见 [PREFIX_PROGRESS.md](../../docs/PREFIX_PROGRESS.md)。历史四版的schema12对照仍见OVERLAP_AB.md。
 
-下方原 overlap receive 指南仅作背景；本分支使用schema12、14000+S及独立stage校验，以OVERLAP_AB.md为准。
+历史Stage1..4使用schema12和分阶段提交，参见 [OVERLAP_AB.md](../../docs/OVERLAP_AB.md)。
+
+下方原 overlap receive 指南仅作背景；历史四版使用schema12、14000+S及独立stage校验；当前Stage5以PREFIX_PROGRESS.md为准。
 
 > 当前relay诊断使用 **schema10、70阶段**，保留原ID；observe仅测下发，显式relay-complete测前置排空后的本核MTE3完成。采集与独立报表见 [RELAY_TIMING.md](RELAY_TIMING.md)。旧schema7/9可离线读取。
 

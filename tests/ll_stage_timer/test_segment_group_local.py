@@ -40,7 +40,8 @@ def test_group_local_preparation_and_retirement_have_separate_intervals():
     assert body.index('scratch_->Reset()')<body.index('LL_SEG_END(localDrainBegin, SEND_DRAIN)')
     assert 'CAL_TOKEN' not in body
     kernel=(ROOT/'csrc/kernels/dispatch/low_latency/dispatch_server_dedup_kernel.h').read_text(encoding='utf-8')
-    assert kernel.index('counts_.TryRecvCnt()')<kernel.index('counts_.CalcCumsum()')<kernel.index('receiver_.Prepare(timer_)')
+    assert 'counts_.TryCompletePrefix()' in kernel
+    assert kernel.index('counts_.RecvCnt()')<kernel.index('counts_.CalcCumsum()')<kernel.index('sender_.ProcessGroupLocal(')
     assert 'tasks,timer_,cooperate' in kernel
 
 

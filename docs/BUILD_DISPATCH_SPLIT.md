@@ -116,3 +116,7 @@ performance remain target-machine validation tasks.
 
 A/B分支的四阶段schema12验证另见OVERLAP_AB.md。四版均保持拆分/O2，
 完整ON wheel及ON/OFF dispatch编译通过；不要将编译耗时当成阶段运行性能。
+
+Stage5 prefix progression retains seven separate entries/O2. A3 cold dispatch
+compile ON73.987s/OFF50.493s and complete ON wheel passed; see PREFIX_PROGRESS.md.
+No compilation regression observed relative to the recorded Stage4 baseline.

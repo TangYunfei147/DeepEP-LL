@@ -26,3 +26,7 @@
 四版策略、统一schema12口径和切换方式见docs/OVERLAP_AB.md。
 仅通过ll_overlap_stage.h的提交常量选择阶段；不得让四个版本各自修改打点范围。
 保留Host/device stage校验、各rank一致性及ST对安装wheel/checkout的校验。
+
+Stage5是额外单提交实验：R前置计数/前缀发布，随后有界ready检查与异步prefix搬入，
+诊断schema13与历史四版schema12不同，见docs/PREFIX_PROGRESS.md。
+事件5只在接收开始前供prefix使用，禁止和在途输入6/7或接收lane重叠复用。

@@ -109,3 +109,9 @@ A3_docker / CANN9.3.0 / O2 / Ascend950 / S28R28 / jobs4。
 `.logs/overlap-ab-001/stageN-cpu.log`、`stageN-wheel.log`、`stageN-on/timing.json`、
 `stageN-off/timing.json`；wheel在`.artifacts/overlap-ab-001/stageN/`。
 验证结束已恢复原远端kernel/ll-g4-overlap-recv分支。
+
+## 后续 Stage5
+
+当前分支HEAD已增加单提交Stage5，见PREFIX_PROGRESS.md。历史Stage1..4仍按上表
+精确commit切换；Stage5诊断为schema13，不能与schema12直接比较阶段耗时。
+Stage4与Stage5的性能对照使用timer OFF，保持全部测试参数一致。

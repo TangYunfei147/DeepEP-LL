@@ -56,9 +56,7 @@ public:
     __aicore__ inline void AdvanceLocal(bool& prepared)
     {
         if (!prepared) {
-            if (!counts_.TryRecvCnt()) return;
-            counts_.CalcCumsum();
-            counts_.CompleteCumsum();
+            if (!counts_.TryCompletePrefix()) return;
             receiver_.SetPrefix(counts_.Prefix());
             receiver_.Prepare(timer_);
             prepared=true;
@@ -78,7 +76,13 @@ public:
         counts_.SendCnt();
 
         if (overlap_.Cooperative() && core_>=sendCores_) {
-            counts_.PrepareRecvCnt();
+            // Publish count/prefix before any local payload preparation/issue.
+            counts_.RecvCnt();
+            counts_.CalcCumsum();
+            counts_.PreparePrefix();
+            // If ready, overlap the prefix DMA with local sender preparation.
+            // Otherwise the first callback retries once, then yields to TX.
+            counts_.TryCompletePrefix();
             bool prepared=false;
             LocalProgress cooperate{this,&prepared};
             const uint32_t tasks=counts_.LocalTaskCount();

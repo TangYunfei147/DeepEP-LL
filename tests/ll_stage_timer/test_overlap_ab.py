@@ -26,7 +26,7 @@ def test_common_timing_boundaries():
     sender=(base/'device/dispatch_server_dedup_send.h').read_text()
     assert 'LL_SEG_SCOPE(CAL_CUMSUM)' not in main
     assert 'LL_SEG_SCOPE(CAL_CUMSUM);\n        CalRecvAndSetFlag();' in counts
-    assert 'LL_SEG_SCOPE(PREFIX_COMPLETE)' in counts and 'LL_SEG_SCOPE(PREFIX_LOAD)' in counts
+    assert 'LL_SEG_SCOPE(PREFIX_COMPLETE)' in counts and 'LL_SEG_SCOPE(PREFIX_LOAD_ISSUE)' in counts
     start=sender.index('void Process(')
     body=sender[start:sender.index('struct NoCooperate',start)]
     assert body.index('LL_SEG_END(segBegin1, PREPARE_INPUT)')<body.index('LL_SEG_SCOPE(SEND_TOKENS)')
