@@ -18,17 +18,24 @@ def commands(a):
     if mismatch:raise ValueError('Receiver breakdown config must match B=M256/H3584/K8/E384/FP8/int32/sync0: '+', '.join(mismatch))
     if settings.get('ll_timer_mode','observe')!='observe':raise ValueError('Receiver breakdown requires observe timing')
     revision=git('rev-parse','HEAD');result=[]
+    suffix=''
+    def compatible(path):
+        info=json.loads(path.read_text())
+        return not git('diff',info['commit'],revision,'--','csrc','deep_ep','cmake','CMakeLists.txt','build_support.py',
+                       'setup.py','pyproject.toml','dependencies.lock.json','requirements-build.txt')
+    if manifest.exists() and not compatible(manifest):
+        suffix='rev-'+revision[:12]
+        manifest=manifest.parent.with_name(tag+'-'+suffix)/'manifest.json'
     if manifest.exists():
         info=json.loads(manifest.read_text())
         if (info['mode'],info['timer'],info['send_cores'],info['recv_cores'])!=(mode,'ON',a.send_cores,56-a.send_cores):
             raise ValueError('Existing breakdown manifest does not match')
         if sha(manifest.parent/info['wheel'])!=info['wheel_sha256']:raise ValueError('Existing wheel checksum mismatch')
-        if git('diff',info['commit'],revision,'--','csrc','deep_ep','cmake','CMakeLists.txt','build_support.py',
-               'setup.py','pyproject.toml','dependencies.lock.json','requirements-build.txt'):
-            raise ValueError('Existing breakdown wheel has different native sources; use a fresh suite checkout')
+        if not compatible(manifest):raise ValueError('Revision-specific wheel has different native sources')
     else:
         build=[sys.executable,str(ROOT/'tests/ll_ablation/build.py'),'--mode',mode,'--timer','ON',
                '--send-cores',str(a.send_cores),'--revision',revision,'--prepare-sdk','--resume']
+        if suffix:build+=['--artifact-suffix',suffix]
         donor=ROOT/'.ablation/wheels'/f'ready-replay-ON-s{a.send_cores}'/'manifest.json'
         if not a.fresh_build and donor.is_file():build+=['--reuse-workspace-manifest',str(donor)]
         elif a.offline_deps:

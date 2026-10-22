@@ -393,6 +393,8 @@ private:
         auto header = tail.Header();
         const uint32_t role = enableDedup_ ? header.GetValue(3U) : 0U;
         const bool firstHop = enableDedup_ && role == uint32_t(EpServerDedupTokenType::FirstHop);
+        const bool forward = firstHop &&
+            ((kLlAblationMode!=4U && kLlAblationMode!=5U) || !ablationReplay_);
         if (enableDedup_)
             BuildServerDedupMetadata(type, destination, role, tasks_.Position(j));
         // Forwarding changes only header[3]; header[0..2] remains immutable
@@ -400,8 +402,9 @@ private:
         if (!enableDedup_ || role != uint32_t(EpServerDedupTokenType::Terminal))
             destination = header;
         if (expertTimer_) expertTimer_->End(expert, LlExpertTimer::Metadata);
-        // FIRST_HOP preparation is shared work: retain only the core stage timer.
-        if (firstHop) {
+        // Replay never relays: do not rewrite its header or transport marker.
+        // In a compact UB view byte480 is payload, not a flag slot.
+        if (forward) {
             PrepareServerDedupForward(tail);
             // Forwarded packets only need compact payload. The hint remains
             // independent of the application-level token type in the header.
@@ -416,7 +419,7 @@ private:
         // Initiate downstream work before local output writes on the same
         // MTE3 stream. Metadata was snapshotted before the terminal rewrite;
         // wire stays immutable until every relay/output read retires.
-        if (firstHop && ((kLlAblationMode!=4U && kLlAblationMode!=5U) || !ablationReplay_)) {
+        if (forward) {
             const uint32_t sourceRank = tail.Header().GetValue(0U);
             const uint32_t ranks = uint32_t(args_->rankSize);
             const uint32_t members = tail.ReadIndex().GetValue(0U);

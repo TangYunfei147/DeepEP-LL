@@ -310,3 +310,13 @@ Logs: /home/tyf/Q4_remote_test/.logs/receiver-device-002.log and receiver-cache-
 Objects: DeepEP-LL-ablations/.tmp/ablation-device-N5q8okRY; cache timing and logs:
 DeepEP-LL-ablations/.tmp/receiver-cache-003. See RECEIVER_BREAKDOWN.md for runtime
 validation and the validated-worktree cache reuse policy.
+
+Receiver replay correctness follow-up (2026-10-22): relay preparation now shares
+the relay-issue guard, preventing replay from writing a transport marker into a
+compact payload. CPU regression reproduces the reported four-byte FP8 signature;
+75 tests pass,2 local compiler skips. Uploaded patch on27 compiled all7 mode5
+entries OFF27s/ON43s with the same toolchain/O2/jobs4; objects are in
+DeepEP-LL-ablations/.tmp/ablation-device-6XbYPOxp. No full-wheel link or EP16
+device correctness/performance run was performed here. Existing CMake cache
+mechanism is unchanged; stale completed wheels now get separate revision-specific
+artifact directories while the validated donor source/cache path stays fixed.

@@ -54,7 +54,9 @@ def test_prepacked_constant_payload_matches_copy_layout(h):
 def test_replay_keeps_packet_flags_until_second_consumer():
     recv=(ROOT/'csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_recv.h').read_text()
     assert 'if (ablationReplay_) ClearFlags();' in recv
-    assert 'if (firstHop && ((kLlAblationMode!=4U && kLlAblationMode!=5U) || !ablationReplay_))' in recv
+    assert 'const bool forward = firstHop &&' in recv
+    assert '((kLlAblationMode!=4U && kLlAblationMode!=5U) || !ablationReplay_);' in recv
+    assert recv.count('if (forward) {')==2
     assert 'timer_=nullptr' in recv
     entry=(ROOT/'csrc/kernels/dispatch/low_latency/dispatch_variant_kernel.h').read_text()
     assert entry.index('timer.End(LlStageTimer::KERNEL')<entry.index('kernel.ReplayReadyForAblation')

@@ -40,12 +40,17 @@ def main():
     p.add_argument('--resume',action='store_true',help='Preserve incomplete directories and build in a fresh attempt')
     p.add_argument('--reuse-workspace-manifest',type=Path,help='Verified ready-replay ON cache for receiver breakdown only')
     p.add_argument('--plan',action='store_true')
+    p.add_argument('--artifact-suffix',default='',help='Revision-specific receiver artifact directory; preserves old wheels')
     a=p.parse_args()
     if not 0<a.send_cores<56:p.error('send-cores must be 1..55')
     if a.mode in ('ready-replay','ready-breakdown') and a.timer!='ON':p.error('ready-replay requires ON')
     if not a.prepare_sdk and not a.plan:p.error('Isolated first build requires --prepare-sdk')
     if a.reuse_workspace_manifest and a.mode!='ready-breakdown':p.error('Cache reuse is restricted to ready-breakdown')
+    if a.artifact_suffix and (a.mode!='ready-breakdown' or not a.artifact_suffix.startswith('rev-') or
+                             not all(c in '0123456789abcdef' for c in a.artifact_suffix[4:]) or len(a.artifact_suffix)!=16):
+        p.error('Artifact suffix must be rev- followed by12hex digits, for ready-breakdown only')
     tag=f'{a.mode}-{a.timer}-s{a.send_cores}'
+    if a.artifact_suffix:tag+='-'+a.artifact_suffix
     config=dict(mode=a.mode,mode_id=MODES[a.mode],timer=a.timer,send_cores=a.send_cores,
                 recv_cores=56-a.send_cores,logical_group=4,commit=git('rev-parse',a.revision+'^{commit}'))
     if a.plan:print(config);return

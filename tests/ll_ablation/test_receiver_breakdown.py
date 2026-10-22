@@ -120,6 +120,32 @@ def test_one_command_builds_one_wheel_then_runs_and_reports(tmp_path,monkeypatch
     a.build_only=True
     assert len(suite.commands(a))==1
 
+    # A successfully built but stale wheel must remain intact while the same
+    # donor cache builds new artifacts in a revision-specific directory.
+    old=tmp_path/'.ablation/wheels/ready-breakdown-ON-s30/manifest.json'
+    old.parent.mkdir(parents=True);old.write_text(json.dumps({'commit':'old'}))
+    before=old.read_bytes()
+    cmds=suite.commands(a)
+    assert len(cmds)==1 and '--artifact-suffix' in cmds[0]
+    assert '--reuse-workspace-manifest' in cmds[0]
+    assert old.read_bytes()==before
+
+
+def test_replay_marker_write_corrupts_compact_payload_regression():
+    import struct
+    # E4M3 encodings for -7,-6,-5,-4 from the reported input pattern.
+    payload=bytearray(3584);payload[480:484]=bytes([0xce,0xcc,0xca,0xc8])
+    corrupt=payload.copy();corrupt[480:484]=struct.pack('<f',1.0)
+    def fp8(byte):
+        return (-1 if byte&128 else 1)*2**(((byte>>3)&15)-7)*(1+(byte&7)/8) if byte&127 else 0
+    actual=list(map(fp8,corrupt[480:484]));expected=list(map(fp8,payload[480:484]))
+    assert actual==[0,0,0,1.875] and expected==[-7,-6,-5,-4]
+    assert abs(actual[0]-expected[0])==7
+    assert abs((actual[3]-expected[3])/expected[3])==1.46875
+    source=(ROOT/'csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_recv.h').read_text()
+    assert 'if (forward) {\n            PrepareServerDedupForward(tail);' in source
+    assert '|| !ablationReplay_);' in source
+
 def test_complete_report_and_missing_iteration_rejection(tmp_path):
     from receiver_report import report
     spec=importlib.util.spec_from_file_location('report_timer',ROOT/'deep_ep/utils/ll_stage_timer.py')

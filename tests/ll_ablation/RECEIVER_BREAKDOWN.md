@@ -1,5 +1,24 @@
 # Receiver replay breakdown: one wheel, three measured arms
 
+## Correctness fix after recv40-001
+
+The target's initial dispatch.check failed with four FP8 elements at offsets
+480..483 (absolute error7 and relative error1.46875). A CPU byte-level regression
+reproduces these exact errors when the float Compact marker1.0 overwrites the
+compact payload. Replay suppressed relay issue but still performed relay header
+and marker preparation. Both are now guarded by the same live-forward condition.
+The first real dispatch keeps its original forwarding behavior. This identifies
+an unsafe replay write; the precise device path that selected the compact view
+still requires target validation. Do not use the failed run for performance.
+
+After updating Git, rerun the same one-command suite with a new result prefix,
+for example `--run-prefix recv40-002`. When an existing completed wheel has stale
+native sources, the suite selects a `-rev-<12hex>` artifact directory and retains
+the old wheel and manifest. It reuses the same validated ready-replay worktree
+and dependency-tracked caches. No deletion or fresh checkout is necessary.
+All three arms must pass correctness again; compare against their new paired
+baseline because removing replay-only forwarding preparation changes the work.
+
 The previous ready replay was about40us. This experiment remeasures a common
 baseline and two ablations in one ON wheel, rather than compiling three wheels.
 It is restricted to EP16/B=M256/H3584/K8/E384/prequantized FP8/int32 scales/G4.
