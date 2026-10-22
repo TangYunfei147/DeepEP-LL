@@ -293,13 +293,13 @@ Validation:
 - Dedup protected source-region hashes match197052c; this is not machine-code
   or target-performance equivalence. Both large/small M>32 need device regression.
 
-Full ON wheel link is NOT verified. Recursive submodule preparation attempted the
+Initial full ON wheel preparation was blocked. Recursive submodule preparation attempted the
 standard command, then stalled downloading CATLASS LLVM/Triton; only the verified
 PID tree belonging to this project's download was terminated. The existing other
 DeepEP-LL-ablations worktree was read only and its dirty files were preserved.
 Independent SDK build reached CMake invocation but cmake is absent. A project-only
-pip target installation of CMake/build requirements timed out after150s, leaving
-no completed SDK or wheel. No system dependencies, driver, or shared Python env
+pip target installation of CMake/build requirements timed out after150s at that
+point. The subsequent local-upload offline workflow below resolved this. No system dependencies, driver, or shared Python env
 were modified, no wheel installed, and no NPU/communication task launched.
 Initial missing .tmp test directory was corrected before the passing native run.
 
@@ -308,3 +308,20 @@ CANN path is named cann-9.3.0, while build_shmem's compiler/version.info reports
 Version9.2.0; retain both facts rather than silently labeling this as a complete
 9.3.0 SDK validation. Source compile succeeded against this actual environment.
 Target instructions: tests/ll_stage_timer/SMALL_B_FAST_PATH.md.
+
+Offline follow-up (user requires0env Python and prefers local upload to27):
+- Confirmed Python executable /root/miniconda3/envs/py311_tyf/bin/python after
+  initializing existing conda then sourcing /home/tyf/0env.sh. No Python replacement.
+- Downloaded CMake3.31.6 aarch64 and all pinned requirements-build wheels locally,
+  uploaded28,968,960B archive, SHA256 verified each wheel. Installed with --no-index
+  --target .cache/build-python; PYTHONPATH/PATH apply only to this build shell.
+- SDK build using existing JSON source completed; .logs/sdk-small-offline-001.log.
+- Full ON wheel compile/link/package PASSED at e3e773e (same production C++ as
+  the final documented candidate). S28/R28, ll_stage_timer=true, pybind11=3.0.4
+  verified in wheel _build_info.json; g4-small-b Host identity found in _C binary.
+- Artifact: .tmp/wheels-on/ascend_deepep-0.1.0.dev5-cp311-cp311-linux_aarch64.whl
+  SHA2565c4ae93970d7fcbebb0e4f1636090d586c8a7b1a321191b5251b0cfab268eed0.
+  Full log .logs/wheel-small-on-offline-001.log, under27 project root above.
+- Wheel NOT installed; no NPU/communication execution or target performance claim.
+  Cold OFF objects and ON objects plus full ON linkage are now confirmed.
+- Python/CANN/offline reproduction: A5_SMALL_B_VALIDATION.md.

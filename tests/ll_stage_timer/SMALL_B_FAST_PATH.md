@@ -36,6 +36,9 @@ ON stages separately (INIT is outside KERNEL). Include all supported input modes
 in correctness checks. Do not compare ON with OFF timings or change S/R per case.
 
 Compilation/device results will be recorded in docs/BUILD_DISPATCH_SPLIT.md.
+Seven-mode ON/OFF CANN objects and full ON wheel linkage now pass on27. No
+device communication or target performance is validated. Environment/offline
+steps are in [A5_SMALL_B_VALIDATION.md](../../docs/A5_SMALL_B_VALIDATION.md).
 
 When isolating sender-only20fb05b, also cherry-pick e3e773e for its updated
 wheel/checkout identity validation. The count algorithm commit is e12e478. The
