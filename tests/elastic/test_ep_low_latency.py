@@ -1123,7 +1123,8 @@ def worker(local_rank, args):
         # One CLI choice drives Python and native initialization; stale shell state
         # does not change the selected branch's default in this experiment entry.
         os.environ['DEEPEP_LL_BACKEND']=backend
-        capability = {"active_aiv": core_config["active_aiv"],
+        capability = {"control_revision": os.environ.get("DEEPEP_LL_CONTROL_REVISION"),
+                      "active_aiv": core_config["active_aiv"],
                       "send_cores": core_config["send_cores"], "recv_cores": core_config["recv_cores"],
                       "dispatch_recv_cores": core_config["dispatch_recv_cores"],
                       "nondedup_dispatch_recv_cores": core_config["recv_cores"],
