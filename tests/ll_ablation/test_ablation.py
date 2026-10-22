@@ -114,3 +114,27 @@ def test_source_guard_rejects_actual_source_edits(tmp_path,staged):
         git('add','kernel.cpp')
         file.write_text('original\n') # Index differs even though working tree matches HEAD.
     with pytest.raises(RuntimeError,match='kernel.cpp'):source_checkout(tmp_path)
+
+def test_suite_builds_every_wheel_before_run_and_reuses_baseline(tmp_path,monkeypatch):
+    import argparse
+    import suite
+    from common import sha
+    monkeypatch.setattr(suite,'ROOT',tmp_path)
+    config=tmp_path/'config.json';config.write_text('{}')
+    directory=tmp_path/'.ablation/wheels/baseline-OFF-s30';directory.mkdir(parents=True)
+    wheel=directory/'baseline.whl';wheel.write_bytes(b'wheel')
+    (directory/'manifest.json').write_text(json.dumps(dict(mode='baseline',timer='OFF',send_cores=30,
+        recv_cores=26,commit='old-source',wheel=wheel.name,wheel_sha256=sha(wheel))))
+    a=argparse.Namespace(config=config,resume=True,send_cores=30,build=True,build_only=True,
+        offline_deps=None,devices='',run_prefix='build-only')
+    plan=suite.plan_commands(a)
+    assert plan['reused_modes']==['baseline']
+    assert len(plan['phases']['build'])==4
+    assert not plan['phases']['install'] and not plan['phases']['run']
+    assert all(c[c.index('--revision')+1]=='old-source' for c in plan['phases']['build'])
+    a.build_only=False
+    plan=suite.plan_commands(a)
+    assert list(plan['phases'])==['build','install','run']
+    assert len(plan['phases']['run'])==5
+    wheel.write_bytes(b'corrupt')
+    with pytest.raises(ValueError,match='corrupt'):suite.plan_commands(a)

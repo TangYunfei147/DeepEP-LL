@@ -15,6 +15,7 @@ def main():
     p.add_argument('--send-cores',type=int,default=28)
     p.add_argument('--prepare-sdk',action='store_true')
     p.add_argument('--offline-deps',type=Path,help='Uploaded deps.py bundle directory; no remote Git access')
+    p.add_argument('--revision',default='HEAD',help='Pinned source revision shared by all resumed variants')
     p.add_argument('--plan',action='store_true')
     a=p.parse_args()
     if not 0<a.send_cores<56:p.error('send-cores must be 1..55')
@@ -24,7 +25,7 @@ def main():
     source=ROOT/'.ablation'/'sources'/tag
     output=ROOT/'.ablation'/'wheels'/tag
     config=dict(mode=a.mode,mode_id=MODES[a.mode],timer=a.timer,send_cores=a.send_cores,
-                recv_cores=56-a.send_cores,logical_group=4,commit=git('rev-parse','HEAD'))
+                recv_cores=56-a.send_cores,logical_group=4,commit=git('rev-parse',a.revision+'^{commit}'))
     if a.plan:print(config);return
     config.update(source_checkout())
     if source.exists() or output.exists():raise RuntimeError('Variant directory exists; use a fresh checkout, never overwrite')

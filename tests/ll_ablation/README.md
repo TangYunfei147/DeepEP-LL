@@ -110,6 +110,26 @@ networked machine; the exporter validates its version and includes the header
 with a SHA256. Missing JSON is rejected, never downloaded on27. Offline builds
 also restrict Git to the local file protocol.
 
+## Compile first, launch later (recommended when the NPU is busy)
+
+```bash
+# Reuse already completed wheels, build every missing variant; no NPU checks/runs.
+python3 tests/ll_ablation/suite.py --build-only --resume --send-cores 30
+
+# Once all wheels are ready and the devices are idle, install and run all modes.
+python3 tests/ll_ablation/suite.py \
+  --devices "$ASCEND_RT_VISIBLE_DEVICES" --send-cores 30 --run-prefix bs256-ab-001
+```
+
+With --build, the order is now **all builds -> all installs -> serial experiments**.
+--build-only performs only the first phase and needs neither devices nor run-prefix.
+--resume reuses complete manifests only after identity/SHA256 checks. Missing
+variants are built at the existing wheels' source commit, so a launcher-only update
+need not rebuild the baseline or mix source revisions. Mixed revisions are rejected.
+Interrupted builds without a valid manifest are not overwritten automatically.
+Results are never skipped or overwritten: use a new prefix if a previous run already
+created result directories. Occupancy checking remains unchanged before each run.
+
 ## One-command single-host EP16 suite
 
 Use the **actual target device IDs and the same S/R as the88us baseline**. The

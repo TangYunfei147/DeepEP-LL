@@ -32,3 +32,9 @@ Source-guard follow-up:14ablation tests passed, including real Git roundtrips.
 Untracked files and dirty dependency contents at the pinned commit are preserved
 and excluded; staged/unstaged tracked edits and changed dependency commits are
 rejected with filenames. No CANN/kernel changes in this launcher-only fix.
+
+Build-phase follow-up:15ablation tests passed. Suite now completes all builds
+before installation/running. --build-only --resume reuses verified baseline wheels
+and pins missing builds to that original source revision. Regression checks cover
+phase ordering, no run/install in build-only, revision pinning and corrupt wheel
+rejection. Occupancy checking and all native/kernel files remain unchanged.
