@@ -1,8 +1,11 @@
 """First-pass output is one readable file even for the 35-case user matrix."""
 import copy
+import hashlib
 import importlib.util
 import json
 from pathlib import Path
+
+import pytest
 
 
 def module(name):
@@ -72,13 +75,18 @@ def test_export_report_replaces_only_pointer_and_keeps_all_local_metrics(tmp_pat
     (suite/'SEND_FIRST.txt').write_text('old archive says transmit887files')
     (suite/'old-parts.txt').write_text('keep archive')
     monkeypatch.setattr(triage,'collect',lambda p:copy.deepcopy(data))
-    result=triage.export_report(suite)
+    receipt={}
+    result=triage.export_report(suite,receipt=receipt)
     assert result==suite/'SEND_FIRST.txt'
     saved=list((suite/'triage').glob('*/triage_summary.json'))
     assert len(saved)==1 and json.loads(saved[0].read_text())==data
     assert (suite/'old-parts.txt').read_text()=='keep archive'
     assert result.stat().st_size<=60000
-    assert triage.export_report(suite)==result
+    # The prior producer's root summary is conservatively one earlier send.
+    assert receipt['issued']==2 and receipt['new_count']==1 and receipt['remaining']==8
+    again={}
+    assert triage.export_report(suite,receipt=again)==result
+    assert again['issued']==2 and again['new_count']==0
 
 
 def test_collect_reads_existing_cases_and_all_rounds_not_suite_archive(tmp_path):
@@ -112,3 +120,68 @@ def test_empty_focus_is_rejected_without_overwriting_existing_report(tmp_path,mo
     text=(suite/'SEND_FIRST.txt').read_text()
     assert 'Selection: {"B":[1],"profiles":["prefix"]}' in text
     assert 'cases=1;' in text
+
+
+def test_summary_receipt_is_idempotent_and_changed_content_consumes_one_send(tmp_path,monkeypatch):
+    data=worst_matrix();suite=tmp_path/'suite';suite.mkdir()
+    monkeypatch.setattr(triage,'collect',lambda p:copy.deepcopy(data))
+    first={};path=triage.export_report(suite,receipt=first)
+    raw=path.read_bytes()
+    assert first['issued']==1 and first['new_count']==1 and first['remaining']==9
+    second={};triage.export_report(suite,receipt=second)
+    assert path.read_bytes()==raw
+    assert second['issued']==1 and second['new_count']==0 and second['remaining']==9
+    assert second['already_issued']==[hashlib.sha256(raw).hexdigest()]
+    data['issues'].append('New evidence changes the necessary summary')
+    third={};triage.export_report(suite,receipt=third)
+    assert path.read_bytes()!=raw
+    assert third['issued']==2 and third['new_count']==1 and third['remaining']==8
+    ledger=json.loads((suite/'triage/send_budget.json').read_text())
+    assert len(ledger['artifacts'])==2 and all(item['kind']=='summary' for item in ledger['artifacts'])
+
+
+def test_summary_change_over_budget_preserves_previous_report_and_artifacts(tmp_path,monkeypatch):
+    data=worst_matrix();suite=tmp_path/'suite';suite.mkdir()
+    monkeypatch.setattr(triage,'collect',lambda p:copy.deepcopy(data))
+    target=triage.export_report(suite)
+    quota=module('transfer_budget')
+    with quota.transaction(suite,'detail',[hashlib.sha256(str(i).encode()).hexdigest() for i in range(9)]):
+        pass
+    prior={str(path.relative_to(suite)):path.read_bytes() for path in suite.rglob('*') if path.is_file()}
+    data['issues'].append('This change requires an eleventh send')
+    receipt={'unchanged':True}
+    with pytest.raises(ValueError,match='limit is 10'):
+        triage.export_report(suite,receipt=receipt)
+    after={str(path.relative_to(suite)):path.read_bytes() for path in suite.rglob('*') if path.is_file()}
+    assert after==prior and target.read_bytes()==prior['SEND_FIRST.txt']
+    assert receipt=={'unchanged':True}
+    # Reissuing the exact old summary remains possible at the hard limit.
+    data['issues'].pop()
+    receipt={};triage.export_report(suite,receipt=receipt)
+    assert receipt['new_count']==0 and receipt['issued']==10 and receipt['remaining']==0
+
+
+def test_corrupt_budget_refuses_summary_without_overwriting_prior_content(tmp_path,monkeypatch):
+    data=worst_matrix();suite=tmp_path/'suite';suite.mkdir()
+    monkeypatch.setattr(triage,'collect',lambda p:copy.deepcopy(data))
+    target=triage.export_report(suite)
+    original=target.read_bytes()
+    ledger=suite/'triage/send_budget.json';ledger.write_text('{broken json')
+    directories=set((suite/'triage').iterdir())
+    data['issues'].append('Updated data must not reset a corrupt budget')
+    with pytest.raises(ValueError,match='Invalid send budget'):
+        triage.export_report(suite)
+    assert target.read_bytes()==original
+    assert ledger.read_text()=='{broken json'
+    assert set((suite/'triage').iterdir())==directories
+
+
+def test_existing_identical_untracked_summary_is_adopted_without_another_send(tmp_path,monkeypatch):
+    data=worst_matrix();suite=tmp_path/'suite';suite.mkdir()
+    monkeypatch.setattr(triage,'collect',lambda p:copy.deepcopy(data))
+    content=triage.render(data).encode('utf-8')
+    (suite/'SEND_FIRST.txt').write_bytes(content)
+    receipt={};target=triage.export_report(suite,receipt=receipt)
+    assert target.read_bytes()==content
+    assert receipt['new_count']==0 and receipt['issued']==1 and receipt['remaining']==9
+    assert (suite/'triage/send_budget.json').is_file()

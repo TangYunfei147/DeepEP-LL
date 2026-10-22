@@ -1,5 +1,7 @@
-默认第一轮只发送一个 **SEND_FIRST.txt（≤60000字符/UTF-8字节，含CRLF）**。
-它汇总全部捕获样本用于定位；全量归档留在目标机，必要时按B/profile/rank/轮次/core提取最多3块细节。
+同一suite只发送必要内容，**摘要及后续补充累计最多10次**。第一轮只发送一个 **SEND_FIRST.txt（≤60000字符/UTF-8字节，含CRLF）**。
+它汇总全部捕获样本用于定位；只有分析明确需要时，才按B/profile/rank/轮次提取补充，core可选。每次默认最多3块，同时受累计剩余额度约束。
+额度持久保存；相同内容不重复要求发送，换输出目录不重置。已有旧摘要首次保守计入额度。只发摘要及明确列出的新part，不发送ledger、manifest、索引或单独性能CSV。
+全量归档留在目标机，`--transfer-mode archive`已禁用。
 旧run可`diagnose.py --analyze-existing <目录>`生成新摘要，无需重采。用法见[PHASED_DIAGNOSIS.md](PHASED_DIAGNOSIS.md)。
 
 当前打点为 **schema14**，支持编译期分组、完整kernel插桩扰动对照及每文件≤60000字符/UTF-8字节的传输报告。

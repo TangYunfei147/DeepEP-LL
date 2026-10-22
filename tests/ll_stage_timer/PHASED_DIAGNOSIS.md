@@ -37,11 +37,12 @@ python tests/ll_stage_timer/diagnose.py \
 python tests/ll_stage_timer/diagnose.py --analyze-existing diagnostic-runs/small_b_phases_001
 ```
 
-## 第一轮只发送一个文件
+## 每套结果累计最多发送10次，第一轮只发摘要
 
-默认现在是`--transfer-mode summary`，只发送运行目录根部的 **SEND_FIRST.txt**，同时限制≤60000字符和60000UTF-8字节（含CRLF）。
+只允许发送分析所需内容；同一suite的摘要和后续补充**累计最多10个文本文件，按每文件一次发送计数**。
+默认且唯一支持的模式是`--transfer-mode summary`。第一轮只发送运行目录根部的 **SEND_FIRST.txt**，同时限制≤60000字符和60000 UTF-8字节（含CRLF）。
 这是用于初步定位的统计摘要，不是完整trace归档：统计读取全部rank/轮次，展示OFF/ON完整耗时、插桩扰动、S/R准备跨度、活动核数、包数均衡、就绪率、关键阶段和最慢核位置。
-阶段详情有明确数量上限，原始JSON、CSV、trace和完整压缩包留在目标机。无需发送887个归档块，也无需重新采样。
+阶段详情有明确数量上限，原始JSON、CSV、trace和已有完整压缩包留在目标机。不要发送887个归档块，也不需要为本次离线更新重新采样。
 
 已有完整采集可直接生成新的一页报告：
 
@@ -51,11 +52,14 @@ python tests/ll_stage_timer/diagnose.py --analyze-existing diagnostic-runs/small
 
 将示例目录替换为实际run。也可直接执行`python tests/ll_stage_timer/triage_report.py <run目录>`，避免执行任何缺失case的原始解析。
 根部SEND_FIRST会更新；原归档不删除，完整本地统计保存在`triage/<hash>/triage_summary.json`，无需发送此JSON。
+额度在suite内持久记录，生成需要发送的新内容时即预留次数，不依赖是否实际粘贴。相同内容重复生成不重复扣额，也不重复要求发送；改变`--output-dir`不会重置额度。
+首次接入已有suite时，旧`SEND_FIRST.txt`保守计作一份已经生成的摘要；如果新摘要内容不同，还会占用一份。因此升级已有run后可用的补充次数可能少于9次。
+本地额度记录、manifest、索引、`PERFORMANCE_COMPARE.txt`和统计JSON均不发送；需要的性能信息已进入摘要。
 35case/2800sample规模的合成压力检查保留每个case的核心表及阶段摘要，整个文本仍低于60000字节。若更大矩阵超出预算，会明确缩减可见详情或要求按B/profile选择，绝不自动拆成几百份。
 
 ## 后续按疑点提取原始细节
 
-第一轮分析后，按报告中的B/profile/rank/iteration/core选择，例如：
+只有第一轮分析仍有明确疑点时，才提取对应的补充。B/profile/rank/iteration必须明确；core可选，不指定时保留这个rank、这一轮的全部已记录核心，例如：
 
 ```bash
 python tests/ll_stage_timer/triage_extract.py diagnostic-runs/small_b_phases_002 \
@@ -63,17 +67,13 @@ python tests/ll_stage_timer/triage_extract.py diagnostic-runs/small_b_phases_002
   --output-dir diagnostic-runs/small_b_phases_002/followup_prefix_b1
 ```
 
-默认最多3块、每块≤60000字节；超过则要求缩小范围，不写超大输出、不偷偷抽样。
+每次补充默认最多3块，且受该suite累计10次的剩余额度限制；每块含封装和CRLF仍≤60000字符和60000 UTF-8字节。
+即使显式提高`--max-parts`，也不能突破累计上限。超过本次上限或剩余额度时明确报错，要求缩小选择范围；不拆出更多待发送文件，也不偷偷抽样。
 选择后的值和真实区间无损，保留原始core编号和active_aiv，明确标为部分视图。多条路由匹配时用`--case`指定报告的本地case路径。
+只发送此次命令列出的新part文件；重复内容无需重发，`manifest.json`和任何本地索引不发送。
 可用`transfer_report.py show <提取目录> --part 1`逐块打印，接收端用`restore`恢复所选trace。
 
-仅需要完整迁移/归档时显式选择：
-
-```bash
-python tests/ll_stage_timer/diagnose.py --analyze-existing diagnostic-runs/small_b_phases_002 --transfer-mode archive
-```
-
-该模式仍可能产生很多文件；完整归档不是初次分析的前提。压缩格式与恢复步骤见[COMPRESSED_TRANSFER.md](COMPRESSED_TRANSFER.md)。
+`--transfer-mode archive`已禁用，旧archive执行计划在构建或设备执行前拒绝；对旧结果运行`--analyze-existing`仍默认生成摘要。已有归档保留在本地，旧包的离线还原能力保留。压缩格式与定点补充的恢复步骤见[COMPRESSED_TRANSFER.md](COMPRESSED_TRANSFER.md)。
 
 ## 如何判断探针扰动
 
@@ -146,3 +146,8 @@ schema14为136阶段、192条真实事件、每核5632B、512B对齐；比schema
 完整相关CPU回归534通过、48项因本机缺少C++/CANN/POSIX环境跳过；最终摘要/选择/入口专项68通过。
 35case/2800sample合成压力报告为47500字节（含CRLF），只有一个文件，所有case核心表均保留。
 这是输出预算测试，不是对目标机这次测量的性能结论；拿到新的SEND_FIRST后再分析实际瓶颈。
+
+2026-10-23累计发送额度更新：最终CPU回归597通过、48项因C++/CANN/POSIX环境缺失跳过。
+加入10次总额说明后的35case/2800sample合成摘要为47662字节（含CRLF），仍只需一份文件。
+已覆盖摘要/补充共同计费、跨输出目录重复内容、旧摘要迁移、额度耗尽及写入失败。
+此次仅更新离线工具，无需重编wheel或重新采样。

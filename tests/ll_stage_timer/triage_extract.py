@@ -6,6 +6,7 @@ requested exact subset exceeds the transfer budget.
 """
 import argparse
 import copy
+import hashlib
 import importlib.util
 import json
 from pathlib import Path
@@ -90,8 +91,10 @@ def export_selection(suite, profile, bs, output_dir, rank=None, iteration=None,
     for name, value in (('rank', rank), ('iteration', iteration), ('core', core)):
         if value is not None and (type(value) is not int or value < 0):
             raise ValueError('--' + name + ' must be a nonnegative integer')
-    if type(max_parts) is not int or not 1 <= max_parts <= 10:
-        raise ValueError('--max-parts must be an integer in 1..10')
+    if rank is None or iteration is None:
+        raise ValueError('Necessary follow-ups require explicit --rank and --iteration; --core is optional')
+    if type(max_parts) is not int or not 1 <= max_parts <= 9:
+        raise ValueError('--max-parts must be an integer in 1..9; the summary also consumes one of 10 sends')
     transfer = _module('transfer_report')
     matches = []
     for path in _candidates(suite, profile, case):
@@ -118,7 +121,7 @@ def export_selection(suite, profile, bs, output_dir, rank=None, iteration=None,
                      source_manifest=source.relative_to(suite).as_posix(),
                      source_bundle_id=source_manifest.get('bundle_id'),
                      selected_samples=len(samples),
-                     note='Exact selected values; null rank/iteration/core means all observed values. '
+                     note='Exact selected rank and iteration; null core means all observed cores. '
                           'Original launch identities, active_aiv, rank and core numbers are preserved. '
                           'This subset does not establish full rank/core/iteration coverage.')
     context = copy.deepcopy(context)
@@ -140,13 +143,18 @@ def export_selection(suite, profile, bs, output_dir, rank=None, iteration=None,
                     notes=['Lossless within the explicit selection only; not a complete suite/archive.',
                            'Separate profiles cannot be summed or aligned to one timeline.'])
     files = dict(zip(names, parts))
-    files['manifest.json'] = _json(manifest) + '\n'
     if any(len(text) > LIMIT or len(text.encode('utf-8')) + text.count('\n') > LIMIT
            for text in files.values()):
         raise ValueError('Selection metadata exceeds the transfer budget; no files were written')
-    output.mkdir(parents=True, exist_ok=False)
-    for name, text in files.items():
-        (output / name).write_bytes(text.encode('utf-8'))
+    digests = [hashlib.sha256(part.encode('utf-8')).hexdigest() for part in parts]
+    with _module('transfer_budget').transaction(suite, 'detail', digests) as usage:
+        manifest['send_first'] = [name for name, digest in zip(names, digests) if digest in usage['new_digests']]
+        manifest['send_budget'] = usage
+        # The manifest is local bookkeeping, never another transmission.
+        files['manifest.json'] = _json(manifest) + '\n'
+        output.mkdir(parents=True, exist_ok=False)
+        for name, text in files.items():
+            (output / name).write_bytes(text.encode('utf-8'))
     return manifest
 
 
@@ -155,12 +163,12 @@ def main(argv=None):
     parser.add_argument('suite', type=Path)
     parser.add_argument('--profile', required=True, choices=PROFILES)
     parser.add_argument('--bs', required=True, type=int)
-    parser.add_argument('--rank', type=int)
-    parser.add_argument('--iteration', type=int)
+    parser.add_argument('--rank', required=True, type=int)
+    parser.add_argument('--iteration', required=True, type=int)
     parser.add_argument('--core', type=int)
     parser.add_argument('--case', type=Path, help='One analysis case directory or transfer manifest, relative to suite')
     parser.add_argument('--output-dir', required=True, type=Path, help='Fresh directory; relative paths use project root')
-    parser.add_argument('--max-parts', type=int, default=3, help='Hard limit 1..10 (default 3); exceeding it writes nothing')
+    parser.add_argument('--max-parts', type=int, default=3, help='Batch ceiling 1..9 (default 3), also limited by the suite\'s remaining sends')
     args = parser.parse_args(argv)
     try:
         manifest = export_selection(args.suite, args.profile, args.bs, args.output_dir,
@@ -168,8 +176,12 @@ def main(argv=None):
                                     case=args.case, max_parts=args.max_parts)
     except (ValueError, OSError, KeyError, TypeError) as exc:
         parser.exit(1, str(exc) + '\n')
-    print(f'Explicit subset: {manifest["samples"]} samples; send exactly {len(manifest["parts"])} part files:')
-    for name in manifest['parts']:
+    usage = manifest['send_budget']
+    print(f'Suite send budget: {usage["issued"]}/10 issued; {usage["remaining"]} remaining; {usage["reserved"]} summary slot reserved.')
+    print(f'Explicit subset: {manifest["samples"]} samples; send only {len(manifest["send_first"])} new part files:')
+    if usage['already_issued']:
+        print('Identical content already issued: do not resend it. No manifest or index is needed.')
+    for name in manifest['send_first']:
         print(_path(args.output_dir) / name)
     return 0
 

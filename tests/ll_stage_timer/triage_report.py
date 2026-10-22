@@ -120,6 +120,7 @@ def _essential(data):
         f"Suite: {data['suite']}; cases={len(data['cases'])}; source coverage={'complete' if data['complete'] else 'INCOMPLETE/UNKNOWN'}",
         'This is a lossy analytical SUMMARY over ALL supplied samples, not a restorable trace archive.',
         'Full captures/archives stay on the target. No suite_* part files are needed for the first pass.',
+        'At most 10 sends for this suite, INCLUDING summaries and necessary follow-ups. Do not resend identical content.',
         'Units: us; a/b[n] = p50/max over n observed rank-rounds. Missing=-, never measured zero.',
         'Span/stage tables: per-rank-round max across observed cores of the initial group (S/R).',
         'Activity tables: observed group counts or ratios per rank-round (not core-time maxima).',
@@ -201,7 +202,7 @@ def render(data, limit=LIMIT):
     tail += ['', 'LOCAL CASE LOCATORS (for a targeted follow-up, not more files to send):']
     tail.extend(case['id']+' '+case['source'] for case in data['cases'])
     tail += ['', 'Exact follow-up only if requested: triage_extract.py <suite> --profile <p> --bs <B> --rank <r> --iteration <i> --core <c> --output-dir <newdir>',
-             'Follow-up default ceiling:3 parts. Full archive is optional via --transfer-mode archive.', '']
+             'Follow-up default ceiling:3 parts, further limited by the remaining cumulative 10-send budget. No archives, manifests or indexes to send.', '']
     for count in (4, 3, 2, 1, 0):
         lines = essential + ['', f'SELECTED COSTS: top {count} non-envelope stages by median rank-round maximum per group/case; remaining stages stay locally.']
         for case in data['cases']:
@@ -222,7 +223,7 @@ def render(data, limit=LIMIT):
     return text
 
 
-def export_report(suite, *, bs=None, profiles=None, limit=LIMIT):
+def export_report(suite, *, bs=None, profiles=None, limit=LIMIT, receipt=None):
     suite = Path(suite)
     data = collect(suite)
     if bs is not None or profiles is not None:
@@ -236,11 +237,15 @@ def export_report(suite, *, bs=None, profiles=None, limit=LIMIT):
     content = render(data, limit)
     summary = _json(data)+'\n'
     directory = suite/'triage'/hashlib.sha256(summary.encode()).hexdigest()[:20]
-    directory.mkdir(parents=True, exist_ok=True)
-    (directory/'triage_summary.json').write_text(summary, encoding='utf-8')
-    (directory/'SEND_FIRST.txt').write_bytes(content.encode('utf-8'))
     target = suite/'SEND_FIRST.txt'
-    target.write_bytes(content.encode('utf-8'))
+    raw = content.encode('utf-8')
+    with _module('transfer_budget').transaction(suite, 'summary', [hashlib.sha256(raw).hexdigest()]) as usage:
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory/'triage_summary.json').write_text(summary, encoding='utf-8')
+        (directory/'SEND_FIRST.txt').write_bytes(raw)
+        target.write_bytes(raw)
+    if receipt is not None:
+        receipt.update(usage)
     return target
 
 
@@ -251,7 +256,10 @@ def main(argv=None):
     parser.add_argument('--profile', nargs='+', choices=PROFILE_ORDER)
     args = parser.parse_args(argv)
     suite = args.suite if args.suite.is_absolute() else ROOT/args.suite
-    print(export_report(suite, bs=args.bs, profiles=args.profile))
+    receipt = {}
+    target = export_report(suite, bs=args.bs, profiles=args.profile, receipt=receipt)
+    print(f'Suite send budget: {receipt["issued"]}/10 issued; {receipt["remaining"]} remaining.')
+    print(target if receipt['new_count'] else 'Identical summary already issued; do not resend it.')
 
 
 if __name__ == '__main__': main()

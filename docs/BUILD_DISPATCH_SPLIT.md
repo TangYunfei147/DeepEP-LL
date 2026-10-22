@@ -438,9 +438,10 @@ that archive manually is unsuitable for initial bottleneck diagnosis. Default
 transfer is now a single readable SEND_FIRST.txt, hard-capped at60000characters
 and UTF-8bytes includingCRLF. All captured samples contribute to statistics;
 selected stage detail is explicitly bounded. Full captures remain on target.
-Exact follow-up extraction requires explicit B/profile/rank/iteration/core and
-refuses more than3parts by default before writing anything. Full archive mode
-remains explicit only. Existing completed runs need offline reanalysis only.
+Exact follow-up extraction requires explicit B/profile/rank/iteration; core is
+optional. It refuses more than3parts by default before writing anything. The
+subsequent 10-transfer policy below replaces the former optional archive mode.
+Existing completed runs need offline reanalysis only.
 
 Native sources, Python runtime package, CMake and build_support are unchanged
 from98c5f50. NoCANN compile orNPU run was needed. Full local relevantregression:
@@ -448,3 +449,31 @@ from98c5f50. NoCANN compile orNPU run was needed. Full local relevantregression:
 adding an empty-selection guard. The35case/2800sample synthetic worst-stage
 report is47500CRLFbytes in ONE file, retaining everycase's essentialtables.
 This is a report-volume validation, not measured target-operator performance.
+
+## 2026-10-23 cumulative transfer limit (offline only)
+
+Each suite permits at most10transfers total, including the initial summary and
+every necessary follow-up part. The default first delivery remains one
+SEND_FIRST.txt, capped at60000characters and UTF-8bytes includingCRLF. Exact
+follow-ups require profile/B/rank/iteration; core is optional. Their default
+3part ceiling is additionally bounded by the suite's remaining allowance.
+
+The suite keeps a persistent ledger, reserving allowance when new sendable
+content is produced. Identical content does not consume allowance again or
+request another send. A different output directory does not reset the budget.
+On first migration an existing SEND_FIRST.txt conservatively occupies one
+previously generated summary slot; a different replacement also costs one.
+Ledger, manifest, indexes, separate CSVs and full archives stay local. Archive
+mode is disabled in diagnosis, including old execution plans before any build
+or device work. Existing archives remain readable locally. This policy does
+not change kernel collection, communication or target performance.
+
+Final CPU regression with UTF-8 enabled: 597 passed, 48 skipped (C++/CANN/POSIX
+unavailable), in 26.46s. Command: `python -m pytest tests/ll_stage_timer
+tests/elastic/test_ll_st_contract.py -q`. Coverage includes cumulative exhaustion,
+duplicate content across output directories, legacy summary adoption, failed
+writes, required selectors and CLI receipt reporting. The 35-case/2800-sample
+synthetic report is 47662 bytes including CRLF, still one file. An earlier local
+run used Windows GBK and collected mocks during editing; the final run above
+used completed sources and UTF-8. Native/runtime/build sources are unchanged;
+no CANN compilation or device sampling was performed for this offline change.

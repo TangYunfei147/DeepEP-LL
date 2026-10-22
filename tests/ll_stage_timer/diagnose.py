@@ -47,9 +47,9 @@ def parser():
     p.add_argument('--wheel-map', type=Path, help='JSON mapping off/profile -> existing local wheel path')
     p.add_argument('--defer-analysis', action='store_true', help='Collect rank-local files before --analyze-existing')
     p.add_argument('--analyze-existing', type=Path, help='Only analyze a completed suite after collecting all ranks')
-    p.add_argument('--transfer-mode', choices=('summary', 'archive'), default='summary',
-                   help='summary: one bounded SEND_FIRST.txt for initial analysis (default); '
-                        'archive: optional lossless full-suite transfer, potentially hundreds of parts')
+    p.add_argument('--transfer-mode', choices=('summary',), default='summary',
+                   help='One bounded SEND_FIRST.txt; only necessary follow-ups, '
+                        'at most 10 transfers including this report')
     return p
 
 
@@ -85,6 +85,7 @@ def _forward_value(argv, option, default=None):
 
 def make_plan(args, forwarded, root=ROOT, python=sys.executable):
     """Pure planning: no filesystem creation or subprocess/device operations."""
+    _validate_transfer_mode(args.transfer_mode)
     root = Path(root).resolve()
     if not args.run_name or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,95}', args.run_name):
         raise ValueError('--run-name must be a fresh ASCII directory name (1..96 characters)')
@@ -298,29 +299,23 @@ def _transfer_module(name):
     return module
 
 
-def write_send_first(suite, transfer_mode='summary'):
-    """Write one initial-analysis report; a full archive requires explicit opt-in."""
+def _validate_transfer_mode(transfer_mode):
+    if transfer_mode != 'summary':
+        raise ValueError('Only summary transfer is allowed: the 10-transfer budget '
+                         'includes SEND_FIRST.txt and all necessary follow-ups; '
+                         'full archive sending is disabled')
+
+
+def write_send_first(suite, transfer_mode='summary', *, receipt=None):
+    """Write the initial report within the shared 10-transfer budget."""
+    _validate_transfer_mode(transfer_mode)
     suite = Path(suite)
-    if transfer_mode not in ('summary', 'archive'):
-        raise ValueError('transfer_mode must be summary or archive')
     _write_performance_compare(suite)
-    if transfer_mode == 'summary':
-        return _transfer_module('triage_report').export_report(suite)
-    module = _transfer_module('suite_transfer')
-    manifest = module.export_suite(suite, limit=LIMIT)
-    overview = suite / manifest['output'] / '00_overview.txt'
-    text = ('FULL ARCHIVE OPTIONAL - not required for initial analysis\n'
-            'For one initial-analysis file, rerun --analyze-existing with --transfer-mode summary.\n\n'
-            + overview.read_text(encoding='utf-8'))
-    if len(text) > LIMIT or len(text.encode('utf-8')) + text.count('\n') > LIMIT:
-        raise ValueError('Optional archive index exceeds the transfer limit')
-    # This is a replaceable pointer to immutable content-addressed bundles.
-    # Repacking after collecting additional ranks preserves earlier exports.
-    (suite / 'SEND_FIRST.txt').write_bytes(text.encode('utf-8'))
-    return suite / 'SEND_FIRST.txt'
+    return _transfer_module('triage_report').export_report(suite, receipt=receipt)
 
 
-def analyze_existing(suite, root=ROOT, python=sys.executable, transfer_mode='summary'):
+def analyze_existing(suite, root=ROOT, python=sys.executable, transfer_mode='summary', *, receipt=None):
+    _validate_transfer_mode(transfer_mode)
     suite = _within_project(suite, Path(root).resolve())
     plan_file = suite / 'node_000/plan.json'
     plan = json.loads(plan_file.read_text(encoding='utf-8'))
@@ -340,7 +335,7 @@ def analyze_existing(suite, root=ROOT, python=sys.executable, transfer_mode='sum
         subprocess.run(command, cwd=root, check=True)
     # The current CLI choice controls transfer even for plans written before
     # summary mode existed; their old archive is never decoded or deleted.
-    return write_send_first(suite, transfer_mode=transfer_mode)
+    return write_send_first(suite, transfer_mode=transfer_mode, receipt=receipt)
 
 
 def _validate_launcher_before_build(plan):
@@ -361,7 +356,10 @@ def _validate_launcher_before_build(plan):
     st['configure_endpoints'](options, environment)
 
 
-def execute(plan):
+def execute(plan, *, receipt=None):
+    # Older archive plans must fail before any build, device work or directory
+    # creation. analyze_existing still defaults their saved results to summary.
+    _validate_transfer_mode(plan.get('transfer_mode', 'summary'))
     root = Path(plan['root'])
     suite, node = Path(plan['suite']), Path(plan['node_dir'])
     if node.exists() or (suite.exists() and plan['nodes'] == 1):
@@ -401,26 +399,37 @@ def execute(plan):
         if stage['timer'] and plan['node'] == 0 and not plan['defer_analysis']:
             _command(stage['analyze'], plan, env, logs / f'{profile}-analyze.log')
     if plan['node'] == 0:
-        write_send_first(suite, transfer_mode=plan.get('transfer_mode', 'summary'))
+        write_send_first(suite, transfer_mode=plan.get('transfer_mode', 'summary'), receipt=receipt)
     return suite / 'SEND_FIRST.txt'
+
+
+def _print_summary_receipt(path, receipt):
+    if not receipt:
+        print('No summary issued on this node; use the node_000 analysis result.')
+        return
+    print(f'Suite send budget: {receipt["issued"]}/10 issued; {receipt["remaining"]} remaining.')
+    print(path if receipt['new_count'] else 'Identical summary already issued; do not resend it.')
 
 
 def main(argv=None):
     p = parser()
     args, forwarded = p.parse_known_args(argv)
-    if args.analyze_existing:
-        if args.plan:
-            print(json.dumps(dict(analyze_existing=str(args.analyze_existing),
-                                  transfer_mode=args.transfer_mode, mutation=False)))
-            return 0
-        print(analyze_existing(args.analyze_existing, transfer_mode=args.transfer_mode))
-        return 0
+    receipt = {}
     try:
+        if args.analyze_existing:
+            if args.plan:
+                print(json.dumps(dict(analyze_existing=str(args.analyze_existing),
+                                      transfer_mode=args.transfer_mode, mutation=False)))
+                return 0
+            path = analyze_existing(args.analyze_existing, transfer_mode=args.transfer_mode, receipt=receipt)
+            _print_summary_receipt(path, receipt)
+            return 0
         plan = make_plan(args, forwarded)
         if args.plan:
             print(json.dumps(plan, indent=2))
             return 0
-        print(execute(plan))
+        path = execute(plan, receipt=receipt)
+        _print_summary_receipt(path, receipt)
     except (ValueError, RuntimeError) as exc:
         p.exit(1, f'{exc}\n')
     return 0
