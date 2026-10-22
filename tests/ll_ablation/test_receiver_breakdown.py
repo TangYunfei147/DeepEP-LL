@@ -107,7 +107,7 @@ def test_one_command_builds_one_wheel_then_runs_and_reports(tmp_path,monkeypatch
     import receiver_suite as suite
     monkeypatch.setattr(suite,'ROOT',tmp_path)
     monkeypatch.setattr(suite,'git',lambda *args:'current-commit')
-    config=tmp_path/'case.json';config.write_text('{}')
+    config=tmp_path/'case.json';config.write_text((ROOT/'tests/ll_ablation/b256.json').read_text())
     donor=tmp_path/'.ablation/wheels/ready-replay-ON-s30/manifest.json'
     donor.parent.mkdir(parents=True);donor.write_text('{}')
     a=argparse.Namespace(config=config,send_cores=30,fresh_build=False,offline_deps=None,
@@ -119,3 +119,38 @@ def test_one_command_builds_one_wheel_then_runs_and_reports(tmp_path,monkeypatch
     assert any('receiver_report.py' in v for v in cmds[-1])
     a.build_only=True
     assert len(suite.commands(a))==1
+
+def test_complete_report_and_missing_iteration_rejection(tmp_path):
+    from receiver_report import report
+    spec=importlib.util.spec_from_file_location('report_timer',ROOT/'deep_ep/utils/ll_stage_timer.py')
+    timer=importlib.util.module_from_spec(spec);spec.loader.exec_module(timer)
+    (tmp_path/'ablation_identity.json').write_text(json.dumps(dict(mode='ready-breakdown',timer='ON',send_cores=30,wheel_sha256='wheel')))
+    summary=dict(status='completed',world_size=16,result_count=1,config={'ll_timer_iters':3},results=[{'correctness':'passed'}])
+    (tmp_path/'summary.json').write_text(json.dumps(summary))
+    for iteration in range(3):
+        data=sample();raw=[]
+        for r in data['records']:
+            if r['stage'] in ('REPLAY_BASE_BYTES_PLUS1','REPLAY_SKIP_BYTES_PLUS1'):
+                r['calls']=(37 if r['core']<32 else 36)*3696+1
+            if r['stage']=='REPLAY_ORDER_PLUS1':r['calls']=iteration+1
+            if r['stage']=='ABLATION_SKIP_FLAGS':r['total_ticks']=30000
+            if r['stage']=='ABLATION_NO_PAYLOAD':r['total_ticks']=20000
+        for core in range(56):
+            pairs=[(0,100),(1,200)]
+            for step in range(3):
+                kind=(iteration+step)%3;duration=(40000,30000,20000)[kind]
+                pairs.extend([(2*(108+kind),250+step*50000),(2*(108+kind)+1,250+step*50000+duration)])
+            pairs.append(((1<<32)|0x8000,100))
+            for r in data['records']:
+                if r['core']==core:pairs.append(((r['calls']<<32)|(0x8000+timer.STAGES.index(r['stage'])),r['total_ticks']))
+            words=[timer.MAGIC,15,1,56,core,1|(30<<8)|((3 if core<30 else 2)<<16),len(pairs),0]
+            for event,tick in pairs:words.extend([event,tick])
+            words.extend([0]*(640-len(words)));raw.append([words[i:i+8] for i in range(0,640,8)])
+        for rank in range(16):
+            meta=dict(rank=rank,iteration=iteration,correctness='passed',config={'B':256},case_id=0,route='normal',seed=0,
+                      comparison={'ablation_mode':5,'ablation_wheel_sha256':'wheel'})
+            (tmp_path/f'r{rank}-i{iteration}.json').write_text(json.dumps(dict(raw=raw,operation='dispatch',frequency_hz=1e9,metadata=meta)))
+    result=next(iter(report(tmp_path)['summary'].values()))
+    assert result['median_skip_flags_delta_us']==10 and result['median_no_output_delta_us']==20
+    summary['config']['ll_timer_iters']=9;(tmp_path/'summary.json').write_text(json.dumps(summary))
+    with pytest.raises(ValueError,match='Missing diagnostic iterations'):report(tmp_path)

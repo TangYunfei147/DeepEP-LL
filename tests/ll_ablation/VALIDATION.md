@@ -44,3 +44,19 @@ and preserves source-only/output-only/both residual directories, creates distinc
 isolated retry paths, and refuses to replace an existing completed manifest.
 Canonical manifests point to nested attempt wheels and their actual source SDK.
 No native/kernel change; partial build cache reuse is intentionally not claimed.
+
+## Receiver breakdown extension
+
+Native sourcec300ce9 (schema15/121metrics) passed14CANN object compiles (7entries
+OFF+ON), plus Host syntax and a real S30/R26 object-cache no-op/header-change test.
+See RECEIVER_BREAKDOWN.md for exact times and limitations. Final CPU checks include
+paired operation/error counters, snapshot layout/priority preservation, complete
+16rank reports, missing-iteration rejection, one-command planning and worktree
+cache preservation with spaces in paths. Full installed-SDK preflight on27 is
+unavailable, so full-wheel link and EP16 correctness are still target-side gates.
+
+Final receiver suite:74CPU tests passed,2local compiler-discovery skips. Includes
+complete16rank/3iteration synthetic report parsing, source-wheel identity and
+iteration/route-count guards, exact operation-counter validation, source cache
+advance/no-op/user-change rejection, and single-wheel command planning. Native
+CANN final verification remains c300ce9; subsequent changes are scripts/docs/tests.

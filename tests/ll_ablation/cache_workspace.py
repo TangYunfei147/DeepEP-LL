@@ -58,14 +58,15 @@ def inspect(root,manifest,revision,send):
 def advance(root,manifest,revision,send,mode):
     source,info=inspect(root,manifest,revision,send)
     header=source/HEADER
-    base=git(source,'show','HEAD:'+HEADER)+'\n'
+    base=subprocess.check_output(['git','-C',str(source),'show','HEAD:'+HEADER])
     head=git(source,'rev-parse','HEAD')
     if head!=revision:
-        header.write_text(base,encoding='utf-8',newline='\n')
+        header.write_bytes(base)
         subprocess.run(['git','-C',str(source),'merge','--ff-only',revision],check=True)
-    base=git(source,'show','HEAD:'+HEADER)+'\n'
-    target=base.replace('kLlAblationMode = 0;',f'kLlAblationMode = {mode};')
-    if header.read_text()!=target:header.write_text(target,encoding='utf-8',newline='\n')
+    base=subprocess.check_output(['git','-C',str(source),'show','HEAD:'+HEADER])
+    target=base.replace(b'kLlAblationMode = 0;',f'kLlAblationMode = {mode};'.encode())
+    if target==base:raise RuntimeError('Cannot locate generated ablation selector')
+    if header.read_bytes()!=target:header.write_bytes(target)
     (source/STATE).parent.mkdir(parents=True,exist_ok=True)
     write_json(source/STATE,dict(commit=revision,header_sha256=sha(header),donor_wheel_sha256=info['wheel_sha256']))
     return source

@@ -72,7 +72,8 @@ missing instrumentation cannot be confused. The parser checks:
 - no-payload-output issued zero payload/scale bytes;
 - task-dependent counts agree across arms;
 - each arm's word comparison found zero errors;
-- all56cores/all16ranks/all iterations are present and order rotation is balanced.
+- all56cores/all16ranks/all requested iterations are present and order rotation is balanced;
+- total output rows match16*256*8, with exactly one probe batch per16ready tasks.
 
 The main result is:
 
@@ -100,6 +101,7 @@ generated mode selection and records the new state. Its original absolute source
 path, SDK and build directories stay in place, preserving native cache eligibility.
 
 Old wheel files/manifests are retained and remain runnable with the unchanged SDK.
+Do not delete the donor source directory: the new wheel also uses its SDK path.
 The old worktree's source HEAD/header now describe mode5; the migration is recorded
 in `.tmp/receiver-cache-state.json`. A build lock rejects concurrent reuse. User
 changes are not reset, stashed or overwritten; use --fresh-build if the donor has
@@ -114,3 +116,31 @@ and build-timing.json. Missing caches naturally require compilation.
 The legacy suite remains five modes and does not mix an old ready-replay wheel
 with the new arms. The new launcher verifies current native inputs before reusing
 an already completed mode5 wheel.
+
+## Validation status
+
+Final native source c300ce9: on27, all7device entries compiled with mode5 OFF/ON
+in27s/43s (O2/dav-3510, jobs4). Mode5 explicitly rejects non-prequantized input
+entries; the original modes retain their supported dtypes. Host syntax passed.
+
+A real CMake object-cache check at S30/R26, prequantized FP8 ON, measured32.897s
+cold,0.029s unchanged,33.032s after a header edit. Object timestamps confirmed
+no-op reuse and necessary dependency rebuild. This is one device object, not
+a full-wheel speedup measurement. Git/worktree tests additionally verify cached
+objects are preserved, header mtime is unchanged on a no-op, locks reject concurrent
+reuse and user edits are rejected; paths containing spaces are covered.
+
+CMake3.31.6 was uploaded to the project-local .tools directory for the check; no
+external access or system install on27. Full-wheel preflight there is blocked by
+the absence of an installed SHMEM SDK (only locked source headers are available).
+No EP16 device run or full-wheel link was claimed. The target command uses its
+existing validated SDK and performs the actual build/correctness/run.
+
+Only local AIV synchronization is used, not a global cross-rank quiet barrier.
+Rotation reduces fixed-position bias, but replay remains a conditioned diagnostic
+with different cache history from live dispatch. Send the new compact JSON before
+turning any duration delta into a production optimization estimate.
+
+Final local regression:74passed/2compiler-discovery skips. NPU operation counts and
+per-arm errors are mandatory gates in the target comparison, not inferred from
+final output alone.

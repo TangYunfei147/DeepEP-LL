@@ -293,3 +293,20 @@ Modes2/3/4 objects: DeepEP-LL-ablations/.tmp/ablation-device-qcVRR5Og on27.
 Offline importer/exporter, valid metadata and OFF comparison guards tested locally.
 Required CPU suite plus new checks:55passed/2compiler-discovery skips; native CANN
 object checks above are separate from these local skips. No18us saving claimed.
+
+## Receiver breakdown, one diagnostic wheel
+
+Mode5 contains three runtime replay arms in one entry, not three new template
+dimensions. The arm loop uses unroll1. Original7dispatch TUs and O2 remain.
+Native c300ce9 compiled all7entries OFF/ON on27 in27s/43s, jobs4. New mode5 is
+explicitly restricted to the prequantized FP8 test shape; other entries reject it.
+Host syntax check passed atS30/R26. A standalone real CMake dependency test for
+the active FP8 ON entry measured cold32.8967s/no-op0.0289s/header-rebuild33.0316s.
+The no-op object timestamp stayed unchanged; edited-header rebuild changed it.
+This does not establish full-wheel warm build time. Full-wheel preflight with
+Ascend950/ON/S30R26 found no installed SHMEM SDK on27; no link/install/NPU run.
+No external download was made on27; CMake was uploaded and used from .tools.
+Logs: /home/tyf/Q4_remote_test/.logs/receiver-device-002.log and receiver-cache-003.log.
+Objects: DeepEP-LL-ablations/.tmp/ablation-device-N5q8okRY; cache timing and logs:
+DeepEP-LL-ablations/.tmp/receiver-cache-003. See RECEIVER_BREAKDOWN.md for runtime
+validation and the validated-worktree cache reuse policy.

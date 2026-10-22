@@ -36,6 +36,11 @@ def decode_sample(decoded):
         if base['payload_bytes']!=skip['payload_bytes'] or base['flag_batches']!=noout['flag_batches']:
             raise ValueError('Arms did not process matching tasks')
         if bool(base['flag_batches'])!=bool(base['payload_bytes']):raise ValueError('Invalid active receiver counts')
+        packet_bytes=3584+28*4 # Admitted prequantized FP8 shape, including scale packs.
+        if base['payload_bytes']%packet_bytes:raise ValueError('Invalid per-packet output byte count')
+        packets=base['payload_bytes']//packet_bytes
+        if base['flag_batches']!=(packets+15)//16:
+            raise ValueError('Replay was not fully ready: unexpected extra probe batches')
         order=stages['REPLAY_ORDER_PLUS1']['calls']-1
         if order not in (0,1,2):raise ValueError('Invalid replay order')
         result.append(dict(core=core,order=order,arms=arms))
@@ -47,6 +52,8 @@ def report(directory):
     if identity['mode']!='ready-breakdown' or identity['timer']!='ON':raise ValueError('Wrong experiment identity')
     summary=json.loads((directory/'summary.json').read_text())
     if summary['status']!='completed' or summary['world_size']!=16:raise ValueError('Incomplete EP16 run')
+    expected_iters=summary.get('config',{}).get('ll_timer_iters')
+    if type(expected_iters) is not int or expected_iters<3:raise ValueError('Missing diagnostic iteration configuration')
     if any(r['correctness']!='passed' for r in summary['results']):raise ValueError('Correctness did not pass')
     spec=importlib.util.spec_from_file_location('receiver_timer',ROOT/'deep_ep/utils/ll_stage_timer.py')
     timer=importlib.util.module_from_spec(spec);spec.loader.exec_module(timer)
@@ -56,11 +63,16 @@ def report(directory):
         if not isinstance(obj,dict) or 'raw' not in obj or obj.get('operation')!='dispatch':continue
         meta=obj['metadata']
         if meta.get('correctness')!='passed':raise ValueError('Capture lacks correctness evidence')
+        comparison=meta.get('comparison') or {}
+        if comparison.get('ablation_mode')!=5 or comparison.get('ablation_wheel_sha256')!=identity['wheel_sha256']:
+            raise ValueError('Capture wheel/mode identity differs from run')
         case=json.dumps([meta['config'],meta.get('case_id'),meta.get('route'),meta.get('seed')],sort_keys=True)
         key=(case,meta['rank'],meta['iteration'])
         if key in seen:raise ValueError('Duplicate capture')
         seen.add(key)
         decoded=timer.parse_records(obj['raw'],'dispatch',obj.get('frequency_hz'))
+        if decoded['send_cores']!=identity['send_cores'] or decoded['boundary_mode']!='observe':
+            raise ValueError('Capture split or timing mode differs')
         if not decoded['frequency_hz']:raise ValueError('Frequency required for microsecond comparison')
         factor=1e6/decoded['frequency_hz'];cores=decode_sample(decoded)
         for core in cores:
@@ -71,10 +83,12 @@ def report(directory):
             skip_flags_delta_us=durations['baseline']-durations['skip-flags'],
             no_output_delta_us=durations['baseline']-durations['no-payload-output']))
     if not samples:raise ValueError('No receiver breakdown captures')
+    if len(samples)!=summary['result_count']:raise ValueError('Missing capture cases')
     aggregate={}
     for case,rows in samples.items():
         if {r['rank'] for r in rows}!=set(range(16)):raise ValueError('Collect all16rank captures first')
         iterations={r['iteration'] for r in rows}
+        if iterations!=set(range(expected_iters)):raise ValueError('Missing diagnostic iterations')
         for rank in range(16):
             owned=[r for r in rows if r['rank']==rank]
             if {r['iteration'] for r in owned}!=iterations:raise ValueError('Missing rank/iteration capture')
@@ -83,12 +97,15 @@ def report(directory):
         per_iteration=[]
         for it in sorted(iterations):
             owned=[r for r in rows if r['iteration']==it]
+            actual_bytes=sum(c['arms']['baseline']['payload_bytes'] for r in owned for c in r['cores'])
+            if actual_bytes!=16*256*8*(3584+28*4):raise ValueError('Global received-route count mismatch')
             values={name:max(r['max_core_us'][name] for r in owned) for name in CASES}
             per_iteration.append(dict(iteration=it,us=values,
                 skip_flags_delta_us=values['baseline']-values['skip-flags'],
                 no_output_delta_us=values['baseline']-values['no-payload-output']))
         aggregate[case]=dict(per_iteration=per_iteration,
             median_max_duration_us={name:statistics.median(r['us'][name] for r in per_iteration) for name in CASES},
+            mean_max_duration_us={name:statistics.mean(r['us'][name] for r in per_iteration) for name in CASES},
             median_skip_flags_delta_us=statistics.median(r['skip_flags_delta_us'] for r in per_iteration),
             median_no_output_delta_us=statistics.median(r['no_output_delta_us'] for r in per_iteration),
             per_rank=[dict(rank=rank,median_duration_us={name:statistics.median(

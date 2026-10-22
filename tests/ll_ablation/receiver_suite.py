@@ -12,6 +12,11 @@ def commands(a):
     config=a.config if a.config.is_absolute() else ROOT/a.config
     settings=json.loads(config.read_text())
     if settings.get('num_nodes',1)!=1:raise ValueError('One-command suite currently requires one16-device host')
+    expected=dict(num_tokens=256,num_max_tokens_per_rank=256,hidden=3584,num_topk=8,
+                  num_experts=384,dtype='fp8',fp8_scale_dtype='int32',do_cpu_sync=0)
+    mismatch=[key for key,value in expected.items() if settings.get(key)!=value]
+    if mismatch:raise ValueError('Receiver breakdown config must match B=M256/H3584/K8/E384/FP8/int32/sync0: '+', '.join(mismatch))
+    if settings.get('ll_timer_mode','observe')!='observe':raise ValueError('Receiver breakdown requires observe timing')
     revision=git('rev-parse','HEAD');result=[]
     if manifest.exists():
         info=json.loads(manifest.read_text())
