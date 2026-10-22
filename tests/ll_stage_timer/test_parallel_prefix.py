@@ -29,3 +29,8 @@ def test_guard_generation_publication_and_lifetime():
     assert 'if(!overlap_.enabled){LL_SEG_SCOPE(TRANSITION_DRAIN);PipeBarrier<PIPE_ALL>();}' in body
     assert 'SyncAll' not in body
     assert 'matrix' not in body
+
+
+def test_parallel_budget_only_applies_to_receivers():
+    header=(ROOT/'csrc/kernels/dispatch/low_latency/common/ll_overlap_layout.h').read_text()
+    assert 'const bool parallelPrefix=!enableDedup && bs<=32U && core>=kLlSendCoreNum;' in header

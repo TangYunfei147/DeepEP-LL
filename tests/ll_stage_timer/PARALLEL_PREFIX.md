@@ -39,7 +39,10 @@ Serial fallback drains metadata sources before Receiver resets TPipe.
 - Retained the final full-prefix load because the current receiver builds tasks
   from global output-row boundaries. It is not another prefix computation.
 - Retained one own-generation read per R, two control publications per R and a
-  final R-record readiness snapshot. They are new overhead relative to R0-only
+  final R-record readiness snapshot. With R28 and one successful poll per
+  phase, control reads total38080B (896B own-generation +12096B preceding totals
+  +25088B final readiness), versus896B for one R0-epoch poll per receiver.
+  Additional control writes are1792B per rank. Retries can change both totals. They are new overhead relative to R0-only
   processing and must be included in whole-kernel A/B, not hidden in phase labels.
 - Retained prefix MTE3 completion before ready and the compatibility epoch write.
   Removing these would risk source reuse or stale-prefix consumption.
@@ -70,3 +73,27 @@ dedup/small calls, plus UB/control bounds. These tests do not replace target NPU
 correctness. Regress M32/B1,2,4,8,16,32 and M256/B1,8,32,256, repeated invocations,
 and every input mode. Keep S/R and input routes fixed in A/B. Compile/device
 validation status is recorded in docs/BUILD_DISPATCH_SPLIT.md.
+
+## Prior work audit and remaining candidates
+
+The existing small-B sender still allocates q scratch descriptors even when B1
+skips q construction, and keeps the conservative two-input-buffer setup. These
+are residual setup costs, but the user's current trace reports normal send cost;
+they are not combined with this prefix candidate. Prequantized input clearing
+also remains until complete valid-byte/padding overwrite is proven.
+
+The plain-q setup forB8/16/32 and the count VF can still have call overhead on
+tiny slices. Parallel prefix uses R short VF invocations instead of one VF scanning
+all E records: aggregate vector work can rise even when wall-clock critical work
+falls. Limiting prefix producers or scalar-prefixing very short slices is a future
+A/B variable, not an assumed gain. Current candidate keeps receiver ownership fixed.
+
+Final prefix loads, per-slice total publication, publication completion waits and
+legacy epoch maintenance are required by the selected protocol. Removing them
+without replacing their dependency would change correctness rather than remove
+redundant work. Verify whole OFF latency and first Probe; stage redistribution alone
+is insufficient evidence.
+
+Budget audit correction: the parallel stage/complete reservation is applied only
+to R cores. S core resource plans retain the baseline values, avoiding an unrelated
+small-B sender-lane reduction at large H. A source guard checks this condition.

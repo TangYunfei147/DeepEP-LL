@@ -1,3 +1,6 @@
+当前并行前缀候选为`kernel/ll-g4-small-b-prefix`，身份`g4-small-b-parallel-prefix`。
+仅M≤32且B≤32分片计算前缀；去重继续R0。A/B与额外开销见[PARALLEL_PREFIX.md](PARALLEL_PREFIX.md)。
+
 当前分支为`kernel/ll-g4-small-b`，身份`g4-small-b`，仅M≤32且B≤32启用优化。
 构建、A/B及验证边界以[SMALL_B_FAST_PATH.md](SMALL_B_FAST_PATH.md)为准。
 下方旧分支身份和历史示例不要直接用于本候选。

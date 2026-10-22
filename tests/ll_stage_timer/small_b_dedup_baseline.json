@@ -28,7 +28,7 @@
       "sha256": "77eee35f584f10e8d7e81535535316248050b82396dd838e9d26f60311304f25",
       "restore": [
         {
-          "new": "    const bool parallelPrefix=!enableDedup && bs<=32U;\n    const uint64_t countStage=parallelPrefix ? (core>=kLlSendCoreNum ? DispatchParallelPrefixStageUbBytes(e):0) :\n        (core==kLlSendCoreNum ? DispatchSinglePrefixStageUbBytes(e):0);\n    const uint64_t complete=parallelPrefix ? DispatchParallelPrefixCompleteUbBytes(e,ranks) :\n        32+DispatchDedupAlign(e*4,32)+DispatchDedupAlign(uint64_t(e/ranks)*8,32);",
+          "new": "    const bool parallelPrefix=!enableDedup && bs<=32U && core>=kLlSendCoreNum;\n    const uint64_t countStage=parallelPrefix ? DispatchParallelPrefixStageUbBytes(e) :\n        (core==kLlSendCoreNum ? DispatchSinglePrefixStageUbBytes(e):0);\n    const uint64_t complete=parallelPrefix ? DispatchParallelPrefixCompleteUbBytes(e,ranks) :\n        32+DispatchDedupAlign(e*4,32)+DispatchDedupAlign(uint64_t(e/ranks)*8,32);",
           "old": "    const uint64_t countStage=core==kLlSendCoreNum ? DispatchSinglePrefixStageUbBytes(e):0;\n    const uint64_t complete=32+DispatchDedupAlign(e*4,32)+DispatchDedupAlign(uint64_t(e/ranks)*8,32);"
         }
       ]
