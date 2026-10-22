@@ -165,9 +165,11 @@ public:
             // invalidate the remaining original pending positions. After all
             // snapshot work is issued, remove by descending original index.
             { LL_SEG_SCOPE(RX_PENDING_UPDATE);
+            if (!tasks_.DropReadySuffix(scan_,count,probe.readyMask)) {
             for (uint32_t n=count;n>0U;--n) {
                 const uint32_t index=n-1U;
                 if (probe.readyMask&(uint32_t(1)<<index)) tasks_.RemovePending(scan_+index);
+            }
             }
             }
         return true;

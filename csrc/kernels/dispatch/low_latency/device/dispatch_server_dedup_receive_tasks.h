@@ -6,6 +6,7 @@
 
 #include "kernel_operator.h"
 #include "../common/ep_memory_server_dedup_data_layout.h"
+#include "../common/ll_pending_batch.h"
 
 namespace DispatchDedup {
 using namespace AscendC;
@@ -105,6 +106,13 @@ public:
     {
         --pendingCount_;
         pendingIdx_.SetValue(p, pendingIdx_.GetValue(pendingCount_));
+    }
+
+    __aicore__ inline bool DropReadySuffix(uint32_t start,uint32_t count,uint32_t readyMask)
+    {
+        if (!LlCanDropReadySuffix(pendingCount_,start,count,readyMask)) return false;
+        pendingCount_-=count;
+        return true;
     }
 
 private:
