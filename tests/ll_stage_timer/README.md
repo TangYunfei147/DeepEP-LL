@@ -1,5 +1,25 @@
 # LL dispatch/combine阶段打点
 
+## 2026-10-22：默认按本机产物分析
+
+两机无需合并文件，各自在本机直接运行：
+
+```bash
+python tests/ll_stage_timer/analyze.py results/ll-timer/你的run目录 --trace-iteration 0
+# 只看dispatch或combine可增加 --op dispatch / --op combine
+```
+
+默认按目录内实际global rank推断完整的16-rank主机组。EP32第一台rank0..15、
+第二台rank16..31都可独立分析；不把global rank重新编号，world_size仍为32。
+本机缺卡、轮次缺失、重复记录及配置混用仍拒绝。缺失远端rank不当作0值补入。
+summary.json记录analysis_scope/analyzed_ranks/missing_remote_ranks，Markdown明确范围；
+慢rank、rank偏斜及专家统计均只代表输入的本机rank。
+`--latest`支持没有rank0 cases.json、但含本机sample文件的run。
+原始样本已存在时，只更新脚本即可，无需重装wheel或重采。
+
+若已合并全部节点，增加`--require-all-ranks`执行全域完整性校验。
+本节覆盖后文历史“必须先收齐全部rank”的分析说明；采样/作业自身仍需全部rank共同运行。
+
 维护分支：`kernel/ll-ndr-hns1825`。本功能保持纯AIV、实际核数查询和1:1收发分工，不改变逻辑组配置及EP准入条件。
 
 ## EP16通信量与有效带宽（schema 3）

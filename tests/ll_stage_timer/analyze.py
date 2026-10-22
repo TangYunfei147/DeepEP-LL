@@ -188,6 +188,8 @@ def render_bottleneck_report(report):
              '- 无物理拓扑、逐peer字节和逐包到达时间，不能证明多对一拥塞，也不计算峰值带宽达成率。', '']
     if report['boundary_mode'] == 'drain':
         lines += ['**drain主动串行化阶段边界：等待位置和重叠已被改变，不能据此判断observe生产路径瓶颈。**', '']
+    lines += [f"分析范围：{report.get('analysis_scope', 'all_ranks')}；实际global ranks：{report.get('analyzed_ranks', list(range(report['world_size'])))}。",
+              '最慢rank、rank偏斜、通信和专家统计仅覆盖上述rank，不代表缺失远端rank或全域瓶颈；EP保持实际通信域大小，不重编号。', '']
     if any(row.get('flags', 0) for row in report['bandwidth']):
         lines += ['**存在跳过通信的非标准诊断标记：不生成带宽，也不能据此推断正常通信瓶颈。**', '']
     if report['frequency_hz'] is None:
@@ -303,7 +305,7 @@ def render_bottleneck_report(report):
     return '\n'.join(lines)
 
 
-def analyze(paths, frequency_hz=None):
+def analyze(paths, frequency_hz=None, require_all_ranks=False):
     configurations={};ranks={};groups={};identity=None;stage_max={};bandwidth=[];diagnostics=[];receivers=[]
     for path in paths:
         saved=json.loads(path.read_text())
@@ -332,11 +334,18 @@ def analyze(paths, frequency_hz=None):
             per_iteration=stage_max.setdefault(stage_key,{})
             per_iteration[iteration]=max(per_iteration.get(iteration,0),duration)
     if identity is None:raise ValueError('No traces')
+    present = {rank for _,rank in ranks}
+    # NDR deploys 16 contiguous global ranks per host. Infer hosts from files,
+    # never from the analysis machine or rank 0, and still reject missing local cards.
+    width = min(16, identity[0])
+    hosts = sorted({rank // width for rank in present})
+    expected_ranks = (set(range(identity[0])) if require_all_ranks else
+                      {rank for host in hosts for rank in range(host*width, min((host+1)*width, identity[0]))})
     for op in configurations:
-        if {rank for kind,rank in ranks if kind==op}!=set(range(identity[0])):
-            raise ValueError(f'Missing ranks for {op}')
-        reference=ranks[(op,0)]
-        if reference!=set(range(len(reference))) or any(ranks[(op,r)]!=reference for r in range(identity[0])):
+        if {rank for kind,rank in ranks if kind==op}!=expected_ranks:
+            raise ValueError(f'Missing ranks for {op}: expected {sorted(expected_ranks)}')
+        reference=ranks[(op,min(expected_ranks))]
+        if reference!=set(range(len(reference))) or any(ranks[(op,r)]!=reference for r in expected_ranks):
             raise ValueError('Missing or misaligned diagnostic iterations')
         if identity[8] is not None:
             expected = identity[8].get('diagnostic_iters')
@@ -347,6 +356,9 @@ def analyze(paths, frequency_hz=None):
         rows.append(dict(operation=op,rank=rank,core=core,role=role,stage=stage,unit=unit,
                          **stats([v for v,n in values]),mean_calls=statistics.mean(n for v,n in values)))
     return dict(schema=identity[9],world_size=identity[0],boundary_mode=identity[3],frequency_hz=identity[4],comparison=identity[10],
+                analyzed_ranks=sorted(present), analyzed_host_groups=hosts,
+                analysis_scope='all_ranks' if present==set(range(identity[0])) else 'local_rank_subset',
+                missing_remote_ranks=sorted(set(range(identity[0]))-present),
                 run_id=identity[5],case_id=identity[7],seed=identity[6],sample_count=len(diagnostics),
                 configurations=configurations,sampling=identity[8],per_rank_core_stage=rows,
                 bandwidth=bandwidth,per_rank_bandwidth=bandwidth_summary(bandwidth),
@@ -360,11 +372,13 @@ def analyze(paths, frequency_hz=None):
 
 def discover(source, latest=False):
     if latest:
-        runs = [p for p in source.iterdir() if p.is_dir() and (p/'cases.json').is_file()]
+        runs = [p for p in source.iterdir() if p.is_dir() and
+                ((p/'cases.json').is_file() or any(p.rglob('sample_*.json')))]
         if not runs:
-            raise ValueError('No run directories containing cases.json')
+            raise ValueError('No run directories containing cases.json or local timer samples')
         # Manifest mtime is the run creation time, unaffected by later report directories.
-        source = max(runs, key=lambda p: ((p/'cases.json').stat().st_mtime_ns, p.name))
+        source = max(runs, key=lambda p: ((p/'cases.json').stat().st_mtime_ns if (p/'cases.json').is_file()
+                     else max(s.stat().st_mtime_ns for s in p.rglob('sample_*.json')), p.name))
     directories = sorted(p for p in source.rglob('ll_stage_timer')
                          if p.is_dir() and not (p/'summary.json').is_file())
     if source.name == 'll_stage_timer' or not directories:
@@ -416,13 +430,13 @@ def expert_reports(paths, frequency_hz):
     return rows,summaries
 
 
-def process_directory(source, output, frequency_hz, trace_iteration, lane_layout='core', show_repeated=False, operation=None):
+def process_directory(source, output, frequency_hz, trace_iteration, lane_layout='core', show_repeated=False, operation=None, require_all_ranks=False):
     if operation not in (None,'dispatch','combine'): raise ValueError('Expected dispatch or combine')
     paths = sorted(source.rglob('sample_*.json'))
     if operation is not None:
         paths=[path for path in paths if json.loads(path.read_text())['operation']==operation]
         if not paths: raise ValueError(f'No {operation} diagnostic samples in {source}')
-    report = analyze(paths, frequency_hz)
+    report = analyze(paths, frequency_hz, require_all_ranks)
     selected = []
     for path in paths:
         item = json.loads(path.read_text())
@@ -460,7 +474,8 @@ def process_directory(source, output, frequency_hz, trace_iteration, lane_layout
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('directory',type=Path,help='Timer directory, case, run, or run parent; every rank required per case')
+    parser.add_argument('directory',type=Path,help='Timer directory, case, run, or run parent; analyzes complete local 16-rank groups by default')
+    parser.add_argument('--require-all-ranks',action='store_true',help='Require the full global communication domain instead of local host data')
     parser.add_argument('--op','--operation',dest='operation',choices=('dispatch','combine'),help='Filter all reports and trace to one operation')
     parser.add_argument('--latest',action='store_true',help='Select newest child run by cases.json creation mtime')
     parser.add_argument('--frequency-hz',type=float,default=None,
@@ -478,7 +493,7 @@ def main():
     documents = []
     for directory in directories:
         destination = output if len(directories)==1 else output/directory.relative_to(source)
-        process_directory(directory, destination, args.frequency_hz, args.trace_iteration, args.lane_layout, args.show_repeated, args.operation)
+        process_directory(directory, destination, args.frequency_hz, args.trace_iteration, args.lane_layout, args.show_repeated, args.operation, args.require_all_ranks)
         documents.append((directory.relative_to(source), (destination/'bottleneck_summary.md').relative_to(output)))
     if len(documents) > 1:
         from urllib.parse import quote
