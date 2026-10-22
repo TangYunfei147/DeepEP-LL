@@ -19,10 +19,10 @@ extern "C" [[bisheng::core_ratio(0,1)]] __global__ __aicore__ void ll_scalar_mic
             for(uint32_t j=0;j<count;++j) {
                 if(mode==10) {
                     dst.SetValue(j,1U);
-                    for(uint32_t g=0;g<3;++g)dst.SetValue(j,dst.GetValue(j)|(2U<<g));
+                    for(uint32_t g=0;g<3;++g)dst.SetValue(j,dst.GetValue(j)|(1U<<((src.GetValue(1024+g)&3U)+1U)));
                 } else {
                     uint32_t mask=1;
-                    for(uint32_t g=0;g<3;++g)mask|=2U<<g;
+                    for(uint32_t g=0;g<3;++g)mask|=1U<<((src.GetValue(1024+g)&3U)+1U);
                     dst.SetValue(j,mask);
                 }
             }
