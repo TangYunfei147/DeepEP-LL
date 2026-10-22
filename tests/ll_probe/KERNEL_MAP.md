@@ -93,3 +93,8 @@ schema13打点与communication_report补齐发送初始化、q准备、首发、
 ST `--ll-profile-capture`将实际capture调用放进独立profiler窗口，包含INIT/最终同步/Flush。
 `analyze.py`调用`transfer_report.py`生成≤60000字符/字节的可恢复分块。
 完整用法与扰动判断见`../ll_stage_timer/PHASED_DIAGNOSIS.md`；通信协议、收发顺序及业务UB不改。
+
+编译限定：ll_stage_timer_device.h在包含profile helper时显式设置DEEPEP_LL_TIMER_DEVICE_CONTEXT，
+使非模板DeviceTimer/RelayCompletionScope在Bisheng Host预处理阶段也引用__aicore__函数。
+Host绑定直接包含profile头保持普通constexpr；不要只依赖__CCE_IS_AICORE__，也不要仅修补某个调用点。
+回归tests/ll_stage_timer/test_profile_device_context.py包含真实Bisheng OFF/六组ON编译探针（不运行NPU）。

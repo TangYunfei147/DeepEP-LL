@@ -386,3 +386,46 @@ exact decoded-field roundtrip and actual interval rendering are covered.
 The two existing user-file byte benchmarks reduced transmitted text72.81% and
 86.04% including headers/CRLF, with identical restored bytes. This is a data
 transport result, not a device latency claim. See COMPRESSED_TRANSFER.md.
+
+## 2026-10-22 timer profile Host/AICore qualifier fix
+
+User compilation on72da8fe failed at RelayCompletionScope's initializer:
+ProfileEnabled(RELAY_COMPLETE) was classified as Host inside an AICore function.
+Reproduced unchanged72da8fe on authorized27: all seven OFF dispatch variants
+failed with the same diagnostic; the Host selection bridge passed. This was a
+source regression, not a successful final OFF build. The earlier all-profile
+compile snapshot predated the final relay gating edit; only prefixON was
+revalidated afterward. The original validation statement has been corrected.
+
+Bisheng's Host preprocessing pass defines __CCE__ but omits __CCE_IS_AICORE__.
+The existing conditional annotation therefore did not match the non-template
+AICore classes it serves. The device timer header now explicitly establishes
+DEEPEP_LL_TIMER_DEVICE_CONTEXT while including the shared profile helpers, so
+ProfileEnabled and ProfileIndex retain AICore qualifiers in both compiler passes.
+The ordinary Host binding still includes the profile header directly and keeps
+normal constexpr helpers. No phase IDs, accumulator layout, runtime gating,
+transport, synchronization, architecture, optimizer flags or SDK changes.
+
+Validation used the existing/home/tyf/0env.sh Python/CANN environment, S28/R28,
+Ascend950/dav-3510, O2, jobs4, new independent object directories:
+
+- Before fix: OFF37.562s, bridgepassed/sevenvariantsfailed (not a usable performance baseline).
+- After fix: OFF37.794s, sevenvariants+bridgepassed.
+- After fix: ON/full87.941s, sevenvariants+bridgepassed.
+- combine OFF separatelycompiled,9.027s.
+-45 targeted remote tests passed in39.27s, including real Bisheng mixed-pass
+  recorder probes for OFF and all six ON profiles, Host-only constexpr use,
+  device include preprocessing under absent/Host-only/device macros, and actual
+  native recorder/relay guard mocks. Probe kernels are compiled only.
+- Complete ON/full wheel built and linked; isolated project venv import,
+  profile/layout and exactsource fingerprint verification passed.
+- Local required structure/ST/profile checks:76passed/21compiler-environment skips.
+
+Evidence remains under the authorized project at
+`.tmp/profile-annotation-fix/.logs/`:before-off.log,compiler-macros.txt,
+pytest-qualifier-01.log,after-off/timing.json,after-on-full/timing.json,
+combine-off.log,wheel-on-full.log,wheel-install.log. Wheel is in
+`.tmp/profile-annotation-fix/.tmp/wheels-on-full/`.
+No NPU task was launched, no SDK rebuilt, and shared Python was not modified.
+After pulling thefix, use a freshdiagnose run-name(e.g.small_b_phases_002);
+keep thefailed directory and existing build caches for diagnosis/reuse.

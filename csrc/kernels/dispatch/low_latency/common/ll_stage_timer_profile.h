@@ -3,7 +3,7 @@
 #ifndef DEEPEP_LL_TIMER_PROFILE_ID
 #define DEEPEP_LL_TIMER_PROFILE_ID 0
 #endif
-#if defined(__CCE__) && defined(__CCE_IS_AICORE__)
+#if defined(DEEPEP_LL_TIMER_DEVICE_CONTEXT) || (defined(__CCE__) && defined(__CCE_IS_AICORE__))
 #define LL_PROFILE_INLINE __aicore__ inline
 #else
 #define LL_PROFILE_INLINE inline

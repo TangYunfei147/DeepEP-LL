@@ -128,7 +128,7 @@ schema14为136阶段、192条真实事件、每核5632B、512B对齐；比schema
 
 - 本地纯CPU计划确认默认7个B、OFF先行、5个ON组均启用实际capture profiler；没有构建或启动设备。
 - 27独立验证目录使用`/home/tyf/0env.sh`，完整CPU回归677通过；最后计时器裁剪调整后实际C++记录器/解析器45通过。
-- full/overview/prepare/prefix/send/recv六组及OFF，各7种dispatch模式与Host选择桥均通过CANN编译。
+- 初始快照曾通过六组ON及OFF编译；随后修改RelayCompletionScope门控后只复验prefix ON，遗漏OFF。0f6f02e/72da8fe因此仍有OFF限定错误，不能将初始结果当作这两个提交的完整验证。修复与最终验收见[BUILD_DISPATCH_SPLIT.md](../../docs/BUILD_DISPATCH_SPLIT.md)。
 - prefix组最终完整Host/Device wheel构建、工程内隔离venv安装、native profile/layout和源码SHA核验通过。未更改共享Python。
 - 计时器微基准仅运行授权设备0，10次启动前均检查无既有NPU任务；结果及解释见TIMER_OVERHEAD_PROBE.md。
 - 未运行完整EP16通信，也未在目标拓扑测量一键矩阵；不能将编译/CPU/micro通过写成目标通信正确性或已恢复性能基线。
@@ -136,3 +136,9 @@ schema14为136阶段、192条真实事件、每核5632B、512B对齐；比schema
 验证材料保留于27的`/home/tyf/Q4_remote_test/DeepEP-LL-g4-small-b-prefix/.tmp/timer-profile-validation/`：
 `.logs/pytest-suite-04.log`、`.logs/final-compile-*/timing.json`、`.logs/wheel-prefix-verified.log`、
 `.tmp/wheels-prefix-verified/`、`.logs/timer-overhead-02/`。这些是验证结果位置，不是脚本硬编码依赖。
+
+## 编译报错后重跑
+
+若遇到`ProfileEnabled: call to __host__ function from __aicore__ function`，更新本分支的限定修复后沿用原诊断命令，改用新的`--run-name small_b_phases_002`。
+原失败目录保留；不需要清空构建缓存或重建SDK。构建系统会按头文件依赖重新编译受影响对象。
+修复只统一打点helper的Host/AICore限定，不修改schema14、通信协议、收发顺序或压缩格式。

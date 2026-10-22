@@ -5,7 +5,11 @@
 #pragma once
 #include "kernel_operator.h"
 #include "ll_stage_timer_layout.h"
+// Bisheng also parses these non-template device classes during its Host pass.
+// Match helper qualifiers to this header's device API, not pass-local macros.
+#define DEEPEP_LL_TIMER_DEVICE_CONTEXT 1
 #include "ll_stage_timer_profile.h"
+#undef DEEPEP_LL_TIMER_DEVICE_CONTEXT
 #include "ll_core_config.h"
 namespace LlStageTimer {
 // Reference semantics: no boundary barriers, local accumulation, first two
