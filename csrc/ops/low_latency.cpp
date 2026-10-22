@@ -127,6 +127,7 @@ void bind_low_latency(py::module_& module)
     if (deepep_ll_overlap_stage()!=DispatchDedup::kLlOverlapExperimentStage)
         throw std::runtime_error("LL A/B stage differs between Host and device library");
     module.attr("low_latency_overlap_stage")=DispatchDedup::kLlOverlapExperimentStage;
+    module.attr("low_latency_ablation_mode") = DispatchDedup::kLlAblationMode;
     module.attr("low_latency_core_protocol") = DispatchDedup::kLlCoreProtocolVersion;
     module.attr("low_latency_q_table_enabled") = true;
     module.attr("low_latency_q_seed_vf") = true;
@@ -223,6 +224,9 @@ void bind_low_latency(py::module_& module)
     module.def("low_latency_dispatch_tiling", [](int p, int b, int h, int k, int e, const std::string& dtype,
                                                  int num_max_tokens_per_rank) {
         const bool fp8 = dtype == "float8_e4m3fn";
+        if constexpr (DispatchDedup::kLlAblationMode==2U || DispatchDedup::kLlAblationMode==3U) {
+            if (!fp8) throw std::invalid_argument("Payload ablation requires prequantized FP8");
+        }
         auto checked=layout(p, b, h, k, e, fp8);
         if (!DispatchDedup::EpServerDedupEnabled(num_max_tokens_per_rank) &&
             !DispatchDedup::DispatchDedupPacketUbFits(checked,b,k,e,p,DispatchDedup::kLlDefaultPlanCoreNum,false))
@@ -256,6 +260,9 @@ void bind_low_latency(py::module_& module)
         if (session.combine_only()) throw std::invalid_argument("LL requires a dense-channel Session");
         dtype_code(dtype);
         const bool fp8 = dtype == "float8_e4m3fn";
+        if constexpr (DispatchDedup::kLlAblationMode==2U || DispatchDedup::kLlAblationMode==3U) {
+            if (!fp8) throw std::invalid_argument("Payload ablation requires prequantized FP8");
+        }
         const auto plan = layout(session.world(), b, h, k, e, fp8);
         const int64_t c = plan.capacityRows;
         if (!stream_address || rows < c || session.capacity() != DispatchDedup::kEpServerDedupPeerBytes) {

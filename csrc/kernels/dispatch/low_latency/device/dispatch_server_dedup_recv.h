@@ -182,7 +182,8 @@ public:
         // This is the end of wait instruction submission, not a new Scalar
         // completion barrier. The existing final PIPE_ALL establishes completion.
 
-        ClearFlags();
+        if constexpr (kLlAblationMode==4U) { if (ablationReplay_) ClearFlags(); }
+        else ClearFlags();
 
         // 最终流水屏障确保输出、relay 和标记清理完成。
         { LL_SEG_SCOPE(RECV_COMPLETE_WAIT);
@@ -190,7 +191,17 @@ public:
         }
     }
 
+    __aicore__ inline void ReplayReadyForAblation() {
+        if (!tasks_.Count()) return;
+        tasks_.ResetPendingForAblation();
+        issued_=consumed_=scan_=0U;
+        if (!overlap_.enabled)for(uint32_t lane=0;lane<lanes_;++lane)SetFlag<HardEvent::MTE3_MTE2>(lane);
+        ablationReplay_=true;
+        timer_=nullptr; // Replay has its own envelope; do not double normal metrics.
+        Run();
+    }
 private:
+    bool ablationReplay_=false;
     static constexpr uint32_t kProbeBatch = 16U;
     static_assert(kProbeBatch<=16U,"priority order uses four-bit snapshot positions");
     struct ProbeResult {
@@ -338,7 +349,7 @@ private:
         // Initiate downstream work before local output writes on the same
         // MTE3 stream. Metadata was snapshotted before the terminal rewrite;
         // wire stays immutable until every relay/output read retires.
-        if (firstHop) {
+        if (firstHop && (kLlAblationMode!=4U || !ablationReplay_)) {
             const uint32_t sourceRank = tail.Header().GetValue(0U);
             const uint32_t ranks = uint32_t(args_->rankSize);
             const uint32_t members = tail.ReadIndex().GetValue(0U);

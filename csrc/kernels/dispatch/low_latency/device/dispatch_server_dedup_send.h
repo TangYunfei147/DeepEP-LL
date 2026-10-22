@@ -98,6 +98,7 @@ public:
             cleanPool.InitBuffer(cleanInput, 2U * inputBytes);
             Duplicate<uint8_t>(cleanInput.Get<uint8_t>(), 0U, 2U * inputBytes);
             Sync<HardEvent::V_MTE2>();
+            if constexpr (kLlAblationMode==2U || kLlAblationMode==3U) Sync<HardEvent::V_S>();
         }
 
         // 2. 分配路由、q 前缀统计、权重、源掩码以及两类发送任务的临时空间。
@@ -182,6 +183,7 @@ public:
         }
         // 每个 512B 块尾部的 32B 标记预置为 1；发送时 payload 和标记一起搬运。
         // 初始 MTE3_V 事件让 lane 首次可写，后续复用由上一包的发送完成事件控制。
+        if constexpr (kLlAblationMode==3U) InitAblationPackets();
         uint64_t flagMask[2] = {0xffU, 0U};
         for (uint32_t lane = 0; lane < lanes_; ++lane) {
             // Initialize only the 32B flags. Padding and unused entries carry no semantics.
@@ -250,6 +252,7 @@ public:
             cleanPool.InitBuffer(cleanInput,2U*inputBytes);
             Duplicate<uint8_t>(cleanInput.Get<uint8_t>(),0U,2U*inputBytes);
             Sync<HardEvent::V_MTE2>();
+            if constexpr (kLlAblationMode==2U || kLlAblationMode==3U) Sync<HardEvent::V_S>();
         }
         if constexpr (NeedQuantize) {
             const uint32_t scales=uint32_t(data_.quantCount/32U);
@@ -266,6 +269,7 @@ public:
         const uint32_t available=(kEpServerDedupCountUbBytes-usedBytes_)/uint32_t(data_.tokenStride);
         lanes_=overlap_.enabled ? overlap_.sendLanes : (available<8U ? available : 8U);
         Allocate(outBuf_,lanes_*uint32_t(data_.tokenStride));
+        if constexpr (kLlAblationMode==3U) InitAblationPackets();
         uint64_t flagMask[2]={0xffU,0U};
         for (uint32_t lane=0;lane<lanes_;++lane) {
             Duplicate<float>(outBuf_.Get<float>()[lane*data_.tokenStride/4U+120U],1.0f,flagMask,
@@ -479,14 +483,26 @@ private:
         DispatchDedupMxfp8Quant::ComputeFp8Data<XType, Fp8Type, RoundMode::CAST_TRUNC, RoundMode::CAST_RINT>(
             src, halfScale, dst, uint32_t(data_.quantCount));
     }
+    __aicore__ inline void InitAblationPackets() {
+        Duplicate<uint8_t>(outBuf_.Get<uint8_t>(),0U,lanes_*uint32_t(data_.tokenStride));
+        Sync<HardEvent::V_S>();
+        for(uint32_t lane=0;lane<lanes_;++lane) {
+            auto out=outBuf_.Get<uint32_t>()[lane*uint32_t(data_.tokenStride)/4U];
+            for(uint32_t i=0;i<uint32_t(data_.scaleBytes);i+=4U) {
+                const uint32_t logical=uint32_t(data_.quantCount)+i;
+                out.SetValue((logical+logical/480U*32U)/4U,0x7f7f7f7fU);
+            }
+        }
+        Sync<HardEvent::S_V>();
+    }
     // 摘要：填充源 rank/token、路由类型和首路由信息，并为首跳包编码其余成员的专家、q 与权重。
-    __aicore__ inline void FillTail(LocalTensor<uint8_t> payload, uint32_t token, uint32_t firstK, uint32_t mask)
+    __aicore__ inline void FillTail(LocalTensor<uint8_t> payload, uint32_t token, uint32_t firstK, uint32_t mask, bool wire=false)
     {
-        auto header = payload[data_.headerPayloadOffset].template ReinterpretCast<uint32_t>();
+        auto header = payload[wire ? data_.headerWireOffset : data_.headerPayloadOffset].template ReinterpretCast<uint32_t>();
         header.SetValue(0U, uint32_t(args_->rank));
         header.SetValue(1U, token);
         header.SetValue(2U, firstK);
-        auto index = payload[data_.readIndexPayloadOffset].template ReinterpretCast<uint32_t>();
+        auto index = payload[wire ? data_.relayReadIndexWireOffset : data_.readIndexPayloadOffset].template ReinterpretCast<uint32_t>();
         header.SetValue(3U, uint32_t(mask == 0U ? EpServerDedupTokenType::Direct : EpServerDedupTokenType::FirstHop));
         // Direct route ownership differs from the weight-copy token partition.
         // Its reserved relay payload is unused; never index routeWeights_ here.
@@ -546,12 +562,22 @@ private:
         // clearing here would add a V dependency ahead of current computation.
         // Payload/scales and every valid tail field are overwritten per use;
         // old bytes outside those fields are padding, never consumed.
+        if constexpr (kLlAblationMode==2U || kLlAblationMode==3U) {
+            // Both input lanes were zeroed once in setup. Refresh unity scales
+            // once per first use of a lane, outside the payload DMA path.
+            if (inputsIssued_<2U) {
+                auto scales=x.template ReinterpretCast<uint8_t>()[uint32_t(data_.quantCount)].template ReinterpretCast<uint32_t>();
+                for(uint32_t i=0;i<uint32_t(data_.scaleBytes)/4U;++i)scales.SetValue(i,0x7f7f7f7fU);
+                Sync<HardEvent::S_V>();
+            }
+        } else {
         DataCopyPad(x,x_[uint64_t(token)*h_],{1U,h_*uint32_t(sizeof(XType)),0U,0U,0U},
                     {NeedQuantize,0U,0U,XType(0)});
         if constexpr (Prequantized) {
             auto scale=x.template ReinterpretCast<uint8_t>()[uint32_t(data_.quantCount)];
             DataCopyPad(scale,inputScales_[uint64_t(token)*data_.scaleBytes],
                         {1U,uint32_t(data_.scaleBytes),0U,0U,0U},{false,0U,0U,uint8_t(0)});
+        }
         }
         if constexpr (!NeedQuantize)
             SetFlag<HardEvent::MTE2_S>(inputReady_[inputsIssued_&1U]);
@@ -596,7 +622,7 @@ private:
             payload = x.template ReinterpretCast<uint8_t>();
         }
         LL_SEG_BEGIN(segBegin5, TOKEN_METADATA);
-        FillTail(payload, token, firstK, mask);
+        if constexpr (kLlAblationMode!=3U) FillTail(payload, token, firstK, mask);
         LL_SEG_END(segBegin5, TOKEN_METADATA);
         Sync<HardEvent::S_V>();
         const uint32_t lane = packets_ % lanes_;
@@ -607,8 +633,14 @@ private:
         auto out = outBuf_.Get<uint8_t>()[lane * data_.tokenStride];
         auto outWords = out.template ReinterpretCast<int32_t>();
         auto inWords = payload.template ReinterpretCast<int32_t>();
+        if constexpr (kLlAblationMode==3U) {
+            // Lane retirement above protects scalar tail rewrites.
+            FillTail(out,token,firstK,mask,true);
+            Sync<HardEvent::S_V>();
+        } else {
         Copy(outWords, inWords, uint64_t(64), uint8_t(data_.blockCount), {1, 1, 16, 15});
         Copy(outWords[64], inWords[64], uint64_t(56), uint8_t(data_.blockCount), {1, 1, 16, 15});
+        }
         // Refresh this packet's layout marker on every reused lane, before
         // the existing V_MTE3 publication dependency.
         uint64_t markerMask[2] = {1U, 0U};

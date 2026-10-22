@@ -1,6 +1,7 @@
 #ifndef DEEPEP_LL_CORE_CONFIG_H
 #define DEEPEP_LL_CORE_CONFIG_H
 #include <cstdint>
+#include "ll_ablation_config.h"
 namespace DispatchDedup {
 #ifndef DEEPEP_LL_SEND_CORES
 #define DEEPEP_LL_SEND_CORES 28
@@ -17,7 +18,7 @@ constexpr uint32_t kLlDispatchUbBytes = 230U * 1024U;
 // Dispatch senders join receive after their own sends; combine retains S/R.
 constexpr uint32_t kLlDispatchRecvCoreNum = kLlActiveCoreNum;
 // Encode the split so mismatched Host/device objects and rank identities differ.
-constexpr uint32_t kLlCoreProtocolVersion = 19000U + kLlSendCoreNum;
+constexpr uint32_t kLlCoreProtocolVersion = 29000U + 100U*kLlAblationMode + kLlSendCoreNum;
 // Storage capacity remains separate from the fixed 56-core launch.
 constexpr uint32_t kLlMaxCoreNum = 72U;
 constexpr uint32_t kLlMaxRecvCoreNum = 56U;

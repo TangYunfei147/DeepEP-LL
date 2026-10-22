@@ -5,9 +5,9 @@
 #pragma once
 #include <cstdint>
 namespace LlStageTimer {
-constexpr uint32_t kSchema = 13U;
+constexpr uint32_t kSchema = 14U;
 constexpr uint64_t kMagic = 0x4c4c5431ULL;
-constexpr uint32_t kTraceRecords = 192U, kMetrics = 108U;
+constexpr uint32_t kTraceRecords = 192U, kMetrics = 109U;
 constexpr uint32_t kRecords = kTraceRecords + kMetrics;
 // Same 16-byte event/metric records as dc_seg. LL keeps per-core 512B alignment.
 constexpr uint32_t kSlots = 80U, kFields = 8U;
@@ -122,6 +122,7 @@ enum Stage : uint32_t {
     RX_READY = 105,
     RX_EMPTY_POLLS = 106,
     RX_PACKETS = 107,
+    ABLATION_READY_RECV = 108,
     StageCount = kMetrics
 };
 constexpr const char* kNames[] = {
@@ -233,6 +234,7 @@ constexpr const char* kNames[] = {
     "RX_READY",
     "RX_EMPTY_POLLS",
     "RX_PACKETS",
+    "ABLATION_READY_RECV",
 
 
 

@@ -268,3 +268,14 @@ from header[0..2]. Original role snapshot, terminal destination, relay ordering,
 all synchronization and lane retirement remain unchanged. No extra UB, launch
 mode or template dimension. CANN compilation and NPU performance are unverified.
 Candidate 1 local required contracts and relay checks: 70 passed, 3 skipped (no C++ compiler). Initial pytest temp-directory failure resolved by using project-local --basetemp.
+
+## Full-dispatch ablation suite (2026-10-22)
+
+experiment/ll-g4-ablations derives from197052c. All7mode TUs and O2/Ascend950
+remain. Five isolated build configurations use a constant header, no dynamic
+per-packet mode selector or new launch argument. Protocol29000+100*mode+S,
+schema14/109metrics/5120B per core. Replay reuses ready input slots and task tables,
+with its own device-cycle envelope; full profiler time is not a replay metric.
+CPU required contracts plus new comparison/schema/mapping tests52passed,2compiler
+skips. Python syntax and EP16 suite command generation passed. No device correctness
+or performance claim yet; CANN/full-wheel validation status is in ll_ablation README.

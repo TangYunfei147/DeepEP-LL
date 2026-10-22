@@ -58,6 +58,7 @@ extern "C" [[bisheng::core_ratio(0, 1)]] __global__ __aicore__ void LL_VARIANT_K
     GM_ADDR relayReadIndexOut, GM_ADDR sourceMaskOut, GM_ADDR expertScalesOut, GM_ADDR tilingData,
     int64_t reservedMagic, GM_ADDR inputScales, GM_ADDR stageTimer, uint32_t timerMode, GM_ADDR expertTimer)
 {
+    if constexpr ((DispatchDedup::kLlAblationMode==2U || DispatchDedup::kLlAblationMode==3U) && !kPrequantized) { AscendC::Trap(); return; }
     util_set_ffts_config(reinterpret_cast<const __gm__ DispatchDedup::CommArgs*>(commArgs)->fftsVal);
     LlStageTimer::DeviceTimer timer;
     timer.Init(stageTimer, 1U, timerMode);
@@ -89,6 +90,12 @@ extern "C" [[bisheng::core_ratio(0, 1)]] __global__ __aicore__ void LL_VARIANT_K
         const uint64_t kernelBegin = timer.Begin(LlStageTimer::KERNEL);
         kernel.Process();
         timer.End(LlStageTimer::KERNEL, kernelBegin);
+        if constexpr (DispatchDedup::kLlAblationMode==4U) {
+            AscendC::SyncAll<true>();
+            const auto replayBegin=timer.Begin(LlStageTimer::ABLATION_READY_RECV);
+            kernel.ReplayReadyForAblation();
+            timer.End(LlStageTimer::ABLATION_READY_RECV,replayBegin);
+        }
     }
     if (timer.Enabled()) { AscendC::SyncAll<true>(); timer.Flush(); }
 }

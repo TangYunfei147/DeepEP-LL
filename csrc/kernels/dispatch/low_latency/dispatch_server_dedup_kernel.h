@@ -127,6 +127,9 @@ public:
         // orders the next launch after all cores finish their writes and cleanup.
     }
 
+    __aicore__ inline void ReplayReadyForAblation() {
+        if (enableDedup_ || core_>=sendCores_) receiver_.ReplayReadyForAblation();
+    }
 private:
     LlStageTimer::DeviceTimer* timer_ = nullptr;
     ServerDedupCounts counts_;

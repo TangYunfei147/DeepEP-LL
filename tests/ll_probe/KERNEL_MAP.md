@@ -82,3 +82,9 @@ count_layout DispatchSinglePrefixStageUbBytes包含256B对齐读缓冲，协议�
 
 schema13打点与communication_report补齐发送初始化、q准备、首发、探测/依赖/输出/尾部。
 源码业务token对照fb9263d存communication_baseline.json，计数/包格式/顺序不改。
+
+Ablation branch only: tests/ll_ablation/README.md is the current experiment entry.
+common/ll_ablation_config.h selects0..4; protocol29000+100*mode+S rejects mixed
+wheels. Schema14 adds ABLATION_READY_RECV, retaining5120B/core. Preload/prepack
+are prequantized FP8-only; ready replay suppresses duplicate relay and delays flag
+cleanup. Production use/combine is not supported by the ablation launcher.

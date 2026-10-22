@@ -78,6 +78,14 @@ public:
         WaitFlag<HardEvent::V_S>(ready);
     }
 
+    __aicore__ inline void ResetPendingForAblation() {
+        pendingCount_=count_;
+        if (!count_) return;
+        SetFlag<HardEvent::S_V>(7U);WaitFlag<HardEvent::S_V>(7U);
+        CreateVecIndex(pendingIdx_.ReinterpretCast<int32_t>(),int32_t(0),count_);
+        SetFlag<HardEvent::V_S>(7U);WaitFlag<HardEvent::V_S>(7U);
+    }
+
     __aicore__ inline uint32_t Begin() const
     {
         return begin_;

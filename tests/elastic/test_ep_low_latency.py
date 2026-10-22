@@ -30,7 +30,7 @@ def validate_core_split_capability(capability):
     send, recv = capability.get("send_cores"), capability.get("recv_cores")
     if (type(send) is not int or type(recv) is not int or send <= 0 or recv <= 0
             or send + recv != 56 or capability.get("active_aiv") != 56
-            or capability.get("core_protocol") != 19000 + send):
+            or capability.get("core_protocol") != 29000 + 100*capability.get("ablation_mode",0) + send):
         raise RuntimeError("Rebuild/install the matching configured 56-core split wheel on every rank")
 
 
@@ -50,8 +50,8 @@ def validate_overlap_stage_capability(capability):
 def validate_stage_timer_capability(capability):
     if not capability["stage_timer"]:
         raise RuntimeError("All ranks must install a DEEPEP_LL_STAGE_TIMER=ON wheel")
-    if capability['stage_timer_schema'] != 13:
-        raise RuntimeError('Detailed LL diagnostics require timer schema 13; '
+    if capability['stage_timer_schema'] != 14:
+        raise RuntimeError('Detailed LL diagnostics require timer schema 14; '
                            f'got {capability["stage_timer_schema"]}; '
                            'rebuild/install the matching wheel on every rank')
 
@@ -555,6 +555,8 @@ def expert_entries(routes, experts, world, rank):
 def payload(sources, tokens, hidden, dtype):
     import torch
 
+    if int(os.environ.get("LL_ABLATION_MODE","0")) in (1,2,3):
+        return torch.zeros((len(sources),hidden),dtype=dtype)
     sources, tokens = torch.as_tensor(sources), torch.as_tensor(tokens)
     cols = torch.arange(hidden)
     values = ((sources[:, None] * 3 + tokens[:, None] * 5 + cols) % 17 - 8).to(dtype)
@@ -648,7 +650,13 @@ def verify_dispatch(recv, handle, entries, args, world, m):
     start = 0
     for rows in entries:
         block = values[start : start + len(rows)].float().cpu()
-        if rows:
+        if rows and int(os.environ.get("LL_ABLATION_MODE","0")) in (1,2,3):
+            torch.testing.assert_close(block,torch.zeros_like(block),rtol=0,atol=0)
+            if isinstance(recv,tuple):
+                reference_scales=fp8_scales([s for s,t in rows],[t for s,t in rows],args.hidden,args.fp8_scale_dtype)
+                if not torch.equal(recv[1][start:start+len(rows)].cpu(),reference_scales):
+                    raise AssertionError("Fixed payload scale mismatch")
+        elif rows:
             ids = (block[:, 0].to(torch.int64) * 16 + block[:, 1].to(torch.int64)) * args.num_tokens
             ids += block[:, 2].to(torch.int64) * 16 + block[:, 3].to(torch.int64)
             order = ids.argsort()
@@ -661,6 +669,8 @@ def verify_dispatch(recv, handle, entries, args, world, m):
                 if not torch.equal(actual_scales.view(torch.int32), reference_scales.view(torch.int32)):
                     raise AssertionError("FP8 scale bits or row association were not preserved")
         start += len(rows)
+    import runpy
+    runpy.run_path(str(PROJECT_ROOT/"tests/ll_ablation/metadata.py"))["save_metadata"](handle,entries,args,m)
 
 
 def control_device(args, torch):
@@ -923,6 +933,7 @@ def run_case(buffer, args, rank, world, m, mode):
 
     progress("prepare")
     routes = make_routes(world, args.num_tokens, args.num_topk, args.num_experts, args.seed, mode)
+    args.ablation_route_digest = __import__("hashlib").sha256(json.dumps(routes).encode()).hexdigest()
     entries = expert_entries(routes, args.num_experts, world, rank)
     counts = [len(rows) for rows in entries]
     expert_dtype = torch.float16 if args.dtype == "fp16" else torch.bfloat16
@@ -987,6 +998,7 @@ def run_case(buffer, args, rank, world, m, mode):
             # Reuse both protocol windows with changed routing, on the same Session.
             completion_boundary(args)
             routes = make_routes(world, args.num_tokens, args.num_topk, args.num_experts, args.seed + repeat, mode)
+            args.ablation_route_digest = __import__("hashlib").sha256(json.dumps(routes).encode()).hexdigest()
             entries = expert_entries(routes, args.num_experts, world, rank)
             counts = [len(rows) for rows in entries]
             indices = torch.tensor(routes[rank], dtype=torch.int64, device="npu")
@@ -1104,6 +1116,15 @@ def worker(local_rank, args):
     from deep_ep._native import require_native
 
     native = require_native("LL ST")
+    requested_ablation=int(os.environ.get("LL_ABLATION_MODE","-1"))
+    if requested_ablation!=getattr(native,"low_latency_ablation_mode",-2):
+        raise RuntimeError("Use ablation launcher and install its matching wheel")
+    if not args.dispatch_only or args.skip_check:
+        raise RuntimeError("Ablation requires dispatch-only with correctness enabled")
+    if requested_ablation in (1,2,3) and any(c.dtype!="fp8" or c.fp8_scale_dtype!="int32" for c in cases):
+        raise RuntimeError("Fixed payload experiments require prequantized FP8/int32 scales")
+    if requested_ablation==4 and not (args.ll_stage_timer and args.skip_perf_test):
+        raise RuntimeError("Ready replay requires ON capture and --skip-perf-test")
     if not callable(getattr(native, "dispatch_low_latency", None)):
         raise RuntimeError("Installed wheel has no LL native entry; rebuild and install the migrated package")
     validate_native_cases(native, cases, world)
@@ -1123,7 +1144,8 @@ def worker(local_rank, args):
         # One CLI choice drives Python and native initialization; stale shell state
         # does not change the selected branch's default in this experiment entry.
         os.environ['DEEPEP_LL_BACKEND']=backend
-        capability = {"active_aiv": core_config["active_aiv"],
+        ablation_manifest=json.loads(Path(os.environ["LL_ABLATION_MANIFEST"]).read_text())
+        capability = {"ablation_wheel_sha256":ablation_manifest["wheel_sha256"],"ablation_mode":requested_ablation,"active_aiv": core_config["active_aiv"],
                       "send_cores": core_config["send_cores"], "recv_cores": core_config["recv_cores"],
                       "dispatch_recv_cores": core_config["dispatch_recv_cores"],
                       "nondedup_dispatch_recv_cores": core_config["recv_cores"],
@@ -1182,6 +1204,7 @@ def worker(local_rank, args):
                         for i, case in enumerate(cases)
                     ],
                 }
+                (Path(args.run_directory) / "ablation_identity.json").write_text(json.dumps(ablation_manifest,indent=2))
                 (Path(args.run_directory) / "cases.json").write_text(json.dumps(manifest, indent=2) + "\n")
                 print(f"[LL ST] run directory: {args.run_directory}", flush=True)
 

@@ -1,0 +1,16 @@
+{
+  "num_tokens": 256,
+  "num_max_tokens_per_rank": 256,
+  "hidden": 3584,
+  "num_topk": 8,
+  "num_experts": 384,
+  "dtype": "fp8",
+  "fp8_scale_dtype": "int32",
+  "do_cpu_sync": 0,
+  "warmup": 10,
+  "num_iters": 100,
+  "perf_tail": 50,
+  "correctness_repeats": 3,
+  "dispatch_only": true,
+  "output_dir": ".ablation/results"
+}
