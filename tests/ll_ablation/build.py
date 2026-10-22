@@ -6,7 +6,7 @@ import subprocess
 import sys
 import hashlib
 import zipfile
-from common import ROOT,MODES,git,sha,write_json
+from common import ROOT,MODES,git,sha,write_json,source_checkout
 
 def main():
     p=argparse.ArgumentParser()
@@ -26,7 +26,7 @@ def main():
     config=dict(mode=a.mode,mode_id=MODES[a.mode],timer=a.timer,send_cores=a.send_cores,
                 recv_cores=56-a.send_cores,logical_group=4,commit=git('rev-parse','HEAD'))
     if a.plan:print(config);return
-    if git('status','--porcelain'):raise RuntimeError('Commit source changes before building variants')
+    config.update(source_checkout())
     if source.exists() or output.exists():raise RuntimeError('Variant directory exists; use a fresh checkout, never overwrite')
     source.parent.mkdir(parents=True,exist_ok=True);output.mkdir(parents=True)
     subprocess.run(['git','-C',str(ROOT),'worktree','add','--detach',str(source),config['commit']],check=True)

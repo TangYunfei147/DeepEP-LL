@@ -27,3 +27,8 @@ Modes2/3/4 object directory: .tmp/ablation-device-qcVRR5Og under that workspace.
 The original metadata/static hash manifest describes a historical baseline and
 is not an equivalence claim for the new experimental modes. Use this suite's
 comparison script and native mode identity, not historical timer comparison.
+
+Source-guard follow-up:14ablation tests passed, including real Git roundtrips.
+Untracked files and dirty dependency contents at the pinned commit are preserved
+and excluded; staged/unstaged tracked edits and changed dependency commits are
+rejected with filenames. No CANN/kernel changes in this launcher-only fix.

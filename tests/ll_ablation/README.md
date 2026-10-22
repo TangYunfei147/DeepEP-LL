@@ -181,3 +181,13 @@ ticks and frequency-based microseconds; no cross-rank clock subtraction.
 payload handling alone cannot explain that target. If replay is short while the
 live path is long, investigate data arrival/routing/communication overlap. These
 are directional tests, not independent additive savings or a promise of70us.
+
+## Build source guard
+
+Builds use committed HEAD in isolated worktrees. Untracked files and modifications
+inside a submodule at the pinned commit are left untouched and excluded, with an
+explicit message and manifest record. They no longer block builds. Changes to
+tracked files (staged or unstaged) or to a submodule commit still stop the build
+and list exact paths, because those changes would not be included in HEAD.
+No reset, clean, automatic stash or source overwrite is performed. Both --devices
+and --device are accepted by suite.py; quote the visibility variable.

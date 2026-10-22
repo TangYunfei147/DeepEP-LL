@@ -91,3 +91,26 @@ def test_offline_dependency_roundtrip(tmp_path):
     unpack(bundle,target)
     assert git(target/'dep','rev-parse','HEAD')==rev
     assert (target/'dep/a.txt').read_text()=='dependency'
+    from common import source_checkout
+    (target/'notes.txt').write_text('user notes must remain untouched')
+    (target/'dep/a.txt').write_text('dependency working-tree experiment')
+    assert source_checkout(target)['source_policy']=='committed_HEAD'
+    assert (target/'notes.txt').read_text()=='user notes must remain untouched'
+    assert (target/'dep/a.txt').read_text()=='dependency working-tree experiment'
+    git(target/'dep','add','a.txt');git(target/'dep','commit','-m','different revision')
+    with pytest.raises(RuntimeError,match='dep'):source_checkout(target)
+
+@pytest.mark.parametrize('staged',[False,True])
+def test_source_guard_rejects_actual_source_edits(tmp_path,staged):
+    import subprocess
+    from common import source_checkout
+    def git(*args):
+        return subprocess.check_output(['git','-C',str(tmp_path),'-c','user.name=codex_remote',
+            '-c','user.email=799847028@qq.com',*args],text=True,stderr=subprocess.STDOUT).strip()
+    git('init');file=tmp_path/'kernel.cpp';file.write_text('original\n')
+    git('add','kernel.cpp');git('commit','-m','base')
+    file.write_text('changed\n')
+    if staged:
+        git('add','kernel.cpp')
+        file.write_text('original\n') # Index differs even though working tree matches HEAD.
+    with pytest.raises(RuntimeError,match='kernel.cpp'):source_checkout(tmp_path)

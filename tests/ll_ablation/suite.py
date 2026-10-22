@@ -4,11 +4,11 @@ import json
 from pathlib import Path
 import subprocess
 import sys
-from common import ROOT,MODES
+from common import ROOT,MODES,source_checkout
 
 def main():
     p=argparse.ArgumentParser()
-    p.add_argument('--devices',required=True)
+    p.add_argument('--devices','--device',dest='devices',required=True)
     p.add_argument('--send-cores',type=int,default=28)
     p.add_argument('--run-prefix',required=True)
     p.add_argument('--config',type=Path,default=ROOT/'tests/ll_ablation/b256.json')
@@ -38,6 +38,9 @@ def main():
         commands.append([str(python),str(ROOT/'tests/ll_ablation/run.py'),'--mode',mode,'--manifest',str(manifest),
             '--devices',a.devices,'--run-name',a.run_prefix+'-'+mode,'--config',str(config)])
     if a.plan:print(json.dumps(commands,indent=2));return
+    if a.build:
+        try:source_checkout()
+        except RuntimeError as error:p.exit(2,str(error)+'\n')
     for command in commands:subprocess.run(command,cwd=ROOT,check=True)
 
 if __name__=='__main__':main()
