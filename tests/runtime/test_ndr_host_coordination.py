@@ -39,6 +39,8 @@ def runtime(monkeypatch):
     obj.native = SimpleNamespace(
         barrier=lambda **kw: log.append(('native_barrier', kw)),
         close=lambda **kw: log.append(('native_close', kw)))
+    env['require_native'] = lambda _: SimpleNamespace(clear_low_latency_combine_windows=
+        lambda native, *shape: log.append(('clear_windows', shape)))
     env['_OWNER'] = obj
     return obj, api, dist, log, env
 
@@ -116,10 +118,30 @@ def test_real_combine_entry_coordinates_before_producer(runtime, monkeypatch, co
     if fail:
         assert ('producer',) not in log and obj.coordination_failed
     elif coordinated:
-        assert log == [('device_sync', 0), ('hccl', 'combine_reuse'),
+        assert log == [('device_sync', 0), ('clear_windows', (1, 3584, 8, 384)), ('hccl', 'combine_reuse'),
                        ('native_barrier', {'host_coordinated': True}), ('producer',)]
     else:
         assert log == [('producer',)]
+
+
+def test_window_prepare_before_collective_and_cached_until_dispatch(runtime):
+    obj, _, _, log, _ = runtime
+    for _ in range(2):
+        obj._host_collective('combine_reuse', lambda: obj._prepare_combine_windows(2,3584,8,384))
+    assert [x[0] for x in log] == ['device_sync','clear_windows','hccl','native_barrier',
+                                  'device_sync','hccl','native_barrier']
+    obj.combine_window_layout = None  # invalidation at the next dispatch
+    obj._host_collective('combine_reuse', lambda: obj._prepare_combine_windows(2,3584,8,384))
+    assert len([x for x in log if x[0]=='clear_windows']) == 2
+
+
+def test_prepare_failure_is_exchanged_and_blocks_launch(runtime):
+    obj, _, _, log, env = runtime
+    def fail(): raise RuntimeError('clear failed')
+    with pytest.raises(RuntimeError, match='clear failed'):
+        obj._host_collective('combine_reuse', fail)
+    assert obj.coordination_failed and env['_OWNER'] is obj
+    assert [x[0] for x in log] == ['device_sync','hccl']
 
 
 @pytest.mark.parametrize('operation', ['barrier', 'close'])

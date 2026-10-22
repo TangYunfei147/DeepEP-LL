@@ -314,6 +314,24 @@ void bind_low_latency(py::module_& module)
         session.invalidate_dispatch_controls();
         dispatch_server_dedup_kernel_do_v2(reinterpret_cast<void*>(stream_address), &args, variant);
     });
+    module.def("clear_low_latency_combine_windows", [](Session& session, int b, int h, int k, int e) {
+        CombineDedup::Layout plan{};
+        if (!session.ll_rdma() || session.capacity() != DispatchDedup::kEpServerDedupPeerBytes ||
+            !CombineDedup::BuildLayout(session.world(), b, h, k, e, plan, query_ll_core_config().active))
+            throw std::invalid_argument("Invalid NDR combine window preparation");
+        const uint64_t packet = (uint64_t(h) * 2U + 479U) / 480U * 512U;
+        const uint64_t bytes = uint64_t(b) * k * packet;
+        auto* local = peer_buffer_base(session, session.rank());
+        py::gil_scoped_release release;
+        // Called after local device completion and BEFORE HCCL completion
+        // exchange. Clear both banks because the next per-core magic is device-owned.
+        for (uint64_t bank = 0; bank < 2; ++bank) {
+            auto* result = local + bank * DispatchDedup::kEpServerDedupWindowBytes +
+                           COMBINE_DEDUP_EP_SERVER_DEDUP_SHARED_DATA_OFFSET;
+            const int status = aclrtMemset(result, bytes, 0, bytes);
+            if (status != 0) throw std::runtime_error("NDR combine result initialization failed: " + std::to_string(status));
+        }
+    });
     module.def("combine_low_latency", [](Session& session, py::dict tensors, int b, int h, int k, int e,
                                          const std::string& dtype, uintptr_t stream_address) {
         if (session.combine_only()) throw std::invalid_argument("LL requires a dense-channel Session");

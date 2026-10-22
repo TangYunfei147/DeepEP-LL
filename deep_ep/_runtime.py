@@ -301,7 +301,7 @@ class Runtime:
         self.stream.synchronize()
         self.native.barrier()
 
-    def _host_collective(self, operation):
+    def _host_collective(self, operation, prepare=None):
         # No new submissions may race this collective. Device completion covers
         # all streams; LL kernels quiet their owned QPs before returning.
         if self.coordination_failed:
@@ -312,6 +312,8 @@ class Runtime:
             try:
                 self.ensure_alive()
                 npu_api().synchronize(self.device)
+                if prepare is not None:
+                    prepare()
             except Exception as exc:
                 error = f"{type(exc).__name__}: {exc}"
             peers = [None] * self.world_size
@@ -332,6 +334,16 @@ class Runtime:
         except Exception:
             self.coordination_failed = True
             raise
+
+    def _prepare_combine_windows(self, b, h, k, e):
+        layout = (b, h, k, e)
+        if getattr(self, "combine_window_layout", None) == layout:
+            return
+        native = require_native("NDR combine window preparation")
+        if not callable(getattr(native, "clear_low_latency_combine_windows", None)):
+            raise RuntimeError("Reinstall the matching NDR wheel with combine window preparation")
+        native.clear_low_latency_combine_windows(self.native, b, h, k, e)
+        self.combine_window_layout = layout
 
 
 def validate_ndr_topology(topology):

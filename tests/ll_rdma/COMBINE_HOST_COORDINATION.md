@@ -1,5 +1,21 @@
 # NDR combine 重复调用的 HCCL 完成协调
 
+## B1→B2小B去重窗口复用修复（Host协议2）
+
+combine partial暂存紧随B*K个结果包；B增大时旧小B的stage可能成为新结果槽。
+H3584/K8下B1 stage起点正是B2 token1 slot0起点。M5扫描所有K槽标志，
+非活跃slot旧BF16数据也参与求和，导致等待超时。CPU已用合法BF16值复现。
+core29/56在B2下负责源token1，与用户case1的现象相符，设备最终原因仍需重测确认。
+
+每次dispatch使runtime的combine窗口准备缓存失效。首次/布局变化的NDR combine
+在全设备同步之后、HCCL状态交换之前，通过新native入口同步清零两个bank的
+B*K结果区（包含payload/flags，不涉及dispatch数据区及计数控制区）。所有rank
+准备成功后才启动combine，避免清零覆盖另一rank的新发布。同布局连续combine
+继续依赖原消费清flag，不反复清零。准备失败随HCCL交换并封锁runtime。
+Python Host协议升2，旧native缺入口明确拒绝；必须全rank完整重装wheel。
+通信kernel ABI7、去重条件、SHMEM均不变。增加的首次准备成本属于Host/API，
+不计入combine kernel task。仍需目标机B1→B2/B31→B32等变shape及多轮验证。
+
 2026-10-22：日志在 `combine.warmup` 首次报告设备507035，随后其他rank的scalar
 all_reduce超时。Profiler在WARMUP退出的警告是失败后采样不完整，不能当作根因。
 日志没有设备fault kernel/PC，尚不能排除combine内部其他错误。
