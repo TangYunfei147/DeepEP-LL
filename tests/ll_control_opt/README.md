@@ -220,3 +220,11 @@ have temporal drift, so a single sweep does not establish a stable percent gain.
 
 CPU plan/synthetic-cache tests do not demonstrate target-device correctness,
 CANN linkage, or performance. Those require the generated full wheel/ST runs.
+
+Validation completed for this delivery:76CPU tests passed on27, including real
+C++ semantic mocks and the multi-node readiness handshake exercised on loopback.
+Final candidate source d00e87f compiled and linked complete CANN9.3.0/O2/S30R26
+OFF and ON wheels. A real no-op OFF wheel rebuild took1.578s without changing any
+native object; editing a device header rebuilt the7dependent LL objects in38.216s.
+These checks did not run NPU kernels or establish speedups. Full evidence and
+log paths are recorded in [BUILD_DISPATCH_SPLIT.md](../../docs/BUILD_DISPATCH_SPLIT.md).

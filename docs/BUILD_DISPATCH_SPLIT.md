@@ -268,3 +268,42 @@ from header[0..2]. Original role snapshot, terminal destination, relay ordering,
 all synchronization and lane retirement remain unchanged. No extra UB, launch
 mode or template dimension. CANN compilation and NPU performance are unverified.
 Candidate 1 local required contracts and relay checks: 70 passed, 3 skipped (no C++ compiler). Initial pytest temp-directory failure resolved by using project-local --basetemp.
+
+## Four production control-path candidates (2026-10-22)
+
+Branch kernel/ll-g4-control-opt starts at197052c, the production algorithm used
+by the earlier ablation mode0. Commits0a44d45/4783fed/868ddf8/d00e87f separately
+add source-mask accumulation, exact pending-suffix removal, an eight-block flag
+VF, and optional metadata staging. There are still7dispatch translation units,
+one dtype specialization per unit, O2 and Ascend950. The VF has a non-unrolled
+batch loop; other block counts retain Sum. No new launch/template dimension or
+wire protocol is introduced. See tests/ll_control_opt/README.md for UB/lifetime
+constraints and the per-commit suite.
+
+On authorized27, native source d00e87f compiled and linked full OFF and ON
+wheels with CANN9.3.0, S30/R26 and4build jobs, covering all7dispatch entries plus
+the existing other library targets. Pinned SDK4dd80e was copied locally inside
+the new project and passed scripts/build_shmem.py reuse validation. Existing
+Python had pybind11 3.1.0; the locked build wheels were uploaded from the local
+machine and installed only into project .tmp/build-venv. No system dependency,
+driver or pre-existing Python environment was changed. No NPU kernel was run.
+
+Validation root on27: /home/tyf/Q4_remote_test/DeepEP-LL-control-opt.
+Logs: .logs/control-wheel-off-002.log and .logs/control-wheel-on-001.log.
+Artifacts: .tmp/wheel-off-002 and .tmp/wheel-on-001. Earlier validation-only
+failures (missing include search path, absent pytest temp parent, mismatched
+pybind11) remain recorded separately; they were resolved without weakening
+the production compiler, architecture or SDK checks.
+
+Real cache validation: unchanged full OFF wheel rebuild1.578s, zero changed
+native object mtimes. A comment edit to dispatch_flag_probe.h rebuilt exactly
+the7LL dispatch objects and relinked/repacked in38.216s; Host/HT objects stayed
+unchanged. The original header was restored in finally. Records are in
+.tmp/control-cache-timing.json, .logs/wheel-warm-off-003.log and
+.logs/wheel-header-off-004.log. These are build times, not kernel performance.
+
+Final Linux CPU suite:76passed, including actual compiled semantic mocks, all
+Host selector tests and loopback readiness success/mismatch/busy propagation.
+Local Windows lacked a native C++ compiler and blocked loopback; those checks
+were completed on27. Device correctness and performance are left to the user's
+EP16 target; the suite runs those gates before accepting summary.csv means.
