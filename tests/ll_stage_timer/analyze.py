@@ -11,6 +11,8 @@ spec=importlib.util.spec_from_file_location('ll_stage_timer_parser',ROOT/'deep_e
 timer=importlib.util.module_from_spec(spec);spec.loader.exec_module(timer)
 relay_spec=importlib.util.spec_from_file_location('ll_relay_timing',Path(__file__).with_name('relay_timing.py'))
 relay_timing=importlib.util.module_from_spec(relay_spec);relay_spec.loader.exec_module(relay_timing)
+comm_spec=importlib.util.spec_from_file_location('ll_communication_report',Path(__file__).with_name('communication_report.py'))
+communication_report=importlib.util.module_from_spec(comm_spec);comm_spec.loader.exec_module(communication_report)
 
 
 def stats(values):
@@ -39,7 +41,7 @@ def input_wait_report(samples):
             bucket=buckets.setdefault((meta['rank'],core,name),dict(values=[],missing=0))
             packet=st.get('TOKEN_INPUT');wait=st.get(name)
             send=st['SEND_TOKENS']['total_ticks'];kernel=st.get('KERNEL',{}).get('total_ticks',0)
-            if (decoded['schema'] not in (9,10,11,12) or decoded.get('boundary_mode','observe')!='observe' or not packet or not wait or
+            if (decoded['schema'] not in (9,10,11,12,13) or decoded.get('boundary_mode','observe')!='observe' or not packet or not wait or
                     wait['calls']!=packet['calls'] or send<=0 or kernel<=0 or
                     not 0<=wait['total_ticks']<=min(send,kernel)):
                 bucket['missing']+=1
@@ -101,7 +103,7 @@ def overlap_receive_report(samples):
         for metric in decoded['records']:
             cores.setdefault(metric['core'],{})[metric['stage']]=metric
         for core,metrics in sorted(cores.items()):
-            available=decoded['schema'] in (11,12)
+            available=decoded['schema'] in (11,12,13)
             overlap='OVERLAP_PATH' in metrics
             intervals=[i for i in decoded.get('intervals',[]) if i['core']==core]
             def first(name,field):
@@ -150,7 +152,7 @@ def analyze(paths, frequency_hz=None):
         for row in report['records']:
             initial_role=row.get('initial_role',row['role'])
             key=(op,rank,row['core'],initial_role,row['stage'])
-            if report['schema'] in (7,9,10,11,12):
+            if report['schema'] in (7,9,10,11,12,13):
                 worker_roles.setdefault((op,rank,row['core']),set()).add(row['role'])
             duration=row['total_us'] if unit=='us' else row['total_ticks']
             groups.setdefault(key,[]).append((duration,row['calls']))
@@ -180,6 +182,7 @@ def analyze(paths, frequency_hz=None):
             for name in ('mean','minimum','maximum','p50','p90','p99'): rows[-1][name]=None
     return dict(schema=identity[9],world_size=identity[0],boundary_mode=identity[3],frequency_hz=identity[4],comparison=identity[10],
                 configurations=configurations,sampling=identity[8],per_rank_core_stage=rows,
+                communication=communication_report.report(wait_samples),
                 overlap_receive=overlap_receive_report(wait_samples),
                 input_wait_bottleneck=input_wait_report(wait_samples),
                 relay_timing=relay_timing.report(wait_samples),
@@ -221,7 +224,7 @@ def expert_reports(paths, frequency_hz):
         if payload['experts'] != meta['config'].get('num_experts',payload['experts']):
             raise ValueError('Expert count differs from case configuration')
         header=saved['raw'][0][0]
-        if header[1] in (7,9,10,11,12): raise ValueError('Segment capture cannot contain legacy expert instrumentation')
+        if header[1] in (7,9,10,11,12,13): raise ValueError('Segment capture cannot contain legacy expert instrumentation')
         expected_send=header[5] >> 8 if header[1] in (5,6) else len(saved['raw'])//2
         if (header[1] in (5,6) and 'send_cores' not in payload) or payload.get('send_cores',expected_send)!=expected_send:
             raise ValueError('Expert/stage core split mismatch')
@@ -273,6 +276,13 @@ def process_directory(source, output, frequency_hz, trace_iteration, lane_layout
     report['expert_interpretation']='Per executing rank and expert; core durations are summed work, not latency. Packet stage counts deliveries only. Shared FIRST_HOP preparation and batch waiting are not assigned. Only samples with executed records enter stage statistics.'
     output.mkdir(parents=True, exist_ok=False)
     (output/'summary.json').write_text(json.dumps(report, indent=2))
+    comm=report['communication']
+    (output/'communication_bottleneck.md').write_text(communication_report.markdown(comm),encoding='utf-8')
+    for name,rows in (('communication_samples',comm['samples']),('communication_costs',comm['costs']),('communication_per_core',comm['per_core'])):
+        if rows:
+            with (output/(name+'.csv')).open('w',newline='',encoding='utf-8-sig') as stream:
+                writer=csv.DictWriter(stream,fieldnames=list(rows[0]));writer.writeheader();writer.writerows(rows)
+
     overlap_rows=report['overlap_receive']
     if overlap_rows:
         with (output/'overlap_receive.csv').open('w',newline='',encoding='utf-8-sig') as stream:

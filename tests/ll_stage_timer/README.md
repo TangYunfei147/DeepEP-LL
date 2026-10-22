@@ -1,3 +1,6 @@
+当前打点为schema13，请以[COMMUNICATION_DIAGNOSTICS.md](COMMUNICATION_DIAGNOSTICS.md)为采集/解析入口。
+新增首包准备、通信邻域和新报告，须全rank安装匹配ON wheel并重采；下方旧schema资料仅供历史追溯。
+
 当前独立候选为kernel/ll-g4-local-q-table；以[LOCAL_Q_TABLE.md](LOCAL_Q_TABLE.md)作为A/B指南。
 
 当前分支已回退group-compact两轮实验，基于S3叠加R0前缀、R核计数和接收表向量化。

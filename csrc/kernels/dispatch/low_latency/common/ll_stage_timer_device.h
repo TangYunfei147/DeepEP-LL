@@ -33,10 +33,12 @@ public:
         return false;
 #endif
     }
-    __aicore__ inline uint64_t Begin(Stage stage) const {
+    __aicore__ inline uint64_t Begin(Stage stage) {
         (void)stage;
 #ifdef DEEPEP_LL_STAGE_TIMER
-        return Enabled() ? AscendC::GetSystemCycle() : 0U;
+        const uint64_t tick=Enabled() ? AscendC::GetSystemCycle() : 0U;
+        if (Enabled() && stage==KERNEL) kernelBegin_=tick;
+        return tick;
 #else
         return 0U;
 #endif
@@ -54,13 +56,25 @@ public:
         const uint64_t end = AscendC::GetSystemCycle();
         sums_[stage] += end - begin;
         ++calls_[stage];
-        if (calls_[stage] <= 2U && count_ + 2U <= kTraceRecords - ((stage != KERNEL && calls_[KERNEL]==0U ? 2U : 0U) +
-            (operation_==1U && stage!=SEND_SUBMIT_END && calls_[SEND_SUBMIT_END]==0U ? 2U : 0U))) {
+        uint32_t reserved=0U;
+        const Stage important[]={KERNEL,SEND_SUBMIT_END,BEFORE_FIRST_SEND,BEFORE_FIRST_RECV_POLL};
+        for (uint32_t i=0;i<(operation_==1U?4U:1U);++i)
+            if (stage!=important[i] && calls_[important[i]]==0U) reserved+=2U;
+        if (calls_[stage] <= 2U && count_ + 2U <= kTraceRecords-reserved) {
             events_[count_] = uint32_t(stage) * 2U; cycles_[count_++] = begin;
             events_[count_] = uint32_t(stage) * 2U + 1U; cycles_[count_++] = end;
         } else { ++omitted_; }
 #else
         (void)stage; (void)begin;
+#endif
+    }
+    // One real elapsed interval from this core's KERNEL start. Empty workers
+    // have no milestone; never infer zero or use cross-core clock subtraction.
+    __aicore__ inline void First(Stage stage) {
+#ifdef DEEPEP_LL_STAGE_TIMER
+        if (Enabled() && calls_[stage]==0U) End(stage,kernelBegin_);
+#else
+        (void)stage;
 #endif
     }
     __aicore__ inline void Flush() {
@@ -96,6 +110,7 @@ private:
     }
     GM_ADDR address_ = nullptr;
     uint32_t mode_ = 1U, operation_ = 0, count_ = 0, omitted_ = 0;
+    uint64_t kernelBegin_=0U;
     uint64_t sums_[kMetrics]{};
     uint32_t calls_[kMetrics]{};
     uint64_t cycles_[kTraceRecords];
@@ -148,3 +163,5 @@ private:
 #define LL_SEG_END(name, stage) do { if (timer_) timer_->End(LlStageTimer::stage, name); } while (false)
 #define LL_SEG_COUNT(stage, count) do { if (timer_) timer_->Count(LlStageTimer::stage, count); } while (false)
 #define LL_SEG_RELAY_COMPLETION(pipe) LlStageTimer::RelayCompletionScope LL_SEG_JOIN(llRelayScope,__LINE__)(timer_, pipe)
+
+#define LL_SEG_FIRST(stage) do { if (timer_) timer_->First(LlStageTimer::stage); } while (false)

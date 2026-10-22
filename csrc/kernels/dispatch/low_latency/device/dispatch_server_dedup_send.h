@@ -66,6 +66,7 @@ public:
     // allocated until the caller's final PIPE_ALL. Empty senders have zero lanes.
     __aicore__ inline void Retire() {
         if (overlap_.Async()) {
+            LL_SEG_SCOPE(SEND_RETIRE_WAIT);
             for (uint32_t lane=0;lane<lanes_;++lane) WaitFlag<HardEvent::MTE3_V>(lane);
         }
     }
@@ -78,6 +79,7 @@ public:
         // reservedBytes 对应仍可能被计数发送读取的 UB，不能当作可用空间覆盖。
         if (enableDedup_ && count_ == 0U) return;
         timer_ = timer;
+        LL_SEG_BEGIN(setupBegin, SEND_SETUP);
         LL_SEG_BEGIN(segBegin1, PREPARE_INPUT);
         scratch_ = &scratch;
         TQue<QuePosition::VECIN, 1> input;
@@ -166,14 +168,17 @@ public:
             // Routes are 256B padded. VF masks the partial prefix vector;
             // no element from the owned slice contributes to the seed.
             Sync<HardEvent::S_V>();
+            LL_SEG_BEGIN(seedIssue,Q_SEED_SUBMIT);
             if (qShard_.begin<=kLlHistogramSegment)
                 asc_vf_call<CountFrequency<true>>(out,ids,qShard_.begin,0U,
                                                 localExperts_*uint32_t(args_->rankSize));
             else
                 asc_vf_call<CountFrequency<false>>(out,ids,qShard_.begin,0U,
                                                  localExperts_*uint32_t(args_->rankSize));
-            Sync<HardEvent::V_S>();
-            LlFinishLocalQ(routeIds_,histogram,qTable_,k_,qShard_);
+            LL_SEG_END(seedIssue,Q_SEED_SUBMIT);
+            { LL_SEG_SCOPE(Q_SEED_WAIT); Sync<HardEvent::V_S>(); }
+            { LL_SEG_SCOPE(Q_LOCAL_UPDATE);
+              LlFinishLocalQ(routeIds_,histogram,qTable_,k_,qShard_); }
         }
         // 每个 512B 块尾部的 32B 标记预置为 1；发送时 payload 和标记一起搬运。
         // 初始 MTE3_V 事件让 lane 首次可写，后续复用由上一包的发送完成事件控制。
@@ -187,6 +192,7 @@ public:
         PipeBarrier<PIPE_V>();
 
         LL_SEG_END(segBegin1, PREPARE_INPUT);
+        LL_SEG_END(setupBegin, SEND_SETUP);
         { LL_SEG_SCOPE(SEND_TOKENS);
         BeginInputPrefetch();
         if (enableDedup_)
@@ -203,11 +209,13 @@ public:
         for (uint32_t lane = 0; lane < lanes_; ++lane) WaitFlag<HardEvent::MTE3_V>(lane);
         LL_SEG_END(sendDrainBegin, SEND_DRAIN);
         }
+        LL_SEG_BEGIN(metaPublish,TX_METADATA_PUBLISH);
         Sync<HardEvent::S_MTE3>();
         if (enableDedup_) DataCopyPad(maskOut_[start_], sourceMasks_, {1U, count_ * 4U, 0U, 0U, 0U});
         if (count_ != 0U)
             DataCopyPad(weightOut_[uint64_t(start_) * k_], enableDedup_ ? sourceWeights_ : routeWeights_,
                         {1U, count_ * k_ * 4U, 0U, 0U, 0U});
+        LL_SEG_END(metaPublish,TX_METADATA_PUBLISH);
         { LL_SEG_SCOPE(SEND_SUBMIT_END); }
         if (!overlap_.Async()) { LL_SEG_SCOPE(SEND_COMPLETE_WAIT);
         Sync<HardEvent::MTE3_S>();
@@ -226,6 +234,7 @@ public:
     {
         if (!tasks) return;
         timer_=timer;
+        LL_SEG_BEGIN(localSetupBegin, SEND_SETUP);
         LL_SEG_BEGIN(localPrepareBegin, PREPARE_INPUT);
         scratch_=&scratch;
         start_=0U; count_=bs_;
@@ -265,6 +274,7 @@ public:
         }
         PipeBarrier<PIPE_V>();
         LL_SEG_END(localPrepareBegin, PREPARE_INPUT);
+        LL_SEG_END(localSetupBegin, SEND_SETUP);
         // Only the cooperative overlap path yields. Serial fallback keeps one
         // continuous lookahead stream. Eight tasks amortize the callback/flush.
         cooperate();
@@ -311,7 +321,8 @@ public:
         for (uint32_t token = 0; token < count_; ++token) {
             uint32_t directMask = 0, firstHopCount = 0, localMask = 0;
             LL_SEG_BEGIN(classifyBegin, PREPARE_INPUT);
-            Classify(token, directMask, firstHopCount, localMask);
+            { LL_SEG_SCOPE(ROUTE_CLASSIFY);
+              Classify(token, directMask, firstHopCount, localMask); }
             LL_SEG_END(classifyBegin, PREPARE_INPUT);
             sourceMasks_.SetValue(token, directMask | localMask);
             for (uint32_t group = 0; group < firstHopCount; ++group) {
@@ -329,6 +340,7 @@ public:
             }
             // DIRECT 暂不发送，缓存 token/k/expert/q 四元组。q 在此按原始路由计算，
             // 后续按 server 重排发送顺序时仍沿用同一个槽位编号。
+            { LL_SEG_SCOPE(DIRECT_PLAN);
             for (uint32_t k = 0; k < k_; ++k)
                 if (directMask & (uint32_t(1) << k)) {
                     const uint32_t index = (start_ + token) * k_ + k;
@@ -340,6 +352,7 @@ public:
                     directTasks_.SetValue(directCount_ * 4U + 3U, q);
                     ++directCount_;
                 }
+            }
         }
 
         // 5. Rotate the existing DIRECT group order by source card and send core.
@@ -604,13 +617,15 @@ private:
                          1U, 8U);
         if constexpr (!NeedQuantize) input.template FreeTensor<XType>(x);
         SetFlag<HardEvent::V_MTE3>(lane);
-        WaitFlag<HardEvent::V_MTE3>(lane);
+        { LL_SEG_SCOPE(TX_PACK_READY_WAIT); WaitFlag<HardEvent::V_MTE3>(lane); }
         LL_SEG_END(packBegin, TOKEN_PACK);
         GlobalTensor<uint8_t> destinationGm;
         destinationGm.SetGlobalBuffer(args_->peerMems[destination] +
                                       DispatchServerDedupDispatchOffset(data_, args_->rank, destination,
                                                                         expert % localExperts_, q, args_->rankSize,
                                                                         localExperts_, bs_));
+        LL_SEG_FIRST(BEFORE_FIRST_SEND);
+        LL_SEG_COUNT(TX_PACKETS,1U);
         LL_SEG_BEGIN(segBegin7, TOKEN_SEND_ISSUE);
         DataCopy(destinationGm, out, uint32_t(data_.tokenStride));
         SetFlag<HardEvent::MTE3_V>(lane);

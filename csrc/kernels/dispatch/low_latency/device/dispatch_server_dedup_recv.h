@@ -139,7 +139,7 @@ public:
             const uint32_t remaining=tasks_.PendingCount()-scan_;
             count=remaining<kProbeBatch ? remaining:kProbeBatch;
             probe=Probe(scan_,count);
-            if (probe.readyMask==0U) { scan_+=count; return false; }
+            if (probe.readyMask==0U) { LL_SEG_COUNT(RX_EMPTY_POLLS,1U); scan_+=count; return false; }
 
             // Current senders mark only FIRST_HOP with KeepFlags; forwarded
             // terminals are Compact. Probe already validated every block flag.
@@ -164,9 +164,11 @@ public:
             // Do NOT remove entries in priority order: swap-with-last would
             // invalidate the remaining original pending positions. After all
             // snapshot work is issued, remove by descending original index.
+            { LL_SEG_SCOPE(RX_PENDING_UPDATE);
             for (uint32_t n=count;n>0U;--n) {
                 const uint32_t index=n-1U;
                 if (probe.readyMask&(uint32_t(1)<<index)) tasks_.RemovePending(scan_+index);
+            }
             }
         return true;
     }
@@ -204,26 +206,33 @@ private:
     // 摘要：保存最多 16 项 pending 任务快照，检查每个包全部块的标记，返回就绪位图。
     __aicore__ inline ProbeResult Probe(uint32_t start, uint32_t count)
     {
+        LL_SEG_FIRST(BEFORE_FIRST_RECV_POLL);
         LL_SEG_SCOPE(RECV_POLL);
+        LL_SEG_COUNT(RX_PROBED,count);
         auto indices = probeIdxBuf_.Get<uint32_t>();
         auto flags = flagsBuf_.Get<float>();
         auto sums = sumBuf_.Get<float>();
         auto work = workBuf_.Get<uint8_t>();
         const uint32_t blocks = uint32_t(data_.blockCount);
+        LL_SEG_BEGIN(flagIssue,RX_FLAG_ISSUE);
         for (uint32_t i = 0; i < count; ++i) {
             const uint32_t j = tasks_.PendingIndex(start + i);
             indices.SetValue(i, j);
             ReadServerDedupFlags(Slot(j), blocks, flags[i * blocks * 8U]);
         }
-        ServerDedupReceiveSync<HardEvent::MTE2_V>();
-        Sum<float>(sums, flags, work, SumParams{count, blocks * 8U, blocks * 8U});
-        ServerDedupReceiveSync<HardEvent::V_S>();
+        LL_SEG_END(flagIssue,RX_FLAG_ISSUE);
+        { LL_SEG_SCOPE(RX_FLAG_WAIT); ServerDedupReceiveSync<HardEvent::MTE2_V>(); }
+        { LL_SEG_SCOPE(RX_FLAG_REDUCE);
+          Sum<float>(sums, flags, work, SumParams{count, blocks * 8U, blocks * 8U});
+          ServerDedupReceiveSync<HardEvent::V_S>(); }
+        LL_SEG_BEGIN(flagDecode,RX_FLAG_DECODE);
         ProbeResult result;
         for (uint32_t i = 0; i < count; ++i) {
             const auto layout = PacketReceiveLayout::Decode(sums.GetValue(i), blocks);
-            if (layout != PacketReceiveLayout::State::Pending) result.readyMask |= uint32_t(1) << i;
+            if (layout != PacketReceiveLayout::State::Pending) { result.readyMask |= uint32_t(1) << i; LL_SEG_COUNT(RX_READY,1U); }
             if (layout == PacketReceiveLayout::State::KeepFlags) result.keepFlagsMask |= uint32_t(1) << i;
         }
+        LL_SEG_END(flagDecode,RX_FLAG_DECODE);
         return result;
     }
 
@@ -231,7 +240,7 @@ private:
     __aicore__ inline void IssueLoad(uint32_t j, uint32_t lane, bool keepFlags, bool reuse)
     {
         LL_SEG_BEGIN(segBegin1, RECV_BUFFER_WAIT);
-        if (reuse) WaitFlag<HardEvent::MTE3_MTE2>(lane);
+        if (reuse) { LL_SEG_SCOPE(RX_LANE_REUSE_WAIT); WaitFlag<HardEvent::MTE3_MTE2>(lane); }
         LL_SEG_END(segBegin1, RECV_BUFFER_WAIT);
         LL_SEG_BEGIN(segBegin2, RECV_INPUT);
         auto wire = lanesBuf_.Get<uint8_t>()[lane * laneStride_];
@@ -255,8 +264,9 @@ private:
     {
         LL_SEG_SCOPE(RECV_COPY);
         LL_SEG_COUNT(RECV_READY_TOKENS, 1U);
+        LL_SEG_COUNT(RX_PACKETS,1U);
         LL_SEG_BEGIN(segBegin3, RECV_INPUT);
-        WaitFlag<HardEvent::MTE2_S>(lane);
+        { LL_SEG_SCOPE(RX_PAYLOAD_READY_WAIT); WaitFlag<HardEvent::MTE2_S>(lane); }
         LL_SEG_END(segBegin3, RECV_INPUT);
         LL_SEG_SCOPE(RECV_OUTPUT);
         uint32_t expert = 0;
@@ -273,24 +283,31 @@ private:
             // Compact offsets are logical payload offsets. Retain this lane
             // until all payload, scale and metadata output reads complete.
             LL_SEG_BEGIN(segBegin4, RECV_BUFFER_WAIT);
-            WaitFlag<HardEvent::MTE2_MTE3>(lane);
+            { LL_SEG_SCOPE(RX_PAYLOAD_READY_WAIT); WaitFlag<HardEvent::MTE2_MTE3>(lane); }
             LL_SEG_END(segBegin4, RECV_BUFFER_WAIT);
             if (expertTimer_) expertTimer_->Start(expert, LlExpertTimer::OutputWrite);
+            LL_SEG_BEGIN(plainPayload,RX_PAYLOAD_OUTPUT);
             DataCopyPad(expandX_[uint64_t(row) * hiddenBytes_], wire, {1U, hiddenBytes_, 0U, 0U, 0U});
             if constexpr (WireFp8)
                 DataCopyPad(dynamicScales_[uint64_t(row) * data_.scaleBytes], wire[uint32_t(data_.quantCount)],
                             {1U, uint32_t(data_.scaleBytes), 0U, 0U, 0U});
+            LL_SEG_END(plainPayload,RX_PAYLOAD_OUTPUT);
             if (expertTimer_) expertTimer_->End(expert, LlExpertTimer::OutputWrite);
             if (expertTimer_) expertTimer_->Start(expert, LlExpertTimer::Metadata);
+            LL_SEG_BEGIN(plainMetadata,RX_METADATA);
             auto header = wire[headerOffset].template ReinterpretCast<uint32_t>();
             if (expertTimer_) expertTimer_->End(expert, LlExpertTimer::Metadata);
             if (expertTimer_) expertTimer_->Start(expert, LlExpertTimer::OutputWrite);
+            LL_SEG_END(plainMetadata,RX_METADATA);
+            LL_SEG_BEGIN(plainMetaOut,RX_META_OUTPUT);
             DataCopyPad(destinationIndex_[uint64_t(row) * 3U], header, {1U, 12U, 0U, 0U, 0U});
+            LL_SEG_END(plainMetaOut,RX_META_OUTPUT);
             SetFlag<HardEvent::MTE3_MTE2>(lane);
             if (expertTimer_) expertTimer_->End(expert, LlExpertTimer::OutputWrite);
             return;
         }
         if (expertTimer_) expertTimer_->Start(expert, LlExpertTimer::Metadata);
+        LL_SEG_BEGIN(recvMetadata,RX_METADATA);
         auto type = wire[uint32_t(data_.tokenStride)].template ReinterpretCast<uint32_t>();
         auto destination = wire[uint32_t(data_.tokenStride) + 32U].template ReinterpretCast<uint32_t>();
         ServerDedupPacketTail tail(wire, headerOffset,
@@ -309,9 +326,10 @@ private:
             wire.template ReinterpretCast<float>().SetValue(PacketReceiveLayout::kMarkerOffset / 4U,
                                                             PacketReceiveLayout::kCompact);
         }
+        LL_SEG_END(recvMetadata,RX_METADATA);
         LL_SEG_BEGIN(segBegin7, RECV_BUFFER_WAIT);
         ServerDedupReceiveSync<HardEvent::S_MTE3>();
-        WaitFlag<HardEvent::MTE2_MTE3>(lane);
+        { LL_SEG_SCOPE(RX_PAYLOAD_READY_WAIT); WaitFlag<HardEvent::MTE2_MTE3>(lane); }
         LL_SEG_END(segBegin7, RECV_BUFFER_WAIT);
         // Initiate downstream work before local output writes on the same
         // MTE3 stream. Metadata was snapshotted before the terminal rewrite;
@@ -338,6 +356,7 @@ private:
                 if (expertTimer_) expertTimer_->End(expertId, LlExpertTimer::Forward);
             }
         }
+        LL_SEG_BEGIN(payloadOut,RX_PAYLOAD_OUTPUT);
         if (expertTimer_) expertTimer_->Start(expert, LlExpertTimer::OutputWrite);
         if (keepFlags) {
             WriteServerDedupPayloadRange(expandX_[uint64_t(row) * hiddenBytes_], wire, 0U, hiddenBytes_);
@@ -350,12 +369,15 @@ private:
                 DataCopyPad(dynamicScales_[uint64_t(row) * data_.scaleBytes], wire[uint32_t(data_.quantCount)],
                             {1U, uint32_t(data_.scaleBytes), 0U, 0U, 0U});
         }
+        LL_SEG_END(payloadOut,RX_PAYLOAD_OUTPUT);
+        LL_SEG_BEGIN(metaOut,RX_META_OUTPUT);
         if (enableDedup_) DataCopyPad(tokenType_[row], type, {1U, 4U, 0U, 0U, 0U});
         DataCopyPad(destinationIndex_[uint64_t(row) * 3U], destination, {1U, 12U, 0U, 0U, 0U});
         if (expertTimer_) expertTimer_->End(expert, LlExpertTimer::OutputWrite);
         if (firstHop) {
             DataCopyPad(relayReadIndex_[uint64_t(row) * k_ * 2U], tail.ReadIndex(), {1U, k_ * 8U, 0U, 0U, 0U});
         }
+        LL_SEG_END(metaOut,RX_META_OUTPUT);
         SetFlag<HardEvent::MTE3_MTE2>(lane);
     }
 

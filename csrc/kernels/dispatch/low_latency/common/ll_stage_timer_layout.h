@@ -5,12 +5,12 @@
 #pragma once
 #include <cstdint>
 namespace LlStageTimer {
-constexpr uint32_t kSchema = 12U;
+constexpr uint32_t kSchema = 13U;
 constexpr uint64_t kMagic = 0x4c4c5431ULL;
-constexpr uint32_t kTraceRecords = 192U, kMetrics = 81U;
+constexpr uint32_t kTraceRecords = 192U, kMetrics = 108U;
 constexpr uint32_t kRecords = kTraceRecords + kMetrics;
 // Same 16-byte event/metric records as dc_seg. LL keeps per-core 512B alignment.
-constexpr uint32_t kSlots = 72U, kFields = 8U;
+constexpr uint32_t kSlots = 80U, kFields = 8U;
 constexpr uint32_t kWordsPerCore = kSlots * kFields;
 constexpr uint32_t kRecordWordOffset = 8U;
 enum Stage : uint32_t {
@@ -95,6 +95,33 @@ enum Stage : uint32_t {
     PREFIX_COMPLETE = 78,
     PREFIX_LOAD = 79,
     RECV_COMPLETE_WAIT = 80,
+    SEND_SETUP = 81,
+    Q_SEED_SUBMIT = 82,
+    Q_SEED_WAIT = 83,
+    Q_LOCAL_UPDATE = 84,
+    ROUTE_CLASSIFY = 85,
+    DIRECT_PLAN = 86,
+    SEND_RETIRE_WAIT = 87,
+    RX_FLAG_ISSUE = 88,
+    RX_FLAG_WAIT = 89,
+    RX_FLAG_REDUCE = 90,
+    RX_FLAG_DECODE = 91,
+    RX_LANE_REUSE_WAIT = 92,
+    RX_PAYLOAD_READY_WAIT = 93,
+    RX_METADATA = 94,
+    RX_PAYLOAD_OUTPUT = 95,
+    RX_META_OUTPUT = 96,
+    TX_PACK_READY_WAIT = 97,
+    TX_METADATA_PUBLISH = 98,
+    BEFORE_FIRST_SEND = 99,
+    BEFORE_FIRST_RECV_POLL = 100,
+    PREFIX_PUBLISH_WAIT = 101,
+    RX_PENDING_UPDATE = 102,
+    TX_PACKETS = 103,
+    RX_PROBED = 104,
+    RX_READY = 105,
+    RX_EMPTY_POLLS = 106,
+    RX_PACKETS = 107,
     StageCount = kMetrics
 };
 constexpr const char* kNames[] = {
@@ -179,6 +206,34 @@ constexpr const char* kNames[] = {
     "PREFIX_COMPLETE",
     "PREFIX_LOAD",
     "RECV_COMPLETE_WAIT",
+    "SEND_SETUP",
+    "Q_SEED_SUBMIT",
+    "Q_SEED_WAIT",
+    "Q_LOCAL_UPDATE",
+    "ROUTE_CLASSIFY",
+    "DIRECT_PLAN",
+    "SEND_RETIRE_WAIT",
+    "RX_FLAG_ISSUE",
+    "RX_FLAG_WAIT",
+    "RX_FLAG_REDUCE",
+    "RX_FLAG_DECODE",
+    "RX_LANE_REUSE_WAIT",
+    "RX_PAYLOAD_READY_WAIT",
+    "RX_METADATA",
+    "RX_PAYLOAD_OUTPUT",
+    "RX_META_OUTPUT",
+    "TX_PACK_READY_WAIT",
+    "TX_METADATA_PUBLISH",
+    "BEFORE_FIRST_SEND",
+    "BEFORE_FIRST_RECV_POLL",
+    "PREFIX_PUBLISH_WAIT",
+    "RX_PENDING_UPDATE",
+    "TX_PACKETS",
+    "RX_PROBED",
+    "RX_READY",
+    "RX_EMPTY_POLLS",
+    "RX_PACKETS",
+
 
 
 };

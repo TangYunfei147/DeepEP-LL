@@ -1,6 +1,7 @@
 """Non-dedup partition and branch isolation contracts."""
 from pathlib import Path
 import subprocess
+import runpy
 import pytest
 ROOT=Path(__file__).resolve().parents[2]
 BASE=ROOT/'csrc/kernels/dispatch/low_latency'
@@ -13,8 +14,9 @@ def method(text,name):
 def test_sender_is_main_loop_and_dedup_unchanged():
     sender=(BASE/'device/dispatch_server_dedup_send.h').read_text(encoding='utf-8')
     old=subprocess.check_output(['git','-C',str(ROOT),'show','4ec82a5:csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_send.h'],encoding='utf-8')
-    assert method(sender,'SendWithDedup')==method(old,'SendWithDedup')
-    assert method(sender,'ProcessGroupLocal')==method(old,'ProcessGroupLocal')
+    normalize=runpy.run_path(str(ROOT/'tests/ll_stage_timer/test_segment_source.py'))['normalize']
+    assert normalize(method(sender,'SendWithDedup'))==normalize(method(old,'SendWithDedup'))
+    assert normalize(method(sender,'ProcessGroupLocal'))==normalize(method(old,'ProcessGroupLocal'))
     body=method(sender,'SendWithoutDedup')
     assert 'GatherMask' not in body and 'ownBegin' not in body
     assert 'const uint32_t serverNum = args_->rankSize / 8U;' in body

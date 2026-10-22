@@ -44,9 +44,13 @@ int main(){
  DeviceTimer timer;timer.Init(reinterpret_cast<uint8_t*>(words.data()),1,1);
  auto kernel=timer.Begin(KERNEL);
  for(uint32_t stage=1;stage<kMetrics;++stage){
-  if((stage>=51 && stage<=55) || stage==69){timer.Count(static_cast<Stage>(stage),17);continue;}
+  if(stage==BEFORE_FIRST_SEND || stage==BEFORE_FIRST_RECV_POLL || stage==SEND_SUBMIT_END)continue;
+  if((stage>=51 && stage<=55) || stage==69 || (stage>=74 && stage<=77) || stage>=103){timer.Count(static_cast<Stage>(stage),17);continue;}
   for(unsigned i=0;i<5;++i){auto begin=timer.Begin(static_cast<Stage>(stage));timer.End(static_cast<Stage>(stage),begin);}
  }
+ timer.First(BEFORE_FIRST_SEND);timer.First(BEFORE_FIRST_SEND);
+ timer.First(BEFORE_FIRST_RECV_POLL);timer.First(BEFORE_FIRST_RECV_POLL);
+ auto submitted=timer.Begin(SEND_SUBMIT_END);timer.End(SEND_SUBMIT_END,submitted);
  timer.End(KERNEL,kernel);
  assert(std::all_of(words.begin(),words.end()-64,[](auto value){return value==0;}));
  assert(AscendC::flushes==0);
@@ -55,12 +59,17 @@ int main(){
  assert(AscendC::flushes>0);
  auto* data=words.data()+55*kWordsPerCore;
  assert(data[0]==kMagic && data[1]==kSchema && data[6]<=kRecords && data[7]>0);
- unsigned kernelBegins=0,kernelEnds=0,kernelMetrics=0;
+ unsigned kernelBegins=0,kernelEnds=0,kernelMetrics=0,firstSend=0,firstPoll=0;
+ static_assert(kWordsPerCore*8==5120);
  for(unsigned i=0;i<data[6];++i){
   auto event=uint32_t(data[8+i*2]);
+  if(event==BEFORE_FIRST_SEND*2){assert(data[9+i*2]==kernel);++firstSend;}
+  if(event==BEFORE_FIRST_RECV_POLL*2){assert(data[9+i*2]==kernel);++firstPoll;}
+  if(event==0x8000+BEFORE_FIRST_SEND || event==0x8000+BEFORE_FIRST_RECV_POLL)
+      assert((data[8+i*2]>>32)==1);
   kernelBegins+=event==0;kernelEnds+=event==1;kernelMetrics+=event==0x8000;
  }
- assert(kernelBegins==1 && kernelEnds==1 && kernelMetrics==1);
+ assert(kernelBegins==1 && kernelEnds==1 && kernelMetrics==1 && firstSend==1 && firstPoll==1);
  assert(std::all_of(words.begin(),words.begin()+55*kWordsPerCore,[](auto value){return value==0;}));
 #else
  assert(AscendC::flushes==0);

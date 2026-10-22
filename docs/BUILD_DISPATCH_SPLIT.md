@@ -224,3 +224,39 @@ Related production CPU/VF mock, q, Host, layout and ST checks:60 passed (7.98s),
 log .tmp/q-prefix-001.log. No CANN compile, full wheel or NPU validation performed.
 Build identifier19000+S requires matching full Host/device installation; wire and
 epoch are unchanged. Compare against b6c4efb using complete OFF kernel timing.
+
+## Communication-neighborhood schema13 (2026-10-22)
+
+Reference: SimpleBrightMan/DeepEP megamoe-urma-tailCover@34d02e97168f799f9558d8999a22e258edc1b3be,
+especially urma/kernel.hpp Put/Quiet/Publish/receive-tail boundaries and timer.hpp.
+LL retains its own MTE semantics and delayed GM export. No additional completion
+wait, pipeline barrier or transport operation was introduced in observe mode.
+
+108 metrics,192 sampled event records,80x8 int64 per core (5120B). Seven dispatch
+translation units remain; no extra kernel mode/template dimension. The extra
+local timer state and probes may change ON register/spill/Scalar overhead.
+No uninstrumented performance claim is made.
+Communication protocol19000+S unchanged; native/Python/ST agree on schema13 and
+reject stale ON wheels. All ranks need a matching full ON wheel and new captures.
+
+Verification:
+- Native recorder ON/OFF, trace-capacity/milestone preservation, schema parsing,
+  report CSV/Markdown/Chrome export, Host selector and ST contracts:86 passed
+  (5.03s), .tmp/comm-native-001.log.
+- Initial full CPU suite:863 passed,111 skipped,2 obsolete tests failed.
+  One compared raw source including new probes, the other treated all historical
+  schemas as comparable. Business-token comparison and schema13-only strict
+  diagnostic mismatch guard fixed these; targeted71 passed/1 POSIX skip.
+- Final report/launcher guards:7 passed (0.21s). Counts overlap the above suites.
+- Source business-token hashes for dispatch sender/receiver/counts match fb9263d
+  after removing diagnostic macros and braces. See communication_baseline.json.
+  This does not prove CANN compilation or instruction-level equivalence.
+- EP16 B=M256/H3584/K8/E384/FP8 ON --plan passed.
+- A3_163_docker hostname resolution failed before the remote preflight command
+  executed. No CANN ON/OFF cold build or full wheel link; no NPU run.
+  Do not substitute earlier successful builds for this timer revision.
+- Acquisition/analysis and interpretation: tests/ll_stage_timer/COMMUNICATION_DIAGNOSTICS.md.
+- Final full CPU suite:867 passed,111 skipped (149.83s), .tmp/comm-full-final.log.
+  Additional final entry-to-first-send report tests:7 passed (0.25s).
+  Entry-to-first-send uses same-core actual INIT start and first-send endpoint,
+  never sums independent phase statistics. All validation batches overlap.

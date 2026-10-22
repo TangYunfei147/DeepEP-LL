@@ -511,7 +511,7 @@ __aicore__ inline void ServerDedupCounts::CalRecvAndSetFlag()
     { LL_SEG_SCOPE(BROADCAST_PREFIX);
       DataCopyPad(workspace,prefix,copy); } // One shared table, no per-core replicas.
     // Finish prefix and count-ready cleanup before releasing a single epoch.
-    SyncFunc<HardEvent::MTE3_S>();
+    { LL_SEG_SCOPE(PREFIX_PUBLISH_WAIT); SyncFunc<HardEvent::MTE3_S>(); }
     LL_SEG_SCOPE(PUBLISH_PREFIX_FLAGS);
     auto ready=prefixPublishBuf_.Get<uint32_t>();
     Duplicate<uint32_t>(ready,0U,8U);

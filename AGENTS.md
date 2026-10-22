@@ -53,3 +53,7 @@ R0前缀生成改为device/dispatch_prefix_scan.h的uint32 VF扫描：64项/段�
 
 当前q分支叠加9e24a79 R0前缀VF，构建标识19000+S，q表VF播种保持。
 PREFIX_COMPLETE本地专家计数提取仍Scalar；没有改变wire/epoch或发送顺序。
+
+当前schema13通信诊断：108metrics/192采样事件/每核5120B。SEND_SETUP与首包前区间分开。
+First区间从KERNEL起点到第一次DataCopy/Probe之前，空任务不补零；保留无新排空的observe语义。
+新报告tests/ll_stage_timer/communication_report.py，参考COMMUNICATION_DIAGNOSTICS.md。

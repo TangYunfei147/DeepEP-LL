@@ -79,3 +79,6 @@ q表VF播种：device/dispatch_frequency_histogram.h复用既有实现，common/
 
 R0 uint32前缀VF：device/dispatch_prefix_scan.h；counts CalRecvAndSetFlag仅调用VF并同步V_MTE3。
 count_layout DispatchSinglePrefixStageUbBytes包含256B对齐读缓冲，协议标识19000+S。
+
+schema13打点与communication_report补齐发送初始化、q准备、首发、探测/依赖/输出/尾部。
+源码业务token对照fb9263d存communication_baseline.json，计数/包格式/顺序不改。

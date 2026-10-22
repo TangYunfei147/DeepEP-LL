@@ -11,7 +11,7 @@ def normalize(s):
  s=re.sub(r'/\*.*?\*/|//[^\n]*','',s,flags=re.S)
  s=re.sub(r'#include [^\n]*ll_(?:stage|expert)_timer[^\n]*','',s)
  s=re.sub(r'if \(timer.Enabled\(\)\) \{ AscendC::SyncAll<true>\(\); timer.Flush\(\); \}','',s)
- s=re.sub(r'\bLL_SEG_(?:BEGIN|END|COUNT|SCOPE|RELAY_COMPLETION)\([^;]*?\);','',s)
+ s=re.sub(r'\bLL_SEG_(?:BEGIN|END|COUNT|SCOPE|FIRST|RELAY_COMPLETION)\([^;]*?\);','',s)
  s=re.sub(r'if \(timer_?\) timer_?->(?:Start|End)\([^;]*\);','',s)
  s=re.sub(r'(?:const uint64_t \w+ = )?timer\.(?:Start|End|Init|Finish|Begin)\([^;\n]*\);?','',s)
  s=re.sub(r'expert\.(?:Init|Finish)\([^;]*\);','',s)
@@ -38,8 +38,8 @@ def test_explicit_boundaries_are_paired_and_use_reference_ids():
     names=set(json.loads(Path(__file__).with_name('dc_seg_stages.json').read_text()))
     for relative in MANIFEST['files']:
         source=(ROOT/relative).read_text(encoding='utf-8')
-        begins=Counter(re.findall(r'LL_SEG_BEGIN\((\w+), (\w+)\)',source))
-        ends=Counter(re.findall(r'LL_SEG_END\((\w+), (\w+)\)',source))
+        begins=Counter(re.findall(r'LL_SEG_BEGIN\((\w+),\s*(\w+)\)',source))
+        ends=Counter(re.findall(r'LL_SEG_END\((\w+),\s*(\w+)\)',source))
         assert begins==ends,relative
         assert {stage for _,stage in begins}<=names
         assert set(re.findall(r'LL_SEG_SCOPE\((\w+)\)',source))<=names
