@@ -60,7 +60,8 @@ extern "C" [[bisheng::core_ratio(0, 1)]] __global__ __aicore__ void DEEPEP_LL_VA
     if (!DispatchDedup::LlTilingKeyValid(reinterpret_cast<const __gm__ DispatchDedup::CommArgs*>(commArgs)->rankSize, tiling->tilingKey)) { AscendC::Trap(); return; }
     const uint32_t bs = tiling->bs;
     const uint32_t h = tiling->h;
-    const bool enableDedup = DispatchDedup::EpServerDedupEnabled(tiling->numMaxTokensPerRank);
+    const bool enableDedup = DispatchDedup::EpServerDedupEnabled(tiling->numMaxTokensPerRank, bs,
+        uint32_t(reinterpret_cast<const __gm__ DispatchDedup::CommArgs*>(commArgs)->rankSize));
     const uint32_t topK = tiling->topK;
     const uint32_t moeExpertNum = tiling->moeExpertNum;
     LlExpertTimer::DeviceTimer expert;
