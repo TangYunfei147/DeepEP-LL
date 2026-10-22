@@ -49,6 +49,9 @@ def main():
     code='from deep_ep._native import require_native; n=require_native("ablation"); '
     code+=f'assert n.low_latency_ablation_mode=={MODES[a.mode]}; assert n.low_latency_core_protocol=={29000+100*MODES[a.mode]+info["send_cores"]}; '
     code+=f'assert bool(n.low_latency_stage_timer_enabled)=={info["timer"]=="ON"}'
+    code+='; import hashlib; from pathlib import Path; '
+    code+=f'assert hashlib.sha256(Path(n.__file__).read_bytes()).hexdigest()=={info["native_sha256"]!r}; '
+    code+='g=n.low_latency_ranks_per_group; assert (g(16) if callable(g) else g)==4'
     subprocess.run([sys.executable,'-c',code],cwd=manifest.parent,env=env,check=True)
     subprocess.run(command,cwd=ROOT,env=env,check=True)
 

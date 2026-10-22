@@ -279,3 +279,17 @@ with its own device-cycle envelope; full profiler time is not a replay metric.
 CPU required contracts plus new comparison/schema/mapping tests52passed,2compiler
 skips. Python syntax and EP16 suite command generation passed. No device correctness
 or performance claim yet; CANN/full-wheel validation status is in ll_ablation README.
+
+Ablation device validation on27: baseline0 (serial) and modes2/3/4 (four-way
+parallel), each all7entries in fresh ON/OFF object directories, passed56objects.
+CANN9.3.0/O2/dav-3510, pinned SHMEM4dd80e headers. No wheel link/install/NPU run.
+Initial recursive dependency preparation timed out; after user clarified27network
+limits all further code/script updates used SSH-uploaded Git bundles. Remaining
+compiler checks used local headers without external access. Serial task was stopped
+and its config restored before parallel checks; other processes were untouched.
+Uploaded parallel script initially hadCRLF, corrected before successful run. Logs:
+/home/tyf/Q4_remote_test/.logs/ablation-device-001.log and ablation-device-003.log.
+Modes2/3/4 objects: DeepEP-LL-ablations/.tmp/ablation-device-qcVRR5Og on27.
+Offline importer/exporter, valid metadata and OFF comparison guards tested locally.
+Required CPU suite plus new checks:55passed/2compiler-discovery skips; native CANN
+object checks above are separate from these local skips. No18us saving claimed.

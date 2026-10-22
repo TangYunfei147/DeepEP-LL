@@ -27,6 +27,7 @@ def compare(paths):
     for mode,(identity,data,metadata,rows) in runs.items():
         for field in ['commit','send_cores','recv_cores']:
             if identity[field]!=ref[0][field]:raise ValueError(f'{mode}: {field} mismatch')
+        if identity.get('logical_group')!=ref[0].get('logical_group'):raise ValueError('Logical group mismatch')
         for field in ['world_size','case_count','result_count']:
             if data[field]!=ref[1][field]:raise ValueError(f'{mode}: {field} mismatch')
         if metadata!=ref[2]:raise ValueError(f'{mode}: valid routing metadata mismatch')

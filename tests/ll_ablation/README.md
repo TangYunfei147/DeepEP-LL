@@ -2,8 +2,9 @@
 
 Branch `experiment/ll-g4-ablations`, algorithm base `197052c` (plain q, optimized
 receiver destination metadata). This is separate from the earlier standalone
-bandwidth probes. **CPU checks passed; CANN compilation and EP16 device correctness
-are not yet validated. Run the correctness gates before interpreting performance.**
+bandwidth probes. **CPU checks and CANN device-object compilation passed. Full-wheel linking and
+EP16 device correctness are not yet validated. Run the correctness gates before
+interpreting performance.**
 
 The target is B=M256, H3584, K8, E384, prequantized FP8, int32 E8M0 scale packs,
 do_cpu_sync0. Other dtype/scale combinations are rejected by the launcher for this
@@ -103,6 +104,11 @@ fetches, and rejects incomplete trees instead of falling back to the network.
 Pip wheel building uses `PIP_NO_INDEX=1`. Reuse the existing target Python/CANN
 environment; missing Python build packages must also be supplied through an
 uploaded wheelhouse compatible with the target's Python/architecture.
+SHMEM Ascend950 also needs nlohmann-json3.11.3 outside its Git submodule tree.
+Prepare its single_include/nlohmann/json.hpp under SHMEM's3rdparty/json on the
+networked machine; the exporter validates its version and includes the header
+with a SHA256. Missing JSON is rejected, never downloaded on27. Offline builds
+also restrict Git to the local file protocol.
 
 ## One-command single-host EP16 suite
 

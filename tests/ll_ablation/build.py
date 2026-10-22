@@ -4,6 +4,8 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import hashlib
+import zipfile
 from common import ROOT,MODES,git,sha,write_json
 
 def main():
@@ -22,7 +24,7 @@ def main():
     source=ROOT/'.ablation'/'sources'/tag
     output=ROOT/'.ablation'/'wheels'/tag
     config=dict(mode=a.mode,mode_id=MODES[a.mode],timer=a.timer,send_cores=a.send_cores,
-                recv_cores=56-a.send_cores,commit=git('rev-parse','HEAD'))
+                recv_cores=56-a.send_cores,logical_group=4,commit=git('rev-parse','HEAD'))
     if a.plan:print(config);return
     if git('status','--porcelain'):raise RuntimeError('Commit source changes before building variants')
     if source.exists() or output.exists():raise RuntimeError('Variant directory exists; use a fresh checkout, never overwrite')
@@ -31,7 +33,8 @@ def main():
     header=source/'csrc/kernels/dispatch/low_latency/common/ll_ablation_config.h'
     header.write_text(header.read_text().replace('kLlAblationMode = 0;',f'kLlAblationMode = {MODES[a.mode]};'))
     env=dict(os.environ,DEEPEP_NPU_ARCH='Ascend950',DEEPEP_LL_STAGE_TIMER=a.timer,
-             DEEPEP_LL_SEND_CORES=str(a.send_cores),DEEPEP_LL_RECV_CORES=str(56-a.send_cores))
+             DEEPEP_LL_SEND_CORES=str(a.send_cores),DEEPEP_LL_RECV_CORES=str(56-a.send_cores),
+             DEEPEP_LL_RANKS_PER_GROUP='4')
     for name in ['SHMEM_ROOT','CATLASS_ROOT']:env.pop(name,None)
     for name,rel in {'TMPDIR':'.tmp','TMP':'.tmp','TEMP':'.tmp','PIP_CACHE_DIR':'.cache/pip',
                      'XDG_CACHE_HOME':'.cache','CCACHE_DIR':'.cache/ccache',
@@ -46,6 +49,7 @@ def main():
         bundle=a.offline_deps if a.offline_deps.is_absolute() else ROOT/a.offline_deps
         run([sys.executable,str(ROOT/'tests/ll_ablation/deps.py'),'unpack','--checkout',str(source),'--bundle',str(bundle)])
         env['PIP_NO_INDEX']='1'
+        env['GIT_ALLOW_PROTOCOL']='file'
     else:run(['git','submodule','update','--init','--recursive','--depth','1'])
     if a.prepare_sdk:run([sys.executable,'scripts/build_shmem.py'])
     else:raise RuntimeError('First isolated build requires --prepare-sdk (SDK remains inside this checkout)')
@@ -53,6 +57,10 @@ def main():
     run([sys.executable,'-m','pip','wheel','--no-deps','--no-build-isolation','--wheel-dir',str(output),'.'])
     wheels=list(output.glob('*.whl'))
     if len(wheels)!=1:raise RuntimeError('Expected exactly one wheel')
+    with zipfile.ZipFile(wheels[0]) as archive:
+        native=[n for n in archive.namelist() if Path(n).name.startswith('_C.') and n.endswith('.so')]
+        if len(native)!=1:raise RuntimeError('Cannot identify native extension in wheel')
+        config['native_sha256']=hashlib.sha256(archive.read(native[0])).hexdigest()
     config.update(wheel=wheels[0].name,wheel_sha256=sha(wheels[0]),header_sha256=sha(header),
                   source=str(source.relative_to(ROOT)),python=sys.version,
                   cann=os.environ.get('ASCEND_HOME_PATH'))
