@@ -75,8 +75,9 @@ initializes its locked recursive submodules and builds its own in-project SHMEM.
 No SDK upgrade, system dependency install or driver change is performed. Every
 variant retains all7 production dispatch translation units and O2/Ascend950.
 This deliberately costs more initial build time to isolate variants. Already
-existing variant build directories are rejected, never deleted or reset. For a
-new source revision use a fresh suite checkout.
+existing complete variants are reused only after validation. With --resume,
+incomplete directories remain untouched and a new isolated attempt is created.
+For a new source revision use a fresh suite checkout.
 
 ### Network-limited hosts (including27): upload only
 
@@ -126,7 +127,10 @@ With --build, the order is now **all builds -> all installs -> serial experiment
 --resume reuses complete manifests only after identity/SHA256 checks. Missing
 variants are built at the existing wheels' source commit, so a launcher-only update
 need not rebuild the baseline or mix source revisions. Mixed revisions are rejected.
-Interrupted builds without a valid manifest are not overwritten automatically.
+Interrupted builds without a valid manifest are preserved. --resume builds that
+mode in a uniquely named source worktree and wheels/<mode>/attempt-* directory,
+then publishes the canonical manifest only on success. Installation/run scripts
+follow its relative wheel/source paths. Completed wheels are not recompiled.
 Results are never skipped or overwritten: use a new prefix if a previous run already
 created result directories. Occupancy checking remains unchanged before each run.
 

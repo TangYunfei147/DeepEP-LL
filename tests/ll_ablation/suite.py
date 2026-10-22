@@ -38,6 +38,7 @@ def plan_commands(a):
         if a.build and mode not in existing:
             command=[sys.executable,str(ROOT/'tests/ll_ablation/build.py'),'--mode',mode,
                 '--timer',timer,'--send-cores',str(a.send_cores),'--prepare-sdk','--revision',revision]
+            if a.resume:command+=['--resume']
             if a.offline_deps:command+=['--offline-deps',str(a.offline_deps.resolve())]
             build_commands.append(command)
         if not env.exists():install_commands.append([sys.executable,'-m','venv','--system-site-packages',str(env)])

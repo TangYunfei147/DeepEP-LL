@@ -6,7 +6,26 @@ import subprocess
 import sys
 import hashlib
 import zipfile
+import json
+import uuid
 from common import ROOT,MODES,git,sha,write_json,source_checkout
+
+def build_paths(root,tag,resume):
+    source=root/'.ablation'/'sources'/tag
+    canonical=root/'.ablation'/'wheels'/tag
+    if (canonical/'manifest.json').exists():
+        raise RuntimeError('Completed variant exists; use suite.py --resume to validate and reuse it')
+    output=canonical
+    if source.exists() or canonical.exists():
+        if not resume:
+            raise RuntimeError('Incomplete variant directory exists; retry with --resume (old files are preserved)')
+        if canonical.exists() and (not canonical.is_dir() or canonical.is_symlink()):
+            raise RuntimeError('Variant output must be a real directory')
+        attempt='attempt-'+uuid.uuid4().hex
+        source=source.with_name(tag+'-'+attempt)
+        output=canonical/attempt
+        print(f'Preserving incomplete variant. Fresh build attempt: {source}; logs: {output}',flush=True)
+    return source,output,canonical
 
 def main():
     p=argparse.ArgumentParser()
@@ -16,19 +35,18 @@ def main():
     p.add_argument('--prepare-sdk',action='store_true')
     p.add_argument('--offline-deps',type=Path,help='Uploaded deps.py bundle directory; no remote Git access')
     p.add_argument('--revision',default='HEAD',help='Pinned source revision shared by all resumed variants')
+    p.add_argument('--resume',action='store_true',help='Preserve incomplete directories and build in a fresh attempt')
     p.add_argument('--plan',action='store_true')
     a=p.parse_args()
     if not 0<a.send_cores<56:p.error('send-cores must be 1..55')
     if a.mode=='ready-replay' and a.timer!='ON':p.error('ready-replay requires ON')
     if not a.prepare_sdk and not a.plan:p.error('Isolated first build requires --prepare-sdk')
     tag=f'{a.mode}-{a.timer}-s{a.send_cores}'
-    source=ROOT/'.ablation'/'sources'/tag
-    output=ROOT/'.ablation'/'wheels'/tag
     config=dict(mode=a.mode,mode_id=MODES[a.mode],timer=a.timer,send_cores=a.send_cores,
                 recv_cores=56-a.send_cores,logical_group=4,commit=git('rev-parse',a.revision+'^{commit}'))
     if a.plan:print(config);return
     config.update(source_checkout())
-    if source.exists() or output.exists():raise RuntimeError('Variant directory exists; use a fresh checkout, never overwrite')
+    source,output,canonical=build_paths(ROOT,tag,a.resume)
     source.parent.mkdir(parents=True,exist_ok=True);output.mkdir(parents=True)
     subprocess.run(['git','-C',str(ROOT),'worktree','add','--detach',str(source),config['commit']],check=True)
     header=source/'csrc/kernels/dispatch/low_latency/common/ll_ablation_config.h'
@@ -62,10 +80,13 @@ def main():
         native=[n for n in archive.namelist() if Path(n).name.startswith('_C.') and n.endswith('.so')]
         if len(native)!=1:raise RuntimeError('Cannot identify native extension in wheel')
         config['native_sha256']=hashlib.sha256(archive.read(native[0])).hexdigest()
-    config.update(wheel=wheels[0].name,wheel_sha256=sha(wheels[0]),header_sha256=sha(header),
+    config.update(wheel=str(wheels[0].relative_to(canonical)),wheel_sha256=sha(wheels[0]),header_sha256=sha(header),
                   source=str(source.relative_to(ROOT)),python=sys.version,
                   cann=os.environ.get('ASCEND_HOME_PATH'))
-    write_json(output/'manifest.json',config)
-    print(output/'manifest.json')
+    # Never replace a manifest published by another successful build.
+    with (canonical/'manifest.json').open('x') as manifest:
+        json.dump(config,manifest,indent=2,sort_keys=True)
+        manifest.write('\n')
+    print(canonical/'manifest.json')
 
 if __name__=='__main__':main()

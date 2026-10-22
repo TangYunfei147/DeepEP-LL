@@ -132,9 +132,34 @@ def test_suite_builds_every_wheel_before_run_and_reuses_baseline(tmp_path,monkey
     assert len(plan['phases']['build'])==4
     assert not plan['phases']['install'] and not plan['phases']['run']
     assert all(c[c.index('--revision')+1]=='old-source' for c in plan['phases']['build'])
+    assert all('--resume' in c for c in plan['phases']['build'])
     a.build_only=False
     plan=suite.plan_commands(a)
     assert list(plan['phases'])==['build','install','run']
     assert len(plan['phases']['run'])==5
     wheel.write_bytes(b'corrupt')
     with pytest.raises(ValueError,match='corrupt'):suite.plan_commands(a)
+
+@pytest.mark.parametrize('leftovers',['source','output','both'])
+def test_incomplete_build_retry_preserves_files(tmp_path,leftovers):
+    from build import build_paths
+    tag='fixed-payload-OFF-s30'
+    old_source=tmp_path/'.ablation/sources'/tag
+    old_output=tmp_path/'.ablation/wheels'/tag
+    paths=[]
+    if leftovers in ('source','both'):paths.append(old_source)
+    if leftovers in ('output','both'):paths.append(old_output)
+    for path in paths:path.mkdir(parents=True);(path/'keep.txt').write_text('preserve')
+    with pytest.raises(RuntimeError,match='--resume'):build_paths(tmp_path,tag,False)
+    source,output,canonical=build_paths(tmp_path,tag,True)
+    assert source!=old_source and output.parent==old_output and canonical==old_output
+    assert not source.exists() and not output.exists()
+    assert all((path/'keep.txt').read_text()=='preserve' for path in paths)
+    assert build_paths(tmp_path,tag,True)[0]!=source
+
+def test_completed_build_is_not_overwritten(tmp_path):
+    from build import build_paths
+    output=tmp_path/'.ablation/wheels/baseline-OFF-s30';output.mkdir(parents=True)
+    manifest=output/'manifest.json';manifest.write_text('{}')
+    with pytest.raises(RuntimeError,match='Completed'):build_paths(tmp_path,'baseline-OFF-s30',True)
+    assert manifest.read_text()=='{}'

@@ -38,3 +38,9 @@ before installation/running. --build-only --resume reuses verified baseline whee
 and pins missing builds to that original source revision. Regression checks cover
 phase ordering, no run/install in build-only, revision pinning and corrupt wheel
 rejection. Occupancy checking and all native/kernel files remain unchanged.
+
+Incomplete-build follow-up:19ablation tests passed. --resume now reaches build.py
+and preserves source-only/output-only/both residual directories, creates distinct
+isolated retry paths, and refuses to replace an existing completed manifest.
+Canonical manifests point to nested attempt wheels and their actual source SDK.
+No native/kernel change; partial build cache reuse is intentionally not claimed.
