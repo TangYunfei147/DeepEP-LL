@@ -429,3 +429,22 @@ combine-off.log,wheel-on-full.log,wheel-install.log. Wheel is in
 No NPU task was launched, no SDK rebuilt, and shared Python was not modified.
 After pulling thefix, use a freshdiagnose run-name(e.g.small_b_phases_002);
 keep thefailed directory and existing build caches for diagnosis/reuse.
+
+## 2026-10-22 bounded first-pass diagnosis (no kernel change)
+
+The user's complete35case/2800sample export was536261158raw bytes and52138287
+encoded bytes in887parts. Lossless compression reducedbytes90.2774%, but sending
+that archive manually is unsuitable for initial bottleneck diagnosis. Default
+transfer is now a single readable SEND_FIRST.txt, hard-capped at60000characters
+and UTF-8bytes includingCRLF. All captured samples contribute to statistics;
+selected stage detail is explicitly bounded. Full captures remain on target.
+Exact follow-up extraction requires explicit B/profile/rank/iteration/core and
+refuses more than3parts by default before writing anything. Full archive mode
+remains explicit only. Existing completed runs need offline reanalysis only.
+
+Native sources, Python runtime package, CMake and build_support are unchanged
+from98c5f50. NoCANN compile orNPU run was needed. Full local relevantregression:
+534passed/48compiler-or-POSIX skips in23.78s; final focusedchecks68passed after
+adding an empty-selection guard. The35case/2800sample synthetic worst-stage
+report is47500CRLFbytes in ONE file, retaining everycase's essentialtables.
+This is a report-volume validation, not measured target-operator performance.

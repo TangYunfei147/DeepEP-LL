@@ -1,5 +1,6 @@
-传输默认已改为 **LZMA＋Base64无损压缩**：一键矩阵结束后只需发送`SEND_FIRST.txt`和列出的压缩块。
-已有结果可`diagnose.py --analyze-existing <目录>`离线重打包；无需重采。恢复命令与校验见[COMPRESSED_TRANSFER.md](COMPRESSED_TRANSFER.md)。
+默认第一轮只发送一个 **SEND_FIRST.txt（≤60000字符/UTF-8字节，含CRLF）**。
+它汇总全部捕获样本用于定位；全量归档留在目标机，必要时按B/profile/rank/轮次/core提取最多3块细节。
+旧run可`diagnose.py --analyze-existing <目录>`生成新摘要，无需重采。用法见[PHASED_DIAGNOSIS.md](PHASED_DIAGNOSIS.md)。
 
 当前打点为 **schema14**，支持编译期分组、完整kernel插桩扰动对照及每文件≤60000字符/UTF-8字节的传输报告。
 多B一键入口见 [PHASED_DIAGNOSIS.md](PHASED_DIAGNOSIS.md)。所有rank需匹配新wheel；schema13原始数据仍可离线解析。

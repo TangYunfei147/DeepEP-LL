@@ -47,6 +47,9 @@ def parser():
     p.add_argument('--wheel-map', type=Path, help='JSON mapping off/profile -> existing local wheel path')
     p.add_argument('--defer-analysis', action='store_true', help='Collect rank-local files before --analyze-existing')
     p.add_argument('--analyze-existing', type=Path, help='Only analyze a completed suite after collecting all ranks')
+    p.add_argument('--transfer-mode', choices=('summary', 'archive'), default='summary',
+                   help='summary: one bounded SEND_FIRST.txt for initial analysis (default); '
+                        'archive: optional lossless full-suite transfer, potentially hundreds of parts')
     return p
 
 
@@ -152,7 +155,7 @@ def make_plan(args, forwarded, root=ROOT, python=sys.executable):
                 device_visibility=devices, matrix=dict(B=args.bs, M=args.m, H=args.hidden, K=args.topk,
                                                        E=args.experts, dtype=args.dtype, cpu_sync=args.cpu_sync),
                 stages=stages, skip_build=args.skip_build, wheel_map=str(args.wheel_map) if args.wheel_map else None,
-                defer_analysis=args.defer_analysis,
+                defer_analysis=args.defer_analysis, transfer_mode=args.transfer_mode,
                 note='Run the same profiles/matrix in the same order on all hosts. ON profiles are separate captures and cannot be summed or merged into one timeline.')
 
 
@@ -288,22 +291,36 @@ def _write_performance_compare(suite):
     return path
 
 
-def write_send_first(suite):
-    """Compress all available cases once, after the matrix has finished."""
-    suite = Path(suite)
-    _write_performance_compare(suite)
-    spec = importlib.util.spec_from_file_location('ll_suite_transfer', Path(__file__).with_name('suite_transfer.py'))
+def _transfer_module(name):
+    spec = importlib.util.spec_from_file_location('ll_' + name, Path(__file__).with_name(name + '.py'))
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    return module
+
+
+def write_send_first(suite, transfer_mode='summary'):
+    """Write one initial-analysis report; a full archive requires explicit opt-in."""
+    suite = Path(suite)
+    if transfer_mode not in ('summary', 'archive'):
+        raise ValueError('transfer_mode must be summary or archive')
+    _write_performance_compare(suite)
+    if transfer_mode == 'summary':
+        return _transfer_module('triage_report').export_report(suite)
+    module = _transfer_module('suite_transfer')
     manifest = module.export_suite(suite, limit=LIMIT)
     overview = suite / manifest['output'] / '00_overview.txt'
+    text = ('FULL ARCHIVE OPTIONAL - not required for initial analysis\n'
+            'For one initial-analysis file, rerun --analyze-existing with --transfer-mode summary.\n\n'
+            + overview.read_text(encoding='utf-8'))
+    if len(text) > LIMIT or len(text.encode('utf-8')) + text.count('\n') > LIMIT:
+        raise ValueError('Optional archive index exceeds the transfer limit')
     # This is a replaceable pointer to immutable content-addressed bundles.
     # Repacking after collecting additional ranks preserves earlier exports.
-    (suite / 'SEND_FIRST.txt').write_bytes(overview.read_bytes())
+    (suite / 'SEND_FIRST.txt').write_bytes(text.encode('utf-8'))
     return suite / 'SEND_FIRST.txt'
 
 
-def analyze_existing(suite, root=ROOT, python=sys.executable):
+def analyze_existing(suite, root=ROOT, python=sys.executable, transfer_mode='summary'):
     suite = _within_project(suite, Path(root).resolve())
     plan_file = suite / 'node_000/plan.json'
     plan = json.loads(plan_file.read_text(encoding='utf-8'))
@@ -321,7 +338,9 @@ def analyze_existing(suite, root=ROOT, python=sys.executable):
         command = [python, str(Path(root) / 'tests/ll_stage_timer/analyze.py'),
                    str(suite / 'runs' / stage['name']), '--op', 'dispatch', '--output-dir', str(destination)]
         subprocess.run(command, cwd=root, check=True)
-    return write_send_first(suite)
+    # The current CLI choice controls transfer even for plans written before
+    # summary mode existed; their old archive is never decoded or deleted.
+    return write_send_first(suite, transfer_mode=transfer_mode)
 
 
 def _validate_launcher_before_build(plan):
@@ -382,7 +401,7 @@ def execute(plan):
         if stage['timer'] and plan['node'] == 0 and not plan['defer_analysis']:
             _command(stage['analyze'], plan, env, logs / f'{profile}-analyze.log')
     if plan['node'] == 0:
-        write_send_first(suite)
+        write_send_first(suite, transfer_mode=plan.get('transfer_mode', 'summary'))
     return suite / 'SEND_FIRST.txt'
 
 
@@ -391,9 +410,10 @@ def main(argv=None):
     args, forwarded = p.parse_known_args(argv)
     if args.analyze_existing:
         if args.plan:
-            print(json.dumps(dict(analyze_existing=str(args.analyze_existing), mutation=False)))
+            print(json.dumps(dict(analyze_existing=str(args.analyze_existing),
+                                  transfer_mode=args.transfer_mode, mutation=False)))
             return 0
-        print(analyze_existing(args.analyze_existing))
+        print(analyze_existing(args.analyze_existing, transfer_mode=args.transfer_mode))
         return 0
     try:
         plan = make_plan(args, forwarded)

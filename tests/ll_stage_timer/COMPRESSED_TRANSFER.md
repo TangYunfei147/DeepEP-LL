@@ -1,3 +1,6 @@
+> 默认交付已改为一个≤60000字节的SEND_FIRST统计摘要。本文的全量压缩归档仅供显式`--transfer-mode archive`或定点细节传输使用；不要求初次分析发送所有归档块。
+> 目标机实测整套数据536261158字节压缩为52138287字节（约减少90.28%）仍需887块，说明全量归档不适合作为手工传输的默认内容。先按[PHASED_DIAGNOSIS.md](PHASED_DIAGNOSIS.md)生成一个摘要，再按疑点提取。
+
 # 无损压缩传输与本地还原
 
 本更新只改Python离线工具。kernel、探针、通信协议、收发顺序、打点组和原始采样量均不改。
@@ -6,11 +9,11 @@
 ## 工作流程
 
 原始timer JSON → 正常分析 → 紧凑表保存完整解码字段 → LZMA/XZ → Base64 → 带校验的文本块。
-默认整套多B/profile结果只发送一次，OFF汇总和active-capture完整耗时一起包含。
+显式归档模式包含整套多B/profile结果、OFF汇总和active-capture完整耗时；它是可选的完整数据迁移。
 读取已有未压缩v1包时先无损恢复，再转换为压缩格式；不要求重采或重编wheel。
 
 ```bash
-python tests/ll_stage_timer/diagnose.py --analyze-existing diagnostic-runs/<run-name>
+python tests/ll_stage_timer/diagnose.py --analyze-existing diagnostic-runs/<run-name> --transfer-mode archive
 ```
 
 读取新生成的`SEND_FIRST.txt`，发送其中列出的全部`suite_*_part_*.txt`。

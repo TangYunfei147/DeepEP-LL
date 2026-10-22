@@ -37,45 +37,43 @@ python tests/ll_stage_timer/diagnose.py \
 python tests/ll_stage_timer/diagnose.py --analyze-existing diagnostic-runs/small_b_phases_001
 ```
 
-## 发哪些文件（无损压缩）
+## 第一轮只发送一个文件
 
-默认只发送根目录 `SEND_FIRST.txt`，以及其中列出的 `transfer/<bundle-id>/suite_*_part_*.txt`。
-整套B/profile数据、OFF性能汇总、启用打点后的完整耗时和身份信息已经一起压缩；无需再发送各case的overview、priority、full、CSV或PERFORMANCE_COMPARE。
-每块同时≤60000字符和60000UTF-8字节，已计入封装及Windows CRLF换行。分包只切传输，不减少轮次、核、指标或真实区间。
+默认现在是`--transfer-mode summary`，只发送运行目录根部的 **SEND_FIRST.txt**，同时限制≤60000字符和60000UTF-8字节（含CRLF）。
+这是用于初步定位的统计摘要，不是完整trace归档：统计读取全部rank/轮次，展示OFF/ON完整耗时、插桩扰动、S/R准备跨度、活动核数、包数均衡、就绪率、关键阶段和最慢核位置。
+阶段详情有明确数量上限，原始JSON、CSV、trace和完整压缩包留在目标机。无需发送887个归档块，也无需重新采样。
 
-新的采集命令不变。已有这套入口的结果，可只重新打包，**无需重采、编译或启动NPU**：
-
-```bash
-python tests/ll_stage_timer/diagnose.py --analyze-existing diagnostic-runs/small_b_phases_001
-```
-
-此命令读取旧版未压缩v1导出也能生成新压缩包。更早直接ST采集的原始JSON，可先离线分析到新的目录：
+已有完整采集可直接生成新的一页报告：
 
 ```bash
-python tests/ll_stage_timer/analyze.py <原run目录> --op dispatch --output-dir <新的分析目录>
+python tests/ll_stage_timer/diagnose.py --analyze-existing diagnostic-runs/small_b_phases_002
 ```
 
-单case分析目录下的`transfer/`也使用压缩分块。每包有整体及分块SHA256；相同数据不重复存储，更新后生成新的哈希目录，旧包保留。
-整套数据按case边界以约64MiB原始数据分组，避免将整个多B矩阵一次解压到内存。缺少B、profile、rank、轮次或完整性能时，概览明确标为INCOMPLETE。
+将示例目录替换为实际run。也可直接执行`python tests/ll_stage_timer/triage_report.py <run目录>`，避免执行任何缺失case的原始解析。
+根部SEND_FIRST会更新；原归档不删除，完整本地统计保存在`triage/<hash>/triage_summary.json`，无需发送此JSON。
+35case/2800sample规模的合成压力检查保留每个case的核心表及阶段摘要，整个文本仍低于60000字节。若更大矩阵超出预算，会明确缩减可见详情或要求按B/profile选择，绝不自动拆成几百份。
 
-若只能通过终端获取文本，每次打印一块即可（路径、group和part按SEND_FIRST选择）：
+## 后续按疑点提取原始细节
+
+第一轮分析后，按报告中的B/profile/rank/iteration/core选择，例如：
 
 ```bash
-python tests/ll_stage_timer/transfer_report.py show diagnostic-runs/small_b_phases_001/transfer/<bundle-id> --group 1 --part 1
+python tests/ll_stage_timer/triage_extract.py diagnostic-runs/small_b_phases_002 \
+  --profile prefix --bs 1 --rank 0 --iteration 0 --core 28 \
+  --output-dir diagnostic-runs/small_b_phases_002/followup_prefix_b1
 ```
 
-接收端将复制的完整块保存到一个或多个文本文件后，先检查缺块，再还原：
+默认最多3块、每块≤60000字节；超过则要求缩小范围，不写超大输出、不偷偷抽样。
+选择后的值和真实区间无损，保留原始core编号和active_aiv，明确标为部分视图。多条路由匹配时用`--case`指定报告的本地case路径。
+可用`transfer_report.py show <提取目录> --part 1`逐块打印，接收端用`restore`恢复所选trace。
+
+仅需要完整迁移/归档时显式选择：
 
 ```bash
-python tests/ll_stage_timer/transfer_report.py inspect copied_*.txt
-python tests/ll_stage_timer/transfer_report.py restore copied_*.txt --output-dir restored_small_b
+python tests/ll_stage_timer/diagnose.py --analyze-existing diagnostic-runs/small_b_phases_002 --transfer-mode archive
 ```
 
-支持乱序、重复块和换行重排；所有分组验证完成后才写入。还原生成每case的`decoded_samples.json`、`trace.json`，完整数据还会重新生成`summary.json`与通信报告。
-trace只使用实际采集的区间，保留WAIT，按rank/AIV/阶段命名，KERNEL和父阶段独立轨道；不会把累计时间拼成不存在的逐包时间线。
-更多细节和压缩验证见[COMPRESSED_TRANSFER.md](COMPRESSED_TRANSFER.md)。
-
-已有大Markdown/CSV缺少原始区间时，压缩不能补出未采集数据。新细分阶段仍需匹配schema14 wheel采集；离线压缩不改变设备打点。
+该模式仍可能产生很多文件；完整归档不是初次分析的前提。压缩格式与恢复步骤见[COMPRESSED_TRANSFER.md](COMPRESSED_TRANSFER.md)。
 
 ## 如何判断探针扰动
 
@@ -142,3 +140,9 @@ schema14为136阶段、192条真实事件、每核5632B、512B对齐；比schema
 若遇到`ProfileEnabled: call to __host__ function from __aicore__ function`，更新本分支的限定修复后沿用原诊断命令，改用新的`--run-name small_b_phases_002`。
 原失败目录保留；不需要清空构建缓存或重建SDK。构建系统会按头文件依赖重新编译受影响对象。
 修复只统一打点helper的Host/AICore限定，不修改schema14、通信协议、收发顺序或压缩格式。
+
+## 首轮摘要验证
+
+完整相关CPU回归534通过、48项因本机缺少C++/CANN/POSIX环境跳过；最终摘要/选择/入口专项68通过。
+35case/2800sample合成压力报告为47500字节（含CRLF），只有一个文件，所有case核心表均保留。
+这是输出预算测试，不是对目标机这次测量的性能结论；拿到新的SEND_FIRST后再分析实际瓶颈。

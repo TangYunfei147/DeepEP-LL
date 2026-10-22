@@ -282,9 +282,13 @@ def prepare_restored(context,samples,trace_iteration=0,render=True):
         'decoded_samples.json':_json([dict(metadata=m,decoded=d) for m,d in samples])+'\n'}
     if render:
         trace=_load('transfer_trace').trace_from_decoded(samples,trace_iteration)
+        if context.get('export_selection'):
+            trace['metadata']['export_selection']=context['export_selection']
         files['trace.json']=_json(trace)+'\n'
         # Complete exports are reanalyzed with the same aggregation code as raw captures.
-        if samples and all(m.get('correctness')=='passed' and 'world_size' in m for m,_ in samples):
+        if context.get('export_selection'):
+            files['analysis_status.json']=_json(dict(status='explicit_subset',reason='Exact selected core/rank/iteration view; full-domain aggregation intentionally not performed.',selection=context['export_selection']))+'\n'
+        elif samples and all(m.get('correctness')=='passed' and 'world_size' in m for m,_ in samples):
             analysis=_load('analyze');report=analysis.analyze_samples(samples)
             files['summary.json']=_json(report)+'\n'
             files['communication_bottleneck.md']=analysis.communication_report.markdown(report['communication'])

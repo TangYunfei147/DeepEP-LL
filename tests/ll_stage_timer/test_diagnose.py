@@ -26,6 +26,7 @@ def test_default_matrix_off_first_and_disjoint_profiles(tmp_path):
     assert result['matrix'] == dict(B=[1, 2, 4, 8, 16, 24, 32], M=32, H=3584, K=8, E=384,
                                     dtype='fp8', cpu_sync=0)
     assert [stage['name'] for stage in result['stages']] == ['off', *diagnose.PROFILES]
+    assert result['transfer_mode'] == 'summary'
     off, *profiles = result['stages']
     assert '--ll-stage-timer' not in off['run'] and '--skip-perf-test' not in off['run']
     assert off['run'][-2:] == ['--perf-tail', '50']
@@ -54,6 +55,13 @@ def test_plan_cli_is_nonmutating(tmp_path, monkeypatch, capsys):
     result = json.loads(capsys.readouterr().out)
     assert result['matrix']['B'] == [1, 8, 32]
     assert [s['name'] for s in result['stages']] == ['off', 'prefix']
+    assert result['transfer_mode'] == 'summary'
+
+
+def test_archive_mode_is_explicit_and_plan_is_nonmutating(tmp_path):
+    result = plan(tmp_path, '--transfer-mode', 'archive')
+    assert result['transfer_mode'] == 'archive'
+    assert list(tmp_path.iterdir()) == []
 
 
 @pytest.mark.parametrize('arguments, message', [
@@ -116,8 +124,13 @@ def test_skip_build_wheel_map_requires_all_profiles(tmp_path):
     assert 'wrong timer profile' in diagnose._verify_code(result['stages'][1], 'branch')
 
 
-def test_execute_build_install_verify_run_analyze_order_without_devices(tmp_path, monkeypatch):
+@pytest.mark.parametrize('transfer_mode', [None, 'summary', 'archive'])
+def test_execute_build_install_verify_run_analyze_order_without_devices(tmp_path, monkeypatch, transfer_mode):
     result = plan(tmp_path, '--profiles', 'prefix', '--bs', '1', '32')
+    if transfer_mode is None:
+        result.pop('transfer_mode')
+    else:
+        result['transfer_mode'] = transfer_mode
     root = tmp_path
     sdk = root/'third-party/shmem/install/shmem'
     (sdk/'include/host').mkdir(parents=True)
@@ -136,17 +149,18 @@ def test_execute_build_install_verify_run_analyze_order_without_devices(tmp_path
         Path(log).write_text('mocked execution')
     monkeypatch.setattr(diagnose, '_command', command)
     exports = []
-    original_export = diagnose.write_send_first
-    def export_once(path):
-        exports.append(path)
-        return original_export(path)
+    def export_once(path, transfer_mode='summary'):
+        exports.append((path, transfer_mode))
+        target = path / 'SEND_FIRST.txt'
+        target.write_text('One bounded initial-analysis report')
+        return target
     monkeypatch.setattr(diagnose, 'write_send_first', export_once)
     diagnose.execute(result)
     assert seen == ['venv.log', 'off-build.log', 'off-install.log', 'off-identity.log',
                     'off-run.log', 'prefix-build.log', 'prefix-install.log',
                     'prefix-identity.log', 'prefix-run.log', 'prefix-analyze.log']
     assert (Path(result['suite'])/'SEND_FIRST.txt').is_file()
-    assert exports == [Path(result['suite'])]
+    assert exports == [(Path(result['suite']), transfer_mode or 'summary')]
     with pytest.raises(ValueError, match='already exists'):
         diagnose.execute(result)
 
@@ -158,7 +172,7 @@ def test_missing_sdk_fails_before_creating_run(tmp_path):
     assert not Path(result['suite']).exists()
 
 
-def test_send_first_index_is_bounded_and_profile_paths_distinct(tmp_path):
+def test_explicit_archive_index_is_bounded_and_profile_paths_distinct(tmp_path):
     suite = tmp_path/'suite'
     for profile in ('overview', 'prefix', 'recv'):
         for case in range(3):
@@ -166,17 +180,18 @@ def test_send_first_index_is_bounded_and_profile_paths_distinct(tmp_path):
             directory.mkdir(parents=True)
             names = ['00_overview.md'] + [f'priority_{i:03d}_of_003.txt' for i in range(1, 4)]
             (directory/'manifest.json').write_text(json.dumps(dict(bundle_id=f'{profile}-{case}', send_first=names)))
-    result = diagnose.write_send_first(suite)
+    result = diagnose.write_send_first(suite, transfer_mode='archive')
     indexes = sorted(suite.glob('SEND_FIRST*.txt'))
     assert result.name == 'SEND_FIRST.txt' and len(indexes) == 1
     text = ''.join(p.read_text() for p in indexes)
+    assert text.startswith('FULL ARCHIVE OPTIONAL')
     assert 'INCOMPLETE' in text
     assert 'suite_001_part_' in text and 'priority_001' not in text
     assert 'Do not add costs' in text
     assert all(len(p.read_bytes()) <= 60000 for p in indexes)
 
 
-def test_analyze_existing_exports_partial_profile_with_explicit_coverage(tmp_path):
+def test_analyze_existing_optional_archive_keeps_explicit_coverage(tmp_path):
     suite = tmp_path/'suite'
     (suite/'node_000').mkdir(parents=True)
     (suite/'node_000/plan.json').write_text(json.dumps(dict(
@@ -184,9 +199,75 @@ def test_analyze_existing_exports_partial_profile_with_explicit_coverage(tmp_pat
     partial = suite/'analysis/prefix/case_00000/transfer'
     partial.mkdir(parents=True)
     (partial/'manifest.json').write_text('{}')
-    result = diagnose.analyze_existing(suite, root=tmp_path)
+    result = diagnose.analyze_existing(suite, root=tmp_path, transfer_mode='archive')
     assert 'INCOMPLETE' in result.read_text()
     assert 'Missing parsed timer cases for prefix: B=[1, 32]' in result.read_text()
+
+
+def test_default_send_first_never_loads_full_archive(tmp_path, monkeypatch):
+    suite = tmp_path / 'suite'
+    suite.mkdir()
+    loaded = []
+    def load(name):
+        loaded.append(name)
+        assert name == 'triage_report', 'Default transfer must not load/compress the full archive'
+        def export_report(actual_suite):
+            assert actual_suite == suite
+            destination = actual_suite / 'SEND_FIRST.txt'
+            destination.write_text('Bounded initial analysis\n', encoding='utf-8')
+            return destination
+        return SimpleNamespace(export_report=export_report)
+    monkeypatch.setattr(diagnose, '_transfer_module', load)
+    output = diagnose.write_send_first(suite)
+    assert output == suite / 'SEND_FIRST.txt'
+    assert loaded == ['triage_report']
+    assert len(output.read_bytes()) <= diagnose.LIMIT
+    assert not (suite / 'transfer').exists()
+
+
+@pytest.mark.parametrize('saved_mode', [None, 'archive'])
+def test_analyze_existing_old_plans_default_to_summary_without_device_or_archive_work(
+        tmp_path, monkeypatch, saved_mode):
+    suite = tmp_path / 'suite'
+    (suite / 'node_000').mkdir(parents=True)
+    saved = dict(stages=[dict(name='prefix', timer=True)])
+    if saved_mode is not None:
+        saved['transfer_mode'] = saved_mode
+    (suite / 'node_000/plan.json').write_text(json.dumps(saved))
+    (suite / 'analysis/prefix').mkdir(parents=True)
+    (suite / 'runs/prefix').mkdir(parents=True)
+    seen = []
+    def write(path, transfer_mode='summary'):
+        seen.append((path, transfer_mode))
+        destination = path / 'SEND_FIRST.txt'
+        destination.write_text('initial analysis')
+        return destination
+    def forbid(*args, **kwargs):
+        raise AssertionError('Existing analysis must not invoke build, sampling, or reparsing')
+    monkeypatch.setattr(diagnose, 'write_send_first', write)
+    monkeypatch.setattr(diagnose.subprocess, 'run', forbid)
+    monkeypatch.setattr(diagnose, 'execute', forbid)
+    output = diagnose.analyze_existing(suite, root=tmp_path)
+    assert output == suite / 'SEND_FIRST.txt'
+    assert seen == [(suite, 'summary')]
+
+
+def test_analyze_existing_cli_transfer_mode_overrides_old_plan(monkeypatch, capsys):
+    seen = []
+    def analyze(suite, **kwargs):
+        seen.append((suite, kwargs['transfer_mode']))
+        return suite / 'SEND_FIRST.txt'
+    monkeypatch.setattr(diagnose, 'analyze_existing', analyze)
+    assert diagnose.main(['--analyze-existing', 'diagnostic-runs/existing']) == 0
+    assert diagnose.main(['--analyze-existing', 'diagnostic-runs/existing',
+                          '--transfer-mode', 'archive']) == 0
+    assert seen == [(Path('diagnostic-runs/existing'), 'summary'),
+                    (Path('diagnostic-runs/existing'), 'archive')]
+    seen.clear()
+    assert diagnose.main(['--analyze-existing', 'diagnostic-runs/existing', '--plan']) == 0
+    assert seen == []
+    result = json.loads(capsys.readouterr().out.splitlines()[-1])
+    assert result['transfer_mode'] == 'summary' and result['mutation'] is False
 
 
 def test_performance_table_uses_full_tasks_and_matching_identity(tmp_path):
@@ -205,7 +286,7 @@ def test_performance_table_uses_full_tasks_and_matching_identity(tmp_path):
     path.write_text(json.dumps(on))
     rows=diagnose._performance_rows(suite)
     assert rows[0]['ratio']==1.2 and rows[0]['delta_us']==2
-    diagnose.write_send_first(suite)
+    diagnose.write_send_first(suite, transfer_mode='archive')
     assert 'performance reports' in (suite/'SEND_FIRST.txt').read_text()
     assert len((suite/'PERFORMANCE_COMPARE.txt').read_bytes())<=60000
     on['comparison']=dict(identity,send_cores=30,recv_cores=26)
