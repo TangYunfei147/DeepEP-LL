@@ -182,7 +182,7 @@ public:
         // This is the end of wait instruction submission, not a new Scalar
         // completion barrier. The existing final PIPE_ALL establishes completion.
 
-        if constexpr (kLlAblationMode==4U) { if (ablationReplay_) ClearFlags(); }
+        if constexpr (kLlAblationMode==4U || kLlAblationMode==5U) { if (ablationReplay_) ClearFlags(); }
         else ClearFlags();
 
         // 最终流水屏障确保输出、relay 和标记清理完成。
@@ -191,7 +191,9 @@ public:
         }
     }
 
-    __aicore__ inline void ReplayReadyForAblation() {
+    __aicore__ inline void ReplayReadyForAblation(uint32_t kind=0U) {
+        ablationReplayKind_=kind;
+        ablationFlagBatches_=ablationPayloadBytes_=0U;
         if (!tasks_.Count()) return;
         tasks_.ResetPendingForAblation();
         issued_=consumed_=scan_=0U;
@@ -200,8 +202,30 @@ public:
         timer_=nullptr; // Replay has its own envelope; do not double normal metrics.
         Run();
     }
+    __aicore__ inline uint32_t ReplayFlagBatches() const { return ablationFlagBatches_; }
+    __aicore__ inline uint32_t ReplayPayloadBytes() const { return ablationPayloadBytes_; }
+    // Restore known-ready flags outside the measured envelope, before every arm.
+    // Payload and header contents are retained from the complete real prefill.
+    __aicore__ inline void RestoreReadyFlagsForAblation() {
+        if (!tasks_.Count()) return;
+        auto ones=flagsBuf_.Get<float>();
+        auto keep=sumBuf_.Get<float>();
+        Duplicate(ones,1.0f,uint32_t(data_.blockCount)*8U);
+        Duplicate(keep,1.0f,8U);
+        ServerDedupReceiveSync<HardEvent::V_S>();
+        keep.SetValue(0U,PacketReceiveLayout::kKeepFlags);
+        ServerDedupReceiveSync<HardEvent::S_MTE3>();
+        for(uint32_t j=0;j<tasks_.Count();++j) {
+            GlobalTensor<float> output;
+            output.SetGlobalBuffer(reinterpret_cast<__gm__ float*>(Slot(j)+480U));
+            DataCopyPad(output,ones,{uint16_t(data_.blockCount),32U,0U,480U,0U});
+            if(tasks_.ReplayKeepFlags(j))DataCopyPad(output,keep,{1U,32U,0U,0U,0U});
+        }
+        PipeBarrier<PIPE_ALL>();
+    }
 private:
     bool ablationReplay_=false;
+    uint32_t ablationReplayKind_=0U,ablationFlagBatches_=0U,ablationPayloadBytes_=0U;
     static constexpr uint32_t kProbeBatch = 16U;
     static_assert(kProbeBatch<=16U,"priority order uses four-bit snapshot positions");
     struct ProbeResult {
@@ -221,6 +245,19 @@ private:
         LL_SEG_SCOPE(RECV_POLL);
         LL_SEG_COUNT(RX_PROBED,count);
         auto indices = probeIdxBuf_.Get<uint32_t>();
+        if constexpr (kLlAblationMode==5U) {
+            if(ablationReplay_ && ablationReplayKind_==1U) {
+                ProbeResult result;
+                result.readyMask=(uint32_t(1)<<count)-1U;
+                for(uint32_t i=0;i<count;++i) {
+                    const uint32_t j=tasks_.PendingIndex(start+i);
+                    indices.SetValue(i,j);
+                    if(tasks_.ReplayKeepFlags(j))result.keepFlagsMask|=uint32_t(1)<<i;
+                }
+                return result; // No flag DMA, Sum, or flag decoding.
+            }
+            if(ablationReplay_)++ablationFlagBatches_;
+        }
         auto flags = flagsBuf_.Get<float>();
         auto sums = sumBuf_.Get<float>();
         auto work = workBuf_.Get<uint8_t>();
@@ -250,6 +287,9 @@ private:
     // 摘要：等待 lane 的旧输出完成后，将 packet 从 GM 预取到 UB，分别发布给 Scalar 和 MTE3 的依赖事件。
     __aicore__ inline void IssueLoad(uint32_t j, uint32_t lane, bool keepFlags, bool reuse)
     {
+        if constexpr (kLlAblationMode==5U) {
+            if(!ablationReplay_)tasks_.RememberReplayLayout(j,keepFlags);
+        }
         LL_SEG_BEGIN(segBegin1, RECV_BUFFER_WAIT);
         if (reuse) { LL_SEG_SCOPE(RX_LANE_REUSE_WAIT); WaitFlag<HardEvent::MTE3_MTE2>(lane); }
         LL_SEG_END(segBegin1, RECV_BUFFER_WAIT);
@@ -298,10 +338,13 @@ private:
             LL_SEG_END(segBegin4, RECV_BUFFER_WAIT);
             if (expertTimer_) expertTimer_->Start(expert, LlExpertTimer::OutputWrite);
             LL_SEG_BEGIN(plainPayload,RX_PAYLOAD_OUTPUT);
+            if (kLlAblationMode!=5U || !ablationReplay_ || ablationReplayKind_!=2U) {
             DataCopyPad(expandX_[uint64_t(row) * hiddenBytes_], wire, {1U, hiddenBytes_, 0U, 0U, 0U});
             if constexpr (WireFp8)
                 DataCopyPad(dynamicScales_[uint64_t(row) * data_.scaleBytes], wire[uint32_t(data_.quantCount)],
                             {1U, uint32_t(data_.scaleBytes), 0U, 0U, 0U});
+                if constexpr(kLlAblationMode==5U)if(ablationReplay_)ablationPayloadBytes_+=hiddenBytes_+(WireFp8?uint32_t(data_.scaleBytes):0U);
+            }
             LL_SEG_END(plainPayload,RX_PAYLOAD_OUTPUT);
             if (expertTimer_) expertTimer_->End(expert, LlExpertTimer::OutputWrite);
             if (expertTimer_) expertTimer_->Start(expert, LlExpertTimer::Metadata);
@@ -349,7 +392,7 @@ private:
         // Initiate downstream work before local output writes on the same
         // MTE3 stream. Metadata was snapshotted before the terminal rewrite;
         // wire stays immutable until every relay/output read retires.
-        if (firstHop && (kLlAblationMode!=4U || !ablationReplay_)) {
+        if (firstHop && ((kLlAblationMode!=4U && kLlAblationMode!=5U) || !ablationReplay_)) {
             const uint32_t sourceRank = tail.Header().GetValue(0U);
             const uint32_t ranks = uint32_t(args_->rankSize);
             const uint32_t members = tail.ReadIndex().GetValue(0U);
@@ -373,6 +416,7 @@ private:
         }
         LL_SEG_BEGIN(payloadOut,RX_PAYLOAD_OUTPUT);
         if (expertTimer_) expertTimer_->Start(expert, LlExpertTimer::OutputWrite);
+        if (kLlAblationMode!=5U || !ablationReplay_ || ablationReplayKind_!=2U) {
         if (keepFlags) {
             WriteServerDedupPayloadRange(expandX_[uint64_t(row) * hiddenBytes_], wire, 0U, hiddenBytes_);
             if constexpr (WireFp8)
@@ -383,6 +427,8 @@ private:
             if constexpr (WireFp8)
                 DataCopyPad(dynamicScales_[uint64_t(row) * data_.scaleBytes], wire[uint32_t(data_.quantCount)],
                             {1U, uint32_t(data_.scaleBytes), 0U, 0U, 0U});
+        }
+            if constexpr(kLlAblationMode==5U)if(ablationReplay_)ablationPayloadBytes_+=hiddenBytes_+(WireFp8?uint32_t(data_.scaleBytes):0U);
         }
         LL_SEG_END(payloadOut,RX_PAYLOAD_OUTPUT);
         LL_SEG_BEGIN(metaOut,RX_META_OUTPUT);

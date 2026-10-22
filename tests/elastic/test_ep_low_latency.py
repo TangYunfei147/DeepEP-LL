@@ -50,8 +50,8 @@ def validate_overlap_stage_capability(capability):
 def validate_stage_timer_capability(capability):
     if not capability["stage_timer"]:
         raise RuntimeError("All ranks must install a DEEPEP_LL_STAGE_TIMER=ON wheel")
-    if capability['stage_timer_schema'] != 14:
-        raise RuntimeError('Detailed LL diagnostics require timer schema 14; '
+    if capability['stage_timer_schema'] not in ((15,) if capability.get('ablation_mode')==5 else (14,15)):
+        raise RuntimeError('Detailed LL diagnostics require matching timer schema14/15; '
                            f'got {capability["stage_timer_schema"]}; '
                            'rebuild/install the matching wheel on every rank')
 
@@ -1119,11 +1119,15 @@ def worker(local_rank, args):
     requested_ablation=int(os.environ.get("LL_ABLATION_MODE","-1"))
     if requested_ablation!=getattr(native,"low_latency_ablation_mode",-2):
         raise RuntimeError("Use ablation launcher and install its matching wheel")
+    if requested_ablation==5 and (world!=16 or any(
+            (c.num_tokens,c.num_max_tokens_per_rank,c.hidden,c.num_topk,c.num_experts,c.dtype,c.fp8_scale_dtype)
+            !=(256,256,3584,8,384,"fp8","int32") for c in cases)):
+        raise RuntimeError("Receiver breakdown is restricted to EP16/B=M256/H3584/K8/E384/FP8/int32")
     if not args.dispatch_only or args.skip_check:
         raise RuntimeError("Ablation requires dispatch-only with correctness enabled")
     if requested_ablation in (1,2,3) and any(c.dtype!="fp8" or c.fp8_scale_dtype!="int32" for c in cases):
         raise RuntimeError("Fixed payload experiments require prequantized FP8/int32 scales")
-    if requested_ablation==4 and not (args.ll_stage_timer and args.skip_perf_test):
+    if requested_ablation in (4,5) and not (args.ll_stage_timer and args.skip_perf_test):
         raise RuntimeError("Ready replay requires ON capture and --skip-perf-test")
     if not callable(getattr(native, "dispatch_low_latency", None)):
         raise RuntimeError("Installed wheel has no LL native entry; rebuild and install the migrated package")

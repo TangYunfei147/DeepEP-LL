@@ -4,7 +4,7 @@ import json
 import subprocess
 
 ROOT=Path(__file__).resolve().parents[2]
-MODES={'baseline':0,'fixed-payload':1,'preload':2,'prepack':3,'ready-replay':4}
+MODES={'baseline':0,'fixed-payload':1,'preload':2,'prepack':3,'ready-replay':4,'ready-breakdown':5}
 def sha(path):return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 def git(*args):return subprocess.check_output(['git','-C',str(ROOT),*args],text=True).strip()
 def write_json(path,data):Path(path).write_text(json.dumps(data,indent=2,sort_keys=True)+'\n')

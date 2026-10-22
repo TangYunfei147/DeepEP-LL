@@ -30,9 +30,9 @@ def main():
     env=dict(os.environ,LL_ABLATION_MODE=str(MODES[a.mode]),LL_ABLATION_MANIFEST=str(manifest))
     command=[sys.executable,str(ROOT/'tests/ll_stage_timer/run.py'),'--devices',a.devices,
              '--config',str(config),'--run-name',a.run_name,'--dispatch-only']
-    if a.mode=='ready-replay':
+    if a.mode in ('ready-replay','ready-breakdown'):
         if info['timer']!='ON':raise RuntimeError('Replay requires ON wheel')
-        command+=['--ll-stage-timer','--ll-timer-iters','5','--skip-perf-test']
+        command+=['--ll-stage-timer','--ll-timer-iters','9' if a.mode=='ready-breakdown' else '5','--skip-perf-test']
     elif info['timer']=='ON':command+=['--ll-stage-timer','--ll-timer-iters','5']
     if a.plan:print(json.dumps(dict(command=command,manifest=info),indent=2));return
     # npu-smi before launcher imports/initializes any NPU runtime.

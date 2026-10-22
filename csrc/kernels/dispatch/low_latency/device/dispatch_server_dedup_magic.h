@@ -42,5 +42,20 @@ __aicore__ inline uint32_t RotateDispatchServerDedupMagic(const __gm__ CommArgs*
     pipe->Reset();
     return magic;
 }
+__aicore__ inline uint32_t NextReplayOrderForAblation(const __gm__ CommArgs* args,uint32_t core,AscendC::TPipe* pipe) {
+    using namespace AscendC;
+    TBuf<> scratch;pipe->InitBuffer(scratch,32U);
+    auto state=scratch.Get<uint32_t>();GlobalTensor<uint32_t> gm;
+    gm.SetGlobalBuffer(reinterpret_cast<__gm__ uint32_t*>(args->peerMems[args->rank]+uint64_t(core)*kEpServerDedupMagicStride));
+    DataCopy(state,gm,8U);
+    const auto read=pipe->FetchEventID(HardEvent::MTE2_S);
+    SetFlag<HardEvent::MTE2_S>(read);WaitFlag<HardEvent::MTE2_S>(read);
+    const uint32_t order=state.GetValue(1U)%3U;
+    state.SetValue(1U,(order+1U)%3U);
+    const auto write=pipe->FetchEventID(HardEvent::S_MTE3);
+    SetFlag<HardEvent::S_MTE3>(write);WaitFlag<HardEvent::S_MTE3>(write);
+    DataCopy(gm,state,8U);
+    PipeBarrier<PIPE_ALL>();pipe->Reset();return order;
+}
 }  // namespace DispatchDedup
 #endif

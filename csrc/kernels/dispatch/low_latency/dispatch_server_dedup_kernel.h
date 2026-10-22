@@ -38,6 +38,7 @@ public:
         sender_.ConfigureOverlap(overlap_);
         receiver_.ConfigureOverlap(overlap_);
         const uint32_t magic = RotateDispatchServerDedupMagic(args_, core_, pipe);
+        if constexpr(kLlAblationMode==5U)ablationOrder_=NextReplayOrderForAblation(args_,core_,pipe);
         counts_.Init(commArgs, expertIds, expertTokenNumsOut, sendCountsOut, bs, topK, experts, expertTokenNumsType,
                      magic, pipe, timer, enableDedup);
         sender_.Init(args_, x, expertIds, expertScales, sourceMaskOut, expertScalesOut, bs, h, topK, experts, pipe,
@@ -127,10 +128,15 @@ public:
         // orders the next launch after all cores finish their writes and cleanup.
     }
 
-    __aicore__ inline void ReplayReadyForAblation() {
-        if (enableDedup_ || core_>=sendCores_) receiver_.ReplayReadyForAblation();
+    __aicore__ inline void ReplayReadyForAblation(uint32_t kind=0U) {
+        if (enableDedup_ || core_>=sendCores_) receiver_.ReplayReadyForAblation(kind);
     }
+    __aicore__ inline void RestoreReadyForAblation() { receiver_.RestoreReadyFlagsForAblation(); }
+    __aicore__ inline uint32_t ReplayOrder() const { return ablationOrder_; }
+    __aicore__ inline uint32_t ReplayFlagBatches() const { return receiver_.ReplayFlagBatches(); }
+    __aicore__ inline uint32_t ReplayPayloadBytes() const { return receiver_.ReplayPayloadBytes(); }
 private:
+    uint32_t ablationOrder_=0U;
     LlStageTimer::DeviceTimer* timer_ = nullptr;
     ServerDedupCounts counts_;
     ServerDedupSender<XType, WireFp8, E4M3, Prequantized> sender_;

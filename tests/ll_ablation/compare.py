@@ -53,7 +53,7 @@ def replay_report(path):
         data=json.loads(file.read_text())
         if not isinstance(data,dict) or 'raw' not in data or data.get('operation')!='dispatch':continue
         decoded=timer.parse_records(data['raw'],'dispatch',data.get('frequency_hz'))
-        if decoded['schema']!=14:raise ValueError('Replay needs schema14')
+        if decoded['schema'] not in (14,15):raise ValueError('Replay needs schema14/15')
         records=[r for r in decoded['records'] if r['stage']=='ABLATION_READY_RECV']
         if len(records)!=56 or any(r['calls']!=1 for r in records):raise ValueError('Incomplete replay envelope')
         meta=data['metadata'];case=json.dumps(meta['config'],sort_keys=True)

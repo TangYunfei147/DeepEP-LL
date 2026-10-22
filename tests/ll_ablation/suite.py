@@ -4,7 +4,9 @@ import json
 from pathlib import Path
 import subprocess
 import sys
-from common import ROOT,MODES,source_checkout,sha,git
+from common import ROOT,MODES as ALL_MODES,source_checkout,sha,git
+# Preserve the original five-wheel experiment; receiver_suite.py builds one new wheel.
+MODES={name:mode for name,mode in ALL_MODES.items() if mode<=4}
 
 
 def plan_commands(a):

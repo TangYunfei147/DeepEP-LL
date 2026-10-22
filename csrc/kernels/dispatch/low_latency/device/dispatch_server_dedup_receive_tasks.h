@@ -5,6 +5,7 @@
 #define DISPATCH_SERVER_DEDUP_RECEIVE_TASKS_H
 
 #include "kernel_operator.h"
+#include "../common/ll_ablation_config.h"
 #include "../common/ep_memory_server_dedup_data_layout.h"
 
 namespace DispatchDedup {
@@ -100,8 +101,21 @@ public:
     }
     __aicore__ inline uint32_t Position(uint32_t j)
     {
-        return tokenPos_.GetValue(j);
+        const uint32_t value=tokenPos_.GetValue(j);
+        if constexpr (kLlAblationMode==5U) return value & 0x7fffffffU;
+        return value;
     }
+    // Mode5 is Host-restricted to EP16/B256/E384: slot positions fit below bit31.
+    // Retain the layout bit in the existing position table; no UB/lane change.
+    __aicore__ inline void RememberReplayLayout(uint32_t j,bool keep) {
+        const uint32_t position=tokenPos_.GetValue(j);
+        if (position & 0x80000000U) { AscendC::Trap(); return; }
+        tokenPos_.SetValue(j,position | (keep ? 0x80000000U : 0U));
+    }
+    __aicore__ inline bool ReplayKeepFlags(uint32_t j) {
+        return (tokenPos_.GetValue(j)&0x80000000U)!=0U;
+    }
+
     __aicore__ inline uint32_t PendingIndex(uint32_t p)
     {
         return pendingIdx_.GetValue(p);

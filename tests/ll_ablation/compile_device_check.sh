@@ -14,6 +14,7 @@ for mode in ${ABLATION_CHECK_MODES:-0 2 3 4}; do
     mkdir "$out/m${mode}-${timer}"
     flags=()
     if [ "$timer" = ON ]; then flags+=(-DDEEPEP_LL_STAGE_TIMER=1); fi
+    begin_seconds=$SECONDS
     pids=()
     failed=0
     for source in "$root"/csrc/kernels/dispatch/low_latency/variants/*.cpp; do
@@ -32,7 +33,7 @@ for mode in ${ABLATION_CHECK_MODES:-0 2 3 4}; do
     done
     for pid in "${pids[@]}"; do wait "$pid" || failed=1; done
     if [ "$failed" -ne 0 ]; then tail -40 "$out/m${mode}-${timer}/"*.log; exit 1; fi
-    echo "PASS mode=$mode timer=$timer seven entries"
+    echo "PASS mode=$mode timer=$timer seven entries seconds=$((SECONDS-begin_seconds))"
   done
 done
 echo "DEVICE_OBJECTS=$out"

@@ -5,9 +5,9 @@
 #pragma once
 #include <cstdint>
 namespace LlStageTimer {
-constexpr uint32_t kSchema = 14U;
+constexpr uint32_t kSchema = 15U;
 constexpr uint64_t kMagic = 0x4c4c5431ULL;
-constexpr uint32_t kTraceRecords = 192U, kMetrics = 109U;
+constexpr uint32_t kTraceRecords = 192U, kMetrics = 118U;
 constexpr uint32_t kRecords = kTraceRecords + kMetrics;
 // Same 16-byte event/metric records as dc_seg. LL keeps per-core 512B alignment.
 constexpr uint32_t kSlots = 80U, kFields = 8U;
@@ -123,6 +123,15 @@ enum Stage : uint32_t {
     RX_EMPTY_POLLS = 106,
     RX_PACKETS = 107,
     ABLATION_READY_RECV = 108,
+    ABLATION_SKIP_FLAGS = 109,
+    ABLATION_NO_PAYLOAD = 110,
+    REPLAY_BASE_FLAGS_PLUS1 = 111,
+    REPLAY_BASE_BYTES_PLUS1 = 112,
+    REPLAY_SKIP_FLAGS_PLUS1 = 113,
+    REPLAY_SKIP_BYTES_PLUS1 = 114,
+    REPLAY_NOOUT_FLAGS_PLUS1 = 115,
+    REPLAY_NOOUT_BYTES_PLUS1 = 116,
+    REPLAY_ORDER_PLUS1 = 117,
     StageCount = kMetrics
 };
 constexpr const char* kNames[] = {
@@ -235,6 +244,16 @@ constexpr const char* kNames[] = {
     "RX_EMPTY_POLLS",
     "RX_PACKETS",
     "ABLATION_READY_RECV",
+    "ABLATION_SKIP_FLAGS",
+    "ABLATION_NO_PAYLOAD",
+    "REPLAY_BASE_FLAGS_PLUS1",
+    "REPLAY_BASE_BYTES_PLUS1",
+    "REPLAY_SKIP_FLAGS_PLUS1",
+    "REPLAY_SKIP_BYTES_PLUS1",
+    "REPLAY_NOOUT_FLAGS_PLUS1",
+    "REPLAY_NOOUT_BYTES_PLUS1",
+    "REPLAY_ORDER_PLUS1",
+
 
 
 
