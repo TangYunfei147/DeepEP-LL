@@ -8,6 +8,7 @@
 #include "dispatch_frequency_histogram.h"
 #include "dispatch_prefix_scan.h"
 #include "../common/ll_overlap_layout.h"
+#include "../common/ll_small_b.h"
 #include "../common/ll_stage_timer_device.h"
 #include "adv_api/reduce/sum.h"
 #include "../common/ep_memory_server_dedup_count_layout.h"
@@ -149,6 +150,7 @@ private:
     __aicore__ inline void CountByVectorRange(uint32_t start, uint32_t end, uint32_t maskBytes, uint32_t record = 0U);
     // 摘要：逐个专家扫描路由并计算计数，作为小规模输入的统计路径。
     __aicore__ inline void CountByExpert(uint32_t start, uint32_t end, uint32_t record = 0U);
+    __aicore__ inline void CountSmallDirectRange(uint32_t start,uint32_t end,uint32_t record);
     __aicore__ inline void BuildLocalTasks(uint32_t start,uint32_t end,uint32_t record);
     // 摘要：清除本核已收取记录的 ready 标记，保留计数字段，为后续窗口复用做准备。
     __aicore__ inline void WaitDispatchClearStatus();
@@ -236,7 +238,8 @@ __aicore__ inline void ServerDedupCounts::SendCnt()
     const uint32_t maskBytes=Ceil(Ceil(expertIdsCnt_,8U),UB_ALIGN)*UB_ALIGN;
     for (uint32_t part=0;part<countPlan_.size;++part) {
         const auto range=countPlan_.ranges[part];
-        if (buildLocalTasks_ && range.local) BuildLocalTasks(range.begin,range.end,range.record);
+        if (LlUseSmallDirect(axisBS_,buildLocalTasks_)) CountSmallDirectRange(range.begin,range.end,range.record);
+        else if (buildLocalTasks_ && range.local) BuildLocalTasks(range.begin,range.end,range.record);
         else if (expertIdsCnt_>=SIZE_ALIGN_256/sizeof(int32_t) && 2U*maskBytes<=routeBytes)
             CountByVectorRange(range.begin,range.end,maskBytes,range.record);
         else CountByExpert(range.begin,range.end,range.record);
@@ -247,6 +250,25 @@ __aicore__ inline void ServerDedupCounts::SendCnt()
         const auto range=countPlan_.ranges[part];
         SendExpertCntRange(range.begin,range.end,range.record);
     }
+}
+
+// Small direct inputs need counts only: feed the original padded IDs to the VF.
+// Its unsigned range predicate excludes other experts, avoiding Compare/And/
+// GatherMask setup and the per-expert multi-instruction reduction fallback.
+__aicore__ inline void ServerDedupCounts::CountSmallDirectRange(uint32_t start,uint32_t end,uint32_t record)
+{
+    LL_SEG_SCOPE(COUNT_COMPUTE);
+    auto histogram=histogramBuf_.Get<int32_t>();
+    auto* output=reinterpret_cast<__ubuf__ uint32_t*>(histogram.GetPhyAddr());
+    auto* input=reinterpret_cast<__ubuf__ uint32_t*>(validExpertIdsTensor_.GetPhyAddr());
+    SyncFunc<HardEvent::S_V>();
+    if (expertIdsCnt_<=kLlHistogramSegment)
+        asc_vf_call<CountFrequency<true>>(output,input,expertIdsCnt_,start,end-start);
+    else
+        asc_vf_call<CountFrequency<false>>(output,input,expertIdsCnt_,start,end-start);
+    SyncFunc<HardEvent::V_S>();
+    for(uint32_t i=0;i<end-start;++i)
+        statusTensor_.SetValue((record+i)*UB_ALIGN_DATA_COUNT+1U,histogram.GetValue(i));
 }
 
 // 摘要：向量筛选本核专家区间内的路由，再用直方图生成每专家的 ready 标记和计数。

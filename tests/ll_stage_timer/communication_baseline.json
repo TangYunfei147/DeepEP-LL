@@ -1,8 +1,8 @@
 {
-  "baseline": "small-B sender candidate; dedup baseline197052c",
+  "baseline": "small-B sender+counts candidate; dedup baseline197052c",
   "files": {
     "csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_send.h": "3fdb9847bfdda5d620eaed149a0c450b0481784ea0e674b51f4b65f68016c287",
     "csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_recv.h": "c4ae709af332347b1792229f6282b2dc926cba86222e68ecee979b8760c472c3",
-    "csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_counts.h": "0a1fff89bf580dd730e80a804690f863dcbc4939d75f33983bb3f3b2580278cc"
+    "csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_counts.h": "fd0db51ad4d9ae546e7bc4997d3c40717c8038933d04d54a2917af044a731635"
   }
 }

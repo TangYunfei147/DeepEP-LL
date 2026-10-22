@@ -11,15 +11,19 @@ import pytest
 
 ROOT=Path(__file__).resolve().parents[2]
 
-def test_native_tiny_q_and_empty_owner_equivalence(tmp_path):
+@pytest.mark.parametrize('fixture',['small_b.cpp','small_b_count.cpp'])
+def test_native_tiny_q_and_empty_owner_equivalence(tmp_path,fixture):
     cc=shlex.split(os.environ.get('CXX',''))
     if not cc:
         found=shutil.which('g++') or shutil.which('clang++')
         if not found:pytest.skip('C++ compiler required')
         cc=[found]
+    api=tmp_path/'c_api';api.mkdir()
+    mock=runpy.run_path(str(ROOT/'tests/elastic/test_ll_frequency_histogram.py'))['MOCK']
+    (api/'asc_simd.h').write_text(mock,encoding='utf-8')
     exe=tmp_path/('small.exe' if os.name=='nt' else 'small')
-    subprocess.run([*cc,'-std=c++17','-O2','-UNDEBUG','-iquote',str(ROOT),
-        str(Path(__file__).with_name('fixtures')/'small_b.cpp'),'-o',str(exe)],check=True)
+    subprocess.run([*cc,'-std=c++17','-O2','-UNDEBUG','-I',str(tmp_path),'-iquote',str(ROOT),
+        str(Path(__file__).with_name('fixtures')/fixture),'-o',str(exe)],check=True)
     subprocess.run([str(exe)],check=True)
 
 def test_unchanged_dedup_and_protocol_regions():
@@ -39,3 +43,13 @@ def test_sender_small_gate_and_lane_cap():
     assert 'const bool zeroQ=LlUseSmallDirect(bs_,enableDedup_) && bs_==1U;' in source
     # Main dedup/VF branch still follows the tiny direct-only branch.
     assert source.index('LlBuildTinyDirectQ(')<source.index('else if (qShard_.count)')
+
+def test_count_gate_keeps_original_dedup_choice():
+    source=(ROOT/'csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_counts.h').read_text(encoding='utf-8')
+    assert 'if (LlUseSmallDirect(axisBS_,buildLocalTasks_)) CountSmallDirectRange' in source
+    assert 'else if (buildLocalTasks_ && range.local) BuildLocalTasks' in source
+    start=source.index('inline void ServerDedupCounts::CountSmallDirectRange(')
+    end=source.index('inline void ServerDedupCounts::CountByVectorRange(',start)
+    body=source[start:end]
+    assert 'GatherMask(' not in body and 'Compares(' not in body
+    assert body.index('SyncFunc<HardEvent::S_V>')<body.index('asc_vf_call')<body.index('SyncFunc<HardEvent::V_S>')

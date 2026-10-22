@@ -36,3 +36,10 @@ ON stages separately (INIT is outside KERNEL). Include all supported input modes
 in correctness checks. Do not compare ON with OFF timings or change S/R per case.
 
 Compilation/device results will be recorded in docs/BUILD_DISPATCH_SPLIT.md.
+
+Count candidate: for the same small non-dedup gate, feed the complete original
+padded route IDs directly to CountFrequency with the owned expert range. The VF
+range predicate excludes all other experts. This avoids Compare/And/GatherMask
+setup and the per-expert reduction fallback. Histograms, count-record placement,
+zero-expert readiness and R-only count ownership keep their original storage and
+publication rules. There is no new allocation or cross-core synchronization.
