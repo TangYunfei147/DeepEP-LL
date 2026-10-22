@@ -46,7 +46,7 @@ python3 tests/ll_ablation/receiver_suite.py \
 
 This builds or reuses **one** ready-breakdown ON wheel, installs it into a dedicated
 venv, runs correctness/stabilization and9 diagnostic captures, then automatically
-writes the comparison and partitioned JSON export. It does not rebuild or rerun
+writes the comparison and compressed trace-text export. It does not rebuild or rerun
 the old five-wheel suite. This command retains the current three-arms-per-kernel
 design and its limitations; the redesigned experiment below is not implemented.
 All16device IDs must be explicit. Occupancy checking remains in place before the
@@ -142,7 +142,8 @@ python3 tests/ll_ablation/receiver_export.py \
 
 Use a new output directory. Every JSON part is ASCII and no larger than60000
 bytes/characters. Keep the part identifiers and send the parts separately. The
-updated receiver suite also runs this export after reporting. This offline path
+updated receiver suite now exports the complete raw run as compressed text after
+reporting; see [TRACE_TEXT.md](TRACE_TEXT.md). This legacy JSON offline path
 does not start devices or modify the recorded input captures.
 
 Send `000-index.json`, followed by the files listed in its `send_first` field

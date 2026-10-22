@@ -117,7 +117,7 @@ def test_one_command_builds_one_wheel_then_runs_and_reports(tmp_path,monkeypatch
     assert len(builds)==1 and '--reuse-workspace-manifest' in builds[0]
     assert 'ready-breakdown' in builds[0]
     assert any('receiver_report.py' in v for command in cmds for v in command)
-    assert any('receiver_export.py' in v for v in cmds[-1])
+    assert any('trace_text.py' in v for v in cmds[-1]) and 'export' in cmds[-1]
     a.build_only=True
     assert len(suite.commands(a))==1
 

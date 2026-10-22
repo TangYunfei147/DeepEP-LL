@@ -251,6 +251,7 @@ python3 tests/ll_ablation/receiver_export.py \
 
 Use a new output directory. JSON parts contain ASCII only and each is at most
 60000 bytes/characters, so they can be sent separately. The updated receiver
-suite automatically exports after generating its report. Offline regrouping can
+suite now exports complete raw captures through the compressed text workflow in
+[TRACE_TEXT.md](TRACE_TEXT.md) after generating its report. Offline regrouping can
 expose execution-position effects; it cannot recover missing layout/order checks
 or turn the existing replay into a causal decomposition.

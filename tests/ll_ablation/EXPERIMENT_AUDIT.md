@@ -150,7 +150,9 @@ python3 tests/ll_ablation/receiver_export.py \
 
 The output directory must be new. Each JSON part contains only ASCII and is at
 most 60000 bytes/characters. Send the parts separately with their identifiers.
-The updated receiver suite invokes reporting and this export automatically.
+The updated receiver suite invokes reporting and compressed raw-trace text export
+automatically; see [TRACE_TEXT.md](TRACE_TEXT.md). This JSON export remains an
+explicit alternative.
 Offline analysis preserves input captures and requires no wheel installation or
 NPU launch. It cannot reconstruct missing layout/order hashes, validate past
 prefill output independently, or remove state contamination already present.

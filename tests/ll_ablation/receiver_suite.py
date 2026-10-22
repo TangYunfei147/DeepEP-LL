@@ -53,8 +53,8 @@ def commands(a):
     out=Path(settings.get('output_dir','.ablation/results'));out=out if out.is_absolute() else ROOT/out
     result.append([sys.executable,str(ROOT/'tests/ll_ablation/receiver_report.py'),str(out/run_name),
                    '--output',str(out/(a.run_prefix+'-receiver-comparison.json'))])
-    result.append([sys.executable,str(ROOT/'tests/ll_ablation/receiver_export.py'),str(out/run_name),
-                   '--output-dir',str(out/(a.run_prefix+'-transfer'))])
+    result.append([sys.executable,str(ROOT/'tests/ll_ablation/trace_text.py'),'export',str(out/run_name),
+                   '--output-dir',str(out/(a.run_prefix+'-trace-text'))])
     return result
 
 def main():
