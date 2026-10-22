@@ -268,3 +268,43 @@ from header[0..2]. Original role snapshot, terminal destination, relay ordering,
 all synchronization and lane retirement remain unchanged. No extra UB, launch
 mode or template dimension. CANN compilation and NPU performance are unverified.
 Candidate 1 local required contracts and relay checks: 70 passed, 3 skipped (no C++ compiler). Initial pytest temp-directory failure resolved by using project-local --basetemp.
+
+## Small non-dedup candidate (2026-10-22)
+
+Branch kernel/ll-g4-small-b, base197052c; only M<=32/B<=32 changes.
+Sender20fb05b: empty route shard skip, B1 q=0, B2/4 tiny-prefix q, lane cap.
+Count e12e478: direct range histogram on original IDs, no filter/GatherMask or
+per-expert reduction for this gate. e3e773e corrects branch wheel/ST identity.
+Seven original dispatch TUs, O2/dav-3510, S28/R28 and wire19000+S/schema13 remain.
+No new template dimensions, mode pruning or new synchronization. Explicit UB
+budgets are unchanged; only small-direct actual send lane use can decrease.
+
+Validation:
+- Local complete tests/ll_stage_timer + tests/elastic:870passed/113skipped,89.51s,
+  .tmp/full-cpu-001.log; compiler/framework/device skips are not device passes.
+- Authorized27 at /home/tyf/Q4_remote_test/DeepEP-LL-g4-small-b:150passed in5.39s,
+  including actual G++ tiny-q/range-count fixtures, all zero-count publishers,
+  duplicates and cross-token shard cases; .logs/cpu-small-002.log.
+- Native CANN source-header cold compile e3e773e: all7modes+Host bridge OFF
+  34.102s, ON61.534s, jobs4. .logs/source-small-{off,on}-001/timing.json.
+  No baseline timing ratio measured. Source headers use locked SHMEM4dd80e2.
+- CPU EP16 plans passed FP8 H3584/K8/E384, M32/B1,2,4,8,16,32 and
+  dedup M256/B1,8,32,256; these plans never launch devices.
+- Dedup protected source-region hashes match197052c; this is not machine-code
+  or target-performance equivalence. Both large/small M>32 need device regression.
+
+Full ON wheel link is NOT verified. Recursive submodule preparation attempted the
+standard command, then stalled downloading CATLASS LLVM/Triton; only the verified
+PID tree belonging to this project's download was terminated. The existing other
+DeepEP-LL-ablations worktree was read only and its dirty files were preserved.
+Independent SDK build reached CMake invocation but cmake is absent. A project-only
+pip target installation of CMake/build requirements timed out after150s, leaving
+no completed SDK or wheel. No system dependencies, driver, or shared Python env
+were modified, no wheel installed, and no NPU/communication task launched.
+Initial missing .tmp test directory was corrected before the passing native run.
+
+Environment source: /home/tyf/0env.sh after existing conda initialization. The
+CANN path is named cann-9.3.0, while build_shmem's compiler/version.info reports
+Version9.2.0; retain both facts rather than silently labeling this as a complete
+9.3.0 SDK validation. Source compile succeeded against this actual environment.
+Target instructions: tests/ll_stage_timer/SMALL_B_FAST_PATH.md.

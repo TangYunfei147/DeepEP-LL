@@ -31,7 +31,9 @@ def test_unchanged_dedup_and_protocol_regions():
     normalize=runpy.run_path(str(Path(__file__).with_name('test_segment_source.py')))['normalize']
     for entry in manifest['regions']:
         text=(ROOT/entry['path']).read_text(encoding='utf-8')
-        if entry.get('begin'):text=text[text.index(entry['begin']):text.index(entry['end'])]
+        if entry.get('begin'):
+            start=text.index(entry['begin'])
+            text=text[start:text.index(entry['end'],start)]
         digest=hashlib.sha256(' '.join(normalize(text)).encode()).hexdigest()
         assert digest==entry['sha256'],entry
 

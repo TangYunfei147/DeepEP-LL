@@ -38,6 +38,24 @@
     {
       "path": "csrc/kernels/dispatch/low_latency/dispatch_server_dedup_kernel.h",
       "sha256": "5bf8f534b91f52a959ac57fdb8ecce2bca39780948e7424924aee06c39140348"
+    },
+    {
+      "path": "csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_counts.h",
+      "begin": "__aicore__ inline void ServerDedupCounts::CountByVectorRange(",
+      "end": "// \u6458\u8981\uff1a\u9010\u4e2a\u4e13\u5bb6\u626b\u63cf\u8def\u7531",
+      "sha256": "74aaee07091a2fe7d935f3232fdd7b6e31321c0afbee505d67210e619ec7d0e1"
+    },
+    {
+      "path": "csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_counts.h",
+      "begin": "__aicore__ inline void ServerDedupCounts::BuildLocalTasks(",
+      "end": "__aicore__ inline void ServerDedupCounts::SendExpertCntRange(",
+      "sha256": "621204524b253bc98b610fff2225617b4cf3c4749d62647dac0b9dedf4103750"
+    },
+    {
+      "path": "csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_counts.h",
+      "begin": "__aicore__ inline void ServerDedupCounts::CompleteCumsum()",
+      "end": "// \u6458\u8981\uff1a\u5bf9\u539f\u59cb\u8def\u7531\u6267\u884c\u9010\u4e13\u5bb6\u5339\u914d",
+      "sha256": "55340ea534422b3368758ab7a8395bcc54269c53e088b6c1ee64fb68673cf88d"
     }
   ]
 }

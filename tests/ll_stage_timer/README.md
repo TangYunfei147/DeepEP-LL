@@ -1,3 +1,7 @@
+当前分支为`kernel/ll-g4-small-b`，身份`g4-small-b`，仅M≤32且B≤32启用优化。
+构建、A/B及验证边界以[SMALL_B_FAST_PATH.md](SMALL_B_FAST_PATH.md)为准。
+下方旧分支身份和历史示例不要直接用于本候选。
+
 当前打点为schema13，请以[COMMUNICATION_DIAGNOSTICS.md](COMMUNICATION_DIAGNOSTICS.md)为采集/解析入口。
 新增首包准备、通信邻域和新报告，须全rank安装匹配ON wheel并重采；下方旧schema资料仅供历史追溯。
 
