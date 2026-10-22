@@ -209,6 +209,7 @@ private:
 // 摘要：统计完整原始路由的专家计数并异步发往专家所属 rank，同时保留仍被 MTE3 使用的记录 UB。
 __aicore__ inline void ServerDedupCounts::SendCnt()
 {
+    LL_SEG_BEGIN(countSetup, COUNT_SETUP);
     statusCntAlign_=countPlan_.count==0U ? 0U : Ceil(countPlan_.count,UB_ALIGN_DATA_COUNT)*UB_ALIGN_DATA_COUNT;
     const uint32_t recordBytes=statusCntAlign_*kEpServerDedupCountRecordBytes;
     if (recordBytes) tpipe_->InitBuffer(statusBuf_,recordBytes);
@@ -221,6 +222,7 @@ __aicore__ inline void ServerDedupCounts::SendCnt()
     }
     tpipe_->InitBufPool(stagePool_,overlap_.enabled ? overlap_.sendBytes : kEpServerDedupCountUbBytes-ReservedBytes());
     if (overlap_.enabled && overlap_.countBytes) tpipe_->InitBufPool(recvCountPool_,overlap_.countBytes);
+    LL_SEG_END(countSetup, COUNT_SETUP);
     if (!countPlan_.count) return;
     LL_SEG_SCOPE(SEND_COUNTS);
     LL_SEG_BEGIN(initCountBuffers, INIT_COUNT_BUFFERS);
@@ -386,6 +388,7 @@ __aicore__ inline void ServerDedupCounts::PrepareRecvCnt()
     recStatusNumPerCore_=0U;
     if (aivId_!=kLlSendCoreNum) return;
     LL_SEG_SCOPE(INIT_COUNT_BUFFERS);
+    LL_SEG_SCOPE(PREFIX_CONTROL_INIT);
     startStatusIndex_=0U;endStatusIndex_=rscvStatusNum_;recStatusNumPerCore_=rscvStatusNum_;
     RecvPool().InitBuffer(scalarBuf_,96U);
     RecvPool().InitBuffer(waitStatusBuf_,Ceil(rscvStatusNum_*32U+256U,256U)*256U);
@@ -408,9 +411,11 @@ __aicore__ inline void ServerDedupCounts::CompleteCumsum()
     const uint32_t receiver=aivId_;
     if (!overlap_.Async()) { LL_SEG_SCOPE(TRANSITION_DRAIN); PipeBarrier<PIPE_ALL>(); }
     if (!overlap_.enabled) tpipe_->Reset();
+    LL_SEG_BEGIN(prefixControlInit, PREFIX_CONTROL_INIT);
     SetCtrlSpr<60,60>(0);
     tpipe_->InitBuffer(readyBuf_,32U);
     tpipe_->InitBuffer(prefixBuf_,Ceil(rscvStatusNum_*4U,32U)*32U);
+    LL_SEG_END(prefixControlInit, PREFIX_CONTROL_INIT);
     WaitCumSumFlag();
     LocalTensor<int32_t> prefix = prefixBuf_.Get<int32_t>();
     GlobalTensor<int32_t> workspace;
@@ -499,10 +504,15 @@ __aicore__ inline bool ServerDedupCounts::TryRecvCnt()
     LL_SEG_SCOPE(WAIT_RECV_COUNTS);
     LL_SEG_SCOPE(POLL_RECV_COUNTS);
     LL_SEG_COUNT(POLL_RECV_COUNTS_ITERATIONS,1U);
+    LL_SEG_BEGIN(countSnapshotIssue, COUNT_SNAPSHOT_ISSUE);
     statusFp32Tensor_=waitStatusBuf_.Get<float>();
     DataCopy(statusFp32Tensor_,windowInstatusFp32Tensor_,
              DataCopyParams{uint16_t(rscvStatusNum_),1U,uint16_t(CNT_GM_STRIDE_BLOCKS-1U),0U});
+    LL_SEG_END(countSnapshotIssue, COUNT_SNAPSHOT_ISSUE);
+    LL_SEG_BEGIN(countSnapshotWait, COUNT_SNAPSHOT_WAIT);
     SyncFunc<HardEvent::MTE2_V>();
+    LL_SEG_END(countSnapshotWait, COUNT_SNAPSHOT_WAIT);
+    LL_SEG_BEGIN(countReadyCheck, COUNT_READY_CHECK);
     auto gather=gatherMaskOutBuf_.Get<float>();
     auto pattern=scalarBuf_.GetWithOffset<uint32_t>(8U,0U);
     auto sum=scalarBuf_.GetWithOffset<float>(8U,32U);
@@ -514,11 +524,17 @@ __aicore__ inline bool ServerDedupCounts::TryRecvCnt()
     // Gather first: E can exceed the uint8 repeat count of a strided ReduceSum.
     ReduceSum(sum,gather,sumContinueBuf_.Get<float>(),rscvStatusNum_);
     SyncFunc<HardEvent::V_S>();
-    if (sum.GetValue(0U)!=float(rscvStatusNum_)) return false;
+    if (sum.GetValue(0U)!=float(rscvStatusNum_)) {
+        LL_SEG_END(countReadyCheck, COUNT_READY_CHECK);
+        return false;
+    }
+    LL_SEG_END(countReadyCheck, COUNT_READY_CHECK);
+    LL_SEG_BEGIN(countValueExtract, COUNT_VALUE_EXTRACT);
     pattern.SetValue(0U,2U);
     SyncFunc<HardEvent::S_V>();
     GatherMask(gather,statusFp32Tensor_,pattern,true,2U,{1U,uint16_t(rscvStatusNum_),1U,0U},n);
     SyncFunc<HardEvent::V_S>();
+    LL_SEG_END(countValueExtract, COUNT_VALUE_EXTRACT);
     WaitDispatchClearStatus();
     return true;
 }
@@ -531,9 +547,12 @@ __aicore__ inline void ServerDedupCounts::CalRecvAndSetFlag()
     auto prefix=gatherMaskOutBuf_.Get<int32_t>();
     // Gather completion and scalar/Vector ownership precede the VF; data-ready
     // publication below still waits for the actual prefix DMA completion.
+    LL_SEG_BEGIN(prefixLocalScan, PREFIX_LOCAL_SCAN);
     SyncFunc<HardEvent::S_V>();
     asc_vf_call<R0PrefixScan>(reinterpret_cast<__ubuf__ uint32_t*>(prefix.GetPhyAddr()),rscvStatusNum_);
     SyncFunc<HardEvent::V_MTE3>();
+    LL_SEG_END(prefixLocalScan, PREFIX_LOCAL_SCAN);
+    LL_SEG_BEGIN(prefixDataPublish, PREFIX_DATA_PUBLISH);
     GlobalTensor<int32_t> workspace,output;
     workspace.SetGlobalBuffer(reinterpret_cast<__gm__ int32_t*>(recvCntWorkspaceGM_));
     workspace.SetL2CacheHint(CacheMode::CACHE_MODE_DISABLE);
@@ -543,6 +562,7 @@ __aicore__ inline void ServerDedupCounts::CalRecvAndSetFlag()
     DataCopyPad(output,prefix,copy);
     { LL_SEG_SCOPE(BROADCAST_PREFIX);
       DataCopyPad(workspace,prefix,copy); } // One shared table, no per-core replicas.
+    LL_SEG_END(prefixDataPublish, PREFIX_DATA_PUBLISH);
     // Finish prefix and count-ready cleanup before releasing a single epoch.
     { LL_SEG_SCOPE(PREFIX_PUBLISH_WAIT); SyncFunc<HardEvent::MTE3_S>(); }
     LL_SEG_SCOPE(PUBLISH_PREFIX_FLAGS);
@@ -559,12 +579,17 @@ __aicore__ inline void ServerDedupCounts::CalRecvAndSetFlag()
 __aicore__ inline void ServerDedupCounts::WaitCumSumFlag()
 {
     LL_SEG_SCOPE(WAIT_CUMSUM);
+    LL_SEG_SCOPE(PREFIX_READY_WAIT);
     auto ready=readyBuf_.Get<uint32_t>();
     do {
         LL_SEG_COUNT(WAIT_CUMSUM_ITERATIONS,1U);
+        LL_SEG_BEGIN(prefixReadyProbe, PREFIX_READY_PROBE);
         DataCopy(ready,prefixReadyGm_,8U);
         SyncFunc<HardEvent::MTE2_S>();
+        LL_SEG_END(prefixReadyProbe, PREFIX_READY_PROBE);
     } while (ready.GetValue(0U)!=prefixEpoch_);
+    // The original do/while scalar condition is included in READY_WAIT only;
+    // preserving it avoids an extra scalar load or a control-flow rewrite.
     // Fixed unbanked epoch alternates 1/0. Consumers never clear the producer flag.
 }
 

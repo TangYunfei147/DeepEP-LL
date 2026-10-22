@@ -17,7 +17,7 @@ def load(name,path):
 timer=load('segments','deep_ep/utils/ll_stage_timer.py')
 
 
-def raw(send=10,operation='dispatch',full=False,schema=7,mode=1):
+def raw(send=10,operation='dispatch',full=False,schema=7,mode=1,profile=0):
     result=[]
     for core in range(56):
         intervals=[];metrics={};omitted=0
@@ -29,7 +29,7 @@ def raw(send=10,operation='dispatch',full=False,schema=7,mode=1):
             else:omitted+=1
         end(50,10,20)
         if full:
-            for stage in range(1,{7:64,9:66,10:70}[schema]):
+            for stage in range(1,timer.SCHEMA_METRICS[schema]):
                 if stage in timer.COUNTERS: metrics[stage]=(100,0);continue
                 for sample in range(2):end(stage,200+stage*20+sample*5,203+stage*20+sample*5)
         else:
@@ -37,9 +37,9 @@ def raw(send=10,operation='dispatch',full=False,schema=7,mode=1):
             metrics[52]=(17,0)
         end(0,100,10000)
         events=intervals+[(0x8000+stage+(calls<<32),total) for stage,(calls,total) in sorted(metrics.items())]
-        words=[0]*(timer.SLOTS*timer.FIELDS)
+        words=[0]*(timer.SCHEMA_SLOTS[schema]*timer.FIELDS)
         role=(3 if core<send else 2) if operation=='dispatch' else (1 if core<send else 4)
-        words[:8]=[timer.MAGIC,schema,1 if operation=='dispatch' else 2,56,core,mode|(send<<8)|(role<<16),len(events),omitted]
+        words[:8]=[timer.MAGIC,schema,1 if operation=='dispatch' else 2,56,core,mode|(send<<8)|(role<<16)|(profile<<24),len(events),omitted]
         for i,(event,value) in enumerate(events):words[8+i*2:10+i*2]=[event,value]
         result.append([words[i:i+8] for i in range(0,len(words),8)])
     return result
@@ -112,7 +112,8 @@ def test_full_capture_is_deferred_and_saves_extended_json(monkeypatch,tmp_path):
         def cpu(self):copies.append(self.shape);return self
         def tolist(self):return self.raw
     native=SimpleNamespace(low_latency_stage_timer_enabled=True,
-        low_latency_stage_timer_layout=lambda:dict(schema=timer.SCHEMA,slots=timer.SLOTS,fields=8,stages=list(timer.STAGES)),
+        low_latency_stage_timer_layout=lambda:dict(schema=timer.SCHEMA,slots=timer.SLOTS,fields=8,stages=list(timer.STAGES),
+                                                  timer_profile='full',timer_profile_id=0),
         low_latency_core_config=lambda:dict(active_aiv=56,send_cores=10,device=0,runtime_device_queried=True))
     monkeypatch.setitem(sys.modules,'torch',SimpleNamespace(int64=0,zeros=lambda *a,**k:Tensor()))
     monkeypatch.setitem(sys.modules,'deep_ep._native',SimpleNamespace(require_native=lambda _:native))

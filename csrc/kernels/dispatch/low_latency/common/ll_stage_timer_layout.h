@@ -5,12 +5,12 @@
 #pragma once
 #include <cstdint>
 namespace LlStageTimer {
-constexpr uint32_t kSchema = 13U;
+constexpr uint32_t kSchema = 14U;
 constexpr uint64_t kMagic = 0x4c4c5431ULL;
-constexpr uint32_t kTraceRecords = 192U, kMetrics = 108U;
+constexpr uint32_t kTraceRecords = 192U, kMetrics = 136U;
 constexpr uint32_t kRecords = kTraceRecords + kMetrics;
 // Same 16-byte event/metric records as dc_seg. LL keeps per-core 512B alignment.
-constexpr uint32_t kSlots = 80U, kFields = 8U;
+constexpr uint32_t kSlots = 88U, kFields = 8U;
 constexpr uint32_t kWordsPerCore = kSlots * kFields;
 constexpr uint32_t kRecordWordOffset = 8U;
 enum Stage : uint32_t {
@@ -122,6 +122,34 @@ enum Stage : uint32_t {
     RX_READY = 105,
     RX_EMPTY_POLLS = 106,
     RX_PACKETS = 107,
+    COUNT_SNAPSHOT_ISSUE = 108,
+    COUNT_SNAPSHOT_WAIT = 109,
+    COUNT_READY_CHECK = 110,
+    COUNT_VALUE_EXTRACT = 111,
+    PREFIX_LOCAL_SCAN = 112,
+    PREFIX_TOTAL_PUBLISH = 113,
+    PREFIX_TOTAL_WAIT = 114,
+    PREFIX_TOTAL_PROBE = 115,
+    PREFIX_TOTAL_DECODE = 116,
+    PREFIX_OFFSET_SUM = 117,
+    PREFIX_OFFSET_APPLY = 118,
+    PREFIX_DATA_PUBLISH = 119,
+    PREFIX_READY_WAIT = 120,
+    PREFIX_READY_PROBE = 121,
+    PREFIX_READY_DECODE = 122,
+    PREFIX_GENERATION_LOAD = 123,
+    INIT_LAYOUT = 124,
+    INIT_MAGIC = 125,
+    INIT_COUNTS = 126,
+    INIT_SENDER = 127,
+    INIT_RECEIVER = 128,
+    COUNT_SETUP = 129,
+    SENDER_INPUT_INIT = 130,
+    SENDER_SCRATCH_ALLOC = 131,
+    SENDER_METADATA_LOAD = 132,
+    SENDER_FLAG_INIT = 133,
+    PREFIX_CONTROL_INIT = 134,
+    TIMER_SETUP = 135,
     StageCount = kMetrics
 };
 constexpr const char* kNames[] = {
@@ -233,9 +261,34 @@ constexpr const char* kNames[] = {
     "RX_READY",
     "RX_EMPTY_POLLS",
     "RX_PACKETS",
-
-
-
+    "COUNT_SNAPSHOT_ISSUE",
+    "COUNT_SNAPSHOT_WAIT",
+    "COUNT_READY_CHECK",
+    "COUNT_VALUE_EXTRACT",
+    "PREFIX_LOCAL_SCAN",
+    "PREFIX_TOTAL_PUBLISH",
+    "PREFIX_TOTAL_WAIT",
+    "PREFIX_TOTAL_PROBE",
+    "PREFIX_TOTAL_DECODE",
+    "PREFIX_OFFSET_SUM",
+    "PREFIX_OFFSET_APPLY",
+    "PREFIX_DATA_PUBLISH",
+    "PREFIX_READY_WAIT",
+    "PREFIX_READY_PROBE",
+    "PREFIX_READY_DECODE",
+    "PREFIX_GENERATION_LOAD",
+    "INIT_LAYOUT",
+    "INIT_MAGIC",
+    "INIT_COUNTS",
+    "INIT_SENDER",
+    "INIT_RECEIVER",
+    "COUNT_SETUP",
+    "SENDER_INPUT_INIT",
+    "SENDER_SCRATCH_ALLOC",
+    "SENDER_METADATA_LOAD",
+    "SENDER_FLAG_INIT",
+    "PREFIX_CONTROL_INIT",
+    "TIMER_SETUP",
 };
 static_assert(kRecordWordOffset + kRecords * 2U <= kWordsPerCore, "segment capacity");
 static_assert(kWordsPerCore * sizeof(uint64_t) % 512U == 0U, "core alignment");

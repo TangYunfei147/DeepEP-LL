@@ -12,10 +12,13 @@ import struct
 import threading
 
 MAGIC = 0x4C4C5431
-SCHEMA, SLOTS, FIELDS = 13, 80, 8
-TRACE_RECORDS, METRICS, RECORDS = 192, 108, 300
+SCHEMA, SLOTS, FIELDS = 14, 88, 8
+TRACE_RECORDS, METRICS, RECORDS = 192, 136, 328
+SCHEMA_SLOTS = {7:72,9:72,10:72,11:72,12:72,13:80,14:88}
+SCHEMA_METRICS = {7:64,9:66,10:70,11:78,12:81,13:108,14:136}
+TIMER_PROFILES = ('full','overview','prepare','prefix','send','recv')
 DEFAULT_FREQUENCY_HZ = 1_000_000_000
-STAGES = ('KERNEL', 'SEND_TOKENS', 'CAL_CUMSUM', 'PREPARE_INPUT', 'SEND_COUNTS', 'INIT_COUNT_BUFFERS', 'WAIT_RECV_COUNTS', 'CLEAR_RECV_STATUS', 'GATHER_RECV_COUNTS', 'GET_CUMSUM', 'BUILD_RECV_CUMSUM', 'WAIT_CUMSUM', 'LOCAL_WINDOW_COPY', 'FORMAT_OUTPUT', 'BUILD_EXPERT_TASKS', 'CLEAR_LOCAL_FLAGS', 'TOKEN_INPUT', 'TOKEN_QUANT', 'TOKEN_METADATA', 'TOKEN_BUFFER_WAIT', 'TOKEN_PACK', 'TOKEN_SEND_ISSUE', 'COUNT_COMPUTE', 'COUNT_SEND_ISSUE', 'POLL_CORE_SUMS', 'REDUCE_CORE_PREFIX', 'CLEAR_CORE_SUMS', 'BROADCAST_PREFIX', 'PUBLISH_PREFIX_FLAGS', 'RECV_POLL', 'RECV_COPY', 'SEND_DRAIN', 'COMBINE_SEND', 'COMBINE_INIT_RECV', 'COMBINE_RECV', 'COMBINE_INPUT', 'COMBINE_PACK_QUANT', 'COMBINE_SEND_ISSUE', 'COMBINE_SEND_FINISH', 'COMBINE_RECV_POLL', 'COMBINE_DEQUANT_REDUCE', 'COMBINE_PROCESS_TOKEN', 'COMBINE_TOKEN_INIT', 'COMBINE_CLEAR_FLAGS', 'COMBINE_SHARED_EXPERT', 'COMBINE_SPECIAL_EXPERT', 'COMBINE_RMSNORM', 'FINAL_DRAIN', 'POLL_RECV_COUNTS', 'WRITE_COUNTS_OUTPUT', 'INIT', 'POLL_CORE_SUMS_ITERATIONS', 'POLL_RECV_COUNTS_ITERATIONS', 'WAIT_CUMSUM_ITERATIONS', 'RECV_READY_TOKENS', 'COMBINE_READY_SLOTS', 'COMBINE_QUANT', 'COMBINE_BUFFER_WAIT', 'COMBINE_COPY_PACK', 'RECV_BUFFER_WAIT', 'RECV_INPUT', 'RECV_OUTPUT', 'CAL_TOKEN', 'COMBINE_INDEX_INPUT', 'TOKEN_INPUT_WAIT', 'TOKEN_QUANT_WAIT', 'RELAY_ISSUE', 'RELAY_PRE_DRAIN', 'RELAY_COMPLETE', 'RELAY_PACKETS','SEND_COMPLETE_WAIT','TRANSITION_DRAIN','RECV_PREPARE','SEND_SUBMIT_END','OVERLAP_PATH','SERIAL_FALLBACK','SEND_LANES','RECV_LANES','PREFIX_COMPLETE','PREFIX_LOAD','RECV_COMPLETE_WAIT','SEND_SETUP','Q_SEED_SUBMIT','Q_SEED_WAIT','Q_LOCAL_UPDATE','ROUTE_CLASSIFY','DIRECT_PLAN','SEND_RETIRE_WAIT','RX_FLAG_ISSUE','RX_FLAG_WAIT','RX_FLAG_REDUCE','RX_FLAG_DECODE','RX_LANE_REUSE_WAIT','RX_PAYLOAD_READY_WAIT','RX_METADATA','RX_PAYLOAD_OUTPUT','RX_META_OUTPUT','TX_PACK_READY_WAIT','TX_METADATA_PUBLISH','BEFORE_FIRST_SEND','BEFORE_FIRST_RECV_POLL','PREFIX_PUBLISH_WAIT','RX_PENDING_UPDATE','TX_PACKETS','RX_PROBED','RX_READY','RX_EMPTY_POLLS','RX_PACKETS')
+STAGES = ('KERNEL', 'SEND_TOKENS', 'CAL_CUMSUM', 'PREPARE_INPUT', 'SEND_COUNTS', 'INIT_COUNT_BUFFERS', 'WAIT_RECV_COUNTS', 'CLEAR_RECV_STATUS', 'GATHER_RECV_COUNTS', 'GET_CUMSUM', 'BUILD_RECV_CUMSUM', 'WAIT_CUMSUM', 'LOCAL_WINDOW_COPY', 'FORMAT_OUTPUT', 'BUILD_EXPERT_TASKS', 'CLEAR_LOCAL_FLAGS', 'TOKEN_INPUT', 'TOKEN_QUANT', 'TOKEN_METADATA', 'TOKEN_BUFFER_WAIT', 'TOKEN_PACK', 'TOKEN_SEND_ISSUE', 'COUNT_COMPUTE', 'COUNT_SEND_ISSUE', 'POLL_CORE_SUMS', 'REDUCE_CORE_PREFIX', 'CLEAR_CORE_SUMS', 'BROADCAST_PREFIX', 'PUBLISH_PREFIX_FLAGS', 'RECV_POLL', 'RECV_COPY', 'SEND_DRAIN', 'COMBINE_SEND', 'COMBINE_INIT_RECV', 'COMBINE_RECV', 'COMBINE_INPUT', 'COMBINE_PACK_QUANT', 'COMBINE_SEND_ISSUE', 'COMBINE_SEND_FINISH', 'COMBINE_RECV_POLL', 'COMBINE_DEQUANT_REDUCE', 'COMBINE_PROCESS_TOKEN', 'COMBINE_TOKEN_INIT', 'COMBINE_CLEAR_FLAGS', 'COMBINE_SHARED_EXPERT', 'COMBINE_SPECIAL_EXPERT', 'COMBINE_RMSNORM', 'FINAL_DRAIN', 'POLL_RECV_COUNTS', 'WRITE_COUNTS_OUTPUT', 'INIT', 'POLL_CORE_SUMS_ITERATIONS', 'POLL_RECV_COUNTS_ITERATIONS', 'WAIT_CUMSUM_ITERATIONS', 'RECV_READY_TOKENS', 'COMBINE_READY_SLOTS', 'COMBINE_QUANT', 'COMBINE_BUFFER_WAIT', 'COMBINE_COPY_PACK', 'RECV_BUFFER_WAIT', 'RECV_INPUT', 'RECV_OUTPUT', 'CAL_TOKEN', 'COMBINE_INDEX_INPUT', 'TOKEN_INPUT_WAIT', 'TOKEN_QUANT_WAIT', 'RELAY_ISSUE', 'RELAY_PRE_DRAIN', 'RELAY_COMPLETE', 'RELAY_PACKETS','SEND_COMPLETE_WAIT','TRANSITION_DRAIN','RECV_PREPARE','SEND_SUBMIT_END','OVERLAP_PATH','SERIAL_FALLBACK','SEND_LANES','RECV_LANES','PREFIX_COMPLETE','PREFIX_LOAD','RECV_COMPLETE_WAIT','SEND_SETUP','Q_SEED_SUBMIT','Q_SEED_WAIT','Q_LOCAL_UPDATE','ROUTE_CLASSIFY','DIRECT_PLAN','SEND_RETIRE_WAIT','RX_FLAG_ISSUE','RX_FLAG_WAIT','RX_FLAG_REDUCE','RX_FLAG_DECODE','RX_LANE_REUSE_WAIT','RX_PAYLOAD_READY_WAIT','RX_METADATA','RX_PAYLOAD_OUTPUT','RX_META_OUTPUT','TX_PACK_READY_WAIT','TX_METADATA_PUBLISH','BEFORE_FIRST_SEND','BEFORE_FIRST_RECV_POLL','PREFIX_PUBLISH_WAIT','RX_PENDING_UPDATE','TX_PACKETS','RX_PROBED','RX_READY','RX_EMPTY_POLLS','RX_PACKETS','COUNT_SNAPSHOT_ISSUE','COUNT_SNAPSHOT_WAIT','COUNT_READY_CHECK','COUNT_VALUE_EXTRACT','PREFIX_LOCAL_SCAN','PREFIX_TOTAL_PUBLISH','PREFIX_TOTAL_WAIT','PREFIX_TOTAL_PROBE','PREFIX_TOTAL_DECODE','PREFIX_OFFSET_SUM','PREFIX_OFFSET_APPLY','PREFIX_DATA_PUBLISH','PREFIX_READY_WAIT','PREFIX_READY_PROBE','PREFIX_READY_DECODE','PREFIX_GENERATION_LOAD','INIT_LAYOUT','INIT_MAGIC','INIT_COUNTS','INIT_SENDER','INIT_RECEIVER','COUNT_SETUP','SENDER_INPUT_INIT','SENDER_SCRATCH_ALLOC','SENDER_METADATA_LOAD','SENDER_FLAG_INIT','PREFIX_CONTROL_INIT','TIMER_SETUP')
 COUNTERS = frozenset((*range(51,56),69,*range(74,78),*range(103,108)))
 ROLES = {1:'send_token',2:'cumsum',3:'send_and_recv',4:'recv'}
 _state=threading.local()
@@ -30,27 +33,34 @@ def parse_records(raw, operation, frequency_hz=None):
     if not raw or not raw[0] or len(raw[0][0])!=8:
         raise ValueError('Missing timer header')
     schema=raw[0][0][1]
-    metrics_limit={7:64,9:66,10:70,11:78,12:81}.get(schema,METRICS)
-    if schema not in (7,9,10,11,12,SCHEMA):
+    if schema not in (7,9,10,11,12,13,SCHEMA):
         return legacy.parse_records(raw,operation,frequency_hz)
+    metrics_limit=SCHEMA_METRICS[schema]
+    slots=SCHEMA_SLOTS[schema]
     if operation not in ('dispatch','combine'): raise ValueError('Expected dispatch or combine')
     if frequency_hz is not None and (not math.isfinite(frequency_hz) or frequency_hz<=0):
         raise ValueError('Counter frequency must be finite and positive')
     cores=len(raw);op=1 if operation=='dispatch' else 2
     if cores!=56: raise ValueError('Segment capture requires 56 AIV')
     records,intervals,core_info,splits=[],[],[],set()
-    modes=set()
+    modes=set();profiles=set()
     for core,rows in enumerate(raw):
-        if len(rows)!=SLOTS or any(len(row)!=FIELDS for row in rows): raise ValueError('Timer shape mismatch')
+        if len(rows)!=slots or any(len(row)!=FIELDS for row in rows): raise ValueError('Timer shape mismatch')
         words=[value for row in rows for value in row]
         if any(type(v) is not int or not -(1<<63)<=v<(1<<64) for v in words): raise ValueError('Invalid timer word')
         words=[v & ((1<<64)-1) for v in words]
-        h=words[:8];mode=h[5]&255;send=(h[5]>>8)&255;role=h[5]>>16
-        if h[:5]!=[MAGIC,schema,op,cores,core] or not (mode==1 or (schema in (10,11,12,13) and mode==3 and op==1)) or not 0<send<56:
+        h=words[:8];mode=h[5]&255;send=(h[5]>>8)&255;role=(h[5]>>16)&255
+        profile=(h[5]>>24)&255 if schema>=14 else 0
+        if profile>=len(TIMER_PROFILES): raise ValueError('Unknown timer profile')
+        if h[5]>>(32 if schema>=14 else 24): raise ValueError('Unexpected segment header bits')
+        profile_name=TIMER_PROFILES[profile]
+        if schema >= 14 and mode == 3 and profile_name not in ('full', 'recv'):
+            raise ValueError('relay-complete requires full or recv timer profile')
+        if h[:5]!=[MAGIC,schema,op,cores,core] or not (mode==1 or (schema in (10,11,12,13,14) and mode==3 and op==1)) or not 0<send<56:
             raise ValueError('Incomplete or mismatched segment header')
         expected=(3 if core<send else 2) if op==1 else (1 if core<send else 4)
         if role!=expected: raise ValueError('Unexpected segment core role')
-        splits.add(send);modes.add(mode);count,omitted=h[6:]
+        splits.add(send);modes.add(mode);profiles.add(profile);count,omitted=h[6:]
         if not 0<count<=TRACE_RECORDS+metrics_limit or any(words[8+count*2:]): raise ValueError('Truncated or invalid segment records')
         metrics={};pairs={};trace_count=0;in_metrics=False
         for i in range(count):
@@ -64,7 +74,7 @@ def parse_records(raw, operation, frequency_hz=None):
                 stage=event//2
                 if in_metrics or payload or stage>=metrics_limit or stage in COUNTERS: raise ValueError('Invalid interval event')
                 pair=pairs.setdefault(stage,[[],[]]);pair[event&1].append(value);trace_count+=1
-        if schema in (10,11,12,13):
+        if schema in (10,11,12,13,14):
             relay={stage for stage in metrics if 66<=stage<=69}
             if relay and op!=1: raise ValueError('Relay diagnostics require dispatch')
             if mode==1 and relay & {67,68}: raise ValueError('Completion metrics in observe capture')
@@ -75,7 +85,9 @@ def parse_records(raw, operation, frequency_hz=None):
                 if mode==3 and (not {67,68}<=relay or metrics[67][0]!=groups or
                                metrics[68][0]!=groups or metrics[68][1]<metrics[66][1]):
                     raise ValueError('Missing/inconsistent relay completion metrics')
-            elif relay: raise ValueError('Relay metrics without issue intervals')
+            elif relay and not (schema >= 14 and profile_name not in ('full', 'recv')
+                                and mode == 1 and relay == {69}):
+                raise ValueError('Relay metrics without issue intervals')
         if trace_count>TRACE_RECORDS: raise ValueError('Trace capacity exceeded')
         if metrics.get(0,(0,))[0]!=1 or 0 not in pairs: raise ValueError('Missing KERNEL interval')
         initial_role=ROLES[role]
@@ -92,7 +104,8 @@ def parse_records(raw, operation, frequency_hz=None):
                 raise ValueError('Sampled intervals exceed accumulated metric')
             for sample,(begin,end) in enumerate(zip(begins,ends)):
                 if end<begin: raise ValueError('Invalid timestamp order')
-                intervals.append(dict(core=core,role=display_role,initial_role=initial_role,stage=STAGES[stage],sample=sample,
+                intervals.append(dict(core=core,role=display_role,initial_role=initial_role,
+                                      timer_profile=profile_name,timer_profile_id=profile,stage=STAGES[stage],sample=sample,
                                       first_tick=begin,last_tick=end,total_ticks=end-begin))
             recorded+=len(begins)
         if len(pairs[0][0])!=1 or metrics[0][1]!=pairs[0][1][0]-pairs[0][0][0]:
@@ -100,14 +113,18 @@ def parse_records(raw, operation, frequency_hz=None):
         if omitted!=sum(v[0] for stage,v in metrics.items() if stage not in COUNTERS)-recorded:
             raise ValueError('Incorrect omitted interval count')
         for stage,(calls,total) in sorted(metrics.items()):
-            item=dict(core=core,role=display_role,initial_role=initial_role,stage=STAGES[stage],total_ticks=total,calls=calls,
+            item=dict(core=core,role=display_role,initial_role=initial_role,
+                      timer_profile=profile_name,timer_profile_id=profile,stage=STAGES[stage],total_ticks=total,calls=calls,
                       average_ticks=total/calls,time_measured=stage not in COUNTERS)
             if frequency_hz is not None: item.update(total_us=total*1e6/frequency_hz,average_us=total*1e6/frequency_hz/calls)
             records.append(item)
-        core_info.append(dict(core=core,role=display_role,initial_role=initial_role,record_count=count,omitted_intervals=omitted))
+        core_info.append(dict(core=core,role=display_role,initial_role=initial_role,
+                              timer_profile=profile_name,timer_profile_id=profile,record_count=count,omitted_intervals=omitted))
     if len(splits)!=1: raise ValueError('Mixed core splits')
     if len(modes)!=1: raise ValueError('Mixed relay diagnostic modes')
+    if len(profiles)!=1: raise ValueError('Mixed timer profiles')
     return dict(schema=schema,operation=operation,active_aiv=cores,send_cores=send,recv_cores=cores-send,
+                timer_profile=profile_name,timer_profile_id=profile,
                 dispatch_recv_cores=cores,boundary_mode='relay-complete' if mode==3 else 'observe',frequency_hz=frequency_hz,
                 records=records,intervals=intervals,cores=core_info,
                 clock='AscendC::GetSystemCycle; no cross-rank clock alignment assumed',
@@ -117,11 +134,13 @@ def parse_records(raw, operation, frequency_hz=None):
 def chrome_trace(saved_records, frequency_hz=None, lane_layout='core', show_repeated=False):
     saved_records=list(saved_records)
     if not saved_records: raise ValueError('No LL stage records')
-    if all(s['raw'][0][0][1] not in (7,9,10,11,12,SCHEMA) for s in saved_records):
+    if all(s['raw'][0][0][1] not in (7,9,10,11,12,13,SCHEMA) for s in saved_records):
         return legacy.chrome_trace(saved_records,frequency_hz,lane_layout,show_repeated)
-    if any(s['raw'][0][0][1] not in (7,9,10,11,12,SCHEMA) for s in saved_records): raise ValueError('Mixed segment and legacy traces')
+    if any(s['raw'][0][0][1] not in (7,9,10,11,12,13,SCHEMA) for s in saved_records): raise ValueError('Mixed segment and legacy traces')
     if len({s['raw'][0][0][1] for s in saved_records})!=1: raise ValueError('Mixed segment schemas')
     if len({s['raw'][0][0][5]&255 for s in saved_records})!=1: raise ValueError('Mixed relay diagnostic modes')
+    profile_ids={(s['raw'][0][0][5]>>24)&255 if s['raw'][0][0][1]>=14 else 0 for s in saved_records}
+    if len(profile_ids)!=1: raise ValueError('Mixed timer profiles')
     if lane_layout not in ('core','stage'): raise ValueError('Expected core or stage lane layout')
     events=[];identities=set();info=[]
     for pid,saved in enumerate(saved_records,1):
@@ -143,8 +162,10 @@ def chrome_trace(saved_records, frequency_hz=None, lane_layout='core', show_repe
                                ts=(row['first_tick']-origin)*1e6/frequency,dur=row['total_ticks']*1e6/frequency,
                                args=dict(rank=rank,iteration=iteration,sample=row['sample'],raw_begin_cycle=row['first_tick'],
                                          raw_end_cycle=row['last_tick'],interval_kind='sampled actual interval')))
-        info.append(dict(operation=report['operation'],rank=rank,iteration=iteration,cores=report['cores']))
+        info.append(dict(operation=report['operation'],rank=rank,iteration=iteration,cores=report['cores'],
+                         timer_profile=report['timer_profile'],timer_profile_id=report['timer_profile_id']))
     return dict(traceEvents=events,metadata=dict(format='dc_seg sampled intervals',sampled_calls_per_stage=2,
+                timer_profile=report['timer_profile'],timer_profile_id=report['timer_profile_id'],
                 all_calls_in_metrics=True,cores=info,clock='Rank-local origins; no cross-rank alignment'))
 
 
@@ -176,8 +197,16 @@ class StageTrace:
         if not getattr(native, 'low_latency_stage_timer_enabled', False):
             raise RuntimeError('Rebuild the full wheel with DEEPEP_LL_STAGE_TIMER=ON')
         schema = native.low_latency_stage_timer_layout()
-        if schema != dict(schema=SCHEMA, slots=SLOTS, fields=FIELDS, stages=list(STAGES)):
+        expected=dict(schema=SCHEMA, slots=SLOTS, fields=FIELDS, stages=list(STAGES))
+        profile_id=schema.get('timer_profile_id')
+        if (any(schema.get(key)!=value for key,value in expected.items()) or
+                type(profile_id) is not int or not 0<=profile_id<len(TIMER_PROFILES) or
+                schema.get('timer_profile')!=TIMER_PROFILES[profile_id]):
             raise RuntimeError('LL timer Python/native schema mismatch')
+        self.timer_profile_id=profile_id
+        self.timer_profile=TIMER_PROFILES[profile_id]
+        if mode == 'relay-complete' and self.timer_profile not in ('full', 'recv'):
+            raise ValueError('relay-complete requires full or recv timer profile')
         cfg = native.low_latency_core_config()
         if not cfg['runtime_device_queried']:
             raise RuntimeError('Bind the actual NPU before allocating a timer')
@@ -202,6 +231,9 @@ class StageTrace:
             raise RuntimeError('Capture returned a different diagnostic mode')
         if self.report['schema'] != SCHEMA:
             raise RuntimeError('Capture returned a stale timer format; rebuild the complete wheel')
+        if (self.report['timer_profile_id']!=self.timer_profile_id or
+                self.report['timer_profile']!=self.timer_profile):
+            raise RuntimeError('Capture returned a different timer profile; rebuild the complete wheel')
         if self.expert_tensor is not None:
             from .ll_expert_timer import parse_records as parse_experts
             self.expert_raw=self.expert_tensor.cpu().tolist()

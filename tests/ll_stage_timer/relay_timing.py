@@ -7,37 +7,41 @@ def report(samples):
     for meta,decoded in samples:
         if decoded['operation']!='dispatch': continue
         schema=decoded['schema'];mode=decoded['boundary_mode'];hz=decoded['frequency_hz']
-        identity.add((schema,mode,hz))
+        profile=decoded.get('timer_profile','full')
+        identity.add((schema,mode,hz,profile))
         cores=defaultdict(dict)
         for record in decoded['records']:cores[record['core']][record['stage']]=record
         for core,stages in sorted(cores.items()):
             key=(meta['rank'],core,meta['iteration'])
             if key in seen: raise ValueError('Duplicate relay rank/core/iteration')
             seen.add(key)
-            available=schema in (10,11,12,13)
+            available=schema in (10,11,12,13,14)
+            issue_enabled=available and (schema < 14 or profile in ('full','recv'))
             issue=stages.get('RELAY_ISSUE')
-            groups=issue['calls'] if issue else 0 if available else None
+            groups=issue['calls'] if issue else 0 if issue_enabled else None
             packets=stages.get('RELAY_PACKETS',{}).get('calls',0) if available else None
-            measured_completion=available and mode=='relay-complete'
-            rows.append(dict(rank=meta['rank'],iteration=meta['iteration'],core=core,mode=mode,
-                status='unavailable' if not available else 'measured' if groups else 'no_relay',
+            measured_completion=issue_enabled and mode=='relay-complete'
+            rows.append(dict(rank=meta['rank'],iteration=meta['iteration'],core=core,mode=mode,timer_profile=profile,
+                status='unavailable' if not available else 'counter_only' if not issue_enabled else 'measured' if groups else 'no_relay',
                 groups=groups,relay_writes=packets,
                 kernel_ticks=stages.get('KERNEL',{}).get('total_ticks'),
-                issue_ticks=issue['total_ticks'] if issue else 0 if available else None,
+                issue_ticks=issue['total_ticks'] if issue else 0 if issue_enabled else None,
                 complete_ticks=stages.get('RELAY_COMPLETE',{}).get('total_ticks',0) if measured_completion else None,
                 pre_drain_ticks=stages.get('RELAY_PRE_DRAIN',{}).get('total_ticks',0) if measured_completion else None))
-    if len(identity)>1: raise ValueError('Mixed relay schemas, diagnostic modes or frequencies')
+    if len(identity)>1: raise ValueError('Mixed relay schemas, diagnostic modes, frequencies or timer profiles')
     mode=next(iter(identity))[1] if identity else None
     hz=next(iter(identity))[2] if identity else None
+    profile=next(iter(identity))[3] if identity else None
     grouped=defaultdict(list)
     for row in rows:grouped[(row['rank'],row['core'])].append(row)
     summaries=[]
     for (rank,core),items in sorted(grouped.items()):
         available=all(i['status']!='unavailable' for i in items)
-        groups=sum(i['groups'] for i in items) if available else None
-        writes=sum(i['relay_writes'] for i in items) if available else None
-        item=dict(rank=rank,core=core,mode=mode,samples=len(items),groups=groups,relay_writes=writes,
-                  status='unavailable' if not available else 'measured' if groups else 'no_relay')
+        groups=sum(i['groups'] for i in items) if all(i['groups'] is not None for i in items) else None
+        writes=sum(i['relay_writes'] for i in items) if all(i['relay_writes'] is not None for i in items) else None
+        counter_only=any(i['status']=='counter_only' for i in items)
+        item=dict(rank=rank,core=core,mode=mode,timer_profile=profile,samples=len(items),groups=groups,relay_writes=writes,
+                  status='unavailable' if not available else 'counter_only' if counter_only else 'measured' if groups else 'no_relay')
         for name in ('issue','complete','pre_drain'):
             values=[i[name+'_ticks'] for i in items]
             total=sum(values) if all(v is not None for v in values) else None
@@ -47,7 +51,7 @@ def report(samples):
             item[name+'_ticks_per_group']=per_group
             item[name+'_us_per_group']=per_group*1e6/hz if per_group is not None and hz else None
         # A fanout group has several writes; this is amortized, not individual latency.
-        item['issue_ticks_per_write']=item['issue_ticks_total']/writes if available and writes else None
+        item['issue_ticks_per_write']=item['issue_ticks_total']/writes if item['issue_ticks_total'] is not None and writes else None
         # Pair completion and KERNEL using exactly these rank/core/iteration
         # rows, including measured zero-relay rounds. Never sum a subset of
         # KERNEL records or divide an accumulated numerator by a mean duration.
@@ -59,14 +63,15 @@ def report(samples):
         item['complete_kernel_ratio']=complete/kernel if complete is not None and kernel is not None and kernel>0 else None
         item['relay_writes_per_group']=writes/groups if available and groups else None
         summaries.append(item)
-    return dict(mode=mode,frequency_hz=hz,samples=rows,per_core=summaries,
+    return dict(mode=mode,timer_profile=profile,frequency_hz=hz,samples=rows,per_core=summaries,
         interpretation='Issue is scalar loop/submit time including possible backpressure. Completion mode first drains '
         'prior local MTE3 work, then times issue through producer MTE3 completion. Pre-drain is separate; '
         'issue is nested inside completion, never add them. Completion is not remote-consumer acknowledgement '
         'or uncontended link latency. Relay writes include self-rank and peer-rank targets. Counts are per FIRST_HOP fanout group and per relay write. '
         'Completion/KERNEL is a ratio of accumulated durations from the same rank/core/iterations, not a normal-mode bottleneck proof. '
         'Average fanout is total relay writes / total FIRST_HOP groups. '
-        'Old formats are unavailable, not zero; completion is unmeasured in observe mode.')
+        'Old formats are unavailable, not zero; completion is unmeasured in observe mode. '
+        'Selective profiles excluding relay issue expose counter_only writes; group counts and all relay times remain unmeasured.')
 
 
 def markdown(result):

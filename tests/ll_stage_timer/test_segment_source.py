@@ -36,10 +36,16 @@ def test_non_diagnostic_token_stream_matches_shared_receive_baseline(relative):
 
 def test_explicit_boundaries_are_paired_and_use_reference_ids():
     names=set(json.loads(Path(__file__).with_name('dc_seg_stages.json').read_text()))
-    for relative in MANIFEST['files']:
+    for relative in [*MANIFEST['files'],'csrc/kernels/dispatch/low_latency/device/dispatch_parallel_count_prefix.h']:
         source=(ROOT/relative).read_text(encoding='utf-8')
         begins=Counter(re.findall(r'LL_SEG_BEGIN\((\w+),\s*(\w+)\)',source))
         ends=Counter(re.findall(r'LL_SEG_END\((\w+),\s*(\w+)\)',source))
+        key=('countReadyCheck','COUNT_READY_CHECK')
+        if key in begins:
+            assert begins[key]==1 and ends[key]==2
+            # The extra textual END is exclusively in the early-return branch.
+            assert re.search(r'if\s*\([^\n]*\)\s*\{\s*LL_SEG_END\(countReadyCheck, COUNT_READY_CHECK\);\s*return false;\s*\}',source)
+            ends[key]-=1
         assert begins==ends,relative
         assert {stage for _,stage in begins}<=names
         assert set(re.findall(r'LL_SEG_SCOPE\((\w+)\)',source))<=names

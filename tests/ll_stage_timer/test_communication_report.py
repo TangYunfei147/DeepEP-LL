@@ -36,7 +36,7 @@ def raw():
             duration('RX_FLAG_WAIT',520,550)
             count('RX_PROBED',16);count('RX_READY',3);count('RX_PACKETS',3)
         records.extend((0x8000+stage+(calls<<32),ticks) for stage,(calls,ticks) in metrics.items())
-        words=[0]*(timer.SLOTS*timer.FIELDS)
+        words=[0]*(timer.SCHEMA_SLOTS[13]*timer.FIELDS)
         words[:8]=[timer.MAGIC,13,1,56,core,1|(28<<8)|((3 if core<28 else 2)<<16),len(records),0]
         for i,(event,value) in enumerate(records):words[8+2*i:10+2*i]=[event,value]
         all_rows.append([words[i:i+8] for i in range(0,len(words),8)])
@@ -47,7 +47,7 @@ def test_new_layout_names_and_end_to_end_units():
     import re
     names=re.findall(r'^\s+"([A-Z_]+)",',header,re.M)
     assert names==list(timer.STAGES)
-    assert timer.SCHEMA==13 and timer.SLOTS==80 and timer.METRICS==108
+    assert timer.SCHEMA==14 and timer.SLOTS==88 and timer.METRICS==136
     decoded=timer.parse_records(raw(),'dispatch',1e9)
     r=comm.report([(dict(rank=0,iteration=0),decoded)])
     send=r['samples'][0];receive=r['samples'][1];empty=r['samples'][2]

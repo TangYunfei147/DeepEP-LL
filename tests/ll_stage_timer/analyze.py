@@ -13,6 +13,8 @@ relay_spec=importlib.util.spec_from_file_location('ll_relay_timing',Path(__file_
 relay_timing=importlib.util.module_from_spec(relay_spec);relay_spec.loader.exec_module(relay_timing)
 comm_spec=importlib.util.spec_from_file_location('ll_communication_report',Path(__file__).with_name('communication_report.py'))
 communication_report=importlib.util.module_from_spec(comm_spec);comm_spec.loader.exec_module(communication_report)
+transfer_spec=importlib.util.spec_from_file_location('ll_transfer_report',Path(__file__).with_name('transfer_report.py'))
+transfer_report=importlib.util.module_from_spec(transfer_spec);transfer_spec.loader.exec_module(transfer_report)
 
 
 def stats(values):
@@ -41,7 +43,7 @@ def input_wait_report(samples):
             bucket=buckets.setdefault((meta['rank'],core,name),dict(values=[],missing=0))
             packet=st.get('TOKEN_INPUT');wait=st.get(name)
             send=st['SEND_TOKENS']['total_ticks'];kernel=st.get('KERNEL',{}).get('total_ticks',0)
-            if (decoded['schema'] not in (9,10,11,12,13) or decoded.get('boundary_mode','observe')!='observe' or not packet or not wait or
+            if (decoded['schema'] not in (9,10,11,12,13,14) or decoded.get('boundary_mode','observe')!='observe' or not packet or not wait or
                     wait['calls']!=packet['calls'] or send<=0 or kernel<=0 or
                     not 0<=wait['total_ticks']<=min(send,kernel)):
                 bucket['missing']+=1
@@ -103,7 +105,7 @@ def overlap_receive_report(samples):
         for metric in decoded['records']:
             cores.setdefault(metric['core'],{})[metric['stage']]=metric
         for core,metrics in sorted(cores.items()):
-            available=decoded['schema'] in (11,12,13)
+            available=decoded['schema'] in (11,12,13,14) and decoded.get('timer_profile','full')=='full'
             overlap='OVERLAP_PATH' in metrics
             intervals=[i for i in decoded.get('intervals',[]) if i['core']==core]
             def first(name,field):
@@ -129,7 +131,7 @@ def overlap_receive_report(samples):
     return rows
 
 
-def analyze(paths, frequency_hz=None):
+def analyze(paths, frequency_hz=None, return_samples=False):
     configurations={};ranks={};groups={};identity=None;stage_max={};measured={};worker_roles={}
     wait_samples=[]
     for path in paths:
@@ -139,7 +141,7 @@ def analyze(paths, frequency_hz=None):
         report=timer.parse_records(saved['raw'],saved['operation'],frequency_hz if frequency_hz is not None else saved['frequency_hz'])
         wait_samples.append((meta,report))
         common=(meta['world_size'],meta['config'],(report['active_aiv'],report['send_cores']),report['boundary_mode'],report['frequency_hz'],
-                meta.get('run_id'),meta.get('seed'),meta.get('case_id'),meta.get('sampling'),report['schema'],meta.get('comparison'))
+                meta.get('run_id'),meta.get('seed'),meta.get('case_id'),meta.get('sampling'),report['schema'],meta.get('comparison'),report.get('timer_profile','full'))
         if identity is not None and common!=identity:raise ValueError('Mixed configurations or timer modes')
         identity=common
         op=report['operation'];rank=meta['rank'];iteration=meta['iteration']
@@ -152,7 +154,7 @@ def analyze(paths, frequency_hz=None):
         for row in report['records']:
             initial_role=row.get('initial_role',row['role'])
             key=(op,rank,row['core'],initial_role,row['stage'])
-            if report['schema'] in (7,9,10,11,12,13):
+            if report['schema'] in (7,9,10,11,12,13,14):
                 worker_roles.setdefault((op,rank,row['core']),set()).add(row['role'])
             duration=row['total_us'] if unit=='us' else row['total_ticks']
             groups.setdefault(key,[]).append((duration,row['calls']))
@@ -180,7 +182,7 @@ def analyze(paths, frequency_hz=None):
                          time_measured=measured[(op,rank,core,role,stage)]))
         if not rows[-1]['time_measured']:
             for name in ('mean','minimum','maximum','p50','p90','p99'): rows[-1][name]=None
-    return dict(schema=identity[9],world_size=identity[0],boundary_mode=identity[3],frequency_hz=identity[4],comparison=identity[10],
+    result = dict(timer_profile=identity[11],schema=identity[9],world_size=identity[0],boundary_mode=identity[3],frequency_hz=identity[4],comparison=identity[10],
                 configurations=configurations,sampling=identity[8],per_rank_core_stage=rows,
                 communication=communication_report.report(wait_samples),
                 overlap_receive=overlap_receive_report(wait_samples),
@@ -189,6 +191,7 @@ def analyze(paths, frequency_hz=None):
                 per_rank_stage_max=[dict(operation=op,rank=rank,stage=stage,unit=unit,**stats(list(values.values())))
                                     for (op,rank,stage),values in sorted(stage_max.items())],
                 note='Per-call diagnostic stage totals; nested/parallel stages cannot be added. No cross-rank timestamp subtraction.')
+    return (result,wait_samples) if return_samples else result
 
 
 def discover(source, latest=False):
@@ -224,7 +227,7 @@ def expert_reports(paths, frequency_hz):
         if payload['experts'] != meta['config'].get('num_experts',payload['experts']):
             raise ValueError('Expert count differs from case configuration')
         header=saved['raw'][0][0]
-        if header[1] in (7,9,10,11,12,13): raise ValueError('Segment capture cannot contain legacy expert instrumentation')
+        if header[1] in (7,9,10,11,12,13,14): raise ValueError('Segment capture cannot contain legacy expert instrumentation')
         expected_send=header[5] >> 8 if header[1] in (5,6) else len(saved['raw'])//2
         if (header[1] in (5,6) and 'send_cores' not in payload) or payload.get('send_cores',expected_send)!=expected_send:
             raise ValueError('Expert/stage core split mismatch')
@@ -256,13 +259,13 @@ def expert_reports(paths, frequency_hz):
     return rows,summaries
 
 
-def process_directory(source, output, frequency_hz, trace_iteration, lane_layout='core', show_repeated=False, operation=None):
+def process_directory(source, output, frequency_hz, trace_iteration, lane_layout='core', show_repeated=False, operation=None, transfer_limit=60000):
     if operation not in (None,'dispatch','combine'): raise ValueError('Expected dispatch or combine')
     paths = sorted(source.rglob('sample_*.json'))
     if operation is not None:
         paths=[path for path in paths if json.loads(path.read_text())['operation']==operation]
         if not paths: raise ValueError(f'No {operation} diagnostic samples in {source}')
-    report = analyze(paths, frequency_hz)
+    report, decoded_samples = analyze(paths, frequency_hz, return_samples=True)
     selected = []
     for path in paths:
         item = json.loads(path.read_text())
@@ -311,11 +314,9 @@ def process_directory(source, output, frequency_hz, trace_iteration, lane_layout
         writer.writeheader(); writer.writerows(rows)
     (output/'trace.json').write_text(json.dumps(trace))
     segment_metrics, segment_intervals, segment_cores = [], [], []
-    for path in paths:
-        saved=json.loads(path.read_text());meta=saved['metadata']
-        decoded=timer.parse_records(saved['raw'],saved['operation'],frequency_hz)
-        if decoded['schema'] not in (7,9,10,11,timer.SCHEMA): continue
-        shared=dict(operation=saved['operation'],rank=meta['rank'],iteration=meta['iteration'])
+    for meta,decoded in decoded_samples:
+        if decoded['schema'] not in (7,9,10,11,12,13,timer.SCHEMA): continue
+        shared=dict(operation=decoded['operation'],rank=meta['rank'],iteration=meta['iteration'])
         segment_metrics.extend(dict(**shared,**row) for row in decoded['records'])
         segment_intervals.extend(dict(**shared,**row) for row in decoded['intervals'])
         segment_cores.extend(dict(**shared,**row) for row in decoded['cores'])
@@ -328,6 +329,8 @@ def process_directory(source, output, frequency_hz, trace_iteration, lane_layout
             with (output/filename).open('w',newline='') as stream:
                 writer=csv.DictWriter(stream,fieldnames=list(values[0]))
                 writer.writeheader();writer.writerows(values)
+    transfer_report.export_bundle(output,report,decoded_samples,limit=transfer_limit)
+    print(f'Sendable report: {output / "transfer" / "00_overview.md"}')
     print(f'{source} -> {output} (all samples summarized; trace iteration {trace_iteration})')
     print(f"Dispatch input wait: {wait_report['status']} (heuristic; see input_wait_bottleneck.md)")
     print(f"Relay timing mode: {relay_report['mode'] or 'no dispatch'} (see relay_timing.md; issue/completion/pre-drain are distinct)")
@@ -344,13 +347,15 @@ def main():
     parser.add_argument('--lane-layout',choices=('core','stage'),default='core',help='One track per AIV (default), or separate stage tracks')
     parser.add_argument('--show-repeated',action='store_true',help='Legacy envelope visibility only; segment samples are always shown')
     parser.add_argument('--output-dir',type=Path,help='Default: stage-analysis under selected source; existing reports rejected')
+    parser.add_argument('--transfer-limit',type=int,default=60000,help='Maximum characters AND UTF-8 bytes per transfer file, <=65535')
     args=parser.parse_args()
+    if not 4096<=args.transfer_limit<=65535: parser.error('transfer-limit must be 4096..65535')
     source=args.directory if args.directory.is_absolute() else ROOT/args.directory
     source, directories = discover(source, args.latest)
     output = (args.output_dir if args.output_dir.is_absolute() else ROOT/args.output_dir) if args.output_dir else source/('stage-analysis-'+args.operation if args.operation else 'stage-analysis')
     for directory in directories:
         destination = output if len(directories)==1 else output/directory.relative_to(source)
-        process_directory(directory, destination, args.frequency_hz, args.trace_iteration, args.lane_layout, args.show_repeated, args.operation)
+        process_directory(directory, destination, args.frequency_hz, args.trace_iteration, args.lane_layout, args.show_repeated, args.operation, args.transfer_limit)
 
 
 if __name__=='__main__':main()

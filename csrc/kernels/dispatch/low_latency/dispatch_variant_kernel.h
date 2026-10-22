@@ -59,8 +59,14 @@ extern "C" [[bisheng::core_ratio(0, 1)]] __global__ __aicore__ void LL_VARIANT_K
     int64_t reservedMagic, GM_ADDR inputScales, GM_ADDR stageTimer, uint32_t timerMode, GM_ADDR expertTimer)
 {
     util_set_ffts_config(reinterpret_cast<const __gm__ DispatchDedup::CommArgs*>(commArgs)->fftsVal);
+#ifdef DEEPEP_LL_STAGE_TIMER
+    const uint64_t timerSetupBegin = stageTimer ? AscendC::GetSystemCycle() : 0U;
+#endif
     LlStageTimer::DeviceTimer timer;
     timer.Init(stageTimer, 1U, timerMode);
+#ifdef DEEPEP_LL_STAGE_TIMER
+    timer.End(LlStageTimer::TIMER_SETUP, timerSetupBegin);
+#endif
     const uint64_t initBegin = timer.Begin(LlStageTimer::INIT);
     // Host owns validation; each core reads its configuration once before work.
     const auto* tiling = reinterpret_cast<const __gm__ DispatchDedup::EpServerDedupTilingData*>(tilingData);
@@ -84,7 +90,8 @@ extern "C" [[bisheng::core_ratio(0, 1)]] __global__ __aicore__ void LL_VARIANT_K
         DispatchDedup::DispatchMemoryServerDedupKernel<LlVariantInput,kWireFp8,kE4M3,kPrequantized> kernel;
         kernel.Init(commArgs,x,expertIds,expertScales,expandXOut,dynamicScalesOut,expertTokenNumsOut,sendCountsOut,
                     tokenTypeOut,destinationIndexOut,relayReadIndexOut,sourceMaskOut,expertScalesOut,bs,h,topK,
-                    moeExpertNum,expertTokenNumsType,&pipe,inputScales,enableDedup,&timer,nullptr);
+                    moeExpertNum,expertTokenNumsType,&pipe,inputScales,enableDedup,
+                    timer.Enabled() ? &timer : nullptr,nullptr);
         timer.End(LlStageTimer::INIT, initBegin);
         const uint64_t kernelBegin = timer.Begin(LlStageTimer::KERNEL);
         kernel.Process();

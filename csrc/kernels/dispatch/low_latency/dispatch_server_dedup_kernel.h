@@ -32,18 +32,24 @@ public:
         pipe_ = pipe;
         constexpr auto mode=Prequantized ? EpServerDedupInputMode::PrequantizedFp8Packs :
             (WireFp8 ? EpServerDedupInputMode::Quantize16 : EpServerDedupInputMode::Plain16);
+        { LL_SEG_SCOPE(INIT_LAYOUT);
         overlap_=LlMakeOverlapLayout(DispatchServerDedupDataLayout(bs,h,topK,experts,mode),
-                                    bs,topK,experts,args_->rankSize,args_->rank,core_,mode,enableDedup);
+                                    bs,topK,experts,args_->rankSize,args_->rank,core_,mode,enableDedup); }
         counts_.ConfigureOverlap(overlap_);
         sender_.ConfigureOverlap(overlap_);
         receiver_.ConfigureOverlap(overlap_);
+        LL_SEG_BEGIN(magicBegin, INIT_MAGIC);
         const uint32_t magic = RotateDispatchServerDedupMagic(args_, core_, pipe);
+        LL_SEG_END(magicBegin, INIT_MAGIC);
+        { LL_SEG_SCOPE(INIT_COUNTS);
         counts_.Init(commArgs, expertIds, expertTokenNumsOut, sendCountsOut, bs, topK, experts, expertTokenNumsType,
-                     magic, pipe, timer, enableDedup);
+                     magic, pipe, timer, enableDedup); }
+        { LL_SEG_SCOPE(INIT_SENDER);
         sender_.Init(args_, x, expertIds, expertScales, sourceMaskOut, expertScalesOut, bs, h, topK, experts, pipe,
-                     magic, inputScales, enableDedup);
+                     magic, inputScales, enableDedup); }
+        { LL_SEG_SCOPE(INIT_RECEIVER);
         receiver_.Init(args_, expandXOut, dynamicScalesOut, tokenTypeOut, destinationIndexOut, relayReadIndexOut,
-                       bs, h, topK, experts, pipe, magic, enableDedup, expertTimer);
+                       bs, h, topK, experts, pipe, magic, enableDedup, expertTimer); }
     }
 
     // Bisheng does not inherit __aicore__ on a plain lambda's operator().
@@ -82,7 +88,7 @@ public:
             if (core_<sendCores_) {
                 sender_.Process(counts_.ScratchPool(),counts_.ReservedBytes(),timer_);
                 sender_.Retire();
-                counts_.Finish();
+                { LL_SEG_SCOPE(FINAL_DRAIN); counts_.Finish(); }
                 return; // S owns all source routes and never waits for receive prefix.
             }
             counts_.RecvCnt();
@@ -90,7 +96,7 @@ public:
             counts_.CompleteCumsum();
             if (overlap_.enabled) receiver_.SetPrefix(counts_.Prefix());
             receiver_.Process(timer_);
-            counts_.Finish();
+            { LL_SEG_SCOPE(FINAL_DRAIN); counts_.Finish(); }
             return;
         }
         if (overlap_.Cooperative() && core_>=sendCores_) {

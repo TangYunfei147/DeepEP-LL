@@ -11,6 +11,7 @@ __aicore__ inline void ServerDedupCounts::PrepareParallelRecvCnt()
     recStatusNumPerCore_=0U;
     if(aivId_<kLlSendCoreNum)return;
     LL_SEG_SCOPE(INIT_COUNT_BUFFERS);
+    LL_SEG_SCOPE(PREFIX_CONTROL_INIT);
     const auto slice=LlParallelPrefixSlice(rscvStatusNum_,aivUsedCumSum_,aivId_-kLlSendCoreNum);
     startStatusIndex_=slice.begin;endStatusIndex_=slice.begin+slice.count;recStatusNumPerCore_=slice.count;
     RecvPool().InitBuffer(prefixPublishBuf_,32U);
@@ -21,10 +22,12 @@ __aicore__ inline void ServerDedupCounts::PrepareParallelRecvCnt()
     if(sharedBytes)RecvPool().InitBuffer(sumContinueBuf_,sharedBytes);
     auto publication=prefixPublishBuf_.Get<uint32_t>();
     GlobalTensor<uint32_t> own;
+    LL_SEG_BEGIN(prefixGenerationLoad, PREFIX_GENERATION_LOAD);
     ParallelControl(own,LlPrefixTotalControlByte(aivId_));
     DataCopy(publication,own,8U);
     SyncFunc<HardEvent::MTE2_S>();
     prefixGeneration_=LlNextPrefixGeneration(publication.GetValue(1U));
+    LL_SEG_END(prefixGenerationLoad, PREFIX_GENERATION_LOAD);
     // Empty slices also participate in the generation/total protocol.
     if(!slice.count)return;
     RecvPool().InitBuffer(scalarBuf_,96U);
@@ -37,10 +40,15 @@ __aicore__ inline bool ServerDedupCounts::TryParallelRecvCnt()
     LL_SEG_SCOPE(WAIT_RECV_COUNTS);
     LL_SEG_SCOPE(POLL_RECV_COUNTS);
     LL_SEG_COUNT(POLL_RECV_COUNTS_ITERATIONS,1U);
+    LL_SEG_BEGIN(countSnapshotIssue, COUNT_SNAPSHOT_ISSUE);
     auto status=waitStatusBuf_.Get<float>();
     DataCopy(status,windowInstatusFp32Tensor_[uint64_t(startStatusIndex_)*CNT_GM_STRIDE_BLOCKS*8U],
         DataCopyParams{uint16_t(recStatusNumPerCore_),1U,uint16_t(CNT_GM_STRIDE_BLOCKS-1U),0U});
+    LL_SEG_END(countSnapshotIssue, COUNT_SNAPSHOT_ISSUE);
+    LL_SEG_BEGIN(countSnapshotWait, COUNT_SNAPSHOT_WAIT);
     SyncFunc<HardEvent::MTE2_V>();
+    LL_SEG_END(countSnapshotWait, COUNT_SNAPSHOT_WAIT);
+    LL_SEG_BEGIN(countReadyCheck, COUNT_READY_CHECK);
     auto gather=gatherMaskOutBuf_.Get<float>();
     auto pattern=scalarBuf_.GetWithOffset<uint32_t>(8U,0U);
     auto sum=scalarBuf_.GetWithOffset<float>(8U,32U);
@@ -50,10 +58,16 @@ __aicore__ inline bool ServerDedupCounts::TryParallelRecvCnt()
     PipeBarrier<PIPE_V>();
     ReduceSum(sum,gather,sumContinueBuf_.Get<float>(),recStatusNumPerCore_);
     SyncFunc<HardEvent::V_S>();
-    if(sum.GetValue(0U)!=float(recStatusNumPerCore_))return false;
+    if(sum.GetValue(0U)!=float(recStatusNumPerCore_)){
+        LL_SEG_END(countReadyCheck, COUNT_READY_CHECK);
+        return false;
+    }
+    LL_SEG_END(countReadyCheck, COUNT_READY_CHECK);
+    LL_SEG_BEGIN(countValueExtract, COUNT_VALUE_EXTRACT);
     pattern.SetValue(0U,2U); SyncFunc<HardEvent::S_V>();
     GatherMask(gather,status,pattern,true,2U,{1U,uint16_t(recStatusNumPerCore_),1U,0U},n);
     SyncFunc<HardEvent::V_S>();
+    LL_SEG_END(countValueExtract, COUNT_VALUE_EXTRACT);
     WaitDispatchClearStatus(); // Only this producer's disjoint count slice.
     return true;
 }
@@ -64,17 +78,21 @@ __aicore__ inline void ServerDedupCounts::CalcParallelCumsum()
     LocalTensor<uint32_t> prefix;
     uint32_t total=0;
     if(recStatusNumPerCore_){
+        LL_SEG_BEGIN(prefixLocalScan, PREFIX_LOCAL_SCAN);
         prefix=gatherMaskOutBuf_.Get<uint32_t>();
         SyncFunc<HardEvent::S_V>();
         asc_vf_call<R0PrefixScan>(reinterpret_cast<__ubuf__ uint32_t*>(prefix.GetPhyAddr()),recStatusNumPerCore_);
         SyncFunc<HardEvent::V_S>(); total=prefix.GetValue(recStatusNumPerCore_-1U);
+        LL_SEG_END(prefixLocalScan, PREFIX_LOCAL_SCAN);
     }
+    LL_SEG_BEGIN(prefixTotalPublish, PREFIX_TOTAL_PUBLISH);
     auto publication=prefixPublishBuf_.Get<uint32_t>();
     publication.SetValue(0U,total);publication.SetValue(1U,prefixGeneration_);
     GlobalTensor<uint32_t> sums;
     ParallelControl(sums,LlPrefixTotalControlByte(kLlSendCoreNum));
     SyncFunc<HardEvent::S_MTE3>();
     DataCopy(sums[uint64_t(receiver)*128U],publication,8U);
+    LL_SEG_END(prefixTotalPublish, PREFIX_TOTAL_PUBLISH);
     // Published total stays in its fixed slot until the next kernel.
     // A slice only needs preceding totals. R0 and empty slices need none.
     uint32_t offset=0;
@@ -83,19 +101,29 @@ __aicore__ inline void ServerDedupCounts::CalcParallelCumsum()
         auto snapshot=sumContinueBuf_.Get<uint32_t>();
         const DataCopyParams rows{uint16_t(receiver),1U,15U,0U};
         { LL_SEG_SCOPE(WAIT_CUMSUM);
+          LL_SEG_SCOPE(PREFIX_TOTAL_WAIT);
           while(true){
             LL_SEG_COUNT(WAIT_CUMSUM_ITERATIONS,1U);
+            LL_SEG_BEGIN(prefixTotalProbe, PREFIX_TOTAL_PROBE);
             DataCopy(snapshot,sums,rows); SyncFunc<HardEvent::MTE2_S>();
+            LL_SEG_END(prefixTotalProbe, PREFIX_TOTAL_PROBE);
+            LL_SEG_BEGIN(prefixTotalDecode, PREFIX_TOTAL_DECODE);
             bool ready=true;
             for(uint32_t p=0;p<receiver;++p)
                 if(snapshot.GetValue(p*8U+1U)!=prefixGeneration_){ready=false;break;}
+            LL_SEG_END(prefixTotalDecode, PREFIX_TOTAL_DECODE);
             if(ready)break;
           }
         }
+        LL_SEG_BEGIN(prefixOffsetSum, PREFIX_OFFSET_SUM);
         for(uint32_t p=0;p<receiver;++p)offset+=snapshot.GetValue(p*8U);
+        LL_SEG_END(prefixOffsetSum, PREFIX_OFFSET_SUM);
     }
     if(recStatusNumPerCore_){
+        LL_SEG_BEGIN(prefixOffsetApply, PREFIX_OFFSET_APPLY);
         if(offset)for(uint32_t i=0;i<recStatusNumPerCore_;++i)prefix.SetValue(i,prefix.GetValue(i)+offset);
+        LL_SEG_END(prefixOffsetApply, PREFIX_OFFSET_APPLY);
+        LL_SEG_BEGIN(prefixDataPublish, PREFIX_DATA_PUBLISH);
         SyncFunc<HardEvent::S_MTE3>();
         GlobalTensor<uint32_t> workspace,output;
         workspace.SetGlobalBuffer(reinterpret_cast<__gm__ uint32_t*>(recvCntWorkspaceGM_));
@@ -104,6 +132,7 @@ __aicore__ inline void ServerDedupCounts::CalcParallelCumsum()
         const DataCopyExtParams part{1U,recStatusNumPerCore_*4U,0U,0U,0U};
         DataCopyPad(output[startStatusIndex_],prefix,part);
         DataCopyPad(workspace[startStatusIndex_],prefix,part);
+        LL_SEG_END(prefixDataPublish, PREFIX_DATA_PUBLISH);
     }
     // Finish prefix/count cleanup and old total source before reusing publication.
     { LL_SEG_SCOPE(PREFIX_PUBLISH_WAIT); SyncFunc<HardEvent::MTE3_S>(); }
@@ -118,6 +147,7 @@ __aicore__ inline void ServerDedupCounts::CompleteParallelCumsum()
 {
     if(!overlap_.Async()){LL_SEG_SCOPE(TRANSITION_DRAIN);PipeBarrier<PIPE_ALL>();}
     if(!overlap_.enabled)tpipe_->Reset();
+    LL_SEG_BEGIN(prefixControlInit, PREFIX_CONTROL_INIT);
     SetCtrlSpr<60,60>(0);
     tpipe_->InitBuffer(readyBuf_,aivUsedCumSum_*32U);
     tpipe_->InitBuffer(prefixBuf_,Ceil(rscvStatusNum_*4U,32U)*32U);
@@ -125,14 +155,20 @@ __aicore__ inline void ServerDedupCounts::CompleteParallelCumsum()
     GlobalTensor<uint32_t> flags;
     ParallelControl(flags,LlPrefixReadyControlByte(kLlSendCoreNum));
     auto ready=readyBuf_.Get<uint32_t>();
+    LL_SEG_END(prefixControlInit, PREFIX_CONTROL_INIT);
     { LL_SEG_SCOPE(WAIT_CUMSUM);
+      LL_SEG_SCOPE(PREFIX_READY_WAIT);
       while(true){
         LL_SEG_COUNT(WAIT_CUMSUM_ITERATIONS,1U);
+        LL_SEG_BEGIN(prefixReadyProbe, PREFIX_READY_PROBE);
         DataCopy(ready,flags,DataCopyParams{uint16_t(aivUsedCumSum_),1U,15U,0U});
         SyncFunc<HardEvent::MTE2_S>();
+        LL_SEG_END(prefixReadyProbe, PREFIX_READY_PROBE);
+        LL_SEG_BEGIN(prefixReadyDecode, PREFIX_READY_DECODE);
         bool complete=true;
         for(uint32_t p=0;p<aivUsedCumSum_;++p)
             if(ready.GetValue(p*8U)!=prefixGeneration_){complete=false;break;}
+        LL_SEG_END(prefixReadyDecode, PREFIX_READY_DECODE);
         if(complete)break;
       }
     }

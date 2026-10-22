@@ -8,6 +8,7 @@ Use --help for launch, configuration, and profiling options.
 """
 
 import argparse
+from contextlib import nullcontext
 import csv
 import math
 import re
@@ -51,10 +52,24 @@ def validate_overlap_stage_capability(capability):
 def validate_stage_timer_capability(capability):
     if not capability["stage_timer"]:
         raise RuntimeError("All ranks must install a DEEPEP_LL_STAGE_TIMER=ON wheel")
-    if capability['stage_timer_schema'] != 13:
-        raise RuntimeError('Detailed LL diagnostics require timer schema 13; '
+    if capability['stage_timer_schema'] != 14:
+        raise RuntimeError('Detailed LL diagnostics require timer schema 14; '
                            f'got {capability["stage_timer_schema"]}; '
                            'rebuild/install the matching wheel on every rank')
+
+
+def installed_source_fingerprint(package):
+    """Read the installed binary's build identity, not the checkout Git label."""
+    info = json.loads((Path(package.__file__).resolve().parent / '_build_info.json').read_text(encoding='utf-8'))
+    value = info.get('source_sha256')
+    if not isinstance(value, str) or not re.fullmatch(r'[0-9a-f]{64}', value):
+        raise RuntimeError('Installed wheel has no valid source_sha256 build identity; rebuild matching wheels')
+    return value
+
+
+def validate_matching_capabilities(capabilities):
+    if not capabilities or any(item != capabilities[0] for item in capabilities):
+        raise RuntimeError('LL AIV/group/protocol/timer/profile/source build differs across ranks')
 
 
 MATRIX_FIELDS = ("num_tokens", "dtype", "num_experts", "hidden", "num_topk", "do_cpu_sync", "fp8_scale_dtype")
@@ -110,6 +125,7 @@ def comparison_metadata(args, world, m):
                 timer_mode=args.ll_timer_mode if args.ll_stage_timer else None,
                 timer_iters=args.ll_timer_iters if args.ll_stage_timer else 0,
                 frequency_hz=args.ll_timer_frequency_hz, stage_capture=args.ll_stage_timer,
+                profile_capture=bool(getattr(args,'ll_profile_capture',False)),
                 expert_capture=args.ll_expert_timer, do_handle_copy=args.do_handle_copy,
                 correctness_repeats=args.correctness_repeats, repeat_combine=args.repeat_combine,
                 skip_check=args.skip_check, dispatch_only=args.dispatch_only,
@@ -212,6 +228,7 @@ def make_parser():
     parser.add_argument("--warmup", type=int, default=10)
     parser.add_argument("--num-iters", type=int, default=100)
     parser.add_argument("--ll-stage-timer", action="store_true", help="Separate device-stage diagnostic calls; requires timer-enabled wheel")
+    parser.add_argument("--ll-profile-capture", action="store_true", help="Profile the actual instrumented capture kernels in a separate trace, including initialization/SyncAll/Flush")
     parser.add_argument('--ll-expert-timer', action='store_true', help='Legacy option: explicitly rejected by reference segment capture')
     parser.add_argument("--ll-timer-iters", type=int, default=5)
     parser.add_argument("--ll-timer-mode", choices=("observe", "relay-complete", "drain"), default="observe", help="relay-complete is dispatch-only diagnostic; generic drain is rejected")
@@ -233,7 +250,7 @@ DISPATCH_PROFILER_ENTRIES = (
 )
 
 
-def kernel_durations(root, kernel, expected):
+def kernel_durations(root, kernel, expected, *, require_order=False):
     """Read only the requested device kernel from torch_npu text exports."""
     rows = []
     entries = DISPATCH_PROFILER_ENTRIES if kernel == "dispatch_server_dedup_kernel" else (kernel,)
@@ -261,6 +278,9 @@ def kernel_durations(root, kernel, expected):
                 rows.append((float(start) if start else None, value))
     if len(rows) != expected:
         raise ValueError(f"{kernel}: expected {expected} profiler records, found {len(rows)} in {root}")
+    if require_order and (any(start is None or not math.isfinite(start) for start, _ in rows)
+                          or len({start for start, _ in rows}) != len(rows)):
+        raise ValueError('Instrumented capture profiler requires unique finite start times for sample ordering')
     if all(start is not None for start, _ in rows):
         rows.sort(key=lambda row: row[0])
     return [value for _, value in rows]
@@ -476,6 +496,8 @@ def resolve_delay_counts(args):
 def validate_args(args, world):
     if args.ll_expert_timer:
         raise ValueError("Reference segment capture rejects legacy per-expert GM instrumentation")
+    if getattr(args,'ll_profile_capture',False) and not args.ll_stage_timer:
+        raise ValueError('--ll-profile-capture requires --ll-stage-timer')
     if args.ll_stage_timer and args.ll_timer_mode not in ("observe", "relay-complete"):
         raise ValueError("LL segment capture supports observe or relay-complete, not generic drain")
     if args.ll_timer_mode == "relay-complete" and not (
@@ -837,6 +859,54 @@ def new_stage_trace(buffer, operation, args, rank):
     return StageTrace(buffer, operation, args.ll_timer_mode, args.ll_timer_frequency_hz)
 
 
+def active_capture_profiler(directory):
+    """A separate profiler window containing only the prepared active captures."""
+    import torch_npu
+    directory = Path(directory)
+    directory.mkdir(parents=True, exist_ok=False)
+    return torch_npu.profiler.profile(
+        schedule=torch_npu.profiler.schedule(wait=0, warmup=0, active=1, repeat=1, skip_first=0),
+        on_trace_ready=torch_npu.profiler.tensorboard_trace_handler(str(directory)),
+        experimental_config=torch_npu.profiler._ExperimentalConfig(
+            aic_metrics=torch_npu.profiler.AiCMetrics.PipeUtilization,
+            profiler_level=torch_npu.profiler.ProfilerLevel.Level1,
+            export_type=torch_npu.profiler.ExportType.Text,
+            l2_cache=False, data_simplification=False),
+        profile_memory=True, with_stack=False, with_flops=False, with_modules=False,
+    )
+
+
+def read_active_capture_profile(directory, operation, expected, rank):
+    """Do not invent task durations when exported tasks are missing/ambiguous."""
+    kernel = f'{operation}_server_dedup_kernel'
+    result = dict(rank=rank, operation=operation, expected_samples=expected,
+                  measurement='instrumented_full_device_kernel_task_us', kernel=kernel)
+    try:
+        values = kernel_durations(directory, kernel, expected, require_order=True)
+    except (OSError, ValueError, KeyError, csv.Error) as error:
+        result.update(status='unavailable', reason=f'{type(error).__name__}: {error}')
+    else:
+        result.update(status='available', kernel_us=values, statistics=sample_stats(values))
+    return result
+
+
+def summarize_active_capture_profiles(rows, operation):
+    expected_ranks = list(range(len(rows)))
+    available = (bool(rows) and all(isinstance(row, dict) for row in rows)
+                 and [row.get('rank') for row in rows] == expected_ranks
+                 and all(row.get('status') == 'available' and row.get('operation') == operation
+                         and type(row.get('expected_samples')) is int and row['expected_samples'] > 0
+                         and len(row.get('kernel_us', [])) == row['expected_samples'] for row in rows)
+                 and len({row['expected_samples'] for row in rows}) == 1)
+    result = dict(status='available' if available else 'unavailable', ranks=rows,
+                  measurement='instrumented_full_device_kernel_task_us',
+                  interpretation='Separate active-capture profiler; includes INIT, KERNEL, final synchronization and timer export. Not the uninstrumented formal baseline.')
+    if available:
+        result['summary'] = summarize_kernel([row['kernel_us'] for row in rows],
+                                              f'{operation}_server_dedup_kernel', 0)
+    return result
+
+
 def diagnostic_calls(buffer, invoke, check, args, operation, rank, m, mode,
                      *, prepared=None, prelude_buffers=None):
     """Sample a stabilized tail, retaining outputs/timers until all launches finish."""
@@ -867,16 +937,27 @@ def diagnostic_calls(buffer, invoke, check, args, operation, rank, m, mode,
             output = invoke()
     else:
         delay, alignment = prelude_buffers
+    profile_capture = bool(getattr(args, 'll_profile_capture', False))
+    profile_directory = Path(args.run_directory) / f'case_{args.case_id:05d}' / mode / 'active_capture_profile' / operation / f'rank_{rank:03d}'
     pending = []
-    for iteration, trace in enumerate(prepared):
-        sampling_prelude(delay, alignment, args)
-        with capture(buffer, operation, args.ll_timer_mode, args.ll_timer_frequency_hz,
-                     prepared=trace, defer_complete=True):
-            output = invoke()
-            output[-1].current_stream_wait()
-        pending.append((iteration, trace, output))
-    # No CPU copy, correctness collective or filesystem operation in the sample loop.
-    completion_boundary(args)
+    with (active_capture_profiler(profile_directory) if profile_capture else nullcontext()) as profiler:
+        for iteration, trace in enumerate(prepared):
+            sampling_prelude(delay, alignment, args)
+            with capture(buffer, operation, args.ll_timer_mode, args.ll_timer_frequency_hz,
+                         prepared=trace, defer_complete=True):
+                output = invoke()
+                output[-1].current_stream_wait()
+            pending.append((iteration, trace, output))
+        # No CPU copy, correctness collective or filesystem operation in the sample loop.
+        completion_boundary(args)
+        if profiler is not None:
+            profiler.step()
+    active_local, active_report = None, None
+    if profile_capture:
+        active_local = read_active_capture_profile(profile_directory, operation, len(prepared), rank)
+        all_ranks = [None] * world
+        dist.all_gather_object(all_ranks, active_local)
+        active_report = summarize_active_capture_profiles(all_ranks, operation)
     for iteration, trace, output in pending:
         agree_check(trace.complete, args, rank)
         agree_check(lambda: check(output), args, rank)
@@ -885,12 +966,30 @@ def diagnostic_calls(buffer, invoke, check, args, operation, rank, m, mode,
                         run_id=Path(args.run_directory).name, seed=args.seed, case_id=args.case_id,
                         correctness="passed", config={**case_config(args, m),
                         "logical_group_size": logical_group},
-                        protocol="stabilized diagnostic tail; Exp+scalar all_reduce; deferred validation/export; excluded from profiler",
+                        protocol="stabilized diagnostic tail; Exp+scalar all_reduce; deferred validation/export; excluded from formal baseline profiler",
                         sampling=dict(after_perf=after_perf, warmup=args.warmup, settle_iters=args.num_iters,
                                       diagnostic_iters=args.ll_timer_iters, delay_rows=args.delay_rows,
                                       delay_cols=args.delay_cols, group_backend=args.group_backend,
                                       expert_timer=bool(getattr(args,'ll_expert_timer',False))))
+        if active_local is not None:
+            metadata['active_capture_profile'] = dict(
+                status=active_local['status'], all_ranks_status=active_report['status'],
+                measurement=active_local['measurement'],
+                kernel_us=active_local['kernel_us'][iteration] if active_local['status']=='available' else None,
+                reason=active_local.get('reason'))
         agree_check(lambda: trace.save(directory / f"sample_{iteration:04d}.json", metadata), args, rank)
+    if active_report is not None:
+        active_report.update(operation=operation, route=mode, config=case_config(args,m),
+                             comparison=comparison_metadata(args,world,m), correctness='passed',
+                             diagnostic_iters=len(prepared))
+        def save_active_report():
+            if rank == 0:
+                path = Path(args.run_directory) / f'case_{args.case_id:05d}' / mode / f'active_capture_{operation}.json'
+                path.parent.mkdir(parents=True, exist_ok=True)
+                with path.open('x', encoding='utf-8') as stream:
+                    json.dump(active_report, stream, indent=2)
+                    stream.write('\n')
+        agree_check(save_active_report, args, rank)
 
 
 def sample_operation(buffer, invoke, check, args, operation, rank, m, mode, progress):
@@ -1132,17 +1231,20 @@ def worker(local_rank, args):
                       "rdma_compiled": bool(getattr(native, "low_latency_rdma_enabled", False)),
                       "logical_group": compiled_group(native,world),
                       "implementation": implementation,
+                      "source_sha256": installed_source_fingerprint(deep_ep),
                       "local_q_table": bool(getattr(native,"low_latency_q_table_enabled",False)),
                       "local_q_seed_vf": bool(getattr(native,"low_latency_q_seed_vf",False)),
                       "overlap_stage": getattr(native,"low_latency_overlap_stage",0),
                       "core_protocol": native.low_latency_core_protocol,
                       "stage_timer": bool(getattr(native, "low_latency_stage_timer_enabled", False)),
+                      "profile_capture_requested": bool(getattr(args, "ll_profile_capture", False)),
                       "stage_timer_schema": native.low_latency_stage_timer_layout()["schema"],
+                      "timer_profile": getattr(native,"low_latency_stage_timer_profile","full"),
+                      "timer_profile_id": getattr(native,"low_latency_stage_timer_profile_id",0),
                       "expert_timer_requested": bool(args.ll_expert_timer)}
         capabilities = [None] * world
         dist.all_gather_object(capabilities, capability)
-        if any(item != capabilities[0] for item in capabilities):
-            raise RuntimeError("LL AIV/group/protocol/timer build differs across ranks")
+        validate_matching_capabilities(capabilities)
         if not getattr(native,"low_latency_q_table_enabled",False):
             raise RuntimeError("Install the local-q-table candidate wheel from this checkout")
         if not getattr(native,"low_latency_q_seed_vf",False):

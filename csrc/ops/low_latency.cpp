@@ -10,6 +10,7 @@
 #include "runtime/session.hpp"
 #include "runtime/ll_core_config.hpp"
 #include "../kernels/dispatch/low_latency/common/ll_stage_timer_layout.h"
+#include "../kernels/dispatch/low_latency/common/ll_stage_timer_profile.h"
 #include "../kernels/dispatch/low_latency/common/ll_overlap_layout.h"
 #include "../kernels/dispatch/low_latency/common/ll_expert_timer_layout.h"
 #include "host/mem/shmem_host_heap.h"
@@ -134,6 +135,8 @@ void bind_low_latency(py::module_& module)
     module.attr("low_latency_rdma_enabled") = false;
     module.attr("low_latency_expert_timer_enabled") = false;
     module.attr("low_latency_stage_timer_enabled") = bool(deepep_ll_stage_timer_enabled());
+    module.attr("low_latency_stage_timer_profile") = LlStageTimer::kProfileName;
+    module.attr("low_latency_stage_timer_profile_id") = LlStageTimer::kProfileId;
     module.def("low_latency_expert_timer_layout", []() {
         py::dict result;
         result["schema"]=LlExpertTimer::kSchema;
@@ -147,6 +150,8 @@ void bind_low_latency(py::module_& module)
     module.def("low_latency_stage_timer_layout", []() {
         py::dict result;
         result["schema"] = LlStageTimer::kSchema;
+        result["timer_profile"] = LlStageTimer::kProfileName;
+        result["timer_profile_id"] = LlStageTimer::kProfileId;
         result["slots"] = LlStageTimer::kSlots;
         result["fields"] = LlStageTimer::kFields;
         std::vector<std::string> names;

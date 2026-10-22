@@ -87,6 +87,7 @@ public:
         timer_ = timer;
         LL_SEG_BEGIN(setupBegin, SEND_SETUP);
         LL_SEG_BEGIN(segBegin1, PREPARE_INPUT);
+        LL_SEG_BEGIN(inputInit, SENDER_INPUT_INIT);
         scratch_ = &scratch;
         TQue<QuePosition::VECIN, 1> input;
         TBufPool<TPosition::VECIN, 1> cleanPool;
@@ -106,6 +107,8 @@ public:
             Sync<HardEvent::V_MTE2>();
         }
 
+        LL_SEG_END(inputInit, SENDER_INPUT_INIT);
+        LL_SEG_BEGIN(scratchAlloc, SENDER_SCRATCH_ALLOC);
         // 2. 分配路由、q 前缀统计、权重、源掩码以及两类发送任务的临时空间。
         // 路由表加载本 rank 全部 bs×k 项，因为 q 必须按原始路由顺序计算，
         // 不能仅统计当前核的 token 分片；权重则只加载当前分片。
@@ -152,6 +155,8 @@ public:
         directTasks_ = directBuf_.Get<uint32_t>();
         serverState_ = serverBuf_.Get<uint32_t>();
         if (maxGroups != 0U) firstHopMasks_ = firstHopBuf_.Get<uint32_t>();
+        LL_SEG_END(scratchAlloc, SENDER_SCRATCH_ALLOC);
+        LL_SEG_BEGIN(metadataLoad, SENDER_METADATA_LOAD);
         DataCopyPad(routeIds_, ids_, {1U, bs_ * k_ * 4U, 0U, 0U, 0U}, {false, 0U, 0U, 0});
         if (count_ != 0U)
             DataCopyPad(routeWeights_, weights_[uint64_t(start_) * k_], {1U, count_ * k_ * 4U, 0U, 0U, 0U},
@@ -165,6 +170,7 @@ public:
         } else {
             Sync<HardEvent::MTE2_S>();
         }
+        LL_SEG_END(metadataLoad, SENDER_METADATA_LOAD);
         qShard_=LlLocalQShard(bs_,k_,sendCores_,GetBlockIdx(),enableDedup_);
         // qWork is persistent; quantization only uses qDst, never this table.
         qTable_=qWorkBuf_.Get<uint32_t>();
@@ -194,6 +200,7 @@ public:
         }
         // 每个 512B 块尾部的 32B 标记预置为 1；发送时 payload 和标记一起搬运。
         // 初始 MTE3_V 事件让 lane 首次可写，后续复用由上一包的发送完成事件控制。
+        LL_SEG_BEGIN(flagInit, SENDER_FLAG_INIT);
         uint64_t flagMask[2] = {0xffU, 0U};
         for (uint32_t lane = 0; lane < lanes_; ++lane) {
             // Initialize only the 32B flags. Padding and unused entries carry no semantics.
@@ -203,6 +210,7 @@ public:
         }
         PipeBarrier<PIPE_V>();
 
+        LL_SEG_END(flagInit, SENDER_FLAG_INIT);
         LL_SEG_END(segBegin1, PREPARE_INPUT);
         LL_SEG_END(setupBegin, SEND_SETUP);
         { LL_SEG_SCOPE(SEND_TOKENS);
@@ -278,6 +286,7 @@ public:
         const uint32_t available=(kEpServerDedupCountUbBytes-usedBytes_)/uint32_t(data_.tokenStride);
         lanes_=overlap_.enabled ? overlap_.sendLanes : (available<8U ? available : 8U);
         Allocate(outBuf_,lanes_*uint32_t(data_.tokenStride));
+        LL_SEG_BEGIN(flagInit, SENDER_FLAG_INIT);
         uint64_t flagMask[2]={0xffU,0U};
         for (uint32_t lane=0;lane<lanes_;++lane) {
             Duplicate<float>(outBuf_.Get<float>()[lane*data_.tokenStride/4U+120U],1.0f,flagMask,
@@ -285,6 +294,7 @@ public:
             SetFlag<HardEvent::MTE3_V>(lane);
         }
         PipeBarrier<PIPE_V>();
+        LL_SEG_END(flagInit, SENDER_FLAG_INIT);
         LL_SEG_END(localPrepareBegin, PREPARE_INPUT);
         LL_SEG_END(localSetupBegin, SEND_SETUP);
         // Only the cooperative overlap path yields. Serial fallback keeps one

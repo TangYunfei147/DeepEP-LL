@@ -87,3 +87,9 @@ schema13打点与communication_report补齐发送初始化、q准备、首发、
 仅M<=32/B<=32，其他路径保持R0。Host/device预算同步于count_layout和ll_overlap_layout。
 固定magic槽+64/+96记录本地总数/代次与完成代次，+32继续维护旧R0 epoch。
 算法、额外开销和验证边界见../ll_stage_timer/PARALLEL_PREFIX.md。
+
+2026-10-22 schema14分阶段诊断：`common/ll_stage_timer_profile.h`控制编译期探针组和紧凑累加槽。
+新入口`tests/ll_stage_timer/diagnose.py`先采OFF正式性能，再分别采overview/prepare/prefix/send/recv；
+ST `--ll-profile-capture`将实际capture调用放进独立profiler窗口，包含INIT/最终同步/Flush。
+`analyze.py`调用`transfer_report.py`生成≤60000字符/字节的可恢复分块。
+完整用法与扰动判断见`../ll_stage_timer/PHASED_DIAGNOSIS.md`；通信协议、收发顺序及业务UB不改。

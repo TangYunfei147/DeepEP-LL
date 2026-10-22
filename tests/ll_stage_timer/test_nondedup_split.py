@@ -24,7 +24,7 @@ def test_sender_is_main_loop_and_dedup_unchanged():
 def test_mode_gates_and_receive_budget():
     kernel=(BASE/'dispatch_server_dedup_kernel.h').read_text(encoding='utf-8')
     branch=kernel.split('if (!enableDedup_) {',1)[1].split('if (overlap_.Cooperative()',1)[0]
-    send=branch.split('}')[0]
+    send=branch.split('return;',1)[0]+'return;'
     assert 'counts_.CompleteCumsum' not in send and 'receiver_.' not in send
     assert 'sender_.Retire()' in send and 'return;' in send
     assert 'ProcessGroupLocal' not in branch

@@ -21,6 +21,7 @@ from setuptools.command.egg_info import egg_info
 from setuptools.command.install_lib import install_lib
 
 ROOT = Path(__file__).resolve().parent
+LL_TIMER_PROFILES = ("full", "overview", "prepare", "prefix", "send", "recv")
 
 
 class BuildEggInfo(egg_info):
@@ -39,6 +40,15 @@ def enabled(name, environment=None):
     if value not in {"ON", "OFF", "1", "0", "TRUE", "FALSE"}:
         raise ValueError(f"{name} must be ON or OFF, got {value!r}")
     return value in {"ON", "1", "TRUE"}
+
+
+def ll_timer_profile(environment=None):
+    """Validate the requested diagnostic profile; OFF shares one native cache."""
+    env = os.environ if environment is None else environment
+    profile = env.get("DEEPEP_LL_TIMER_PROFILE", "full")
+    if profile not in LL_TIMER_PROFILES:
+        raise ValueError("DEEPEP_LL_TIMER_PROFILE must be one of " + ", ".join(LL_TIMER_PROFILES))
+    return profile if enabled("DEEPEP_LL_STAGE_TIMER", env) else "full"
 
 
 class ConfiguredBuild(build):
@@ -152,6 +162,8 @@ def validate_shmem_sdk(root, expected):
 def build_cache_key(configuration):
     """Keep object files across source edits; isolate incompatible toolchains."""
     identity = {key: value for key, value in configuration.items() if key not in {"source_sha256", "source_version"}}
+    if "ll_timer_profile" in identity and not identity.get("ll_stage_timer", False):
+        identity["ll_timer_profile"] = "full"
     identity["source_root"] = str(ROOT.resolve())
     return hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()[:16]
 
@@ -207,6 +219,7 @@ def build_configuration(environment=None):
         raise ValueError("DEEPEP_LL_SEND_CORES and DEEPEP_LL_RECV_CORES must be positive and sum to 56")
     result["ll_send_cores"], result["ll_recv_cores"] = send, recv
     result["ll_stage_timer"] = enabled("DEEPEP_LL_STAGE_TIMER", env)
+    result["ll_timer_profile"] = ll_timer_profile(env)
     result["build_type"] = env.get("DEEPEP_BUILD_TYPE", "RelWithDebInfo" if lineinfo else "Release")
     if result["build_type"] not in {"Release", "RelWithDebInfo", "Debug"}:
         raise RuntimeError("DEEPEP_BUILD_TYPE must be Release, RelWithDebInfo or Debug")
@@ -367,6 +380,9 @@ class VariantBuild(ConfiguredBuild):
         variant = "megamoe-timer" if beta and timer else ("megamoe" if beta else "core")
         if enabled("DEEPEP_LL_STAGE_TIMER"):
             variant += "-ll-timer"
+            profile = ll_timer_profile()
+            if profile != "full":
+                variant += "-" + profile
         self.build_base = str(Path(self.build_base) / variant)
         super().finalize_options()
 
@@ -402,6 +418,7 @@ class CMakeBuild(build_ext):
             f"-DCMAKE_BUILD_TYPE={configuration['build_type']}",
             f"-DDEEPEP_DEVICE_JOBS={jobs}",
             f"-DDEEPEP_LL_STAGE_TIMER={'ON' if configuration.get('ll_stage_timer', False) else 'OFF'}",
+            f"-DDEEPEP_LL_TIMER_PROFILE={configuration.get('ll_timer_profile', 'full')}",
             f"-DDEEPEP_LL_SEND_CORES={configuration.get('ll_send_cores', 28)}",
             f"-DDEEPEP_LL_RECV_CORES={configuration.get('ll_recv_cores', 28)}",
             f"-DPython_EXECUTABLE={sys.executable}",

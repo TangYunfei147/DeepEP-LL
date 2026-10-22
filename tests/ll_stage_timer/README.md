@@ -1,3 +1,7 @@
+当前打点为 **schema14**，支持编译期分组、完整kernel插桩扰动对照及每文件≤60000字符/UTF-8字节的传输报告。
+多B一键入口见 [PHASED_DIAGNOSIS.md](PHASED_DIAGNOSIS.md)。所有rank需匹配新wheel；schema13原始数据仍可离线解析。
+下方历史schema/分支说明不作为当前构建身份。
+
 当前并行前缀候选为`kernel/ll-g4-small-b-prefix`，身份`g4-small-b-parallel-prefix`。
 仅M≤32且B≤32分片计算前缀；去重继续R0。A/B与额外开销见[PARALLEL_PREFIX.md](PARALLEL_PREFIX.md)。
 
@@ -5,7 +9,7 @@
 构建、A/B及验证边界以[SMALL_B_FAST_PATH.md](SMALL_B_FAST_PATH.md)为准。
 下方旧分支身份和历史示例不要直接用于本候选。
 
-当前打点为schema13，请以[COMMUNICATION_DIAGNOSTICS.md](COMMUNICATION_DIAGNOSTICS.md)为采集/解析入口。
+历史schema13通信探针见[COMMUNICATION_DIAGNOSTICS.md](COMMUNICATION_DIAGNOSTICS.md)为采集/解析入口。
 新增首包准备、通信邻域和新报告，须全rank安装匹配ON wheel并重采；下方旧schema资料仅供历史追溯。
 
 当前独立候选为kernel/ll-g4-local-q-table；以[LOCAL_Q_TABLE.md](LOCAL_Q_TABLE.md)作为A/B指南。
