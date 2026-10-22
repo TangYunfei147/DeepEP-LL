@@ -74,3 +74,6 @@ OFF wheels, dispatch+combine and summary.csv mean_kernel_us (pooled per-rank las
 50of100). Do not substitute max-rank mean or replay durations. Keep all artifacts,
 loaded native/device/SDK identity checks, per-node readiness and idle checks.
 See tests/ll_control_opt/README.md and docs/BUILD_DISPATCH_SPLIT.md for validation.
+The core-only suite disables MegaMoE/fused components: do not require CATLASS or
+its test/DSL dependencies. Reused SHMEM SDKs still need full standard validation;
+only cold SDK builds need the JSON source asset. Preserve failed build caches.

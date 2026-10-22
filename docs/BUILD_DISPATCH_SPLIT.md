@@ -307,3 +307,21 @@ Host selector tests and loopback readiness success/mismatch/busy propagation.
 Local Windows lacked a native C++ compiler and blocked loopback; those checks
 were completed on27. Device correctness and performance are left to the user's
 EP16 target; the suite runs those gates before accepting summary.csv means.
+
+### Core dependency preparation fix
+
+The control-suite builder formerly copied every top-level Git dependency and
+unconditionally required the JSON header used to compile SHMEM. That incorrectly
+blocked core-only wheels when optional CATLASS was uninitialized, even with a
+reusable SDK. Commit9ae2e5c selects only pinned SHMEM, reuses project-local SDK
+caches without modifying their kernel worktrees, and requires json3.11.3 only
+for a cold SDK build. The standard complete SDK validation still runs before pip.
+Offline bundles may contain unused CATLASS records; they are not required.
+
+Recovery was tested on27:98Linux CPU tests passed, including real Git/cache and
+failure-reentry fixtures. A real baseline wheel was built with no CATLASS in its
+isolated source and no JSON source asset, using the validated SDK. The original
+suite --build-only --resume then reused that baseline and built all four candidate
+wheels, publishing five verified manifests under .tmp/ll-control-opt/wheels.
+No NPU devices were used. Existing failed attempts and caches were retained;
+no cleanup, SDK rebuild, external download or kernel change was needed.
