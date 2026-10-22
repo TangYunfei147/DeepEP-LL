@@ -15,6 +15,7 @@
 #include "../common/ep_memory_server_dedup_protocol.h"
 #include "../common/ll_send_order.h"
 #include "../common/ll_input_prefetch.h"
+#include "../common/ll_local_q.h"
 #include "../../../common/ep_packet_receive_layout.h"
 
 namespace DispatchDedup {
@@ -107,7 +108,9 @@ public:
         const uint32_t scratchBytes = NeedQuantize && quantWorkBytes > qBytes ? quantWorkBytes : qBytes;
         Allocate(idsBuf_, routeBytes);
         Allocate(qDstBuf_, scratchBytes);
-        Allocate(qSubBuf_, scratchBytes);
+        const uint32_t histogramBytes=uint32_t(DispatchDedupAlign(
+            uint64_t(localExperts_)*args_->rankSize*4U,32U));
+        Allocate(qSubBuf_, scratchBytes>histogramBytes?scratchBytes:histogramBytes);
         Allocate(qWorkBuf_, qBytes);
         if constexpr (NeedQuantize) Allocate(quantBuf_, uint32_t(data_.packedPayloadBytes));
         Allocate(weightInBuf_, uint32_t(DispatchDedupAlign(uint64_t(count_) * k_ * 4U, 32U)));
@@ -152,6 +155,11 @@ public:
         } else {
             Sync<HardEvent::MTE2_S>();
         }
+        qShard_=LlLocalQShard(bs_,k_,sendCores_,GetBlockIdx(),enableDedup_);
+        // qWork is persistent; quantization only uses qDst, never this table.
+        qTable_=qWorkBuf_.Get<uint32_t>();
+        LlBuildLocalQ(routeIds_,qSubBuf_.Get<uint32_t>(),qTable_,
+                      localExperts_*uint32_t(args_->rankSize),k_,qShard_);
         // 每个 512B 块尾部的 32B 标记预置为 1；发送时 payload 和标记一起搬运。
         // 初始 MTE3_V 事件让 lane 首次可写，后续复用由上一包的发送完成事件控制。
         uint64_t flagMask[2] = {0xffU, 0U};
@@ -423,23 +431,8 @@ private:
     __aicore__ inline uint32_t CalTokenSendExpertCnt(uint32_t expert, uint32_t index)
     {
         LL_SEG_SCOPE(CAL_TOKEN);
-        if (index < k_) return 0U;
-        // Memory's prefix reduction over the complete original route sequence.
-        auto dst = qDstBuf_.Get<int32_t>();
-        auto sub = qSubBuf_.Get<int32_t>();
-        Duplicate<int32_t>(dst, int32_t(expert), index);
-        PipeBarrier<PIPE_V>();
-        Sub(sub, routeIds_, dst, index);
-        PipeBarrier<PIPE_V>();
-        auto input = sub.template ReinterpretCast<float>();
-        auto output = dst.template ReinterpretCast<float>();
-        Abs(output, input, index);
-        PipeBarrier<PIPE_V>();
-        Mins(sub, dst, 1, index);
-        PipeBarrier<PIPE_V>();
-        ReduceSum<float>(output, input, qWorkBuf_.Get<float>(), index);
-        Sync<HardEvent::V_S>();
-        return index - uint32_t(dst.GetValue(0));
+        (void)expert; // The original route index uniquely identifies its q.
+        return qTable_.GetValue(index-qShard_.begin);
     }
     template <class Fp8Type>
     // 摘要：以每 32 元素为一组生成 MXFP8 scale 和量化数据，复用 q 计算的临时 UB。
@@ -614,6 +607,8 @@ private:
     TPipe* pipe_ = nullptr;
     LlStageTimer::DeviceTimer* timer_ = nullptr;
     bool enableDedup_ = false;
+    LlQShard qShard_{};
+    LocalTensor<uint32_t> qTable_;
     TBufPool<TPosition::VECCALC, 16>* scratch_ = nullptr;
     uint32_t sendCores_ = 0;
     uint32_t bs_ = 0, h_ = 0, k_ = 0, localExperts_ = 0, start_ = 0, count_ = 0;

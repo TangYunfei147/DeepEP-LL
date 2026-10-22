@@ -1,3 +1,5 @@
+当前独立候选为kernel/ll-g4-local-q-table；以[LOCAL_Q_TABLE.md](LOCAL_Q_TABLE.md)作为A/B指南。
+
 当前分支已回退group-compact两轮实验，基于S3叠加R0前缀、R核计数和接收表向量化。
 身份g4-r0-prefix、协议17000+S、Stage3/schema12；以[R0_PREFIX.md](R0_PREFIX.md)为当前构建/测试指南。
 下方旧分支身份和安装示例仅为历史资料。

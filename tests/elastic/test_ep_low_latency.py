@@ -1131,6 +1131,7 @@ def worker(local_rank, args):
                       "rdma_compiled": bool(getattr(native, "low_latency_rdma_enabled", False)),
                       "logical_group": compiled_group(native,world),
                       "implementation": implementation,
+                      "local_q_table": bool(getattr(native,"low_latency_q_table_enabled",False)),
                       "overlap_stage": getattr(native,"low_latency_overlap_stage",0),
                       "core_protocol": native.low_latency_core_protocol,
                       "stage_timer": bool(getattr(native, "low_latency_stage_timer_enabled", False)),
@@ -1140,6 +1141,8 @@ def worker(local_rank, args):
         dist.all_gather_object(capabilities, capability)
         if any(item != capabilities[0] for item in capabilities):
             raise RuntimeError("LL AIV/group/protocol/timer build differs across ranks")
+        if not getattr(native,"low_latency_q_table_enabled",False):
+            raise RuntimeError("Install the local-q-table candidate wheel from this checkout")
         validate_core_split_capability(capability)
         if capability['implementation'] not in ('ndr-hns1825','configurable-groups','g4-shared-recv','g4-overlap-recv','g4-r0-prefix'):
             raise RuntimeError('Rebuild the wheel with the shared experiment implementation identity')

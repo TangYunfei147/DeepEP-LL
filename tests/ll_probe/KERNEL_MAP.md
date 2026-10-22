@@ -71,3 +71,6 @@ receive_tasks.h按记录段生成tokenPos、一次生成pendingIdx；Host和over
 详见../ll_stage_timer/R0_PREFIX.md。发送算法恢复S3，compact共享任务表已删除。
 
 非去重模式在主Process前置独立分支，Recv编号core-S且接收核数R；去重保持56核共享接收。
+
+本核q表：common/ll_local_q.h负责分片与播种；sender在PREPARE_INPUT构建qWork表。
+CalTokenSendExpertCnt只查表；Host/overlap核算qSub直方图最小容量。收发顺序和wire不变。

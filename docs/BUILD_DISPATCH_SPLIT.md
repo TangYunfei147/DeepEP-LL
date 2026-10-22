@@ -166,3 +166,18 @@ Validation:
 - Logs .tmp/nondedup-full-001.log and .tmp/nondedup-native-001.log.
   Existing CPU inspect_dispatch_routes.py retains historical S3 allocation;
   do not use it to assert current non-dedup core ownership. See R0_PREFIX.md.
+
+## Local q table candidate (2026-10-22)
+
+Base f7c7848; branch kernel/ll-g4-local-q-table. Seven dispatch TUs, communication
+protocol18000+S and Stage3/schema12 remain unchanged. Only per-core q preprocessing
+and lookup, corresponding qSub histogram capacity, and candidate capability guard added.
+
+Required CPU/source checks plus q helper:45 passed,2 unavailable C++ selector skips.
+Native q and UB matrix final batch:3 passed (2.18s); overlaps the initial q checks.
+Actual production q helper tests both ownership modes and all shard boundaries.
+Seven send/order/pack/local methods match base exactly; scheduler/counts/receiver/
+core protocol match. No device code timing or performance claim.
+Logs in .tmp/q-check-001.log; compiled fixtures in .tmp/q-native-final.
+No CANN ON/OFF build or full ON wheel link performed; retain the documented target
+cold-build procedure and complete dispatch/combine validation before adoption.
