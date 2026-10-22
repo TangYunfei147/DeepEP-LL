@@ -3,13 +3,16 @@
 #include <cstring>
 #include <stdexcept>
 #include <cstdio>
+#include <mutex>
+#include <chrono>
 #define __aicore__
 #define __gm__
 #define __ubuf__
 constexpr int PIPE_ALL=0;
 namespace AscendC {
-enum class HardEvent { S_MTE3, MTE3_S, MTE2_S, V_S };
-inline bool events[4][8]{};
+enum class HardEvent { S_MTE3, MTE3_S, MTE2_S, V_S, S_MTE2 };
+inline thread_local bool events[5][8]{};
+inline std::mutex memoryMutex;
 template<HardEvent E> void SetFlag(uint32_t id) {
     if(id>=8 || events[int(E)][id]) throw std::runtime_error("event reused while live");
     events[int(E)][id]=true;
@@ -20,9 +23,15 @@ template<HardEvent E> void WaitFlag(uint32_t id) {
 }
 using std::printf;
 inline uint64_t cycles=0;
-inline uint64_t GetSystemCycle() { return cycles; }
+inline uint64_t GetSystemCycle() {
+#ifdef DEEPEP_TEST_ROUTE_THREADS
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+#else
+    return cycles;
+#endif
+}
 enum class CacheMode { CACHE_MODE_DISABLE };
-inline uint32_t core=0, cores=16;
+inline thread_local uint32_t core=0, cores=16;
 inline uint32_t GetBlockIdx() { return core; }
 inline uint32_t GetBlockNum() { return cores; }
 inline void Trap() { throw std::runtime_error("device trap"); }
@@ -39,7 +48,14 @@ template<class T> struct GlobalTensor {
     T& operator()(uint32_t index) { return p[index]; }
     void SetGlobalBuffer(T* q) { p=q; }
     void SetL2CacheHint(CacheMode) {}
+    T GetValue(uint32_t i) { std::lock_guard<std::mutex> guard(memoryMutex); return p[i]; }
+    void SetValue(uint32_t i, T value) { std::lock_guard<std::mutex> guard(memoryMutex); p[i]=value; }
 };
+enum class CacheLine { SINGLE_CACHE_LINE };
+enum class DcciDst { CACHELINE_OUT };
+enum class MemDsbT { DDR };
+template<class T,CacheLine,DcciDst> void DataCacheCleanAndInvalid(GlobalTensor<T>) {}
+template<MemDsbT> void DataSyncBarrier() {}
 struct DataCopyExtParams { uint16_t count; uint32_t bytes, srcStride, dstStride, reserved; };
 struct DataCopyParams { uint16_t blockCount, blockLen, srcStride, dstStride; };
 inline uint32_t stridedCopies = 0;
@@ -51,8 +67,8 @@ template<class T> void DataCopy(LocalTensor<T> dst, GlobalTensor<T> src, DataCop
                     c.blockLen*32U);
 }
 template<class T> struct DataCopyPadExtParams { bool pad; uint8_t left, right; T value; };
-template<class T> void DataCopy(GlobalTensor<T> d, LocalTensor<T> s, uint32_t n) { std::memcpy(d.p,s.p,n*sizeof(T)); }
-template<class T> void DataCopy(LocalTensor<T> d, GlobalTensor<T> s, uint32_t n) { std::memcpy(d.p,s.p,n*sizeof(T)); }
+template<class T> void DataCopy(GlobalTensor<T> d, LocalTensor<T> s, uint32_t n) { std::lock_guard<std::mutex> guard(memoryMutex); std::memcpy(d.p,s.p,n*sizeof(T)); }
+template<class T> void DataCopy(LocalTensor<T> d, GlobalTensor<T> s, uint32_t n) { std::lock_guard<std::mutex> guard(memoryMutex); std::memcpy(d.p,s.p,n*sizeof(T)); }
 template<class T> void DataCopyPad(GlobalTensor<T> d, LocalTensor<T> s, DataCopyExtParams c) {
     for (uint32_t i=0;i<c.count;++i) std::memcpy(reinterpret_cast<uint8_t*>(d.p)+i*(c.bytes+c.dstStride),
         reinterpret_cast<uint8_t*>(s.p)+i*((c.bytes+31U)/32U*32U+c.srcStride*32U),c.bytes);

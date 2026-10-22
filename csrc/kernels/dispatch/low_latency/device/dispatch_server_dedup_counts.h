@@ -8,6 +8,7 @@
 #include "ll_transport.h"
 #include "ll_count_frame_transport.h"
 #include "ll_count_frame_receive.h"
+#include "ll_route_exchange.h"
 #include "../common/ll_count_frame_layout.h"
 #include "adv_api/reduce/sum.h"
 #include "../common/ep_memory_server_dedup_count_layout.h"
@@ -44,6 +45,10 @@ public:
         expertTokenNumsType_ = expertTokenNumsType;
         useAllCoreCount_ = bs < kEpServerDedupAllCoreCountBsThreshold;
         packedFrames_ = LlTransport::Rdma(args_) && epWorldSize_ > 16U;
+        pairedRoutes_ = LlTransport::Rdma(args_) && epWorldSize_ == 32U &&
+                        expertIdsCnt_ <= kRouteExchangeMaxBytes / sizeof(int32_t);
+        publishingSource_ = epRankId_;
+        if (pairedRoutes_) routeExchange_.Init(args_, expertIdsCnt_, DispatchServerDedupWindowOffset(magic));
         layout_ = DispatchServerDedupCountLayout(experts, coreNum_);
         stateOffset_ = DispatchServerDedupWindowOffset(magic) + layout_.cntOffset;
         GM_ADDR localState = args_->peerMems[epRankId_] + stateOffset_;
@@ -160,6 +165,9 @@ private:
     uint32_t activeCumSumCores_ = 0;
     bool useAllCoreCount_ = false;
     bool packedFrames_ = false;
+    bool pairedRoutes_ = false;
+    uint32_t publishingSource_ = 0;
+    PairedRouteExchange routeExchange_;
     GM_ADDR recvCntWorkspaceGM_ = nullptr;
     GM_ADDR sendCountsOutGM_ = nullptr;
     GlobalTensor<int32_t> expertIdsGMTensor_;
@@ -187,12 +195,29 @@ __aicore__ inline void ServerDedupCounts::SendCnt()
         const uint32_t core = useAllCoreCount_ ? aivId_ : aivId_ - aivUsedAllToAll_;
         SplitToCore(rscvStatusNum_, cores, core, start, end, count);
     }
+    if (pairedRoutes_) {
+        // Keep the original core partition, but compute only experts on this
+        // physical host. Host boundaries are also rank/frame boundaries.
+        const uint32_t hostFirst=(epRankId_/16U)*16U*moeExpertNumPerRank_;
+        const uint32_t hostEnd=hostFirst+16U*moeExpertNumPerRank_;
+        start=start<hostFirst?hostFirst:start;
+        end=end>hostEnd?hostEnd:end;
+        if (end<start) end=start;
+        count=end-start;
+    }
     // 2. statusBuf_ 独立保留，每专家记录占 32B；其余 UB 交给可复用的 stagePool_。
     // 即使本核没有负责的专家，也先建立 stagePool_，供后续发送或接收阶段使用。
     statusCntAlign_ = count == 0U ? 0U : Ceil(Ceil(rscvStatusNum_, cores), UB_ALIGN_DATA_COUNT) * UB_ALIGN_DATA_COUNT;
     if (count != 0U) tpipe_->InitBuffer(statusBuf_, ReservedBytes());
     tpipe_->InitBufPool(stagePool_, kEpServerDedupCountUbBytes - ReservedBytes());
-    if (count == 0U) return;
+    if (count == 0U && !pairedRoutes_) return;
+    if (count == 0U && pairedRoutes_ && aivId_ != 0U) {
+        // No route consumers on this core. It still participates in the ACK
+        // join, but does not load/scan routes just to publish an empty done.
+        LocalTensor<uint8_t> unusedScratch{};
+        routeExchange_.Complete(unusedScratch);
+        return;
+    }
 
     // 3. 为完整 bs×topK 路由及筛选/归约临时数据分配 UB，等待 GM 路由搬入。
     const uint32_t routeBytes = Ceil(expertIdsCnt_ * sizeof(int32_t), SIZE_ALIGN_256) * SIZE_ALIGN_256;
@@ -201,29 +226,57 @@ __aicore__ inline void ServerDedupCounts::SendCnt()
     countPool_.InitBuffer(dstExpBuf_, routeBytes);
     countPool_.InitBuffer(subExpBuf_, routeBytes);
     countPool_.InitBuffer(workBuf_, routeBytes);
-    countPool_.InitBuffer(histogramBuf_, statusCntAlign_ * sizeof(int32_t));
+    if (statusCntAlign_) countPool_.InitBuffer(histogramBuf_, statusCntAlign_ * sizeof(int32_t));
     validExpertIdsTensor_ = expertIdsBuf_.Get<int32_t>();
     workLocalTensor_ = workBuf_.Get<float>();
-    statusTensor_ = statusBuf_.Get<int32_t>();
+    if (count) statusTensor_ = statusBuf_.Get<int32_t>();
     const DataCopyExtParams idsCopy{1U, expertIdsCnt_ * uint32_t(sizeof(int32_t)), 0U, 0U, 0U};
     const DataCopyPadExtParams<int32_t> pad{false, 0U, 0U, 0};
     DataCopyPad(validExpertIdsTensor_, expertIdsGMTensor_, idsCopy, pad);
     SyncFunc<HardEvent::MTE2_V>();
+    if (pairedRoutes_) {
+        // Every rank publishes outbound before any rank waits for inbound.
+        // Only core0 owns the route/commit/ACK QP; its scratch is retired before
+        // count computation or payload sending reuses it.
+        SyncFunc<HardEvent::MTE2_S>();
+        routeExchange_.Publish(validExpertIdsTensor_, workBuf_.Get<uint8_t>());
+    }
 
     // 4. 规模足够时先向量筛选本核专家区间再做直方图；小输入逐专家统计。
     // 两条路径都写 ready=1 和真实 count，零计数专家也发布，避免对端永久等待。
     const uint32_t maskBytes = Ceil(Ceil(expertIdsCnt_, 8U), UB_ALIGN) * UB_ALIGN;
 
-    if (expertIdsCnt_ >= SIZE_ALIGN_256 / sizeof(int32_t) && 2U * maskBytes <= routeBytes) {
+    if (count && expertIdsCnt_ >= SIZE_ALIGN_256 / sizeof(int32_t) && 2U * maskBytes <= routeBytes) {
         CountByVectorRange(start, end, maskBytes);
-    } else {
+    } else if (count) {
         CountByExpert(start, end);
     }
 
     // 5. Scalar 填好的记录通过 MTE3 写到目标专家所属 rank。
     // 此处仅下发，不全量等待：statusBuf_ 保持不变，而筛选临时 UB 可以交给后续阶段。
     SyncFunc<HardEvent::S_MTE3>();
-    SendExpertCntRange(start, end);
+    if (count) SendExpertCntRange(start, end);
+    if (pairedRoutes_) {
+        // Status records are reused for the paired source. Retire the local
+        // source's MTE body/commit reads before overwriting their UB.
+        SyncFunc<HardEvent::MTE3_S>();
+        const uint32_t hostFirst=(epRankId_/16U)*16U*moeExpertNumPerRank_;
+        const uint32_t hostEnd=hostFirst+16U*moeExpertNumPerRank_;
+        if (count && start<hostEnd && end>hostFirst) {
+            SyncFunc<HardEvent::V_MTE2>();
+            routeExchange_.ReadPeer(validExpertIdsTensor_);
+            SyncFunc<HardEvent::MTE2_V>();
+            if (expertIdsCnt_ >= SIZE_ALIGN_256 / sizeof(int32_t) && 2U * maskBytes <= routeBytes)
+                CountByVectorRange(start,end,maskBytes);
+            else CountByExpert(start,end);
+            publishingSource_=routeExchange_.Peer();
+            SyncFunc<HardEvent::S_MTE3>();
+            SendExpertCntRange(start,end);
+            SyncFunc<HardEvent::MTE3_S>();
+            publishingSource_=epRankId_;
+        }
+        routeExchange_.Complete(workBuf_.Get<uint8_t>());
+    }
     // Only statusBuf_ is still read by MTE3. Count's V_S dependencies already
     // retired the shared scratch; do not Reset either pool (A5 drains MTE3).
     // Keeping the pipe also preserves Init's CTRL[60] through FP8 quantization.
@@ -282,10 +335,11 @@ __aicore__ inline void ServerDedupCounts::SendExpertCntRange(uint32_t start, uin
         const uint32_t localExpert = expert % moeExpertNumPerRank_;
         const uint32_t count =
             end - expert < moeExpertNumPerRank_ - localExpert ? end - expert : moeExpertNumPerRank_ - localExpert;
-        const uint64_t offset = (uint64_t(localExpert) * epWorldSize_ + epRankId_) * kEpServerDedupCountGmStride;
+        if (pairedRoutes_ && !LlTransport::SameHost(args_,dst)) { expert+=count; continue; }
+        const uint64_t offset = (uint64_t(localExpert) * epWorldSize_ + publishingSource_) * kEpServerDedupCountGmStride;
         if (packedFrames_) {
             const auto frame = CountFrame(rscvStatusNum_, epWorldSize_,
-                useAllCoreCount_ ? coreNum_ : aivUsedCumSum_, dst, epRankId_, localExpert);
+                useAllCoreCount_ ? coreNum_ : aivUsedCumSum_, dst, publishingSource_, localExpert);
             if (frame.firstExpert != localExpert || frame.records != count) { Trap(); return; }
             LlTransport::CountFrame(args_, dst, stateOffset_ + frame.frameOffset, stateOffset_ + frame.commitOffset,
                 statusTensor_[(expert - start) * UB_ALIGN_DATA_COUNT].ReinterpretCast<uint8_t>(), count, workBuf_.Get<uint8_t>());
