@@ -9,3 +9,8 @@ mkdir -p "$here/build"
   -I"$sdk/asc/include" -I"$sdk/include" -c "$here/scalar.cpp" -o "$here/build/scalar.o"
 "$compiler" -O2 -std=c++17 -I"$sdk/include" "$here/scalar_host.cpp" "$here/build/scalar.o" \
   --cce-fatobj-link -L"$sdk/lib64" -Wl,-rpath,"$sdk/lib64" -lascendcl -lruntime -o "$here/build/scalar_probe"
+
+"$compiler" -O2 -std=c++17 -xasc --npu-arch=dav-3510 --cce-auto-infer-kernel-type=false \
+  -I"$sdk/asc/include" -I"$sdk/include" -c "$here/transfer.cpp" -o "$here/build/transfer.o"
+"$compiler" -O2 -std=c++17 -I"$sdk/include" "$here/peer_host.cpp" "$here/build/transfer.o" \
+  --cce-fatobj-link -L"$sdk/lib64" -Wl,-rpath,"$sdk/lib64" -lascendcl -lruntime -o "$here/build/peer_probe"
