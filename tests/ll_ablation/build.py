@@ -12,10 +12,12 @@ def main():
     p.add_argument('--timer',choices=['ON','OFF'],default='OFF')
     p.add_argument('--send-cores',type=int,default=28)
     p.add_argument('--prepare-sdk',action='store_true')
+    p.add_argument('--offline-deps',type=Path,help='Uploaded deps.py bundle directory; no remote Git access')
     p.add_argument('--plan',action='store_true')
     a=p.parse_args()
     if not 0<a.send_cores<56:p.error('send-cores must be 1..55')
     if a.mode=='ready-replay' and a.timer!='ON':p.error('ready-replay requires ON')
+    if not a.prepare_sdk and not a.plan:p.error('Isolated first build requires --prepare-sdk')
     tag=f'{a.mode}-{a.timer}-s{a.send_cores}'
     source=ROOT/'.ablation'/'sources'/tag
     output=ROOT/'.ablation'/'wheels'/tag
@@ -32,13 +34,19 @@ def main():
              DEEPEP_LL_SEND_CORES=str(a.send_cores),DEEPEP_LL_RECV_CORES=str(56-a.send_cores))
     for name in ['SHMEM_ROOT','CATLASS_ROOT']:env.pop(name,None)
     for name,rel in {'TMPDIR':'.tmp','TMP':'.tmp','TEMP':'.tmp','PIP_CACHE_DIR':'.cache/pip',
+                     'XDG_CACHE_HOME':'.cache','CCACHE_DIR':'.cache/ccache',
+                     'TORCH_EXTENSIONS_DIR':'.cache/torch_extensions','ASCEND_CACHE_PATH':'.cache/ascend',
                      'SHMEM_LOG_PATH':'.logs/shmem','ASCEND_WORK_PATH':'.logs/ascend',
                      'ASCEND_PROCESS_LOG_PATH':'.logs/ascend'}.items():
         dest=source/rel;dest.mkdir(parents=True,exist_ok=True);env[name]=str(dest)
     def run(command):
         with (output/'build.log').open('a') as log:
             subprocess.run(command,cwd=source,env=env,stdout=log,stderr=subprocess.STDOUT,check=True)
-    run(['git','submodule','update','--init','--recursive','--depth','1'])
+    if a.offline_deps:
+        bundle=a.offline_deps if a.offline_deps.is_absolute() else ROOT/a.offline_deps
+        run([sys.executable,str(ROOT/'tests/ll_ablation/deps.py'),'unpack','--checkout',str(source),'--bundle',str(bundle)])
+        env['PIP_NO_INDEX']='1'
+    else:run(['git','submodule','update','--init','--recursive','--depth','1'])
     if a.prepare_sdk:run([sys.executable,'scripts/build_shmem.py'])
     else:raise RuntimeError('First isolated build requires --prepare-sdk (SDK remains inside this checkout)')
     # Existing environment must satisfy requirements-build.txt; no system dependency installation.

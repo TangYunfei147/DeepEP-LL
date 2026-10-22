@@ -13,6 +13,7 @@ def main():
     p.add_argument('--run-prefix',required=True)
     p.add_argument('--config',type=Path,default=ROOT/'tests/ll_ablation/b256.json')
     p.add_argument('--build',action='store_true',help='Build new isolated wheels, including project-local SDKs')
+    p.add_argument('--offline-deps',type=Path)
     p.add_argument('--plan',action='store_true')
     a=p.parse_args()
     ids=a.devices.split(',')
@@ -31,6 +32,7 @@ def main():
         python=env/('Scripts/python.exe' if sys.platform=='win32' else 'bin/python')
         if a.build:commands.append([sys.executable,str(ROOT/'tests/ll_ablation/build.py'),'--mode',mode,
             '--timer',timer,'--send-cores',str(a.send_cores),'--prepare-sdk'])
+        if a.build and a.offline_deps:commands[-1]+=['--offline-deps',str(a.offline_deps.resolve())]
         if not env.exists():commands.append([sys.executable,'-m','venv','--system-site-packages',str(env)])
         commands.append([str(python),str(ROOT/'tests/ll_ablation/install.py'),str(manifest)])
         commands.append([str(python),str(ROOT/'tests/ll_ablation/run.py'),'--mode',mode,'--manifest',str(manifest),

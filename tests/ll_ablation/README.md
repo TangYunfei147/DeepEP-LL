@@ -51,8 +51,8 @@ The generic historical compare.py is not used; use this directory's compare.py.
 Baseline/replay keep full payload correctness checks. Fixed/preloaded/prepacked
 validate exact zero payload, unity scale bits, expected output counts/shapes and
 cross-mode fingerprints for all valid destination rows, source weights, count
-outputs and (when dedup enabled) token types/source masks. Uninitialized reserved
-relay tail bytes are not hashed. Fingerprints are required for **all ranks**.
+outputs and (when dedup enabled) token types/source masks/valid relay entries and
+weights. Uninitialized reserved relay tail bytes are not hashed. Fingerprints are required for **all ranks**.
 The baseline is necessary: constant payload alone cannot validate row identity.
 Three correctness rounds change routes and reuse both protocol windows before
 sampling. Never use --skip-check or combine with these diagnostic wheels.
@@ -76,6 +76,33 @@ variant retains all7 production dispatch translation units and O2/Ascend950.
 This deliberately costs more initial build time to isolate variants. Already
 existing variant build directories are rejected, never deleted or reset. For a
 new source revision use a fresh suite checkout.
+
+### Network-limited hosts (including27): upload only
+
+Do not run online dependency downloads there. On a networked machine, prepare a
+complete checkout at the same locked submodule revisions, including recursive
+dependencies. Export its Git objects without credentials/configuration:
+
+```bash
+python tests/ll_ablation/deps.py pack --checkout /path/to/complete/checkout \
+  --bundle .ablation/offline-deps
+```
+
+The exporter rejects missing/dirty/wrong-revision/shallow dependencies. If needed,
+unshallow on the networked machine before export. Upload the entire offline-deps
+directory via SSH/SCP; do not put Git credentials or token files in the upload.
+Then append `--offline-deps .ablation/offline-deps` to build.py or suite.py:
+
+```bash
+python tests/ll_ablation/build.py --mode preload --timer OFF --send-cores 30 \
+  --prepare-sdk --offline-deps .ablation/offline-deps
+```
+
+Offline import checks SHA256 and every receiving gitlink, uses only local bundle
+fetches, and rejects incomplete trees instead of falling back to the network.
+Pip wheel building uses `PIP_NO_INDEX=1`. Reuse the existing target Python/CANN
+environment; missing Python build packages must also be supplied through an
+uploaded wheelhouse compatible with the target's Python/architecture.
 
 ## One-command single-host EP16 suite
 

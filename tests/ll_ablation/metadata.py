@@ -15,8 +15,16 @@ def save_metadata(handle,entries,args,m):
         kinds=handle.token_type[:rows].cpu()
         values['token_type']=digest(kinds)
         values['source_mask']=digest(handle.source_mask)
-        # Relay unused tail words are not initialized and must never be hashed.
-        # Only packet kinds and valid destination/source tables are compared here.
+        relay=handle.relay_read_index[:rows].cpu()
+        valid=hashlib.sha256()
+        for row,kind in enumerate(kinds.tolist()):
+            if kind not in (1,2,3):raise AssertionError('Invalid token type')
+            if kind==2:
+                members=int(relay[row,0,0])
+                if not 1<=members<args.num_topk:raise AssertionError('Invalid relay member count')
+                valid.update(row.to_bytes(8,'little'))
+                valid.update(relay[row,:members+1].contiguous().numpy().tobytes())
+        values['valid_relay_entries']=valid.hexdigest()
     key=json.dumps(dict(B=args.num_tokens,M=m,H=args.hidden,K=args.num_topk,E=args.num_experts,
                         dtype=args.dtype,routes=args.ablation_route_digest),sort_keys=True)
     path=Path(args.run_directory)/f'ablation_metadata_rank{dist.get_rank():03}.json'

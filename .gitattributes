@@ -8,3 +8,5 @@
 *.jpeg binary
 *.pdf binary
 *.whl binary
+
+tests/ll_ablation/*.sh text eol=lf

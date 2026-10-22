@@ -61,3 +61,33 @@ def test_replay_keeps_packet_flags_until_second_consumer():
 
 def test_all_modes_have_distinct_protocol_identity():
     assert len({29000+100*m+28 for m in MODES.values()})==len(MODES)
+
+def test_offline_dependency_escape_rejected(tmp_path):
+    from deps import unpack
+    bundle=tmp_path/'bundle';bundle.mkdir()
+    root=tmp_path/'repo';root.mkdir()
+    (bundle/'deps.json').write_text(json.dumps({'entries':[{'path':'../escape','file':'x','sha256':'x','revision':'x'}]}))
+    with pytest.raises(ValueError,match='Unsafe dependency path'):unpack(bundle,root)
+
+def test_compare_rejects_on_latency(tmp_path):
+    paths={mode:fake_run(tmp_path,mode,88) for mode in ['baseline','fixed-payload','preload','prepack']}
+    p=paths['preload']/'ablation_identity.json';d=json.loads(p.read_text());d['timer']='ON';p.write_text(json.dumps(d))
+    with pytest.raises(ValueError,match='requires OFF'):compare(paths)
+
+def test_offline_dependency_roundtrip(tmp_path):
+    import shutil,subprocess
+    from deps import pack,unpack
+    if not shutil.which('git'):pytest.skip('Git required')
+    def git(path,*args):
+        return subprocess.check_output(['git','-C',str(path),'-c','user.name=codex_remote',
+            '-c','user.email=799847028@qq.com',*args],text=True,stderr=subprocess.STDOUT).strip()
+    source=tmp_path/'source';source.mkdir();git(source,'init')
+    dep=source/'dep';dep.mkdir();git(dep,'init');(dep/'a.txt').write_text('dependency')
+    git(dep,'add','a.txt');git(dep,'commit','-m','dependency');rev=git(dep,'rev-parse','HEAD')
+    git(source,'update-index','--add','--cacheinfo','160000',rev,'dep');git(source,'commit','-m','pin')
+    bundle=tmp_path/'bundle';pack(source,bundle)
+    target=tmp_path/'target';target.mkdir();git(target,'init')
+    git(target,'update-index','--add','--cacheinfo','160000',rev,'dep');git(target,'commit','-m','pin')
+    unpack(bundle,target)
+    assert git(target/'dep','rev-parse','HEAD')==rev
+    assert (target/'dep/a.txt').read_text()=='dependency'
