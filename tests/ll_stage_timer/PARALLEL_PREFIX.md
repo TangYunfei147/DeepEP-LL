@@ -97,3 +97,13 @@ is insufficient evidence.
 Budget audit correction: the parallel stage/complete reservation is applied only
 to R cores. S core resource plans retain the baseline values, avoiding an unrelated
 small-B sender-lane reduction at large H. A source guard checks this condition.
+
+## Validation result
+
+Final source ae69d20 passes native protocol/UB tests, all7input-mode ON/OFF CANN
+compilation and full ON wheel linking. Final compile times OFF37.614s/ON71.513s;
+no device run or OFF performance result. See docs/BUILD_DISPATCH_SPLIT.md for
+logs, artifact hash and prior corrected test/compiler failures. Use the existing
+small-B test matrix and add M256 regressions; compare against c68d8c6 with the same
+S/R and OFF build. Matching full wheel and fresh test processes on every rank are
+required; the launcher rejects an old small-B wheel via implementation identity.

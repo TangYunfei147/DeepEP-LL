@@ -82,3 +82,8 @@ count_layout DispatchSinglePrefixStageUbBytes包含256B对齐读缓冲，协议�
 
 schema13打点与communication_report补齐发送初始化、q准备、首发、探测/依赖/输出/尾部。
 源码业务token对照fb9263d存communication_baseline.json，计数/包格式/顺序不改。
+
+小B并行前缀候选：device/dispatch_parallel_count_prefix.h、common/ll_parallel_prefix.h；
+仅M<=32/B<=32，其他路径保持R0。Host/device预算同步于count_layout和ll_overlap_layout。
+固定magic槽+64/+96记录本地总数/代次与完成代次，+32继续维护旧R0 epoch。
+算法、额外开销和验证边界见../ll_stage_timer/PARALLEL_PREFIX.md。

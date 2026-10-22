@@ -325,3 +325,51 @@ Offline follow-up (user requires0env Python and prefers local upload to27):
 - Wheel NOT installed; no NPU/communication execution or target performance claim.
   Cold OFF objects and ON objects plus full ON linkage are now confirmed.
 - Python/CANN/offline reproduction: A5_SMALL_B_VALIDATION.md.
+
+## Parallel small-prefix candidate and overhead audit (2026-10-22)
+
+Branch kernel/ll-g4-small-b-prefix, baseline c68d8c6. Production source final
+ae69d20; identity g4-small-b-parallel-prefix, wire/core19000+S and schema13.
+Only M<=32/B<=32 selects the distributed prefix; dedup retains R0. Seven original
+translation units and O2/dav-3510 remain, no new kernel-mode dimension.
+
+Correctness/lifetime audit: unique per-R slice, uint32 inclusive scan, preceding
+only total dependence, one shared prefix, publication-before-ready MTE3 fence,
+fixed per-core generation across mode/shape changes, old epoch kept current, and
+serial fallback retirement before Reset. New controls use existing zeroed magic
+slot bytes64..127, not E-dependent banked scratch. Repeated calls require the
+existing same-stream serialization and fixed communicator S/R.
+
+Removed extra work: draft all-R total reads became preceding-only reads, count
+reduction scratch is reused for snapshots, and prefix workspace is not replicated
+per consumer. Final budget correction limits added reservations to R cores,
+preserving S plans/lanes. Retained costs (including extra control traffic and
+R short VF calls) are quantified in tests/ll_stage_timer/PARALLEL_PREFIX.md.
+PREFIX_COMPLETE may shrink while BUILD_RECV_CUMSUM grows; target whole OFF task
+time and first Probe are the acceptance measures, not one phase's label.
+
+Validation:
+- Full local CPU suite before final R-only budget guard:871passed/114skipped,
+  87.91s, .tmp/full-prefix-cpu.log. Skips are compiler/framework/device dependent.
+- Authorized27 native GCC tests:65passed in5.85s, .logs/native-prefix-002.log;
+  includes actual VF mock, random producer ordering, empty slices, varying E,
+  generations/wrap/mode switching and UB/control bounds. Initial fixture heap
+  alignment violated the CPU VF mock's256B contract; aligned storage fixed it.
+- Final budget/Q/prefix native regression:12passed in3.99s,
+  .logs/prefix-final-cpu.log. Final local guard regression5passed/3compiler skips.
+- CANN first attempt found two LL_SEG_SCOPE macros on one line (__LINE__ variable
+  collision); split lines fixed it. No algorithm change from that repair.
+- Final cold compile, validated installed SDK headers, S28/R28/jobs4:
+  OFF37.614s, ON71.513s, all7modes+Host bridge passed. Logs/timing.json under
+  .logs/prefix-{off,on}-final. These times are compilation, not NPU performance.
+- Final full ON wheel compile/link/package PASSED. _build_info confirms timerON
+  and S28/R28; Host binary contains g4-small-b-parallel-prefix.
+  Artifact .tmp/wheels-on-final/ascend_deepep-0.1.0.dev5-cp311-cp311-linux_aarch64.whl
+  SHA256d1f99c4a5a778c672f1ca54ed784a3120ceaf3ee019b6e0ad12ae261fa8c3308.
+  Full log .logs/prefix-wheel-on-final.log.
+
+All remote paths are under /home/tyf/Q4_remote_test/DeepEP-LL-g4-small-b-prefix.
+Used conda initialization + /home/tyf/0env.sh (py311_tyf), local Git bundle upload,
+validated offline SDK copy and project-local build tools from the prior small-B
+validation. No external downloads, shared-environment changes, wheel installation
+or NPU/communication launch. Target device correctness/performance remains pending.
