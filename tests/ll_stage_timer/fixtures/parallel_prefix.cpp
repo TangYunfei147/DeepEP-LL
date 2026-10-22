@@ -29,11 +29,13 @@ int main(){
             for(auto& v:counts)v=(round%3==0)?0:rng()%33;
             std::partial_sum(counts.begin(),counts.end(),reference.begin());
             std::vector<std::vector<uint32_t>> local(receivers);
+            std::vector<uint32_t*> aligned(receivers);
             unsigned coverage=0;
             for(unsigned r=0;r<receivers;++r){
                 const auto s=LlParallelPrefixSlice(e,receivers,r);assert(s.begin==coverage);coverage+=s.count;
-                local[r].resize((s.count+63)/64*64,999999U);
-                std::copy(counts.begin()+s.begin,counts.begin()+s.begin+s.count,local[r].begin());
+                local[r].resize((s.count+63)/64*64+64,999999U);
+                aligned[r]=reinterpret_cast<uint32_t*>((reinterpret_cast<uintptr_t>(local[r].data())+255U)&~uintptr_t(255U));
+                std::copy(counts.begin()+s.begin,counts.begin()+s.begin+s.count,aligned[r]);
                 assert(LlNextPrefixGeneration(totalTags[r])==next);
                 const auto totalAddress=LlPrefixTotalControlByte(send+r);
                 const auto flagAddress=LlPrefixReadyControlByte(send+r);
@@ -47,11 +49,11 @@ int main(){
                 const unsigned r=rng()%receivers;
                 const auto s=LlParallelPrefixSlice(e,receivers,r);
                 if(state[r]==0){
-                    R0PrefixScan(local[r].data(),s.count);
-                    totals[r]=s.count?local[r][s.count-1]:0;totalTags[r]=next;state[r]=1;
+                    R0PrefixScan(aligned[r],s.count);
+                    totals[r]=s.count?aligned[r][s.count-1]:0;totalTags[r]=next;state[r]=1;
                 } else if(state[r]==1 && (!s.count || std::all_of(totalTags.begin(),totalTags.begin()+r,[&](auto t){return t==next;}))){
                     uint32_t offset=0;if(s.count)for(unsigned p=0;p<r;++p)offset+=totals[p];
-                    for(unsigned i=0;i<s.count;++i)output[s.begin+i]=local[r][i]+offset;
+                    for(unsigned i=0;i<s.count;++i)output[s.begin+i]=aligned[r][i]+offset;
                     readyTags[r]=next;state[r]=2; // Ready only after this slice is written.
                 } else if(state[r]==2 && std::all_of(readyTags.begin(),readyTags.end(),[&](auto t){return t==next;})){
                     assert(output==reference);
