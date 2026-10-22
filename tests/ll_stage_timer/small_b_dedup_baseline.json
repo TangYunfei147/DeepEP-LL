@@ -1,0 +1,43 @@
+{
+  "baseline": "197052c",
+  "regions": [
+    {
+      "path": "csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_send.h",
+      "begin": "    __aicore__ inline void SendWithDedup(",
+      "end": "    // \u6458\u8981\uff1a\u975e\u53bb\u91cd\u53d1\u9001\u6d41\u7a0b",
+      "sha256": "dfeb18b6de5a469cd6e3afb07869ccd4f5542e24793fb5f4b9969ffaa3ebc2e4"
+    },
+    {
+      "path": "csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_send.h",
+      "begin": "    __aicore__ inline uint32_t CalTokenSendExpertCnt(",
+      "end": "    template <class Fp8Type>",
+      "sha256": "24354baf8bcb73fe9cf8747a0da7adb03ea347037768e8fcfad16ff7e3494fd0"
+    },
+    {
+      "path": "csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_send.h",
+      "begin": "    __aicore__ inline void FillTail(",
+      "end": "    // The generator retains",
+      "sha256": "ab32522fc19788b5306af1efd8c7f9248ec60f9ce9e2a91a24d342e76fe0a7d4"
+    },
+    {
+      "path": "csrc/kernels/dispatch/low_latency/common/ll_core_config.h",
+      "sha256": "51c527b4295ecd25e346e06de6a610c411e0029c2c4d68afc0656d511b792884"
+    },
+    {
+      "path": "csrc/kernels/dispatch/low_latency/common/ll_overlap_layout.h",
+      "sha256": "77eee35f584f10e8d7e81535535316248050b82396dd838e9d26f60311304f25"
+    },
+    {
+      "path": "csrc/kernels/dispatch/low_latency/common/ll_overlap_stage.h",
+      "sha256": "616db99b915c56cd876f04c76baa4cc9ec1a2f35ff962103d07caf41ced1db37"
+    },
+    {
+      "path": "csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_recv.h",
+      "sha256": "c4ae709af332347b1792229f6282b2dc926cba86222e68ecee979b8760c472c3"
+    },
+    {
+      "path": "csrc/kernels/dispatch/low_latency/dispatch_server_dedup_kernel.h",
+      "sha256": "5bf8f534b91f52a959ac57fdb8ecce2bca39780948e7424924aee06c39140348"
+    }
+  ]
+}

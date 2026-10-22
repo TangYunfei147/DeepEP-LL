@@ -17,6 +17,7 @@
 #include "../common/ll_send_order.h"
 #include "../common/ll_input_prefetch.h"
 #include "../common/ll_local_q.h"
+#include "../common/ll_small_b.h"
 #include "../../../common/ep_packet_receive_layout.h"
 
 namespace DispatchDedup {
@@ -78,6 +79,11 @@ public:
         // 1. 无 token 分片的发送核直接返回；有任务的核复用 SendCnt 释放出的 scratch。
         // reservedBytes 对应仍可能被计数发送读取的 UB，不能当作可用空间覆盖。
         if (enableDedup_ && count_ == 0U) return;
+        const bool smallDirect=LlUseSmallDirect(bs_,enableDedup_);
+        const LlQShard smallShard=smallDirect ? LlLocalQShard(bs_,k_,sendCores_,GetBlockIdx(),false) : LlQShard{0U,0U};
+        // Route ownership contains every token-weight owner: K>=1. A zero-route
+        // S core owns no weights and has no packet lanes to retire.
+        if (smallDirect && smallShard.count==0U) return;
         timer_ = timer;
         LL_SEG_BEGIN(setupBegin, SEND_SETUP);
         LL_SEG_BEGIN(segBegin1, PREPARE_INPUT);
@@ -134,6 +140,7 @@ public:
         // lane 数由当前 shape 决定；输入容量校验需保证至少能容纳一个。
         const uint32_t available = (kEpServerDedupCountUbBytes - usedBytes_) / uint32_t(data_.tokenStride);
         lanes_ = overlap_.enabled ? overlap_.sendLanes : (available < 8U ? available : 8U);
+        if (smallDirect && lanes_>smallShard.count) lanes_=smallShard.count;
         Allocate(outBuf_, lanes_ * uint32_t(data_.tokenStride));
         routeIds_ = idsBuf_.Get<int32_t>();
         if (count_ != 0U) routeWeights_ = weightInBuf_.Get<float>();
@@ -161,7 +168,12 @@ public:
         qShard_=LlLocalQShard(bs_,k_,sendCores_,GetBlockIdx(),enableDedup_);
         // qWork is persistent; quantization only uses qDst, never this table.
         qTable_=qWorkBuf_.Get<uint32_t>();
-        if (qShard_.count) {
+        if (smallDirect && bs_==1U) {
+            // Every original route index is <K, whose legacy q is zero.
+        } else if (smallDirect && bs_<=4U) {
+            LL_SEG_SCOPE(Q_LOCAL_UPDATE);
+            LlBuildTinyDirectQ(routeIds_,qTable_,k_,qShard_);
+        } else if (qShard_.count) {
             auto histogram=qSubBuf_.Get<uint32_t>();
             auto* out=reinterpret_cast<__ubuf__ uint32_t*>(histogram.GetPhyAddr());
             auto* ids=reinterpret_cast<__ubuf__ uint32_t*>(routeIds_.GetPhyAddr());
@@ -384,6 +396,7 @@ public:
     __aicore__ inline void SendWithoutDedup(TQue<QuePosition::VECIN, 1>& input)
     {
         // Route ownership is independent of the token partition used to copy weights.
+        const bool zeroQ=LlUseSmallDirect(bs_,enableDedup_) && bs_==1U;
         const uint32_t total = bs_ * k_, core = GetBlockIdx();
         const uint32_t base = total / sendCores_;
         const uint32_t remainder = total % sendCores_;
@@ -393,7 +406,7 @@ public:
         if (serverNum < 16U) {
             for (uint32_t i = begin; i < begin + count; ++i) {
                 const uint32_t expert = uint32_t(routeIds_.GetValue(i));
-                SendPacket(input, i / k_, i % k_, expert, CalTokenSendExpertCnt(expert, i), 0U);
+                SendPacket(input, i / k_, i % k_, expert, (zeroQ ? 0U : CalTokenSendExpertCnt(expert, i)), 0U);
             }
             return;
         }
@@ -407,7 +420,7 @@ public:
             for (uint32_t i = begin; i < begin + count; ++i) {
                 const uint32_t expert = uint32_t(routeIds_.GetValue(i));
                 if (expert < firstExpert || expert >= firstExpert + expertsPerServer) continue;
-                SendPacket(input, i / k_, i % k_, expert, CalTokenSendExpertCnt(expert, i), 0U);
+                SendPacket(input, i / k_, i % k_, expert, (zeroQ ? 0U : CalTokenSendExpertCnt(expert, i)), 0U);
             }
         }
     }
