@@ -1,6 +1,8 @@
-# LL 混合 MTE / NDR 协议审计（ABI 5）
+# LL 混合 MTE / NDR 协议审计（核心协议7）
 
-分支 `kernel/ll-ndr-hns1825`。NDR 指 HNS_1825 NPU Direct RDMA。此版本把原全 peer RDMA 改为：**机内 MTE，跨机 RDMA put，禁止跨机 get**。
+分支 `kernel/ll-ndr-hns1825`。
+
+2026-10-22更新：跨机实际B<32启用G16去重（第一项协议6）；跨机计数改为连续frame body加独立commit（第二项协议7），覆盖下文旧28B/4B逐记录描述。详见SMALL_BATCH_DEDUP.md和PACKED_COUNT_FRAMES.md。SDK未改。NDR 指 HNS_1825 NPU Direct RDMA。此版本把原全 peer RDMA 改为：**机内 MTE，跨机 RDMA put，禁止跨机 get**。
 
 ## 物理机与逻辑组分离
 

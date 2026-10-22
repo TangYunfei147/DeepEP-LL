@@ -1,6 +1,10 @@
-# HNS_1825 混合 MTE / NDR LL（ABI 5）
+# HNS_1825 混合 MTE / NDR LL（核心协议7）
 
 维护分支：`kernel/ll-ndr-hns1825`。原泛化/打点分支 `kernel/ll-configurable-groups` 不包含此改动。
+
+跨机B<32按G16去重见[SMALL_BATCH_DEDUP.md](SMALL_BATCH_DEDUP.md)；
+计数帧合并见[PACKED_COUNT_FRAMES.md](PACKED_COUNT_FRAMES.md)。两项为顺序独立提交，
+全rank更新完整wheel，SHMEM不变。
 
 2026-10-22：NDR初始化、barrier和销毁改为现有HCCL ProcessGroup的Host协调，
 先完成本卡全部stream，再交换所有rank状态；生产路径不再启动设备barrier。
@@ -33,7 +37,7 @@ python -m pip install -v --force-reinstall --no-build-isolation --no-deps .
 bash tests/ll_rdma/build_smoke.sh
 ```
 
-SDK 默认构建 HNS_1825，并自动校验复用已有匹配产物，无需 `--if-needed`；身份不一致时先停止使用该 SDK 的任务，再显式 `--rebuild`。仅使用仓内 `third-party/shmem/install/shmem`。全 rank 必须匹配 ABI 5；移除旧的 `DEEPEP_LL_RANKS_PER_GROUP` 编译定义，G 不再通过编辑全局宏设置。
+SDK 默认构建 HNS_1825，并自动校验复用已有匹配产物，无需 `--if-needed`；身份不一致时先停止使用该 SDK 的任务，再显式 `--rebuild`。仅使用仓内 `third-party/shmem/install/shmem`。全 rank 必须匹配核心协议7；移除旧的 `DEEPEP_LL_RANKS_PER_GROUP` 编译定义，G 不再通过编辑全局宏设置。
 
 环境脚本不默认选卡，runner 要显式 `--devices`，日志/缓存/临时文件保持工程内。后续代码、脚本和指南通过 Git 更新，原始数据与构建产物不提交。
 

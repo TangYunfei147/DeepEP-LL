@@ -6,6 +6,8 @@
 
 #include "kernel_operator.h"
 #include "ll_transport.h"
+#include "ll_count_frame_transport.h"
+#include "../common/ll_count_frame_layout.h"
 #include "adv_api/reduce/sum.h"
 #include "../common/ep_memory_server_dedup_count_layout.h"
 
@@ -40,6 +42,7 @@ public:
         moeExpertNumPerRank_ = experts / epWorldSize_;
         expertTokenNumsType_ = expertTokenNumsType;
         useAllCoreCount_ = bs < kEpServerDedupAllCoreCountBsThreshold;
+        packedFrames_ = LlTransport::Rdma(args_) && epWorldSize_ > 16U;
         layout_ = DispatchServerDedupCountLayout(experts, coreNum_);
         stateOffset_ = DispatchServerDedupWindowOffset(magic) + layout_.cntOffset;
         GM_ADDR localState = args_->peerMems[epRankId_] + stateOffset_;
@@ -155,6 +158,7 @@ private:
     uint32_t startStatusIndex_ = 0, endStatusIndex_ = 0, recStatusNumPerCore_ = 0;
     uint32_t activeCumSumCores_ = 0;
     bool useAllCoreCount_ = false;
+    bool packedFrames_ = false;
     GM_ADDR recvCntWorkspaceGM_ = nullptr;
     GM_ADDR sendCountsOutGM_ = nullptr;
     GlobalTensor<int32_t> expertIdsGMTensor_;
@@ -278,6 +282,15 @@ __aicore__ inline void ServerDedupCounts::SendExpertCntRange(uint32_t start, uin
         const uint32_t count =
             end - expert < moeExpertNumPerRank_ - localExpert ? end - expert : moeExpertNumPerRank_ - localExpert;
         const uint64_t offset = (uint64_t(localExpert) * epWorldSize_ + epRankId_) * kEpServerDedupCountGmStride;
+        if (packedFrames_) {
+            const auto frame = CountFrame(rscvStatusNum_, epWorldSize_,
+                useAllCoreCount_ ? coreNum_ : aivUsedCumSum_, dst, epRankId_, localExpert);
+            if (frame.firstExpert != localExpert || frame.records != count) { Trap(); return; }
+            LlTransport::CountFrame(args_, dst, stateOffset_ + frame.frameOffset, stateOffset_ + frame.commitOffset,
+                statusTensor_[(expert - start) * UB_ALIGN_DATA_COUNT].ReinterpretCast<uint8_t>(), count, workBuf_.Get<uint8_t>());
+            expert += count;
+            continue;
+        }
         LlTransport::Records(args_, dst, stateOffset_ + offset,
             statusTensor_[(expert - start) * UB_ALIGN_DATA_COUNT].ReinterpretCast<uint8_t>(),
             count, epWorldSize_ * kEpServerDedupCountGmStride, true, workBuf_.Get<uint8_t>());
@@ -383,6 +396,24 @@ __aicore__ inline void ServerDedupCounts::CalTokenSendExpertCnt(uint32_t dstExpe
 // 摘要：清除本核已收取记录的 ready 标记，保留计数字段，为后续窗口复用做准备。
 __aicore__ inline void ServerDedupCounts::WaitDispatchClearStatus()
 {
+    if (packedFrames_) {
+        // Called only after GetCumSum has observed every receiver's snapshot.
+        // Exactly the owner of a frame's first logical record clears its commit.
+        auto zero = waitStatusBuf_.Get<float>();
+        Duplicate<float>(zero, 0.0f, 8U);
+        SyncFunc<HardEvent::V_MTE3>();
+        for (uint32_t logical = startStatusIndex_; logical < endStatusIndex_; ++logical) {
+            const uint32_t expert = logical / epWorldSize_, source = logical % epWorldSize_;
+            const auto frame = CountFrame(rscvStatusNum_, epWorldSize_,
+                useAllCoreCount_ ? coreNum_ : aivUsedCumSum_, epRankId_, source, expert);
+            // Retire body ready words too: a later shape/partition may place a
+            // commit at a former dense-record boundary. Counts are snapshotted.
+            DataCopy(selfRankWinInGMTensor_[frame.recordOffset / sizeof(float)], zero, 8U);
+            if (expert == frame.firstExpert)
+                DataCopy(selfRankWinInGMTensor_[frame.commitOffset / sizeof(float)], zero, 8U);
+        }
+        return;
+    }
     DataCopyParams intriOutParams{static_cast<uint16_t>(recStatusNumPerCore_), 1, 0,
                                   static_cast<uint16_t>(CNT_GM_STRIDE_BLOCKS - 1U)};
     uint64_t duplicateMask[2] = {0x0101010101010101ULL, 0ULL};
@@ -528,7 +559,14 @@ __aicore__ inline void ServerDedupCounts::WaitDispatch()
     LlTransport::PollDeadline deadline(LlTransport::Rdma(args_));
     while (sumOfFlag != compareTarget) {
         deadline.Check();
-        DataCopy(statusFp32Tensor_,
+        if (packedFrames_) {
+            for (uint32_t i = 0; i < recStatusNumPerCore_; ++i) {
+                const uint32_t logical = startStatusIndex_ + i;
+                const auto frame = CountFrame(rscvStatusNum_, epWorldSize_,
+                    useAllCoreCount_ ? coreNum_ : aivUsedCumSum_, epRankId_, logical % epWorldSize_, logical / epWorldSize_);
+                DataCopy(statusFp32Tensor_[i * 8U], windowInstatusFp32Tensor_[frame.commitOffset / sizeof(float)], 8U);
+            }
+        } else DataCopy(statusFp32Tensor_,
                  windowInstatusFp32Tensor_[startStatusIndex_ * kEpServerDedupCountGmStride / sizeof(float)],
                  intriParams);
         SyncFunc<AscendC::HardEvent::MTE2_V>();
@@ -537,8 +575,19 @@ __aicore__ inline void ServerDedupCounts::WaitDispatch()
         sumOfFlag = statusSumOutTensor.GetValue(0);
     }
 
+    if (packedFrames_) {
+        // Commit acquired: load the actual dense records, preserving the old
+        // logical expert/source ordering for prefix sums and Receiver metadata.
+        for (uint32_t i = 0; i < recStatusNumPerCore_; ++i) {
+            const uint32_t logical = startStatusIndex_ + i;
+            const auto frame = CountFrame(rscvStatusNum_, epWorldSize_,
+                useAllCoreCount_ ? coreNum_ : aivUsedCumSum_, epRankId_, logical % epWorldSize_, logical / epWorldSize_);
+            DataCopy(statusFp32Tensor_[i * 8U], windowInstatusFp32Tensor_[frame.recordOffset / sizeof(float)], 8U);
+        }
+        SyncFunc<HardEvent::MTE2_V>();
+    }
     GatherSumRecvCnt(gatherMaskOutTensor, gatherTmpTensor, statusSumOutTensor);
-    WaitDispatchClearStatus();
+    if (!packedFrames_) WaitDispatchClearStatus();
 }
 
 // 摘要：为本片局部前缀加上跨核偏移，写出 sendCountsOut 与各核前缀副本，再发布完成标记。
@@ -550,6 +599,7 @@ __aicore__ inline void ServerDedupCounts::CalRecvAndSetFlag()
     // 当前 UB 中是片段内前缀；先等待所有片段总数，再累加编号更小接收核的总数。
     // 这样得到全 rank 接收表中的基址，各核可独立修正自己负责的片段。
     const uint32_t offset = GetCumSum(newAivId);
+    if (packedFrames_) WaitDispatchClearStatus();
 
     if (recStatusNumPerCore_ != 0U) {
         for (uint32_t i = 0; i < recStatusNumPerCore_; ++i) {

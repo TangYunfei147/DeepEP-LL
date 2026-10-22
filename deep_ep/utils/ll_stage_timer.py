@@ -205,7 +205,7 @@ class StageTrace:
             if (operation != 'dispatch' or any(type(v) is not int for v in (rank,world,count)) or
                     not (0 <= rank < world <= count <= 1024 and world >= 16 and world%16==0 and count%world==0)):
                 raise ValueError('Expert capture requires a valid dispatch expert configuration')
-            if native.low_latency_core_protocol not in (5, 6) or not hasattr(native, 'low_latency_expert_timer_layout'):
+            if native.low_latency_core_protocol not in (5, 6, 7) or not hasattr(native, 'low_latency_expert_timer_layout'):
                 raise RuntimeError('Expert diagnostics require the matching ABI 5 wheel on every rank')
             if native.low_latency_expert_timer_layout() != dict(schema=expert.SCHEMA, header_rows=expert.HEADER_ROWS,
                                                                fields=expert.FIELDS, stages=list(expert.STAGES)):
