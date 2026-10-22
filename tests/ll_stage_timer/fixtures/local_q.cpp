@@ -7,6 +7,7 @@
 #include <random>
 #include <algorithm>
 #include "csrc/kernels/dispatch/low_latency/common/ll_local_q.h"
+#include "csrc/kernels/dispatch/low_latency/device/dispatch_frequency_histogram.h"
 struct Tensor {
  std::vector<uint32_t>* v;
  uint32_t GetValue(uint32_t i){return v->at(i);}
@@ -19,7 +20,7 @@ int main(){
  for(unsigned e:{32U,384U,1024U})
  for(unsigned s:{1U,10U,28U,55U})
  for(bool dedup:{false,true}) for(bool repeated:{false,true}) {
-  std::vector<uint32_t> ids(b*k),ref(b*k),hist(e);
+  std::vector<uint32_t> ids((b*k+63)/64*64,7),ref(b*k),hist(e);
   for(unsigned t=0;t<b;++t) {
    std::vector<unsigned> pool(e);
    for(unsigned i=0;i<e;++i)pool[i]=i;
@@ -33,7 +34,10 @@ int main(){
    assert(part.begin==coverage);
    coverage+=part.count;
    std::vector<uint32_t> q(part.count),counts(e,0xdeadbeef);
-   DispatchDedup::LlBuildLocalQ(Tensor{&ids},Tensor{&counts},Tensor{&q},e,k,part);
+   if(part.count) {
+    DispatchDedup::CountFrequency<true>(counts.data(),ids.data(),part.begin,0,e);
+    DispatchDedup::LlFinishLocalQ(Tensor{&ids},Tensor{&counts},Tensor{&q},k,part);
+   }
    for(unsigned i=0;i<part.count;++i)assert(q[i]==ref[part.begin+i]);
    // Reordered DIRECT and FIRST_HOP tail reads must still use original q.
    for(unsigned i=part.count;i>0;--i)assert(q[i-1]==ref[part.begin+i-1]);
@@ -41,4 +45,14 @@ int main(){
   }
   assert(coverage==b*k);
  }
+ for(unsigned begin:{0U,63U,64U,65U,32768U,32769U,65536U}) {
+  std::vector<uint32_t> ids((begin+80+63)/64*64,383U),counts(384,0xdeadbeef),q(80);
+  if(begin<=32768)
+   DispatchDedup::CountFrequency<true>(counts.data(),ids.data(),begin,0,384);
+  else
+   DispatchDedup::CountFrequency<false>(counts.data(),ids.data(),begin,0,384);
+  DispatchDedup::LlFinishLocalQ(Tensor{&ids},Tensor{&counts},Tensor{&q},8,{begin,80});
+  for(unsigned j=0;j<80;++j)assert(q[j]==(begin+j<8?0:begin+j));
+ }
+
 }

@@ -43,3 +43,6 @@ dispatch UB预算230KiB、combine独立预算不变。接收表向量化须处�
 当前kernel/ll-g4-local-q-table从f7c7848派生；协议18000+S、收发调度不变。
 qWork持久保存本片q，qSub播种私有专家直方图，内部量化只能复用qDst。
 去重按token分片，非去重按route分片，R本组q不变。指南tests/ll_stage_timer/LOCAL_Q_TABLE.md。
+
+q前缀播种现复用CountFrequency VF，V_S后只做本片Scalar更新；空片段跳过。
+保持18000+S及收发协议，候选ST检查low_latency_q_seed_vf。A/B基线af46122。

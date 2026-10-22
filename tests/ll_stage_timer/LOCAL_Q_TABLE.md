@@ -1,8 +1,26 @@
+当前VF播种版本叠加在Scalar q表提交af46122上，作为一个独立提交。
+A/B请以af46122为A、当前VF提交为B；原始无q表基线仍为f7c7848。
+用户报告Scalar q表比原始基线劣化约10%，此次旨在隔离前缀播种的影响，尚无性能结论。
+
+## VF播种更新
+
+前缀[0,begin)调用已有CountFrequency<true/false>，384专家按128-bin窗口处理。
+VF初始化/累加直方图；返回后一次V_S确保结果可被Scalar访问，再调用LlFinishLocalQ
+顺序更新本片。不再逐条Scalar扫描前缀。空分片直接跳过，零长度前缀仍由VF初始化零表。
+输入routeIds已有256B padding，末向量由有效掩码排除本片及padding数据。
+32768项以上选择既有分段累计路径，避免uint16频数溢出。
+完整q表、histogram容量、Host和overlap预算均不变，收发顺序/通信协议18000+S不变。
+新增low_latency_q_seed_vf=True用于候选ST核对，保持全rank一致。
+
+PREPARE_INPUT包含VF调用、S_V/V_S及本片Scalar更新；CAL_TOKEN仍只查表。
+E384的现有helper会按三个bin窗口扫描前缀，不能当作只读一遍输入或保证性能提升。
+A5支持此API，A3不支持，CPU mock仅验证运算和掩码。
+
 # 本核q表独立A/B候选
 
 分支kernel/ll-g4-local-q-table，基线kernel/ll-g4-group-compact@f7c784868522742f052c74e0bd8a6f5a5ac961b8。
 唯一算法变化为发送q预计算。通信协议18000+S、wire、Stage3/schema12、收发顺序、R0前缀、
-R核本组初发、relay、combine均沿用基线。该分支只有一个候选提交。
+R核本组初发、relay、combine均沿用基线。以下为首轮Scalar q表说明；当前已新增独立VF播种提交，以上方更新为准。
 
 ## 实现
 

@@ -181,3 +181,21 @@ core protocol match. No device code timing or performance claim.
 Logs in .tmp/q-check-001.log; compiled fixtures in .tmp/q-native-final.
 No CANN ON/OFF build or full ON wheel link performed; retain the documented target
 cold-build procedure and complete dispatch/combine validation before adoption.
+
+## VF-seeded local q table (2026-10-22)
+
+Independent commit on kernel/ll-g4-local-q-table; A/B baseline af46122.
+Reuse existing CountFrequency for [0,begin), then V_S and Scalar updates only
+inside the original shard. Wire/protocol18000+S, schedule, original VF source,
+UB layout and seven TUs unchanged. New local_q_seed_vf capability prevents
+accidental testing with the previous Scalar-seed wheel.
+
+CPU combined required regression/histogram/q:135 passed,3 skipped (4.20s).
+Final actual VF mock + q update + UB fixtures:4 passed (3.09s), overlapping prior
+checks. Covers masked partial input, zero prefix/empty shard, E384/1024 and
+multi-segment65536 hot-bin counts. Mock checks arithmetic, not device scheduling.
+Eight sender/order/lookup methods are identical to af46122.
+Logs .tmp/q-vf-001.log; fixture output .tmp/q-vf-final.
+No CANN compilation, full wheel link, NPU correctness or performance validation.
+A3 cannot execute this A5-only VF API. Use target ON/OFF compile procedure above
+and LOCAL_Q_TABLE.md for independent OFF A/B, including PREPARE_INPUT overhead.

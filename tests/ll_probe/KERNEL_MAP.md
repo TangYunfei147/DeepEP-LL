@@ -74,3 +74,5 @@ receive_tasks.h按记录段生成tokenPos、一次生成pendingIdx；Host和over
 
 本核q表：common/ll_local_q.h负责分片与播种；sender在PREPARE_INPUT构建qWork表。
 CalTokenSendExpertCnt只查表；Host/overlap核算qSub直方图最小容量。收发顺序和wire不变。
+
+q表VF播种：device/dispatch_frequency_histogram.h复用既有实现，common/ll_local_q.h仅本片更新。

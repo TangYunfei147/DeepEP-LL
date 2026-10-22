@@ -11,6 +11,7 @@
 
 #include "kernel_operator.h"
 #include "dispatch_dedup_mxfp8_quant.h"
+#include "dispatch_frequency_histogram.h"
 #include "../common/ep_memory_server_dedup_data_layout.h"
 #include "../common/ep_memory_server_dedup_protocol.h"
 #include "../common/ll_send_order.h"
@@ -158,8 +159,22 @@ public:
         qShard_=LlLocalQShard(bs_,k_,sendCores_,GetBlockIdx(),enableDedup_);
         // qWork is persistent; quantization only uses qDst, never this table.
         qTable_=qWorkBuf_.Get<uint32_t>();
-        LlBuildLocalQ(routeIds_,qSubBuf_.Get<uint32_t>(),qTable_,
-                      localExperts_*uint32_t(args_->rankSize),k_,qShard_);
+        if (qShard_.count) {
+            auto histogram=qSubBuf_.Get<uint32_t>();
+            auto* out=reinterpret_cast<__ubuf__ uint32_t*>(histogram.GetPhyAddr());
+            auto* ids=reinterpret_cast<__ubuf__ uint32_t*>(routeIds_.GetPhyAddr());
+            // Routes are 256B padded. VF masks the partial prefix vector;
+            // no element from the owned slice contributes to the seed.
+            Sync<HardEvent::S_V>();
+            if (qShard_.begin<=kLlHistogramSegment)
+                asc_vf_call<CountFrequency<true>>(out,ids,qShard_.begin,0U,
+                                                localExperts_*uint32_t(args_->rankSize));
+            else
+                asc_vf_call<CountFrequency<false>>(out,ids,qShard_.begin,0U,
+                                                 localExperts_*uint32_t(args_->rankSize));
+            Sync<HardEvent::V_S>();
+            LlFinishLocalQ(routeIds_,histogram,qTable_,k_,qShard_);
+        }
         // 每个 512B 块尾部的 32B 标记预置为 1；发送时 payload 和标记一起搬运。
         // 初始 MTE3_V 事件让 lane 首次可写，后续复用由上一包的发送完成事件控制。
         uint64_t flagMask[2] = {0xffU, 0U};
