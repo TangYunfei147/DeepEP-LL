@@ -268,3 +268,15 @@ from header[0..2]. Original role snapshot, terminal destination, relay ordering,
 all synchronization and lane retirement remain unchanged. No extra UB, launch
 mode or template dimension. CANN compilation and NPU performance are unverified.
 Candidate 1 local required contracts and relay checks: 70 passed, 3 skipped (no C++ compiler). Initial pytest temp-directory failure resolved by using project-local --basetemp.
+
+## A5 standalone scalar/transfer probes (2026-10-22)
+
+New experiment/ll-g4-scalar-probes starts at197052c. Production seven-mode
+dispatch sources are unchanged. tests/ll_micro adds two separate test kernels
+and ACL executables; no wheel/SDK rebuild or new production template dimension.
+On authorized177.22.26.1: Ascend950DT/CANN9.3.0, O2/dav-3510 compile+link passed.
+Initial unsigned CreateVecIndex compile failure fixed with signed int32 view.
+Scalar8configurations all passed checksum checks; transfer tx modes0/1/2 passed.
+Further transfer launches paused on external NPU tasks as explicitly requested.
+Required CPU contracts43passed/2skipped; runner guards5passed. See
+../tests/ll_micro/RESULTS.md for measured costs, raw locations and limitations.
