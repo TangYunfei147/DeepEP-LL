@@ -312,11 +312,15 @@ private:
         auto destination = wire[uint32_t(data_.tokenStride) + 32U].template ReinterpretCast<uint32_t>();
         ServerDedupPacketTail tail(wire, headerOffset,
                                    uint32_t(keepFlags ? data_.relayReadIndexWireOffset : data_.readIndexPayloadOffset));
-        const bool firstHop = enableDedup_ && tail.Header().GetValue(3U) == uint32_t(EpServerDedupTokenType::FirstHop);
+        auto header = tail.Header();
+        const uint32_t role = enableDedup_ ? header.GetValue(3U) : 0U;
+        const bool firstHop = enableDedup_ && role == uint32_t(EpServerDedupTokenType::FirstHop);
         if (enableDedup_)
-            BuildServerDedupMetadata(type, destination, tail, tasks_.Position(j));
-        else
-            for (uint32_t i = 0U; i < 3U; ++i) destination.SetValue(i, tail.Header().GetValue(i));
+            BuildServerDedupMetadata(type, destination, role, tasks_.Position(j));
+        // Forwarding changes only header[3]; header[0..2] remains immutable
+        // until the existing MTE3_MTE2 lane retirement.
+        if (!enableDedup_ || role != uint32_t(EpServerDedupTokenType::Terminal))
+            destination = header;
         if (expertTimer_) expertTimer_->End(expert, LlExpertTimer::Metadata);
         // FIRST_HOP preparation is shared work: retain only the core stage timer.
         if (firstHop) {

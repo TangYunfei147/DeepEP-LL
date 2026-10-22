@@ -154,3 +154,7 @@ ready_fraction=RX_READY/RX_PROBED；probes_per_consumed_packet=RX_PROBED/RX_PACK
 原生CPU计时器mock验证ON/OFF行为、延迟GM导出、容量和首包/首轮询区间预留；
 合成schema13样本经过实际parse→analyze→CSV/Markdown/Chrome输出并校验单位。
 未做真实CANN ON/OFF冷编译、完整ON wheel链接或NPU采样；新增指标的实际数值要重新采集。
+
+2026-10-22元数据候选更新：上述fb9263d等价检查仅描述原始插桩提交。
+当前收发算法优化已改变业务语句，communication_baseline.json记录当前候选摘要，
+不得把当前摘要检查解释为与fb9263d算法逐字等价；schema13及observe同步口径保持。

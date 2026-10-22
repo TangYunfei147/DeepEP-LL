@@ -74,7 +74,7 @@ def test_new_report_does_not_invent_old_measurements():
     result=comm.report([(dict(rank=0,iteration=0),decoded)])
     assert result['status']=='requires_schema13_dispatch' and not result['samples']
 
-def test_observe_business_tokens_match_preinstrumentation():
+def test_observe_business_tokens_match_recorded_candidate():
     manifest=json.loads((Path(__file__).with_name('communication_baseline.json')).read_text())
     for relative,digest in manifest['files'].items():
         tokens=source_checks.normalize((ROOT/relative).read_text(encoding='utf-8'))

@@ -260,3 +260,11 @@ Verification:
   Additional final entry-to-first-send report tests:7 passed (0.25s).
   Entry-to-first-send uses same-core actual INIT start and first-send endpoint,
   never sums independent phase statistics. All validation batches overlap.
+
+## Metadata A/B candidates (2026-10-22)
+
+Candidate 1 reads receiver role once and outputs non-terminal destination directly
+from header[0..2]. Original role snapshot, terminal destination, relay ordering,
+all synchronization and lane retirement remain unchanged. No extra UB, launch
+mode or template dimension. CANN compilation and NPU performance are unverified.
+Candidate 1 local required contracts and relay checks: 70 passed, 3 skipped (no C++ compiler). Initial pytest temp-directory failure resolved by using project-local --basetemp.

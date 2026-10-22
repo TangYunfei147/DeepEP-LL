@@ -83,18 +83,15 @@ __aicore__ inline void WriteServerDedupPayloadRange(GlobalTensor<uint8_t> output
 
 // Snapshot the local role independently of the header that forwarding changes.
 __aicore__ inline void BuildServerDedupMetadata(LocalTensor<uint32_t> type, LocalTensor<uint32_t> destination,
-                                                ServerDedupPacketTail tail, uint32_t slot)
+                                                uint32_t role, uint32_t slot)
 {
-    auto header = tail.Header();
-    const uint32_t role = header.GetValue(3U);
     type.SetValue(0U, role);
     if (role == uint32_t(EpServerDedupTokenType::Terminal)) {
         destination.SetValue(0U, slot);
         destination.SetValue(1U, UINT32_MAX);
         destination.SetValue(2U, UINT32_MAX);
-    } else {
-        for (uint32_t i = 0U; i < 3U; ++i) destination.SetValue(i, header.GetValue(i));
     }
+    // Non-terminal destination reads the unchanged header directly.
 }
 
 __aicore__ inline void PrepareServerDedupForward(ServerDedupPacketTail tail)
