@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -15,6 +16,8 @@ import zipfile
 ROOT = Path(__file__).resolve().parents[2]
 STATE = Path('.tmp/ll-control-opt')
 SDK = Path('third-party/shmem/install/shmem')
+SHMEM = Path('third-party/shmem')
+JSON_HEADER = SHMEM / '3rdparty/json/single_include/nlohmann/json.hpp'
 
 
 def git(root, *args):
@@ -109,29 +112,83 @@ def environment(source, send_cores):
     return env
 
 
-def copy_local_dependencies(donor, source):
-    """Copy pinned repositories via local Git; preserve the donor and its SDK."""
-    for relative, revision in links(source).items():
+def required_links(source, project=True):
+    dependencies = links(source)
+    # This suite fixes MegaMoE and fused builds OFF. CATLASS (including its
+    # test/DSL submodules) is not part of the core LL build graph.
+    return {p:r for p,r in dependencies.items() if not project or p==SHMEM.as_posix()}
+
+
+def check_checkout(path, revision):
+    if not (path / '.git').exists() or Path(git(path, 'rev-parse', '--show-toplevel')).resolve()!=path.resolve():
+        raise RuntimeError(f'Pinned local dependency unavailable: {path}')
+    if git(path, 'rev-parse', 'HEAD') != revision:
+        raise RuntimeError(f'Existing dependency has the wrong revision: {path}')
+    if git(path, 'diff', 'HEAD', '--name-only', '--ignore-submodules=dirty'):
+        raise RuntimeError(f'Dependency has tracked edits: {path}; no changes were overwritten')
+
+
+def dependency_donor(root, source):
+    """Prefer existing sources; consult only registered project-local caches."""
+    revision=required_links(source).get(SHMEM.as_posix())
+    if revision is None:return root
+    existing=(source/SHMEM/'.git').exists()
+    if existing:
+        check_checkout(source/SHMEM,revision)
+        if (source/SDK/'deepep-sdk.json').is_file():return source
+    if (root/SHMEM/'.git').exists():
+        check_checkout(root/SHMEM,revision)
+        if (root/SDK/'deepep-sdk.json').is_file():return root
+        candidates=[root]
+    else:candidates=[]
+    manifests=list((root/'.ablation/wheels').glob('*/manifest.json'))
+    manifests+=list((root/STATE/'wheels').glob('*/manifest.json'))
+    for manifest in sorted(manifests):
+        try:
+            info=json.loads(manifest.read_text(encoding='utf-8'))
+            candidate=resolve(root,info['source'])
+            if not any((root/base).resolve().is_relative_to(root.resolve()) and
+                       candidate.is_relative_to((root/base).resolve()) for base in (Path('.ablation/sources'),STATE)):
+                continue
+            if not (candidate/'.git').exists() or common_dir(candidate)!=common_dir(root):continue
+            check_checkout(candidate/SHMEM,revision)
+        except (OSError,ValueError,KeyError,RuntimeError,subprocess.CalledProcessError):
+            continue
+        if candidate not in candidates:candidates.append(candidate)
+    if not candidates:
+        if existing:return source
+        raise RuntimeError(f'Pinned SHMEM source unavailable in {root} or registered local caches; '
+                           'initialize third-party/shmem or use --offline-deps. No network fallback.')
+    candidates.sort(key=lambda path:not (path/SDK/'deepep-sdk.json').is_file())
+    print(f'Reusing SHMEM dependency source from {candidates[0]} (kernel sources unchanged)',flush=True)
+    return candidates[0]
+
+
+def copy_sdk_assets(donor, source):
+    if (donor/JSON_HEADER).is_file() and not (source/JSON_HEADER).exists():
+        (source/JSON_HEADER).parent.mkdir(parents=True,exist_ok=True)
+        shutil.copy2(donor/JSON_HEADER,source/JSON_HEADER)
+    if (donor/SDK/'deepep-sdk.json').is_file() and not (source/SDK).exists():
+        # scripts/build_shmem.py validates the copied identity and all hashes
+        # before pip builds anything. Existing/incomplete SDKs are never replaced.
+        shutil.copytree(donor/SDK,source/SDK,symlinks=False)
+
+
+def copy_local_dependencies(donor, source, *, project=True):
+    """Copy only required pinned repositories; preserve optional repositories."""
+    if project:donor=dependency_donor(donor,source)
+    for relative, revision in required_links(source,project).items():
         origin, target = donor / relative, source / relative
         if (target / '.git').exists():
-            if git(target, 'rev-parse', 'HEAD') != revision:
-                raise RuntimeError(f'Existing dependency has the wrong revision: {target}')
+            check_checkout(target,revision)
         else:
-            if not (origin / '.git').exists() or git(origin, 'rev-parse', 'HEAD') != revision:
-                raise RuntimeError(f'Pinned local dependency unavailable: {origin}; initialize it or pass --offline-deps. No network fallback.')
-            if git(origin, 'diff', 'HEAD', '--name-only', '--ignore-submodules=dirty'):
-                raise RuntimeError(f'Local dependency has tracked edits: {origin}')
+            check_checkout(origin,revision)
             if target.exists() and any(target.iterdir()):
                 raise RuntimeError(f'Refuse to overwrite nonempty dependency: {target}')
             subprocess.run(['git', 'clone', '--no-hardlinks', '--no-checkout', str(origin), str(target)], check=True)
-            subprocess.run(['git', '-C', str(target), 'checkout', '--detach', revision], check=True)
-        copy_local_dependencies(origin, target)
-    json_rel = Path('third-party/shmem/3rdparty/json/single_include/nlohmann/json.hpp')
-    if (donor / json_rel).is_file() and not (source / json_rel).exists():
-        (source / json_rel).parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(donor / json_rel, source / json_rel)
-    if (donor / SDK / 'deepep-sdk.json').is_file() and not (source / SDK).exists():
-        shutil.copytree(donor / SDK, source / SDK, symlinks=False)
+            subprocess.run(['git', '-C', str(target), 'checkout', '--no-recurse-submodules', '--detach', revision], check=True)
+        copy_local_dependencies(origin, target,project=False)
+    if project:copy_sdk_assets(donor,source)
 
 
 def unpack_dependencies(bundle, source):
@@ -143,6 +200,8 @@ def unpack_dependencies(bundle, source):
         target, artifact = source / relative, bundle / entry['file']
         if relative.is_absolute() or '..' in relative.parts or artifact.parent != bundle:
             raise ValueError('Unsafe offline dependency path')
+        if not relative.is_relative_to(SHMEM):
+            continue  # Optional CATLASS entries/artifacts are not required.
         if target.resolve() != target or not target.is_relative_to(source) or sha(artifact) != entry['sha256']:
             raise ValueError('Unsafe or corrupt offline dependency')
         parent = target.parent
@@ -151,15 +210,14 @@ def unpack_dependencies(bundle, source):
         if links(parent).get(target.relative_to(parent).as_posix()) != entry['revision']:
             raise ValueError('Offline dependency differs from pinned Git revision')
         if (target / '.git').exists():
-            if git(target, 'rev-parse', 'HEAD') != entry['revision']:
-                raise ValueError('Existing dependency differs from uploaded bundle')
+            check_checkout(target,entry['revision'])
             continue
         if target.exists() and any(target.iterdir()):
             raise ValueError(f'Refuse to overwrite {target}')
         target.mkdir(parents=True, exist_ok=True)
         subprocess.run(['git', 'init', str(target)], check=True)
         subprocess.run(['git', '-C', str(target), 'fetch', str(artifact), 'HEAD'], check=True)
-        subprocess.run(['git', '-C', str(target), 'checkout', '--detach', entry['revision']], check=True)
+        subprocess.run(['git', '-C', str(target), 'checkout', '--no-recurse-submodules', '--detach', entry['revision']], check=True)
     for asset in data.get('assets', []):
         if asset['path'] != 'third-party/shmem/3rdparty/json/single_include/nlohmann/json.hpp':
             raise ValueError('Unknown offline dependency asset')
@@ -174,16 +232,22 @@ def unpack_dependencies(bundle, source):
             shutil.copy2(artifact, target)
 
 
-def check_dependencies(source):
-    for relative, revision in links(source).items():
+def check_dependencies(source, *, project=True):
+    for relative, revision in required_links(source,project).items():
         target = source / relative
-        if not (target / '.git').exists() or git(target, 'rev-parse', 'HEAD') != revision:
-            raise RuntimeError(f'Uninitialized or mismatched dependency: {target}')
-        check_dependencies(target)
-    if (source / 'third-party/shmem').exists():
-        header = source / 'third-party/shmem/3rdparty/json/single_include/nlohmann/json.hpp'
+        check_checkout(target,revision)
+        check_dependencies(target,project=False)
+    if project and SHMEM.as_posix() in required_links(source):
+        # The standard SDK preparer fully validates installed SDKs without
+        # building them. JSON source is needed only for a cold SDK build.
+        if (source/SDK/'deepep-sdk.json').is_file():return
+        header = source / JSON_HEADER
         if not header.is_file():
-            raise RuntimeError('Uploaded/local nlohmann json header missing; no network fallback')
+            raise RuntimeError('Cold SDK build needs uploaded/local nlohmann json header; no network fallback')
+        contents=header.read_text(encoding='utf-8')
+        if any(not re.search(r'#define\s+NLOHMANN_JSON_VERSION_'+part+r'\s+'+str(value)+r'\b',contents)
+               for part,value in (('MAJOR',3),('MINOR',11),('PATCH',3))):
+            raise RuntimeError('Cold SDK build requires nlohmann json3.11.3')
 
 
 def build(revision, send_cores, *, root=ROOT, workspace=None, offline_deps=None, resume=False):
@@ -233,6 +297,8 @@ def build(revision, send_cores, *, root=ROOT, workspace=None, offline_deps=None,
                 write_json(output / 'timings.json', timings)
         if offline_deps:
             unpack_dependencies(resolve(root, offline_deps), source)
+            if SHMEM.as_posix() in required_links(source):
+                copy_sdk_assets(dependency_donor(root,source),source)
         else:
             copy_local_dependencies(root, source)
         check_dependencies(source)

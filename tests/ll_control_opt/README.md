@@ -136,9 +136,20 @@ build. It never skips native dependency checks based only on a source hash.
 Cold preparation and individual build/package wall times are recorded separately
 in each attempt's `timings.json`; compilation speed is not a performance result.
 
-Default dependency preparation copies the local checkout's pinned initialized
-repositories using local Git, plus its existing validated SDK and required
-nlohmann header. The source checkout remains unchanged. If dependencies were
+Dependency preparation selects only `third-party/shmem` and its actual nested
+Git dependencies. CATLASS and its test/DSL repositories are optional MegaMoE
+dependencies; this core LL suite does not copy or require them. The main
+checkout remains unchanged. Existing SHMEM source and SDK in the build worktree
+are reused first; otherwise the builder uses the main checkout or matching
+same-repository worktrees referenced by `.ablation/wheels/*/manifest.json` and
+previous control-suite manifests. Cached kernel sources/HEADs are never changed.
+Pinned source identity, tracked edits and the standard complete SDK validation
+remain mandatory. A manifest's presence alone never qualifies an SDK.
+
+An existing SDK does not require the `nlohmann/json.hpp` source asset: that file
+is required, at version3.11.3, only when preparing a cold SDK. Neither an invalid
+SDK nor an incomplete existing install is silently overwritten or rebuilt.
+If dependencies were
 uploaded as an existing `tests/ll_ablation/deps.py` bundle, use:
 
 ```bash
@@ -146,8 +157,10 @@ python3 tests/ll_control_opt/suite.py \
   --build-only --resume --send-cores 30 --offline-deps .tmp/uploaded-deps
 ```
 
-There is no Git/network fallback. If the default checkout lacks initialized
-dependencies, initialize/upload them first. An uploaded dependency bundle carries
+There is no Git/network fallback. If neither the checkout nor registered local
+caches contain pinned SHMEM, initialize/upload it first. Extra CATLASS entries in
+an offline bundle are ignored; required SHMEM pins and hashes are still checked.
+An uploaded dependency bundle carries
 source/header assets, not necessarily an SDK; first SDK preparation may therefore
 need a local compile. Existing SDK identity mismatches fail rather than trigger a
 destructive rebuild.
@@ -167,13 +180,17 @@ It must be at an ancestor of the first missing commit, have the same pinned
 dependencies, and have no tracked edits or untracked source files. The primary
 checkout is never accepted as the build workspace. Generated ablation headers
 are not silently restored or deleted; an ablation worktree with such edits is
-rejected. Cache reuse across this production/ablation boundary is deliberately
-not automatic. No `git reset`, `git clean`, or overwrite of old wheels occurs.
+rejected as a native build workspace. Copying only its pinned SHMEM source/SDK
+is permitted without changing that worktree. No `git reset`, `git clean`, or
+overwrite of old wheels occurs.
 
 `--resume` reuses a finished wheel only after checking its revision, split,
 timer/group, wheel hash and SDK hashes. An incomplete attempt is retained and a
 new attempt subdirectory is created. It does **not** skip, merge, or overwrite
 old performance results. After a failed device run, use a fresh `--run-prefix`.
+For the former CATLASS preparation failure, update the scripts and repeat the
+original command with `--resume`; no performance run had started, so the same
+run prefix and the existing unfinished build worktree can be retained.
 Locks prevent concurrent suite/cache mutation; if a process was killed, inspect
 the recorded PID before manually removing its stale `.lock` file.
 
