@@ -71,3 +71,6 @@ receive_tasks.h按记录段生成tokenPos、一次生成pendingIdx；Host和over
 详见../ll_stage_timer/R0_PREFIX.md。发送算法恢复S3，compact共享任务表已删除。
 
 非去重模式在主Process前置独立分支，Recv编号core-S且接收核数R；去重保持56核共享接收。
+
+R0 uint32前缀VF：device/dispatch_prefix_scan.h；counts CalRecvAndSetFlag仅调用VF并同步V_MTE3。
+count_layout DispatchSinglePrefixStageUbBytes包含256B对齐读缓冲，协议标识19000+S。

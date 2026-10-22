@@ -166,3 +166,17 @@ Validation:
 - Logs .tmp/nondedup-full-001.log and .tmp/nondedup-native-001.log.
   Existing CPU inspect_dispatch_routes.py retains historical S3 allocation;
   do not use it to assert current non-dedup core ownership. See R0_PREFIX.md.
+
+## R0 uint32 vector prefix (2026-10-22)
+
+One A5 VF replaces the serial per-entry prefix loop, six fixed register scan
+steps per64-element block. Seven mode TUs and O2 stay unchanged; no new mode.
+256B padded gather buffer is reflected in the common Host/device UB formula.
+Config19000+S rejects old layout builds; wire/epoch/schema12 unchanged.
+Native CPU semantic mock covers lengths0..1024, zeros, ones, random counts,
+values beyond FP32 exact integers, masked tail preservation and gather bounds.
+Related CPU/Host/profiler/layout tests51pass (4.97s), log .tmp/prefix-scan-001.log.
+These simulate public VF operation semantics, not actual AscendC instructions.
+A3_163_docker failed hostname resolution before any remote compile command ran.
+No CANN ON/OFF cold build, wheel linkage or NPU performance has been validated.
+Retain target cold-build and correctness/OFF profiling requirements.

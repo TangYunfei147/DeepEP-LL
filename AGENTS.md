@@ -37,3 +37,7 @@ dispatch UB预算230KiB、combine独立预算不变。接收表向量化须处�
 
 非去重M<=32专用路径：S发所有route后退出，R仅计数/前缀/接收，不生成本组描述符。
 去重路径不变，协议18000+S；Host/Device按M选择实际接收核数，不能仅按B判断。
+
+R0前缀生成改为device/dispatch_prefix_scan.h的uint32 VF扫描：64项/段、6级gather/add、寄存器carry。
+输入缓冲按256B补齐，Host与Device共用预算。配置标识19000+S，wire/epoch和schema12不变。
+无逐项Scalar累加，不使用float转换；A3不支持该A5 VF，不能作为运行性能验收。
