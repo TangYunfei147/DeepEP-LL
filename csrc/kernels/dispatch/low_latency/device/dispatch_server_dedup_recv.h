@@ -14,6 +14,7 @@
 #include "dispatch_server_dedup_receive_tasks.h"
 #include "../common/ll_receive_priority.h"
 #include "dispatch_server_dedup_receive_packet.h"
+#include "dispatch_flag_probe.h"
 
 namespace DispatchDedup {
 using namespace AscendC;
@@ -224,15 +225,28 @@ private:
         }
         LL_SEG_END(flagIssue,RX_FLAG_ISSUE);
         { LL_SEG_SCOPE(RX_FLAG_WAIT); ServerDedupReceiveSync<HardEvent::MTE2_V>(); }
+        const bool fusedMasks=blocks==8U;
         { LL_SEG_SCOPE(RX_FLAG_REDUCE);
-          Sum<float>(sums, flags, work, SumParams{count, blocks * 8U, blocks * 8U});
+          if (fusedMasks) {
+              BuildReceiveFlagMasks(reinterpret_cast<__ubuf__ float*>(flags.GetPhyAddr()),
+                  reinterpret_cast<__ubuf__ uint32_t*>(sums.GetPhyAddr()),count,blocks);
+          } else {
+              Sum<float>(sums, flags, work, SumParams{count, blocks * 8U, blocks * 8U});
+          }
           ServerDedupReceiveSync<HardEvent::V_S>(); }
         LL_SEG_BEGIN(flagDecode,RX_FLAG_DECODE);
         ProbeResult result;
+        if (fusedMasks) {
+            auto masks=sums.template ReinterpretCast<uint32_t>();
+            result.readyMask=masks.GetValue(0U);
+            result.keepFlagsMask=masks.GetValue(1U);
+            LL_SEG_COUNT(RX_READY,uint32_t(__builtin_popcount(result.readyMask)));
+        } else {
         for (uint32_t i = 0; i < count; ++i) {
             const auto layout = PacketReceiveLayout::Decode(sums.GetValue(i), blocks);
             if (layout != PacketReceiveLayout::State::Pending) { result.readyMask |= uint32_t(1) << i; LL_SEG_COUNT(RX_READY,1U); }
             if (layout == PacketReceiveLayout::State::KeepFlags) result.keepFlagsMask |= uint32_t(1) << i;
+        }
         }
         LL_SEG_END(flagDecode,RX_FLAG_DECODE);
         return result;
