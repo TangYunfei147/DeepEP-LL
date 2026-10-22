@@ -7,6 +7,9 @@
 **SHMEM不改、不打补丁，无需重建原SDK，只需全rank更新完整wheel**。
 部署及边界见[HOST_BARRIER_FIX.md](HOST_BARRIER_FIX.md)。
 
+dispatch sender跨机packet批处理见[DISPATCH_RDMA_BATCH.md](DISPATCH_RDMA_BATCH.md)：
+仅合并完成等待，保留wire格式及原SDK；全rank更新wheel，无需SDK重建。
+
 NDR combine每次提交前增加同一HCCL组的Host完成协调，保护重复调用的双窗口复用；
 见[COMBINE_HOST_COORDINATION.md](COMBINE_HOST_COORDINATION.md)。SHMEM保持原样。
 

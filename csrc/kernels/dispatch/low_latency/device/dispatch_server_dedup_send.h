@@ -10,6 +10,7 @@
 
 #include "kernel_operator.h"
 #include "ll_transport.h"
+#include "ll_dispatch_rdma_batch.h"
 #include "dispatch_dedup_mxfp8_quant.h"
 #include "../common/ep_memory_server_dedup_data_layout.h"
 #include "../common/ep_memory_server_dedup_protocol.h"
@@ -66,6 +67,7 @@ public:
         // reservedBytes 对应仍可能被计数发送读取的 UB，不能当作可用空间覆盖。
         if (enableDedup_ && count_ == 0U) return;
         timer_ = timer;
+        if (LlTransport::Rdma(args_)) rdmaBatch_.Init(args_, uint32_t(data_.tokenStride), timer_);
         if (timer_) timer_->Start(LlStageTimer::SendPrepare);
         scratch_ = &scratch;
         TQue<QuePosition::VECIN, 1> input;
@@ -148,6 +150,13 @@ public:
             SendWithDedup(input);
         else
             SendWithoutDedup(input);
+        if (rdmaBatch_.Pending()) {
+            // End-of-stream may borrow any lane only after local MTE reads retire.
+            PipeBarrier<PIPE_ALL>();
+            if (timer_) timer_->Start(LlStageTimer::SendIssue);
+            rdmaBatch_.Flush(outBuf_.Get<uint8_t>());
+            if (timer_) timer_->End(LlStageTimer::SendIssue);
+        }
         if (timer_) timer_->End(LlStageTimer::SendPayload);
         if (timer_) timer_->Start(LlStageTimer::SendMetadata);
 
@@ -447,9 +456,18 @@ private:
             uint64_t(data_.tokenStride),
 #endif
             false);
+#ifndef DEEPEP_LL_NO_COMM
+        if (LlTransport::RemoteWrite(args_, destination)) {
+            rdmaBatch_.Enqueue(destination,
+                DispatchServerDedupDispatchOffset(data_, args_->rank, destination,
+                    expert % localExperts_, q, args_->rankSize, localExperts_, bs_), out);
+        } else
+#endif
+        {
         LlTransport::Packet(args_, destination,
             DispatchServerDedupDispatchOffset(data_, args_->rank, destination,
                 expert % localExperts_, q, args_->rankSize, localExperts_, bs_), out, uint32_t(data_.tokenStride), 7U, timer_);
+        }
         SetFlag<HardEvent::MTE3_V>(lane);
         ++packets_;
         if (timer_) timer_->End(LlStageTimer::SendIssue);
@@ -458,6 +476,7 @@ private:
     const __gm__ DispatchDedup::CommArgs* args_ = nullptr;
     TPipe* pipe_ = nullptr;
     LlStageTimer::DeviceTimer* timer_ = nullptr;
+    LlTransport::DispatchRdmaBatch rdmaBatch_;
     bool enableDedup_ = false;
     TBufPool<TPosition::VECCALC, 16>* scratch_ = nullptr;
     uint32_t sendCores_ = 0;
