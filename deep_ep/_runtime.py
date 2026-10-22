@@ -323,7 +323,10 @@ class Runtime:
             failures = [(rank, peer[1]) for rank, peer in enumerate(peers) if peer[1] is not None]
             if failures:
                 raise RuntimeError(f"NDR device completion failed: {failures}")
-            getattr(self.native, operation)(host_coordinated=True)
+            # Combine reuse is a distinct collective phase, but needs only the
+            # native barrier acknowledgement, never native resource cleanup.
+            native_operation = "barrier" if operation == "combine_reuse" else operation
+            getattr(self.native, native_operation)(host_coordinated=True)
             if os.environ.get("DEEPEP_LL_INIT_TRACE") == "1":
                 print(f"[DeepEP init] rank={self.rank} HCCL {operation} complete", flush=True)
         except Exception:

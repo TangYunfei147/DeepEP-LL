@@ -1103,6 +1103,7 @@ def worker(local_rank, args):
                       "rdma_compiled": bool(getattr(native, "low_latency_rdma_enabled", False)),
                       "logical_group": compiled_group(native,world),
                       "implementation": implementation,
+                      "combine_host_protocol": getattr(deep_ep.ElasticBuffer, "ll_combine_host_protocol", 0),
                       "core_protocol": native.low_latency_core_protocol,
                       "stage_timer": bool(getattr(native, "low_latency_stage_timer_enabled", False)),
                       "stage_timer_schema": native.low_latency_stage_timer_layout()["schema"],

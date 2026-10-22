@@ -53,6 +53,75 @@ def test_all_streams_and_all_ranks_before_native(runtime):
     assert len(log) == 6
 
 
+def test_combine_reuse_has_distinct_phase_and_never_closes(runtime):
+    obj, _, _, log, env = runtime
+    for _ in range(5):
+        obj._host_collective('combine_reuse')
+    assert log == [('device_sync', 0), ('hccl', 'combine_reuse'),
+                   ('native_barrier', {'host_coordinated': True})] * 5
+    assert not obj.closed and env['_OWNER'] is obj
+
+
+@pytest.mark.parametrize('fault', ['device', 'peer', 'order', 'hccl'])
+def test_combine_reuse_failure_blocks_next_call(runtime, fault):
+    obj, api, dist, log, env = runtime
+    def fail(*a, **kw): raise RuntimeError('injected')
+    if fault == 'device': api.synchronize = fail
+    if fault == 'hccl': dist.all_gather_object = fail
+    if fault in ('peer', 'order'):
+        def gather(out, packet, group):
+            out[:] = [packet] * len(out)
+            out[3] = ('close', None) if fault == 'order' else ('combine_reuse', 'failed')
+        dist.all_gather_object = gather
+    with pytest.raises(RuntimeError): obj._host_collective('combine_reuse')
+    assert obj.coordination_failed and env['_OWNER'] is obj
+    with pytest.raises(RuntimeError, match='restart'): obj._host_collective('combine_reuse')
+    assert not any(x[0].startswith('native_') for x in log)
+
+
+@pytest.mark.parametrize('coordinated,fail', [(True, False), (False, False), (True, True)])
+def test_real_combine_entry_coordinates_before_producer(runtime, monkeypatch, coordinated, fail):
+    obj, api, dist, log, _ = runtime
+    obj.host_coordinated = coordinated
+    obj.notify_failed = False
+    torch = sys.modules['torch']
+    class Tensor:
+        dtype = 'bf16'
+        shape = (2, 3584)
+        def is_contiguous(self): return True
+    torch.Tensor = Tensor; torch.bfloat16 = 'bf16'; torch.float16 = 'fp16'
+    class ReachedProducer(Exception): pass
+    def producer():
+        log.append(('producer',))
+        raise ReachedProducer()
+    event = ModuleType('deep_ep.utils.event')
+    event.EventHandle = producer; event.EventOverlap = object
+    monkeypatch.setitem(sys.modules, 'deep_ep.utils.event', event)
+    tree = ast.parse((ROOT / 'deep_ep/buffers/elastic.py').read_text(encoding='utf-8'))
+    cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == 'ElasticBuffer')
+    method = next(n for n in cls.body if isinstance(n, ast.FunctionDef) and n.name == '_combine_low_latency')
+    env = dict(__name__='deep_ep.buffers.elastic', __package__='deep_ep.buffers',
+               runtime_of=lambda _: obj, npu_api=lambda: api,
+               require_native=lambda _: SimpleNamespace(low_latency_combine_tiling=lambda *a: b''))
+    exec(compile(ast.fix_missing_locations(ast.Module(body=[method], type_ignores=[])), '<production combine>', 'exec'), env)
+    token = object()
+    buffer = SimpleNamespace(_handle_token=token)
+    handle = SimpleNamespace(_buffer_token=token, metadata_only=False, num_expanded_tokens=2,
+                             hidden=3584, num_tokens=1, num_topk=8, num_experts=384, num_max_tokens_per_rank=32)
+    if fail:
+        def broken(*a, **kw): raise RuntimeError('collective failed')
+        dist.all_gather_object = broken
+    with pytest.raises(RuntimeError if fail else ReachedProducer):
+        env['_combine_low_latency'](buffer, Tensor(), handle, None, None, 0, 0, None, None, False, False)
+    if fail:
+        assert ('producer',) not in log and obj.coordination_failed
+    elif coordinated:
+        assert log == [('device_sync', 0), ('hccl', 'combine_reuse'),
+                       ('native_barrier', {'host_coordinated': True}), ('producer',)]
+    else:
+        assert log == [('producer',)]
+
+
 @pytest.mark.parametrize('operation', ['barrier', 'close'])
 @pytest.mark.parametrize('fault', ['device', 'peer', 'order', 'hccl', 'native'])
 def test_failure_blocks_reuse_and_retains_owner(runtime, operation, fault):

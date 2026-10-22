@@ -166,6 +166,8 @@ class EPHandle:
 class ElasticBuffer:
     """Own a restricted native resource session; see docs/api.md."""
 
+    ll_combine_host_protocol = 1  # HCCL completion before each NDR window reuse.
+
     def __init__(
         self,
         group: Optional[dist.ProcessGroup] = None,
@@ -601,6 +603,11 @@ class ElasticBuffer:
         with runtime.notify_lock:
             if runtime.notify_failed:
                 raise RuntimeError("A previous communication launch failed; restart the distributed job")
+            if getattr(runtime, "host_coordinated", False):
+                # Fixed ready flags and two rotating windows have no receiver
+                # credit protocol. All peers must retire the prior call before
+                # any sender can reuse a window (including warmup/timer calls).
+                runtime._host_collective("combine_reuse")
             producer = EventHandle()
             with npu.stream(runtime.stream):
                 producer.current_stream_wait()
@@ -631,6 +638,8 @@ class ElasticBuffer:
                     event = EventOverlap(EventHandle(), retained)
                 except Exception:
                     runtime.notify_failed = True
+                    if getattr(runtime, "host_coordinated", False):
+                        runtime.coordination_failed = True
                     raise
             event.current_stream_wait()
             runtime.notify_inflight = None
