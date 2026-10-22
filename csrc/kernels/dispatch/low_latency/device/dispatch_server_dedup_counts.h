@@ -156,6 +156,12 @@ private:
     __aicore__ inline void WaitDispatchClearStatus();
     // R0轮询全部来源计数，提取计数并清理本轮通知。
     __aicore__ inline void CalRecvAndSetFlag();
+    __aicore__ inline bool UseParallelPrefix() const { return LlUseSmallDirect(axisBS_,buildLocalTasks_); }
+    __aicore__ inline void PrepareParallelRecvCnt();
+    __aicore__ inline bool TryParallelRecvCnt();
+    __aicore__ inline void CalcParallelCumsum();
+    __aicore__ inline void CompleteParallelCumsum();
+    __aicore__ inline void ParallelControl(GlobalTensor<uint32_t>& view,uint64_t offset);
     // 等待R0发布当前epoch，不清理共享标记；下轮由R0交替发布。
     __aicore__ inline void WaitCumSumFlag();
 
@@ -188,6 +194,7 @@ private:
     GlobalTensor<uint32_t> prefixReadyGm_;
     uint32_t prefixEpoch_=0U;
     TBuf<> prefixPublishBuf_;
+    uint32_t prefixGeneration_; // Assigned by small-prefix Prepare before any read.
     // Both views outlive all their tensors. The record buffer is outside their
     // shared address range and remains immutable until the phase is retired.
     TBufPool<TPosition::VECCALC, 16> stagePool_;
@@ -375,6 +382,7 @@ __aicore__ inline void ServerDedupCounts::SendExpertCntRange(uint32_t start, uin
 // 只有R0接收全部计数，其他R核直接继续本组发送。
 __aicore__ inline void ServerDedupCounts::PrepareRecvCnt()
 {
+    if(UseParallelPrefix()){PrepareParallelRecvCnt();return;}
     recStatusNumPerCore_=0U;
     if (aivId_!=kLlSendCoreNum) return;
     LL_SEG_SCOPE(INIT_COUNT_BUFFERS);
@@ -396,6 +404,7 @@ __aicore__ inline void ServerDedupCounts::RecvCnt()
 __aicore__ inline void ServerDedupCounts::CompleteCumsum()
 {
     LL_SEG_SCOPE(PREFIX_COMPLETE);
+    if(UseParallelPrefix()){CompleteParallelCumsum();return;}
     const uint32_t receiver=aivId_;
     if (!overlap_.Async()) { LL_SEG_SCOPE(TRANSITION_DRAIN); PipeBarrier<PIPE_ALL>(); }
     if (!overlap_.enabled) tpipe_->Reset();
@@ -485,6 +494,7 @@ __aicore__ inline void ServerDedupCounts::WaitDispatchClearStatus()
 // its count flags have been consumed; CalcCumsum publishes the prefix.
 __aicore__ inline bool ServerDedupCounts::TryRecvCnt()
 {
+    if(UseParallelPrefix())return TryParallelRecvCnt();
     if (!recStatusNumPerCore_) return true;
     LL_SEG_SCOPE(WAIT_RECV_COUNTS);
     LL_SEG_SCOPE(POLL_RECV_COUNTS);
@@ -515,6 +525,7 @@ __aicore__ inline bool ServerDedupCounts::TryRecvCnt()
 
 __aicore__ inline void ServerDedupCounts::CalRecvAndSetFlag()
 {
+    if(UseParallelPrefix()){CalcParallelCumsum();return;}
     if (aivId_!=kLlSendCoreNum) return;
     LL_SEG_SCOPE(BUILD_RECV_CUMSUM);
     auto prefix=gatherMaskOutBuf_.Get<int32_t>();
@@ -558,4 +569,5 @@ __aicore__ inline void ServerDedupCounts::WaitCumSumFlag()
 }
 
 }  // namespace DispatchDedup
+#include "dispatch_parallel_count_prefix.h"
 #endif

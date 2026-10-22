@@ -34,6 +34,9 @@ def test_unchanged_dedup_and_protocol_regions():
         if entry.get('begin'):
             start=text.index(entry['begin'])
             text=text[start:text.index(entry['end'],start)]
+        for change in entry.get('restore',[]):
+            assert text.count(change['new'])==1
+            text=text.replace(change['new'],change['old'])
         digest=hashlib.sha256(' '.join(normalize(text)).encode()).hexdigest()
         assert digest==entry['sha256'],entry
 

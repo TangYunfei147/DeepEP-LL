@@ -130,7 +130,7 @@ void bind_low_latency(py::module_& module)
     module.attr("low_latency_core_protocol") = DispatchDedup::kLlCoreProtocolVersion;
     module.attr("low_latency_q_table_enabled") = true;
     module.attr("low_latency_q_seed_vf") = true;
-    module.attr("low_latency_implementation") = "g4-small-b";
+    module.attr("low_latency_implementation") = "g4-small-b-parallel-prefix";
     module.attr("low_latency_rdma_enabled") = false;
     module.attr("low_latency_expert_timer_enabled") = false;
     module.attr("low_latency_stage_timer_enabled") = bool(deepep_ll_stage_timer_enabled());

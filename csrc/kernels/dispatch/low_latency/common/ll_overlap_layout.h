@@ -35,8 +35,11 @@ LL_OVERLAP_INLINE LlOverlapLayout LlMakeOverlapLayout(const EpServerDedupDataLay
         LlOverlapMax(64,DispatchDedupAlign(ranks/kLlRanksPerGroup*4,32))+DispatchDedupAlign(groups*4,32) :
         2*input+q+(quant?work+d.packedPayloadBytes:0);
     const uint64_t countScratch=plan.count?4*routes+records*4:0;
-    const uint64_t countStage=core==kLlSendCoreNum ? DispatchSinglePrefixStageUbBytes(e):0;
-    const uint64_t complete=32+DispatchDedupAlign(e*4,32)+DispatchDedupAlign(uint64_t(e/ranks)*8,32);
+    const bool parallelPrefix=!enableDedup && bs<=32U;
+    const uint64_t countStage=parallelPrefix ? (core>=kLlSendCoreNum ? DispatchParallelPrefixStageUbBytes(e):0) :
+        (core==kLlSendCoreNum ? DispatchSinglePrefixStageUbBytes(e):0);
+    const uint64_t complete=parallelPrefix ? DispatchParallelPrefixCompleteUbBytes(e,ranks) :
+        32+DispatchDedupAlign(e*4,32)+DispatchDedupAlign(uint64_t(e/ranks)*8,32);
     const uint64_t maxRows=uint64_t(bs)*ranks*(k<e/ranks?k:e/ranks);
     const uint64_t receiveCores=enableDedup?kLlDispatchRecvCoreNum:kLlRecvCoreNum;
     const uint64_t tasks=(maxRows+receiveCores-1)/receiveCores;

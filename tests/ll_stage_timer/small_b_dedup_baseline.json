@@ -25,7 +25,13 @@
     },
     {
       "path": "csrc/kernels/dispatch/low_latency/common/ll_overlap_layout.h",
-      "sha256": "77eee35f584f10e8d7e81535535316248050b82396dd838e9d26f60311304f25"
+      "sha256": "77eee35f584f10e8d7e81535535316248050b82396dd838e9d26f60311304f25",
+      "restore": [
+        {
+          "new": "    const bool parallelPrefix=!enableDedup && bs<=32U;\n    const uint64_t countStage=parallelPrefix ? (core>=kLlSendCoreNum ? DispatchParallelPrefixStageUbBytes(e):0) :\n        (core==kLlSendCoreNum ? DispatchSinglePrefixStageUbBytes(e):0);\n    const uint64_t complete=parallelPrefix ? DispatchParallelPrefixCompleteUbBytes(e,ranks) :\n        32+DispatchDedupAlign(e*4,32)+DispatchDedupAlign(uint64_t(e/ranks)*8,32);",
+          "old": "    const uint64_t countStage=core==kLlSendCoreNum ? DispatchSinglePrefixStageUbBytes(e):0;\n    const uint64_t complete=32+DispatchDedupAlign(e*4,32)+DispatchDedupAlign(uint64_t(e/ranks)*8,32);"
+        }
+      ]
     },
     {
       "path": "csrc/kernels/dispatch/low_latency/common/ll_overlap_stage.h",
@@ -55,7 +61,19 @@
       "path": "csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_counts.h",
       "begin": "__aicore__ inline void ServerDedupCounts::CompleteCumsum()",
       "end": "// \u6458\u8981\uff1a\u5bf9\u539f\u59cb\u8def\u7531\u6267\u884c\u9010\u4e13\u5bb6\u5339\u914d",
-      "sha256": "55340ea534422b3368758ab7a8395bcc54269c53e088b6c1ee64fb68673cf88d"
+      "sha256": "55340ea534422b3368758ab7a8395bcc54269c53e088b6c1ee64fb68673cf88d",
+      "restore": [
+        {
+          "new": "    if(UseParallelPrefix()){CompleteParallelCumsum();return;}\n",
+          "old": ""
+        }
+      ]
+    },
+    {
+      "path": "csrc/kernels/dispatch/low_latency/common/ep_memory_server_dedup_count_layout.h",
+      "begin": "struct EpServerDedupCountLayout {",
+      "end": "// R0 only:",
+      "sha256": "9b3cbb9550dcb0c2c68224824a6abca17dc9b17c20b755656eb19e45e17a79f5"
     }
   ]
 }

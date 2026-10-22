@@ -1,1 +1,1 @@
-{"implementation": "g4-small-b", "rdma": false}
+{"implementation": "g4-small-b-parallel-prefix", "rdma": false}

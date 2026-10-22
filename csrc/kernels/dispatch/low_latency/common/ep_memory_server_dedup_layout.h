@@ -195,10 +195,14 @@ inline bool DispatchDedupPacketUbFits(const EpMemoryServerDedupLayout& layout, i
                               16 * layout.data.blockCount * 32 + 256 +
                               16 * align((layout.data.blockCount + 7) / 8, 32) * 4 + 256 + 16 * 36 +
                               layout.data.tokenStride + 64;
+    const bool parallelPrefix=!enableDedup && b<=32;
+    const uint64_t countStage=parallelPrefix ? DispatchParallelPrefixStageUbBytes(uint32_t(num_experts)) :
+        DispatchSinglePrefixStageUbBytes(uint32_t(num_experts));
+    const uint64_t countScratch=parallelPrefix ? DispatchGroupLocalCountSendUbBytes(b*k,num_experts,world_size):0U;
     return layout.data.blockCount > 0 && layout.data.blockCount <= UINT8_MAX &&
            sender + serverStateExtra <= kEpServerDedupCountUbBytes &&
            localSender <= kEpServerDedupCountUbBytes && receiver <= kEpServerDedupCountUbBytes &&
-           localReserved+DispatchSinglePrefixStageUbBytes(uint32_t(num_experts))<=kEpServerDedupCountUbBytes;
+           localReserved+countScratch+countStage<=kEpServerDedupCountUbBytes;
 }
 }  // namespace DispatchDedup
 

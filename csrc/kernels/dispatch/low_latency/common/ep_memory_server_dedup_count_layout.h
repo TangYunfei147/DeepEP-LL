@@ -7,6 +7,7 @@
 #include "comm_args.h"
 #include "ll_core_config.h"
 #include "ll_group_local_send.h"
+#include "ll_parallel_prefix.h"
 #include "dispatch_dedup_types.h"
 
 // Legacy count-probe threshold; production group-local source ownership uses LlGroupCountPlan.
@@ -89,6 +90,21 @@ DISPATCH_DEDUP_EP_DEDUP_INLINE uint64_t DispatchSinglePrefixStageUbBytes(uint32_
     return 128U+((uint64_t(experts)*32U+256U+255U)/256U)*256U+
            ((uint64_t(experts)*4U+255U)/256U)*256U+
            ((uint64_t(experts)*4U+31U)/32U)*32U;
+}
+
+// Per-R slice reception + fixed-control snapshot. Reduction scratch is reused
+// after count gather; maximum padded VF and control reads are included.
+DISPATCH_DEDUP_EP_DEDUP_INLINE uint64_t DispatchParallelPrefixStageUbBytes(uint32_t experts,uint32_t receivers=kLlRecvCoreNum)
+{
+    const uint64_t n=(uint64_t(experts)+receivers-1U)/receivers;
+    const uint64_t scan=((n*4U+255U)/256U)*256U;
+    const uint64_t snapshot=((uint64_t(receivers)*32U+255U)/256U)*256U;
+    return 128U+((n*32U+256U+255U)/256U)*256U+scan+(scan>snapshot?scan:snapshot);
+}
+DISPATCH_DEDUP_EP_DEDUP_INLINE uint64_t DispatchParallelPrefixCompleteUbBytes(uint32_t experts,uint32_t ranks,uint32_t receivers=kLlRecvCoreNum)
+{
+    return uint64_t(receivers)*32U+((uint64_t(experts)*4U+31U)/32U)*32U+
+           ((uint64_t(experts/ranks)*8U+31U)/32U)*32U;
 }
 
 // Peak sendCnt allocation: four route-sized UB buffers plus count records/histogram.
