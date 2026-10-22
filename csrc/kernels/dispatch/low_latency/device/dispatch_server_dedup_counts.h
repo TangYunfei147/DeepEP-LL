@@ -94,7 +94,7 @@ public:
     // the original RecvCnt allocations. ProcessGroupLocal drains its reads first.
     __aicore__ inline TBufPool<TPosition::VECCALC,16>& LocalSendScratchPool()
     {
-        LL_SEG_SCOPE(PREPARE_INPUT);
+        LL_SEG_SCOPE(LOCAL_SEND_POOL_SETUP);
         tpipe_->InitBufPool(localSendPool_,overlap_.enabled ? overlap_.sendBytes : kEpServerDedupCountUbBytes-ReservedBytes(),stagePool_);
         return localSendPool_;
     }
@@ -214,7 +214,7 @@ __aicore__ inline void ServerDedupCounts::SendCnt()
     if (overlap_.enabled && overlap_.countBytes) tpipe_->InitBufPool(recvCountPool_,overlap_.countBytes);
     if (!countPlan_.count) return;
     LL_SEG_SCOPE(SEND_COUNTS);
-    LL_SEG_BEGIN(initCountBuffers, INIT_COUNT_BUFFERS);
+    LL_SEG_BEGIN(initCountBuffers, SEND_COUNT_SETUP);
     tpipe_->InitBufPool(countPool_,4U*routeBytes+statusCntAlign_*sizeof(int32_t),stagePool_);
     countPool_.InitBuffer(expertIdsBuf_,routeBytes);
     countPool_.InitBuffer(dstExpBuf_,routeBytes);
@@ -232,7 +232,7 @@ __aicore__ inline void ServerDedupCounts::SendCnt()
     PipeBarrier<PIPE_V>();
     Duplicate<int32_t>(statusTensor_,0x3f800000,flagMask,statusCntAlign_/8U,1U,8U);
     SyncFunc<HardEvent::V_S>();
-    LL_SEG_END(initCountBuffers, INIT_COUNT_BUFFERS);
+    LL_SEG_END(initCountBuffers, SEND_COUNT_SETUP);
     const uint32_t maskBytes=Ceil(Ceil(expertIdsCnt_,8U),UB_ALIGN)*UB_ALIGN;
     for (uint32_t part=0;part<countPlan_.size;++part) {
         const auto range=countPlan_.ranges[part];
@@ -252,7 +252,7 @@ __aicore__ inline void ServerDedupCounts::SendCnt()
 // 摘要：向量筛选本核专家区间内的路由，再用直方图生成每专家的 ready 标记和计数。
 __aicore__ inline void ServerDedupCounts::CountByVectorRange(uint32_t start, uint32_t end, uint32_t maskBytes, uint32_t record)
 {
-        LL_SEG_SCOPE(COUNT_COMPUTE);
+        LL_SEG_SCOPE(COUNT_HISTOGRAM);
     LocalTensor<int32_t> histogram = histogramBuf_.Get<int32_t>();
     LocalTensor<int32_t> selected = dstExpBuf_.Get<int32_t>();
     LocalTensor<uint8_t> lower = subExpBuf_.Get<uint8_t>();
@@ -285,7 +285,7 @@ __aicore__ inline void ServerDedupCounts::CountByVectorRange(uint32_t start, uin
 // 摘要：逐个专家扫描路由并计算计数，作为小规模输入的统计路径。
 __aicore__ inline void ServerDedupCounts::CountByExpert(uint32_t start, uint32_t end, uint32_t record)
 {
-        LL_SEG_SCOPE(COUNT_COMPUTE);
+        LL_SEG_SCOPE(COUNT_EXPERT_SCAN);
     for (uint32_t expert = start; expert < end; ++expert) {
         int32_t count = 0;
         CalTokenSendExpertCnt(expert, expertIdsCnt_, count);
@@ -299,7 +299,7 @@ __aicore__ inline void ServerDedupCounts::CountByExpert(uint32_t start, uint32_t
 // produces q: no per-route prefix reduction, remote exchange or scalar owner test.
 __aicore__ inline void ServerDedupCounts::BuildLocalTasks(uint32_t start,uint32_t end,uint32_t record)
 {
-    LL_SEG_SCOPE(COUNT_COMPUTE);
+    LL_SEG_SCOPE(LOCAL_ROUTE_BUILD);
     SyncFunc<HardEvent::S_V>();
     auto lower=subExpBuf_.Get<uint8_t>();
     auto upper=workBuf_.Get<uint8_t>();
@@ -355,7 +355,7 @@ __aicore__ inline void ServerDedupCounts::PrepareRecvCnt()
 {
     recStatusNumPerCore_=0U;
     if (aivId_!=kLlSendCoreNum) return;
-    LL_SEG_SCOPE(INIT_COUNT_BUFFERS);
+    LL_SEG_SCOPE(RECV_COUNT_SETUP);
     startStatusIndex_=0U;endStatusIndex_=rscvStatusNum_;recStatusNumPerCore_=rscvStatusNum_;
     RecvPool().InitBuffer(scalarBuf_,96U);
     RecvPool().InitBuffer(waitStatusBuf_,Ceil(rscvStatusNum_*32U+256U,256U)*256U);

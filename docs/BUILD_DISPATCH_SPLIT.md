@@ -180,3 +180,30 @@ These simulate public VF operation semantics, not actual AscendC instructions.
 A3_163_docker failed hostname resolution before any remote compile command ran.
 No CANN ON/OFF cold build, wheel linkage or NPU performance has been validated.
 Retain target cold-build and correctness/OFF profiling requirements.
+
+## Distinct stage semantics / schema13 (2026-10-22)
+
+User explicitly prohibits using one stage name for different work.
+Renamed ambiguous dispatch/combine preparation, load issue/completion and lane
+wait sites; no new business operations, barriers or task/packet ordering.
+Schema13 retains old IDs0..80 for offline reading and appends58 names (139 metrics).
+Trace192 retained, carrier grows72→88 slots (4608→5632B/core), 512B aligned.
+Old schema7/9/10/11/12 captures retain72-row validation and original names.
+New ON captures require matching schema13 wheel/parser; wire/core19000+S unchanged.
+
+Validation:
+- Full local CPU suite868passed/109skipped,89.39s (.tmp/stage13-full-001.log).
+- Native ON/OFF recorder, capacity/GM export, Host selector, format/semantic
+  checks42passed,3.99s (.tmp/stage13-native-001.log). Overlaps full-suite tests.
+- Additional unique-name inventory and semantic checks run after doc generation.
+- Seven business headers stripped of LL_SEG labels/comments match9e24a79 tokens.
+  This is source parity, not a CANN compilation or device equivalence proof.
+- No CANN cold ON/OFF build/full wheel or NPU test in this revision. Existing
+  A3_163_docker connection was unavailable in the preceding attempt.
+  New timer metric arrays may change ON overhead; never interpret old/new ON
+  kernel ratio as OFF algorithm speedup.
+- Native/core/ABI/shape guards retained; trace still stores first2 intervals per
+  stage plus all-call metrics, and preserves KERNEL/SEND_SUBMIT_END reservation.
+  Trace overflow remains explicitly counted as omitted.
+- Stage name/locations and repeated-name exceptions documented in
+  tests/ll_stage_timer/STAGE_SEMANTICS.md.

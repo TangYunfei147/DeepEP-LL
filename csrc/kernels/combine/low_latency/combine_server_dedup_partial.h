@@ -27,7 +27,7 @@ public:
                                 uint32_t bs, uint32_t h, uint32_t k, uint32_t experts, uint8_t dtype, uint64_t window,
                                 const EpCombineM45WorkspaceLayout& layout)
     {
-        LL_SEG_SCOPE(COMBINE_INIT_RECV);
+        LL_SEG_SCOPE(COMBINE_PARTIAL_SETUP);
         args_ = args;
         recvCores_ = DispatchDedup::kLlRecvCoreNum;
         pipe_ = pipe;
@@ -82,7 +82,7 @@ public:
         for (uint32_t step = 1U; step <= servers; ++step) {
             const uint32_t count = SelectServer(ServerDedupHalfOrder(servers, ownServer, step - 1U), owner, step == 1U);
             for (uint32_t task = 0; task < count; ++task) {
-                LL_SEG_SCOPE(COMBINE_PROCESS_TOKEN);
+                LL_SEG_SCOPE(COMBINE_PARTIAL_TOKEN);
                 const uint32_t row = uint32_t(rows_.GetValue(task));
                 LoadTask(row);
                 const uint32_t source = uint32_t(table2Ub_.GetValue(0U));
@@ -126,7 +126,7 @@ private:
     }
     __aicore__ inline uint32_t SelectServer(uint32_t server, uint32_t& owner, bool validateRanks)
     {
-        LL_SEG_SCOPE(PREPARE_INPUT);
+        LL_SEG_SCOPE(COMBINE_PARTIAL_ROUTE_SETUP);
         uint32_t count = 0U;
         const uint32_t localCore = GetBlockIdx() - DispatchDedup::kLlSendCoreNum;
         const uint32_t vectorBytes = EpCombineAlign(scanRows_ * 4U, 256U);
@@ -187,7 +187,7 @@ private:
     }
     __aicore__ inline void LoadTask(uint32_t row)
     {
-        LL_SEG_SCOPE(COMBINE_INDEX_INPUT);
+        LL_SEG_SCOPE(COMBINE_PARTIAL_ROUTE_LOAD);
         // Route is reloaded by original row so the list needs only 4B/task.
         // Table3 is exactly one K*8B row, fetched only for an owned type2 task.
         DataCopyPad(table2Ub_, table2_[uint64_t(row) * 3U], {1U, 12U, 0U, 0U, 0U}, {false, 0U, 0U, 0});
@@ -196,11 +196,11 @@ private:
     }
     __aicore__ inline void Load(uint32_t row, uint32_t source, uint32_t member)
     {
-        LL_SEG_SCOPE(COMBINE_INPUT);
+        LL_SEG_SCOPE(COMBINE_PARTIAL_LOAD_ISSUE);
         const uint32_t lane = (inputSequence_ + member) % inputLanes_;
-        LL_SEG_BEGIN(inputWaitBegin, COMBINE_BUFFER_WAIT);
+        LL_SEG_BEGIN(inputWaitBegin, COMBINE_PARTIAL_INPUT_REUSE_WAIT);
         WaitFlag<HardEvent::V_MTE2>(lane);
-        LL_SEG_END(inputWaitBegin, COMBINE_BUFFER_WAIT);
+        LL_SEG_END(inputWaitBegin, COMBINE_PARTIAL_INPUT_REUSE_WAIT);
         GlobalTensor<uint16_t> data;
         if (member == 0U) {
             data = expert_[uint64_t(row) * h_];
@@ -222,16 +222,16 @@ private:
     template <class T>
     __aicore__ inline void Aggregate(uint32_t row, uint32_t source, uint32_t contributions)
     {
-        LL_SEG_SCOPE(COMBINE_DEQUANT_REDUCE);
+        LL_SEG_SCOPE(COMBINE_PARTIAL_REDUCE);
         const uint32_t preload = contributions < inputLanes_ ? contributions : inputLanes_;
         for (uint32_t member = 0; member < preload; ++member) Load(row, source, member);
         const auto weights = table3Ub_.ReinterpretCast<float>();
         for (uint32_t member = 0; member < contributions; ++member) {
             const uint32_t lane = (inputSequence_ + member) % inputLanes_;
             const float weight = weights.GetValue(member * 2U + 1U);
-            LL_SEG_BEGIN(consumeInputBegin, COMBINE_INPUT);
+            LL_SEG_BEGIN(consumeInputBegin, COMBINE_PARTIAL_LOAD_WAIT);
             WaitFlag<HardEvent::MTE2_V>(lane);
-            LL_SEG_END(consumeInputBegin, COMBINE_INPUT);
+            LL_SEG_END(consumeInputBegin, COMBINE_PARTIAL_LOAD_WAIT);
             Cast(cast_, inputs_[lane * inputBytes_ / 2U].template ReinterpretCast<T>(), RoundMode::CAST_NONE, h_);
             SetFlag<HardEvent::V_MTE2>(lane);
             // Prefetch may reuse this input after Cast, independent of weighted
@@ -254,11 +254,11 @@ private:
     __aicore__ inline void Send(uint32_t lane, uint32_t source, uint32_t token, uint32_t topk)
     {
         // Only output-lane reuse waits for MTE3; aggregation entry never does.
-        LL_SEG_BEGIN(packQuantBegin, COMBINE_PACK_QUANT);
-        LL_SEG_BEGIN(outputWaitBegin, COMBINE_BUFFER_WAIT);
+        LL_SEG_BEGIN(packQuantBegin, COMBINE_PARTIAL_PACK);
+        LL_SEG_BEGIN(outputWaitBegin, COMBINE_PARTIAL_OUTPUT_WAIT);
         WaitFlag<HardEvent::MTE3_V>(lane);
-        LL_SEG_END(outputWaitBegin, COMBINE_BUFFER_WAIT);
-        LL_SEG_BEGIN(copyPackBegin, COMBINE_COPY_PACK);
+        LL_SEG_END(outputWaitBegin, COMBINE_PARTIAL_OUTPUT_WAIT);
+        LL_SEG_BEGIN(copyPackBegin, COMBINE_PARTIAL_COPY_PACK);
         auto output = outputs_[lane * packetBytes_];
         auto dst = output.ReinterpretCast<int32_t>();
         auto src = low_.ReinterpretCast<int32_t>();
@@ -266,15 +266,15 @@ private:
         Copy(dst[64U], src[64U], uint64_t(56U), uint8_t(blocks_), {1U, 1U, 16U, 15U});
         SetFlag<HardEvent::V_MTE3>(lane);
         WaitFlag<HardEvent::V_MTE3>(lane);
-        LL_SEG_END(copyPackBegin, COMBINE_COPY_PACK);
-        LL_SEG_END(packQuantBegin, COMBINE_PACK_QUANT);
-        LL_SEG_BEGIN(sendIssueBegin, COMBINE_SEND_ISSUE);
+        LL_SEG_END(copyPackBegin, COMBINE_PARTIAL_COPY_PACK);
+        LL_SEG_END(packQuantBegin, COMBINE_PARTIAL_PACK);
+        LL_SEG_BEGIN(sendIssueBegin, COMBINE_PARTIAL_SEND_ISSUE);
         GlobalTensor<uint8_t> target;
         target.SetGlobalBuffer(args_->peerMems[source] + window_ + COMBINE_DEDUP_EP_SERVER_DEDUP_SHARED_DATA_OFFSET +
                                (uint64_t(token) * k_ + topk) * packetBytes_);
         DataCopy(target, output, packetBytes_);
         SetFlag<HardEvent::MTE3_V>(lane);
-        LL_SEG_END(sendIssueBegin, COMBINE_SEND_ISSUE);
+        LL_SEG_END(sendIssueBegin, COMBINE_PARTIAL_SEND_ISSUE);
     }
 
     uint32_t recvCores_ = 0;

@@ -12,10 +12,10 @@ import struct
 import threading
 
 MAGIC = 0x4C4C5431
-SCHEMA, SLOTS, FIELDS = 12, 72, 8
-TRACE_RECORDS, METRICS, RECORDS = 192, 81, 273
+SCHEMA, SLOTS, FIELDS = 13, 88, 8
+TRACE_RECORDS, METRICS, RECORDS = 192, 139, 331
 DEFAULT_FREQUENCY_HZ = 1_000_000_000
-STAGES = ('KERNEL', 'SEND_TOKENS', 'CAL_CUMSUM', 'PREPARE_INPUT', 'SEND_COUNTS', 'INIT_COUNT_BUFFERS', 'WAIT_RECV_COUNTS', 'CLEAR_RECV_STATUS', 'GATHER_RECV_COUNTS', 'GET_CUMSUM', 'BUILD_RECV_CUMSUM', 'WAIT_CUMSUM', 'LOCAL_WINDOW_COPY', 'FORMAT_OUTPUT', 'BUILD_EXPERT_TASKS', 'CLEAR_LOCAL_FLAGS', 'TOKEN_INPUT', 'TOKEN_QUANT', 'TOKEN_METADATA', 'TOKEN_BUFFER_WAIT', 'TOKEN_PACK', 'TOKEN_SEND_ISSUE', 'COUNT_COMPUTE', 'COUNT_SEND_ISSUE', 'POLL_CORE_SUMS', 'REDUCE_CORE_PREFIX', 'CLEAR_CORE_SUMS', 'BROADCAST_PREFIX', 'PUBLISH_PREFIX_FLAGS', 'RECV_POLL', 'RECV_COPY', 'SEND_DRAIN', 'COMBINE_SEND', 'COMBINE_INIT_RECV', 'COMBINE_RECV', 'COMBINE_INPUT', 'COMBINE_PACK_QUANT', 'COMBINE_SEND_ISSUE', 'COMBINE_SEND_FINISH', 'COMBINE_RECV_POLL', 'COMBINE_DEQUANT_REDUCE', 'COMBINE_PROCESS_TOKEN', 'COMBINE_TOKEN_INIT', 'COMBINE_CLEAR_FLAGS', 'COMBINE_SHARED_EXPERT', 'COMBINE_SPECIAL_EXPERT', 'COMBINE_RMSNORM', 'FINAL_DRAIN', 'POLL_RECV_COUNTS', 'WRITE_COUNTS_OUTPUT', 'INIT', 'POLL_CORE_SUMS_ITERATIONS', 'POLL_RECV_COUNTS_ITERATIONS', 'WAIT_CUMSUM_ITERATIONS', 'RECV_READY_TOKENS', 'COMBINE_READY_SLOTS', 'COMBINE_QUANT', 'COMBINE_BUFFER_WAIT', 'COMBINE_COPY_PACK', 'RECV_BUFFER_WAIT', 'RECV_INPUT', 'RECV_OUTPUT', 'CAL_TOKEN', 'COMBINE_INDEX_INPUT', 'TOKEN_INPUT_WAIT', 'TOKEN_QUANT_WAIT', 'RELAY_ISSUE', 'RELAY_PRE_DRAIN', 'RELAY_COMPLETE', 'RELAY_PACKETS','SEND_COMPLETE_WAIT','TRANSITION_DRAIN','RECV_PREPARE','SEND_SUBMIT_END','OVERLAP_PATH','SERIAL_FALLBACK','SEND_LANES','RECV_LANES','PREFIX_COMPLETE','PREFIX_LOAD','RECV_COMPLETE_WAIT')
+STAGES = ('KERNEL', 'SEND_TOKENS', 'CAL_CUMSUM', 'PREPARE_INPUT', 'SEND_COUNTS', 'INIT_COUNT_BUFFERS', 'WAIT_RECV_COUNTS', 'CLEAR_RECV_STATUS', 'GATHER_RECV_COUNTS', 'GET_CUMSUM', 'BUILD_RECV_CUMSUM', 'WAIT_CUMSUM', 'LOCAL_WINDOW_COPY', 'FORMAT_OUTPUT', 'BUILD_EXPERT_TASKS', 'CLEAR_LOCAL_FLAGS', 'TOKEN_INPUT', 'TOKEN_QUANT', 'TOKEN_METADATA', 'TOKEN_BUFFER_WAIT', 'TOKEN_PACK', 'TOKEN_SEND_ISSUE', 'COUNT_COMPUTE', 'COUNT_SEND_ISSUE', 'POLL_CORE_SUMS', 'REDUCE_CORE_PREFIX', 'CLEAR_CORE_SUMS', 'BROADCAST_PREFIX', 'PUBLISH_PREFIX_FLAGS', 'RECV_POLL', 'RECV_COPY', 'SEND_DRAIN', 'COMBINE_SEND', 'COMBINE_INIT_RECV', 'COMBINE_RECV', 'COMBINE_INPUT', 'COMBINE_PACK_QUANT', 'COMBINE_SEND_ISSUE', 'COMBINE_SEND_FINISH', 'COMBINE_RECV_POLL', 'COMBINE_DEQUANT_REDUCE', 'COMBINE_PROCESS_TOKEN', 'COMBINE_TOKEN_INIT', 'COMBINE_CLEAR_FLAGS', 'COMBINE_SHARED_EXPERT', 'COMBINE_SPECIAL_EXPERT', 'COMBINE_RMSNORM', 'FINAL_DRAIN', 'POLL_RECV_COUNTS', 'WRITE_COUNTS_OUTPUT', 'INIT', 'POLL_CORE_SUMS_ITERATIONS', 'POLL_RECV_COUNTS_ITERATIONS', 'WAIT_CUMSUM_ITERATIONS', 'RECV_READY_TOKENS', 'COMBINE_READY_SLOTS', 'COMBINE_QUANT', 'COMBINE_BUFFER_WAIT', 'COMBINE_COPY_PACK', 'RECV_BUFFER_WAIT', 'RECV_INPUT', 'RECV_OUTPUT', 'CAL_TOKEN', 'COMBINE_INDEX_INPUT', 'TOKEN_INPUT_WAIT', 'TOKEN_QUANT_WAIT', 'RELAY_ISSUE', 'RELAY_PRE_DRAIN', 'RELAY_COMPLETE', 'RELAY_PACKETS','SEND_COMPLETE_WAIT','TRANSITION_DRAIN','RECV_PREPARE','SEND_SUBMIT_END','OVERLAP_PATH','SERIAL_FALLBACK','SEND_LANES','RECV_LANES','PREFIX_COMPLETE','PREFIX_LOAD','RECV_COMPLETE_WAIT','SEND_SETUP','LOCAL_SEND_SETUP','LOCAL_SEND_RETIRE','ROUTE_CLASSIFY','LOCAL_SEND_POOL_SETUP','SEND_COUNT_SETUP','RECV_COUNT_SETUP','COUNT_HISTOGRAM','COUNT_EXPERT_SCAN','LOCAL_ROUTE_BUILD','RECV_LANE_REUSE_WAIT','RECV_LOAD_ISSUE','RECV_LOAD_WAIT','RECV_DIRECT_COPY_WAIT','RECV_RELAY_COPY_WAIT','RECV_SETUP','RECV_BATCH','RECV_TRANSITION_DRAIN','DISPATCH_FINAL_DRAIN','COMBINE_PENDING_SETUP','COMBINE_NOTIFY_ISSUE','COMBINE_PARTIAL_SEND','COMBINE_SOURCE_RECV','COMBINE_SHARED_OUTPUT_DRAIN','COMBINE_DIRECT_RECV','COMBINE_DIRECT_SEND','COMBINE_DIRECT_TABLE_CACHE','COMBINE_DIRECT_SETUP','COMBINE_TYPE_LOAD','COMBINE_DIRECT_RANKS_LOAD','COMBINE_DIRECT_TOKEN','COMBINE_DIRECT_ROUTE_LOAD','COMBINE_DIRECT_INPUT','COMBINE_DIRECT_PACK','COMBINE_PARTIAL_SETUP','COMBINE_PARTIAL_TOKEN','COMBINE_PARTIAL_ROUTE_SETUP','COMBINE_PARTIAL_ROUTE_LOAD','COMBINE_PARTIAL_LOAD_ISSUE','COMBINE_PARTIAL_INPUT_REUSE_WAIT','COMBINE_PARTIAL_REDUCE','COMBINE_PARTIAL_LOAD_WAIT','COMBINE_PARTIAL_PACK','COMBINE_PARTIAL_OUTPUT_WAIT','COMBINE_PARTIAL_COPY_PACK','COMBINE_PARTIAL_SEND_ISSUE','COMBINE_SOURCE_SETUP','COMBINE_SOURCE_LOAD_ISSUE','COMBINE_SOURCE_INPUT_REUSE_WAIT','COMBINE_SHARED_LANE_RECLAIM','COMBINE_SOURCE_TOKEN','COMBINE_SOURCE_LOAD_WAIT','COMBINE_SOURCE_REDUCE','COMBINE_SOURCE_OUTPUT_WAIT','COMBINE_DIRECT_DRAIN','COMBINE_SERVER_READY_WAIT','COMBINE_SOURCE_DRAIN','COMBINE_SOURCE_POLL')
 COUNTERS = frozenset((*range(51,56),69,*range(74,78)))
 ROLES = {1:'send_token',2:'cumsum',3:'send_and_recv',4:'recv'}
 _state=threading.local()
@@ -30,8 +30,8 @@ def parse_records(raw, operation, frequency_hz=None):
     if not raw or not raw[0] or len(raw[0][0])!=8:
         raise ValueError('Missing timer header')
     schema=raw[0][0][1]
-    metrics_limit={7:64,9:66,10:70,11:78}.get(schema,METRICS)
-    if schema not in (7,9,10,11,SCHEMA):
+    metrics_limit={7:64,9:66,10:70,11:78,12:81}.get(schema,METRICS)
+    if schema not in (7,9,10,11,12,SCHEMA):
         return legacy.parse_records(raw,operation,frequency_hz)
     if operation not in ('dispatch','combine'): raise ValueError('Expected dispatch or combine')
     if frequency_hz is not None and (not math.isfinite(frequency_hz) or frequency_hz<=0):
@@ -41,12 +41,12 @@ def parse_records(raw, operation, frequency_hz=None):
     records,intervals,core_info,splits=[],[],[],set()
     modes=set()
     for core,rows in enumerate(raw):
-        if len(rows)!=SLOTS or any(len(row)!=FIELDS for row in rows): raise ValueError('Timer shape mismatch')
+        if len(rows)!=(SLOTS if schema==SCHEMA else 72) or any(len(row)!=FIELDS for row in rows): raise ValueError('Timer shape mismatch')
         words=[value for row in rows for value in row]
         if any(type(v) is not int or not -(1<<63)<=v<(1<<64) for v in words): raise ValueError('Invalid timer word')
         words=[v & ((1<<64)-1) for v in words]
         h=words[:8];mode=h[5]&255;send=(h[5]>>8)&255;role=h[5]>>16
-        if h[:5]!=[MAGIC,schema,op,cores,core] or not (mode==1 or (schema in (10,11,12) and mode==3 and op==1)) or not 0<send<56:
+        if h[:5]!=[MAGIC,schema,op,cores,core] or not (mode==1 or (schema in (10,11,12,13) and mode==3 and op==1)) or not 0<send<56:
             raise ValueError('Incomplete or mismatched segment header')
         expected=(3 if core<send else 2) if op==1 else (1 if core<send else 4)
         if role!=expected: raise ValueError('Unexpected segment core role')
@@ -64,7 +64,7 @@ def parse_records(raw, operation, frequency_hz=None):
                 stage=event//2
                 if in_metrics or payload or stage>=metrics_limit or stage in COUNTERS: raise ValueError('Invalid interval event')
                 pair=pairs.setdefault(stage,[[],[]]);pair[event&1].append(value);trace_count+=1
-        if schema in (10,11,12):
+        if schema in (10,11,12,13):
             relay={stage for stage in metrics if 66<=stage<=69}
             if relay and op!=1: raise ValueError('Relay diagnostics require dispatch')
             if mode==1 and relay & {67,68}: raise ValueError('Completion metrics in observe capture')
@@ -117,9 +117,9 @@ def parse_records(raw, operation, frequency_hz=None):
 def chrome_trace(saved_records, frequency_hz=None, lane_layout='core', show_repeated=False):
     saved_records=list(saved_records)
     if not saved_records: raise ValueError('No LL stage records')
-    if all(s['raw'][0][0][1] not in (7,9,10,11,SCHEMA) for s in saved_records):
+    if all(s['raw'][0][0][1] not in (7,9,10,11,12,SCHEMA) for s in saved_records):
         return legacy.chrome_trace(saved_records,frequency_hz,lane_layout,show_repeated)
-    if any(s['raw'][0][0][1] not in (7,9,10,11,SCHEMA) for s in saved_records): raise ValueError('Mixed segment and legacy traces')
+    if any(s['raw'][0][0][1] not in (7,9,10,11,12,SCHEMA) for s in saved_records): raise ValueError('Mixed segment and legacy traces')
     if len({s['raw'][0][0][1] for s in saved_records})!=1: raise ValueError('Mixed segment schemas')
     if len({s['raw'][0][0][5]&255 for s in saved_records})!=1: raise ValueError('Mixed relay diagnostic modes')
     if lane_layout not in ('core','stage'): raise ValueError('Expected core or stage lane layout')

@@ -13,7 +13,7 @@ def method(text,name):
 def test_sender_is_main_loop_and_dedup_unchanged():
     sender=(BASE/'device/dispatch_server_dedup_send.h').read_text(encoding='utf-8')
     old=subprocess.check_output(['git','-C',str(ROOT),'show','4ec82a5:csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_send.h'],encoding='utf-8')
-    assert method(sender,'SendWithDedup')==method(old,'SendWithDedup')
+    assert method(sender,'SendWithDedup').replace('ROUTE_CLASSIFY','PREPARE_INPUT')==method(old,'SendWithDedup')
     assert method(sender,'ProcessGroupLocal')==method(old,'ProcessGroupLocal')
     body=method(sender,'SendWithoutDedup')
     assert 'GatherMask' not in body and 'ownBegin' not in body

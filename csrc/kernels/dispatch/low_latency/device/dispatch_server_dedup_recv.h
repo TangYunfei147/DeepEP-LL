@@ -66,7 +66,7 @@ public:
     __aicore__ inline void Prepare(LlStageTimer::DeviceTimer* timer = nullptr)
     {
         timer_ = timer;
-        LL_SEG_SCOPE(FORMAT_OUTPUT);
+        LL_SEG_SCOPE(RECV_SETUP);
         // Overlap retains all send/count DMA sources and shares the already
         // acquired prefix. Only the drained fallback may Reset/reload.
         LL_SEG_SCOPE(RECV_PREPARE);
@@ -127,7 +127,7 @@ public:
     __aicore__ inline bool TryBatch() {
         if (!tasks_.PendingCount()) return false;
         LL_SEG_SCOPE(LOCAL_WINDOW_COPY);
-        LL_SEG_SCOPE(FORMAT_OUTPUT);
+        LL_SEG_SCOPE(RECV_BATCH);
         auto snapshot=probeIdxBuf_.Get<uint32_t>();
         const uint32_t depth=lanes_;
             // One bounded scan; empty batches return to the cooperative caller.
@@ -230,10 +230,10 @@ private:
     // 摘要：等待 lane 的旧输出完成后，将 packet 从 GM 预取到 UB，分别发布给 Scalar 和 MTE3 的依赖事件。
     __aicore__ inline void IssueLoad(uint32_t j, uint32_t lane, bool keepFlags, bool reuse)
     {
-        LL_SEG_BEGIN(segBegin1, RECV_BUFFER_WAIT);
+        LL_SEG_BEGIN(segBegin1, RECV_LANE_REUSE_WAIT);
         if (reuse) WaitFlag<HardEvent::MTE3_MTE2>(lane);
-        LL_SEG_END(segBegin1, RECV_BUFFER_WAIT);
-        LL_SEG_BEGIN(segBegin2, RECV_INPUT);
+        LL_SEG_END(segBegin1, RECV_LANE_REUSE_WAIT);
+        LL_SEG_BEGIN(segBegin2, RECV_LOAD_ISSUE);
         auto wire = lanesBuf_.Get<uint8_t>()[lane * laneStride_];
         GlobalTensor<uint8_t> source;
         source.SetGlobalBuffer(Slot(j));
@@ -247,7 +247,7 @@ private:
         SetFlag<HardEvent::MTE2_MTE3>(lane);
         // Publish immediately after this load, before queuing later loads.
         SetFlag<HardEvent::MTE2_S>(lane);
-        LL_SEG_END(segBegin2, RECV_INPUT);
+        LL_SEG_END(segBegin2, RECV_LOAD_ISSUE);
     }
 
     // 摘要：消费已预取包，写出 token/scale 和路由元数据；FIRST_HOP 还向其余专家转发，再归还 lane。
@@ -255,9 +255,9 @@ private:
     {
         LL_SEG_SCOPE(RECV_COPY);
         LL_SEG_COUNT(RECV_READY_TOKENS, 1U);
-        LL_SEG_BEGIN(segBegin3, RECV_INPUT);
+        LL_SEG_BEGIN(segBegin3, RECV_LOAD_WAIT);
         WaitFlag<HardEvent::MTE2_S>(lane);
-        LL_SEG_END(segBegin3, RECV_INPUT);
+        LL_SEG_END(segBegin3, RECV_LOAD_WAIT);
         LL_SEG_SCOPE(RECV_OUTPUT);
         uint32_t expert = 0;
         if (expertTimer_ && expertTimer_->Enabled()) {
@@ -272,9 +272,9 @@ private:
         if (!enableDedup_ && !keepFlags) {
             // Compact offsets are logical payload offsets. Retain this lane
             // until all payload, scale and metadata output reads complete.
-            LL_SEG_BEGIN(segBegin4, RECV_BUFFER_WAIT);
+            LL_SEG_BEGIN(segBegin4, RECV_DIRECT_COPY_WAIT);
             WaitFlag<HardEvent::MTE2_MTE3>(lane);
-            LL_SEG_END(segBegin4, RECV_BUFFER_WAIT);
+            LL_SEG_END(segBegin4, RECV_DIRECT_COPY_WAIT);
             if (expertTimer_) expertTimer_->Start(expert, LlExpertTimer::OutputWrite);
             DataCopyPad(expandX_[uint64_t(row) * hiddenBytes_], wire, {1U, hiddenBytes_, 0U, 0U, 0U});
             if constexpr (WireFp8)
@@ -309,10 +309,10 @@ private:
             wire.template ReinterpretCast<float>().SetValue(PacketReceiveLayout::kMarkerOffset / 4U,
                                                             PacketReceiveLayout::kCompact);
         }
-        LL_SEG_BEGIN(segBegin7, RECV_BUFFER_WAIT);
+        LL_SEG_BEGIN(segBegin7, RECV_RELAY_COPY_WAIT);
         ServerDedupReceiveSync<HardEvent::S_MTE3>();
         WaitFlag<HardEvent::MTE2_MTE3>(lane);
-        LL_SEG_END(segBegin7, RECV_BUFFER_WAIT);
+        LL_SEG_END(segBegin7, RECV_RELAY_COPY_WAIT);
         // Initiate downstream work before local output writes on the same
         // MTE3 stream. Metadata was snapshotted before the terminal rewrite;
         // wire stays immutable until every relay/output read retires.

@@ -37,7 +37,7 @@ def raw(send=10,operation='dispatch',full=False,schema=7,mode=1):
             metrics[52]=(17,0)
         end(0,100,10000)
         events=intervals+[(0x8000+stage+(calls<<32),total) for stage,(calls,total) in sorted(metrics.items())]
-        words=[0]*(timer.SLOTS*timer.FIELDS)
+        words=[0]*((timer.SLOTS if schema==timer.SCHEMA else 72)*timer.FIELDS)
         role=(3 if core<send else 2) if operation=='dispatch' else (1 if core<send else 4)
         words[:8]=[timer.MAGIC,schema,1 if operation=='dispatch' else 2,56,core,mode|(send<<8)|(role<<16),len(events),omitted]
         for i,(event,value) in enumerate(events):words[8+i*2:10+i*2]=[event,value]
@@ -112,17 +112,17 @@ def test_full_capture_is_deferred_and_saves_extended_json(monkeypatch,tmp_path):
         def cpu(self):copies.append(self.shape);return self
         def tolist(self):return self.raw
     native=SimpleNamespace(low_latency_stage_timer_enabled=True,
-        low_latency_stage_timer_layout=lambda:dict(schema=timer.SCHEMA,slots=72,fields=8,stages=list(timer.STAGES)),
+        low_latency_stage_timer_layout=lambda:dict(schema=timer.SCHEMA,slots=timer.SLOTS,fields=8,stages=list(timer.STAGES)),
         low_latency_core_config=lambda:dict(active_aiv=56,send_cores=10,device=0,runtime_device_queried=True))
     monkeypatch.setitem(sys.modules,'torch',SimpleNamespace(int64=0,zeros=lambda *a,**k:Tensor()))
     monkeypatch.setitem(sys.modules,'deep_ep._native',SimpleNamespace(require_native=lambda _:native))
     module=load('deep_ep.utils.ll_stage_timer','deep_ep/utils/ll_stage_timer.py')
-    trace=module.StageTrace(object(),'dispatch');assert trace.tensor.shape==(56,72,8) and trace.tensor.data_ptr()%512==0
+    trace=module.StageTrace(object(),'dispatch');assert trace.tensor.shape==(56,timer.SLOTS,8) and trace.tensor.data_ptr()%512==0
     tensors={'input':SimpleNamespace(device='npu:0')}
     with module.capture(trace.buffer,'dispatch',prepared=trace,defer_complete=True):module.attach(trace.buffer,tensors,'dispatch')
     assert not copies
     trace.complete();trace.save(tmp_path/'sample_0.json',dict(rank=0,iteration=0))
-    assert copies==[(56,72,8)]
+    assert copies==[(56,timer.SLOTS,8)]
     assert not (tmp_path/'dispatch_prof_rank0_sample_0.bin').exists()
     assert json.loads((tmp_path/'sample_0.json').read_text())['schema']==timer.SCHEMA
     with pytest.raises(FileExistsError):trace.save(tmp_path/'sample_0.json')

@@ -41,3 +41,9 @@ dispatch UB预算230KiB、combine独立预算不变。接收表向量化须处�
 R0前缀生成改为device/dispatch_prefix_scan.h的uint32 VF扫描：64项/段、6级gather/add、寄存器carry。
 输入缓冲按256B补齐，Host与Device共用预算。配置标识19000+S，wire/epoch和schema12不变。
 无逐项Scalar累加，不使用float转换；A3不支持该A5 VF，不能作为运行性能验收。
+
+## 阶段命名约束（schema13）
+用户明确要求：作用不同的代码禁止使用同一个阶段名。新打点先查STAGE_SEMANTICS.md。
+不同初始化/路由分类/搬运下发/完成等待必须分名；同一种操作的多次执行保留同名。
+业务收发不得因拆分打点增加同步。schema13每核88×8 int64，旧schema仅离线解析。
+禁止将旧PREPARE_INPUT累计数据自动重标为新SEND_SETUP或ROUTE_CLASSIFY。

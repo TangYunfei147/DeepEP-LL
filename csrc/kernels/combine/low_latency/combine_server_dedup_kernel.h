@@ -113,39 +113,39 @@ public:
     __aicore__ inline void Process()
     {
         if (enableDedup_) {
-            LL_SEG_BEGIN(segBegin1, PREPARE_INPUT);
+            LL_SEG_BEGIN(segBegin1, COMBINE_PENDING_SETUP);
             CopyLocalPendingTokens();
-            LL_SEG_END(segBegin1, PREPARE_INPUT);
+            LL_SEG_END(segBegin1, COMBINE_PENDING_SETUP);
         }
         if (core_ >= sendCores_) {
             if (enableDedup_) {
                 if (core_ >= notifyBegin_) {
-                    LL_SEG_BEGIN(segBegin2, PREPARE_INPUT);
+                    LL_SEG_BEGIN(segBegin2, COMBINE_NOTIFY_ISSUE);
                     NotifyServerCard();
-                    LL_SEG_END(segBegin2, PREPARE_INPUT);
+                    LL_SEG_END(segBegin2, COMBINE_NOTIFY_ISSUE);
                     // Notification has been issued; do not add an MTE3 drain.
                 }
                 WaitServerReady();
-                LL_SEG_BEGIN(segBegin4, COMBINE_SEND);
+                LL_SEG_BEGIN(segBegin4, COMBINE_PARTIAL_SEND);
                 ReturnPartialTokens();
-                LL_SEG_END(segBegin4, COMBINE_SEND);
-                LL_SEG_BEGIN(segBegin5, COMBINE_RECV);
+                LL_SEG_END(segBegin4, COMBINE_PARTIAL_SEND);
+                LL_SEG_BEGIN(segBegin5, COMBINE_SOURCE_RECV);
                 const uint32_t retiredOutputs = AggregateSourceTokens();
-                LL_SEG_END(segBegin5, COMBINE_RECV);
-                LL_SEG_BEGIN(segBegin6, COMBINE_SEND_FINISH);
+                LL_SEG_END(segBegin5, COMBINE_SOURCE_RECV);
+                LL_SEG_BEGIN(segBegin6, COMBINE_SHARED_OUTPUT_DRAIN);
                 DrainSharedOutputs(retiredOutputs);
-                LL_SEG_END(segBegin6, COMBINE_SEND_FINISH);
+                LL_SEG_END(segBegin6, COMBINE_SHARED_OUTPUT_DRAIN);
             } else {
-                LL_SEG_BEGIN(segBegin7, COMBINE_RECV);
+                LL_SEG_BEGIN(segBegin7, COMBINE_DIRECT_RECV);
                 AggregateSourceTokensM6();
-                LL_SEG_END(segBegin7, COMBINE_RECV);
+                LL_SEG_END(segBegin7, COMBINE_DIRECT_RECV);
             }
         } else {
-            LL_SEG_BEGIN(segBegin8, COMBINE_SEND);
+            LL_SEG_BEGIN(segBegin8, COMBINE_DIRECT_SEND);
             ReturnDirectTokens();
             // Retain the full drain after direct-return DMA completion.
             PipeBarrier<PIPE_ALL>();
-            LL_SEG_END(segBegin8, COMBINE_SEND);
+            LL_SEG_END(segBegin8, COMBINE_DIRECT_SEND);
         }
         // Retires prepare publication, both zero sources and server notification;
         // no arena/pipe reset or exit may precede completion of their DMA reads.
@@ -266,23 +266,23 @@ private:
             // The old metadata has no users after its scalar offset is read.
             // Payload DMA owns separate lanes, so changing this cache needs
             // no payload drain and preserves the lane sequence across batches.
-            LL_SEG_BEGIN(cacheInputBegin, COMBINE_INDEX_INPUT);
+            LL_SEG_BEGIN(cacheInputBegin, COMBINE_DIRECT_TABLE_CACHE);
             DataCopyPad(tableUb_, table_[uint64_t(cacheBegin) * 3U], {1U, (cacheEnd - cacheBegin) * 12U, 0U, 0U, 0U},
                         {false, 0U, 0U, 0});
             Sync<HardEvent::MTE2_S>();
-            LL_SEG_END(cacheInputBegin, COMBINE_INDEX_INPUT);
+            LL_SEG_END(cacheInputBegin, COMBINE_DIRECT_TABLE_CACHE);
         }
     }
     __aicore__ inline void PrepareDirectRows()
     {
-        LL_SEG_SCOPE(PREPARE_INPUT);
+        LL_SEG_SCOPE(COMBINE_DIRECT_SETUP);
         selected_ = 0U;
         if (tokens_ == 0U) return;
         if (enableDedup_) {
-            LL_SEG_BEGIN(typeInputBegin, COMBINE_INDEX_INPUT);
+            LL_SEG_BEGIN(typeInputBegin, COMBINE_TYPE_LOAD);
             DataCopyPad(typeUb_, types_, {1U, tokens_ * 4U, 0U, 0U, 0U}, {false, 0U, 0U, 0});
             Sync<HardEvent::MTE2_V>();
-            LL_SEG_END(typeInputBegin, COMBINE_INDEX_INPUT);
+            LL_SEG_END(typeInputBegin, COMBINE_TYPE_LOAD);
             Compares(maskUb_, typeUb_, int32_t(1), CMPMODE::EQ, (tokens_ + 63U) / 64U * 64U);
             CreateVecIndex(indexUb_, int32_t(0), tokens_);
             PipeBarrier<PIPE_V>();
@@ -302,11 +302,11 @@ private:
         Muls(typeUb_, typeUb_, int32_t(12), chunk);  // Table2 byte offsets
         for (uint32_t begin = 0U; begin < tokens_; begin += chunk) {
             const uint32_t span = tokens_ - begin < chunk ? tokens_ - begin : chunk;
-            LL_SEG_BEGIN(tableInputBegin, COMBINE_INDEX_INPUT);
+            LL_SEG_BEGIN(tableInputBegin, COMBINE_DIRECT_RANKS_LOAD);
             Sync<HardEvent::V_MTE2>();  // table cache is no longer a Gather source
             DataCopyPad(tableUb_, table_[uint64_t(begin) * 3U], {1U, span * 12U, 0U, 0U, 0U}, {false, 0U, 0U, 0});
             Sync<HardEvent::MTE2_V>();
-            LL_SEG_END(tableInputBegin, COMBINE_INDEX_INPUT);
+            LL_SEG_END(tableInputBegin, COMBINE_DIRECT_RANKS_LOAD);
             Gather(indexUb_[begin], tableUb_, typeUb_.ReinterpretCast<uint32_t>(), 0U, span);
         }
         PipeBarrier<PIPE_V>();
@@ -359,28 +359,28 @@ private:
             owner = (owner + count) % sendCores_;
             for (uint32_t task = first; task < count; task += sendCores_) {
                 const uint32_t row = uint32_t(indexUb_.GetValue(task));
-                LL_SEG_SCOPE(COMBINE_PROCESS_TOKEN);
-                LL_SEG_BEGIN(indexBegin, COMBINE_INDEX_INPUT);
+                LL_SEG_SCOPE(COMBINE_DIRECT_TOKEN);
+                LL_SEG_BEGIN(indexBegin, COMBINE_DIRECT_ROUTE_LOAD);
                 // Only owned rows reload a routing triple. The persistent rank
                 // and original-row arrays are untouched between server rounds.
                 DataCopyPad(tableUb_, table_[uint64_t(row) * 3U], {1U, 12U, 0U, 0U, 0U}, {false, 0U, 0U, 0});
                 Sync<HardEvent::MTE2_S>();
-                LL_SEG_END(indexBegin, COMBINE_INDEX_INPUT);
+                LL_SEG_END(indexBegin, COMBINE_DIRECT_ROUTE_LOAD);
                 const uint32_t source = uint32_t(tableUb_.GetValue(0U));
                 const uint32_t token = uint32_t(tableUb_.GetValue(1U));
                 const uint32_t topk = uint32_t(tableUb_.GetValue(2U));
                 const uint32_t lane = sendSequence++ % lanes_;
                 // Input lifetime ends after Vector has consumed its last block.
-                LL_SEG_BEGIN(inputBegin, COMBINE_INPUT);
+                LL_SEG_BEGIN(inputBegin, COMBINE_DIRECT_INPUT);
                 WaitFlag<HardEvent::V_MTE2>(lane);
                 auto input = payloadUb_[lane * laneBytes_ / 2U];
                 DataCopyPad(input, expert_[uint64_t(row) * h_], {1U, h_ * 2U, 0U, 0U, 0U},
                             {false, 0U, 0U, uint16_t(0)});
                 SetFlag<HardEvent::MTE2_V>(lane);
                 WaitFlag<HardEvent::MTE2_V>(lane);
-                LL_SEG_END(inputBegin, COMBINE_INPUT);
+                LL_SEG_END(inputBegin, COMBINE_DIRECT_INPUT);
                 // Output lifetime ends only after the previous send has read it.
-                LL_SEG_BEGIN(packQuantBegin, COMBINE_PACK_QUANT);
+                LL_SEG_BEGIN(packQuantBegin, COMBINE_DIRECT_PACK);
                 LL_SEG_BEGIN(bufferBegin, COMBINE_BUFFER_WAIT);
                 WaitFlag<HardEvent::MTE3_V>(lane);
                 LL_SEG_END(bufferBegin, COMBINE_BUFFER_WAIT);
@@ -396,7 +396,7 @@ private:
                 SetFlag<HardEvent::V_MTE3>(lane);
                 WaitFlag<HardEvent::V_MTE3>(lane);
                 LL_SEG_END(packBegin, COMBINE_COPY_PACK);
-                LL_SEG_END(packQuantBegin, COMBINE_PACK_QUANT);
+                LL_SEG_END(packQuantBegin, COMBINE_DIRECT_PACK);
                 LL_SEG_BEGIN(issueBegin, COMBINE_SEND_ISSUE);
                 GlobalTensor<uint8_t> destination;
                 destination.SetGlobalBuffer(args_->peerMems[source] + window_ +
@@ -408,13 +408,13 @@ private:
             }
             // No server fence: the next scan can overlap pending output DMA.
         }
-        LL_SEG_BEGIN(finishBegin, COMBINE_SEND_FINISH);
+        LL_SEG_BEGIN(finishBegin, COMBINE_DIRECT_DRAIN);
         // Final retirement includes unused seeded lanes, never a per-token drain.
         for (uint32_t lane = 0; lane < lanes_; ++lane) {
             WaitFlag<HardEvent::V_MTE2>(lane);
             WaitFlag<HardEvent::MTE3_V>(lane);
         }
-        LL_SEG_END(finishBegin, COMBINE_SEND_FINISH);
+        LL_SEG_END(finishBegin, COMBINE_DIRECT_DRAIN);
     }
     // M4→M5交接需保留尚未完成的MTE3输出槽；只等待当前要复用的输入/向量资源。
     // 修改此处同步必须联查Partial与SourceAggregate的槽位生命周期，避免提前覆盖发送数据。
@@ -439,7 +439,7 @@ private:
     __aicore__ inline void WaitFlags(GlobalTensor<float> gm, LocalTensor<float> input, LocalTensor<float> work,
                                      LocalTensor<float> sum, uint32_t flags)
     {
-        LL_SEG_SCOPE(COMBINE_RECV_POLL);
+        LL_SEG_SCOPE(COMBINE_SERVER_READY_WAIT);
         while (true) {
             // The previous reduction has completed before MTE2 overwrites input.
             Sync<HardEvent::V_MTE2>();

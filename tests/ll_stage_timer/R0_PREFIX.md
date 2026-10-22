@@ -1,3 +1,5 @@
+当前打点已升级schema13，名称与缓冲变更见[STAGE_SEMANTICS.md](STAGE_SEMANTICS.md)。下方schema12为历史算法说明；新采样需全rank重装ON并重采。
+
 ## 2026-10-22：R0整数向量前缀
 
 当前配置标识19000+S（取代下文历史17000/18000），Stage3/schema12、wire与epoch协议不变。

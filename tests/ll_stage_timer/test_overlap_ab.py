@@ -29,7 +29,7 @@ def test_common_timing_boundaries():
     assert 'LL_SEG_SCOPE(PREFIX_COMPLETE)' in counts and 'LL_SEG_SCOPE(PREFIX_LOAD)' in counts
     start=sender.index('void Process(')
     body=sender[start:sender.index('struct NoCooperate',start)]
-    assert body.index('LL_SEG_END(segBegin1, PREPARE_INPUT)')<body.index('LL_SEG_SCOPE(SEND_TOKENS)')
+    assert body.index('LL_SEG_END(segBegin1, SEND_SETUP)')<body.index('LL_SEG_SCOPE(SEND_TOKENS)')
     assert 'overlap_.Cooperative() ? 8U:tasks' in sender
     assert 'if (overlap_.Async())' in sender and 'if (!overlap_.Async())' in sender
 

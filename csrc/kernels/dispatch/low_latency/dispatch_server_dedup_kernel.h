@@ -115,11 +115,11 @@ public:
                 if (!overlap_.Async()) { counts_.RecvCnt(); counts_.CalcCumsum(); }
             }
             counts_.CompleteCumsum();
-            if (!overlap_.Async()) { LL_SEG_SCOPE(TRANSITION_DRAIN); PipeBarrier<PIPE_ALL>(); }
+            if (!overlap_.Async()) { LL_SEG_SCOPE(RECV_TRANSITION_DRAIN); PipeBarrier<PIPE_ALL>(); }
             if (overlap_.enabled) receiver_.SetPrefix(counts_.Prefix());
             receiver_.Process(timer_);
         }
-        { LL_SEG_SCOPE(FINAL_DRAIN);
+        { LL_SEG_SCOPE(DISPATCH_FINAL_DRAIN);
         sender_.Retire();
         counts_.Finish(); }
 

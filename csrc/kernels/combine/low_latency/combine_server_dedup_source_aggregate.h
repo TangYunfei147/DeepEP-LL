@@ -58,7 +58,7 @@ public:
 
     __aicore__ inline void DrainM6()
     {
-        LL_SEG_SCOPE(COMBINE_SEND_FINISH);
+        LL_SEG_SCOPE(COMBINE_SOURCE_DRAIN);
         for (uint32_t lane = 0; lane < outputLanes_; ++lane)
             WaitFlag<HardEvent::MTE3_V>(finalLayout_.outputSlots[lane]);
     }
@@ -104,7 +104,7 @@ private:
                                       uint32_t participant, uint32_t participants, uint32_t phaseOffset,
                                       uint32_t computeBytes, uint32_t outputOffset, bool enableDedup)
     {
-        LL_SEG_SCOPE(COMBINE_INIT_RECV);
+        LL_SEG_SCOPE(COMBINE_SOURCE_SETUP);
         enableDedup_ = enableDedup;
         scratch_ = scratch[phaseOffset];
         h_ = h;
@@ -156,7 +156,7 @@ private:
     }
     __aicore__ inline bool Probe(uint32_t token, uint32_t mask)
     {
-        LL_SEG_SCOPE(COMBINE_RECV_POLL);
+        LL_SEG_SCOPE(COMBINE_SOURCE_POLL);
         // The previous probe's V_S retired its flag-buffer reader. This UB is
         // independent of payload compute/output, so do not wait for that Vector
         // work before issuing the next flag read. Inactive slot flags stay zero.
@@ -186,11 +186,11 @@ private:
     }
     __aicore__ inline void Load(uint32_t token, uint32_t k, uint32_t member)
     {
-        LL_SEG_SCOPE(COMBINE_INPUT);
+        LL_SEG_SCOPE(COMBINE_SOURCE_LOAD_ISSUE);
         const uint32_t lane = (inputSequence_ + member) % inputLanes_;
-        LL_SEG_BEGIN(inputWaitBegin, COMBINE_BUFFER_WAIT);
+        LL_SEG_BEGIN(inputWaitBegin, COMBINE_SOURCE_INPUT_REUSE_WAIT);
         WaitFlag<HardEvent::V_MTE2>(lane);
-        LL_SEG_END(inputWaitBegin, COMBINE_BUFFER_WAIT);
+        LL_SEG_END(inputWaitBegin, COMBINE_SOURCE_INPUT_REUSE_WAIT);
         const uint32_t retire = enableDedup_ ? finalLayout_.inputRetireMasks[lane] & ~retiredOutputs_ : 0U;
         if (retire != 0U) {
             for (uint32_t slot = 0; slot < sharedOutputLanes_; ++slot)
@@ -198,9 +198,9 @@ private:
             // MTE3_V protects Vector, not MTE2. Bridge only first-use reclamation
             // through Vector before this DMA overwrites any inherited output.
             SetFlag<HardEvent::V_MTE2>(lane);
-            LL_SEG_BEGIN(reclaimWaitBegin, COMBINE_BUFFER_WAIT);
+            LL_SEG_BEGIN(reclaimWaitBegin, COMBINE_SHARED_LANE_RECLAIM);
             WaitFlag<HardEvent::V_MTE2>(lane);
-            LL_SEG_END(reclaimWaitBegin, COMBINE_BUFFER_WAIT);
+            LL_SEG_END(reclaimWaitBegin, COMBINE_SHARED_LANE_RECLAIM);
             retiredOutputs_ |= retire;
         }
         DataCopy(inputs_[finalLayout_.inputOffsets[lane] / 2U], result_[(uint64_t(token) * k_ + k) * packetBytes_ / 2U],
@@ -210,7 +210,7 @@ private:
     template <class T>
     __aicore__ inline void Aggregate(uint32_t token, uint32_t mask, uint32_t completed)
     {
-        LL_SEG_SCOPE(COMBINE_PROCESS_TOKEN);
+        LL_SEG_SCOPE(COMBINE_SOURCE_TOKEN);
         uint32_t nextK = 0U, loaded = 0U;
         for (; nextK < k_ && loaded < inputLanes_; ++nextK)
             if (!enableDedup_ || ((mask >> nextK) & 1U)) Load(token, nextK, loaded++);
@@ -218,10 +218,10 @@ private:
         for (uint32_t k = 0U; k < k_; ++k)
             if (!enableDedup_ || ((mask >> k) & 1U)) {
                 const uint32_t lane = (inputSequence_ + member) % inputLanes_;
-                LL_SEG_BEGIN(consumeInputBegin, COMBINE_INPUT);
+                LL_SEG_BEGIN(consumeInputBegin, COMBINE_SOURCE_LOAD_WAIT);
                 WaitFlag<HardEvent::MTE2_V>(lane);
-                LL_SEG_END(consumeInputBegin, COMBINE_INPUT);
-                LL_SEG_BEGIN(reduceBegin, COMBINE_DEQUANT_REDUCE);
+                LL_SEG_END(consumeInputBegin, COMBINE_SOURCE_LOAD_WAIT);
+                LL_SEG_BEGIN(reduceBegin, COMBINE_SOURCE_REDUCE);
                 Cast(cast_, inputs_[finalLayout_.inputOffsets[lane] / 2U].template ReinterpretCast<T>(),
                      RoundMode::CAST_NONE, h_);
                 SetFlag<HardEvent::V_MTE2>(lane);
@@ -237,14 +237,14 @@ private:
                     Add(sum_, sum_, product_, h_);
                 }
                 PipeBarrier<PIPE_V>();
-                LL_SEG_END(reduceBegin, COMBINE_DEQUANT_REDUCE);
+                LL_SEG_END(reduceBegin, COMBINE_SOURCE_REDUCE);
                 ++member;
             }
         inputSequence_ += member;
         const uint32_t outputLane = finalLayout_.outputSlots[completed % outputLanes_];
-        LL_SEG_BEGIN(outputWaitBegin, COMBINE_BUFFER_WAIT);
+        LL_SEG_BEGIN(outputWaitBegin, COMBINE_SOURCE_OUTPUT_WAIT);
         WaitFlag<HardEvent::MTE3_V>(outputLane);
-        LL_SEG_END(outputWaitBegin, COMBINE_BUFFER_WAIT);
+        LL_SEG_END(outputWaitBegin, COMBINE_SOURCE_OUTPUT_WAIT);
         auto output = outputs_[outputLane * outputBytes_ / 2U];
         Cast(output.template ReinterpretCast<T>(), sum_, RoundMode::CAST_RINT, h_);
         SetFlag<HardEvent::V_MTE3>(outputLane);
