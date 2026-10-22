@@ -35,7 +35,7 @@ extern "C" [[bisheng::core_ratio(0,1)]] __global__ __aicore__ void ll_scalar_mic
             for(uint32_t j=0;j<count;++j) dst.SetValue(j,j);
         } else if(mode==6) {
             SetFlag<HardEvent::S_V>(0); WaitFlag<HardEvent::S_V>(0);
-            CreateVecIndex(dst,0U,count);
+            CreateVecIndex(dst.ReinterpretCast<int32_t>(),0,count);
             SetFlag<HardEvent::V_S>(0); WaitFlag<HardEvent::V_S>(0);
         }
     }
