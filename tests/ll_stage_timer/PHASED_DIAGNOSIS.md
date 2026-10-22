@@ -37,20 +37,45 @@ python tests/ll_stage_timer/diagnose.py \
 python tests/ll_stage_timer/diagnose.py --analyze-existing diagnostic-runs/small_b_phases_001
 ```
 
-## 发哪些文件
+## 发哪些文件（无损压缩）
 
-先发送根目录的 `SEND_FIRST.txt` 和 `PERFORMANCE_COMPARE.txt`，然后按索引发送各 case/profile 的 `transfer/00_overview.md`、`priority_*.txt`。
-完整 `full_*.txt` 保留全部已解码的每轮/每rank/每核指标、前两次真实区间、配置、频率和缺失信息；需要深入定位时再发送指定部分。
-每个传输文件同时限制 **60000 字符和60000 UTF-8字节**，包括总索引、manifest和分块索引；不会靠截断丢掉后面的核或轮次。
-分块带总数、顺序、bundle ID、SHA256，解析端可恢复并验证全量数据。
+默认只发送根目录 `SEND_FIRST.txt`，以及其中列出的 `transfer/<bundle-id>/suite_*_part_*.txt`。
+整套B/profile数据、OFF性能汇总、启用打点后的完整耗时和身份信息已经一起压缩；无需再发送各case的overview、priority、full、CSV或PERFORMANCE_COMPARE。
+每块同时≤60000字符和60000UTF-8字节，已计入封装及Windows CRLF换行。分包只切传输，不减少轮次、核、指标或真实区间。
 
-已有 schema13 原始 JSON 无需重采即可导出传输包：
+新的采集命令不变。已有这套入口的结果，可只重新打包，**无需重采、编译或启动NPU**：
+
+```bash
+python tests/ll_stage_timer/diagnose.py --analyze-existing diagnostic-runs/small_b_phases_001
+```
+
+此命令读取旧版未压缩v1导出也能生成新压缩包。更早直接ST采集的原始JSON，可先离线分析到新的目录：
 
 ```bash
 python tests/ll_stage_timer/analyze.py <原run目录> --op dispatch --output-dir <新的分析目录>
 ```
 
-已有大 Markdown/CSV 不包含完整原始记录时，工具不能补出未采集的数据。新细分阶段必须重装匹配 schema14 wheel 并重采。
+单case分析目录下的`transfer/`也使用压缩分块。每包有整体及分块SHA256；相同数据不重复存储，更新后生成新的哈希目录，旧包保留。
+整套数据按case边界以约64MiB原始数据分组，避免将整个多B矩阵一次解压到内存。缺少B、profile、rank、轮次或完整性能时，概览明确标为INCOMPLETE。
+
+若只能通过终端获取文本，每次打印一块即可（路径、group和part按SEND_FIRST选择）：
+
+```bash
+python tests/ll_stage_timer/transfer_report.py show diagnostic-runs/small_b_phases_001/transfer/<bundle-id> --group 1 --part 1
+```
+
+接收端将复制的完整块保存到一个或多个文本文件后，先检查缺块，再还原：
+
+```bash
+python tests/ll_stage_timer/transfer_report.py inspect copied_*.txt
+python tests/ll_stage_timer/transfer_report.py restore copied_*.txt --output-dir restored_small_b
+```
+
+支持乱序、重复块和换行重排；所有分组验证完成后才写入。还原生成每case的`decoded_samples.json`、`trace.json`，完整数据还会重新生成`summary.json`与通信报告。
+trace只使用实际采集的区间，保留WAIT，按rank/AIV/阶段命名，KERNEL和父阶段独立轨道；不会把累计时间拼成不存在的逐包时间线。
+更多细节和压缩验证见[COMPRESSED_TRANSFER.md](COMPRESSED_TRANSFER.md)。
+
+已有大Markdown/CSV缺少原始区间时，压缩不能补出未采集数据。新细分阶段仍需匹配schema14 wheel采集；离线压缩不改变设备打点。
 
 ## 如何判断探针扰动
 

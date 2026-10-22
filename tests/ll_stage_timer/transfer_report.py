@@ -1,30 +1,17 @@
-"""Bounded, lossless timer exports for terminals with a 65535-character limit.
-
-The priority series is deliberately smaller than the full series. Tables carry
-their own field names and never fill absent metrics with zero. Every text part is
-an independent ASCII JSON document; concatenate its ``records`` arrays, not the
-files themselves. ``restore_samples`` verifies and reconstructs the full series.
-"""
-from collections import Counter, defaultdict
+"""Lossless compressed timer transfer; all processing is offline, with no NPU work."""
+from collections import defaultdict
+import argparse
+import importlib.util
 import hashlib
 import json
 from pathlib import Path
-import statistics
+import sys
 
-FORMAT = 'll-timer-transfer-v1'
+FORMAT = 'll-timer-transfer-v2'
+LEGACY_FORMAT = 'll-timer-transfer-v1'
+SAMPLE_FORMAT = 'll-timer-samples-v2'
 DEFAULT_LIMIT = 60000
 MAX_LIMIT = 65535
-PREFIX_STAGES = ('SEND_COUNTS', 'COUNT_COMPUTE', 'COUNT_SEND_ISSUE',
-                 'WAIT_RECV_COUNTS', 'GATHER_RECV_COUNTS', 'GET_CUMSUM',
-                 'BUILD_RECV_CUMSUM', 'PREFIX_COMPLETE', 'POLL_CORE_SUMS',
-                 'REDUCE_CORE_PREFIX', 'BROADCAST_PREFIX', 'PUBLISH_PREFIX_FLAGS',
-                 'PREFIX_PUBLISH_WAIT', 'WAIT_CUMSUM', 'PREFIX_LOAD',
-                 'RECV_PREPARE', 'BUILD_EXPERT_TASKS', 'WRITE_COUNTS_OUTPUT',
-                 'BEFORE_FIRST_SEND', 'BEFORE_FIRST_RECV_POLL', 'SEND_SETUP',
-                 'SEND_COMPLETE_WAIT', 'SEND_RETIRE_WAIT', 'RECV_COMPLETE_WAIT',
-                 'FINAL_DRAIN', 'ALL_CORE_WAIT', 'TIMER_FLUSH')
-COUNTERS = ('TX_PACKETS', 'RX_PACKETS', 'RELAY_PACKETS', 'RX_PROBED',
-            'RX_READY', 'RX_EMPTY_POLLS')
 NOTES = (
     'Raw ticks and calls are retained. Missing stages/counters are absent, never imputed as zero.',
     'Stage totals may nest or overlap; do not sum them. Submission is not DMA completion.',
@@ -42,31 +29,6 @@ def _json(value):
 
 def _hash(text):
     return hashlib.sha256(text.encode('utf-8')).hexdigest()
-
-
-def _stats(values):
-    values = list(values)
-    if not values:
-        return dict(observed=0)
-    return dict(observed=len(values), minimum=min(values), p50=statistics.median(values),
-                maximum=max(values))
-
-
-def _activity(stages):
-    tx = stages.get('TX_PACKETS', {}).get('calls')
-    rx = stages.get('RX_PACKETS', {}).get('calls')
-    if tx and rx:
-        return 'tx_rx_observed'
-    if tx:
-        return 'tx_observed'
-    if rx:
-        return 'rx_observed'
-    return 'no_tx_rx_counter_record'
-
-
-def _partition(core, decoded):
-    split = decoded.get('send_cores')
-    return ('S' if core < split else 'R') if split is not None else 'unknown'
 
 
 def _tables(kind, sample_id, rows, budget):
@@ -109,278 +71,170 @@ def _full_records(report, samples, budget):
         yield from _tables('intervals', sample_id, decoded.get('intervals', []), budget)
 
 
-def _priority(samples, report):
-    per_sample = []
-    aggregates = defaultdict(list)
-    core_details = []
-    completeness = []
-    contexts = []
-    context_ids = {}
-    for sample_id, (meta, decoded) in enumerate(samples):
-        context = dict(metadata={k: v for k, v in meta.items() if k not in ('rank', 'iteration')},
-                       decoded={k: v for k, v in decoded.items() if k not in ('records', 'intervals', 'cores')})
-        context_key = _json(context)
-        if context_key not in context_ids:
-            context_ids[context_key] = len(contexts)
-            contexts.append(dict(kind='sample_context', context=len(contexts), **context))
-        cores = defaultdict(dict)
-        for row in decoded.get('records', []):
-            cores[row['core']][row['stage']] = row
-        identity = dict(sample=sample_id, operation=decoded.get('operation'),
-                        rank=meta.get('rank'), iteration=meta.get('iteration'),
-                        schema=decoded.get('schema'), frequency_hz=decoded.get('frequency_hz'),
-                        context=context_ids[context_key])
-        spans = {c: st['KERNEL']['total_ticks'] for c, st in cores.items() if 'KERNEL' in st}
-        longest = max(spans, key=spans.get) if spans else None
-        activity = Counter(_activity(st) for st in cores.values())
-        packet_counts = {}
-        for name in COUNTERS:
-            values = [st[name]['calls'] for st in cores.values() if name in st]
-            packet_counts[name] = dict(observed_cores=len(values), absent_cores=len(cores)-len(values))
-            if values:
-                packet_counts[name]['observed_total'] = sum(values)
-        item = dict(**identity, kernel_span_ticks=_stats(spans.values()),
-                    longest_core=longest, observed_activity=dict(activity), counters=packet_counts,
-                    expected_cores=decoded.get('active_aiv'), observed_cores=len(cores),
-                    prefix_stages={}, preparation={},
-                    interval_coverage=dict(recorded=len(decoded.get('intervals', [])),
-                                           omitted_per_core=_stats(c['omitted_intervals'] for c in decoded.get('cores', [])
-                                                                   if 'omitted_intervals' in c)))
-        names = set(PREFIX_STAGES)
-        names.update(name for st in cores.values() for name in st
-                     if name.startswith(('PREFIX_', 'COUNT_SNAPSHOT_', 'COUNT_READY_', 'COUNT_VALUE_')))
-        for name in sorted(names):
-            rows = [st[name] for st in cores.values() if name in st]
-            if rows:
-                item['prefix_stages'][name] = _stats(r['total_ticks'] for r in rows)
-        for core, stages in cores.items():
-            category = _activity(stages)
-            part = _partition(core, decoded)
-            for name, row in stages.items():
-                key = (decoded.get('operation'), part, category, name)
-                aggregates[key].append(row)
-            if core == longest:
-                core_details.append((spans[core], sample_id, core))
-        # INIT is outside KERNEL. Only subtract timestamps from this same core/sample.
-        intervals = defaultdict(dict)
-        for row in decoded.get('intervals', []):
-            if row.get('sample', 0) == 0:
-                intervals[row['core']][row['stage']] = row
-        for label,start,finish in (
-                ('entry_to_first_send_ticks','INIT','BEFORE_FIRST_SEND'),
-                ('entry_to_first_probe_ticks','INIT','BEFORE_FIRST_RECV_POLL'),
-                ('entry_to_kernel_end_ticks','INIT','KERNEL'),
-                ('timer_entry_to_kernel_end_ticks','TIMER_SETUP','KERNEL')):
-            values=[]
-            for core,trace in intervals.items():
-                if start in trace and finish in trace:
-                    value=trace[finish]['last_tick']-trace[start]['first_tick']
-                    if value<0: raise ValueError('Non-monotonic same-core preparation interval')
-                    values.append(value)
-            if values: item['preparation'][label]=_stats(values)
-        item['active_capture_profile']=meta.get('active_capture_profile')
-        per_sample.append(item)
-        expected = decoded.get('active_aiv')
-        completeness.append(dict(**identity, observed_kernel_cores=len(spans), expected_cores=expected,
-                                 all_kernel_cores_present=(len(spans) == expected) if expected is not None else None))
-    records = [dict(kind='priority_context', notes=list(NOTES),
-                    detail_availability='Schema13 lacks schema14 prefix subphase splits; absent values remain missing.',
-                    schemas=sorted({d.get('schema') for _, d in samples if d.get('schema') is not None}),
-                    configurations=report.get('configurations'), sampling=report.get('sampling'))]
-    records.extend(contexts)
-    records.extend(dict(kind='sample_summary', data=row) for row in per_sample)
-    aggregate_rows = []
-    for (operation, partition, activity, stage), rows in sorted(aggregates.items()):
-        row = dict(operation=operation, partition=partition, observed_activity=activity, stage=stage,
-                   calls=_stats(r['calls'] for r in rows),
-                   total_ticks=_stats(r['total_ticks'] for r in rows),
-                   time_measured=all(r.get('time_measured', True) for r in rows))
-        aggregate_rows.append(row)
-    # One longest-core sample per rank/iteration is ranked; send only the top four
-    # in the initial series. Every other core is preserved in the full series.
-    selected = sorted(core_details, reverse=True)[:4]
-    return records, aggregate_rows, selected, per_sample, completeness
+def _load(name):
+    spec=importlib.util.spec_from_file_location('ll_transfer_'+name,Path(__file__).with_name(name+'.py'))
+    module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+    return module
 
 
-def _pack(series, records, bundle_id, limit):
-    def encode(part, parts, items):
-        return _json(dict(format=FORMAT, bundle_id=bundle_id, series=series,
-                          part=part, parts=parts, table_encoding='zip(fields,row); preserve absent keys',
-                          records=items)) + '\n'
-    groups = []
-    group = []
-    for record in records:
-        # Reserve maximum ten-digit part counts while packing; final headers shrink.
-        if len(encode(9999999999, 9999999999, group + [record])) > limit:
-            if not group:
-                raise ValueError(f"{series}/{record.get('kind')}: one record exceeds {limit} characters; no data was truncated")
-            groups.append(group)
-            group = []
-            if len(encode(9999999999, 9999999999, [record])) > limit:
-                raise ValueError(f"{series}/{record.get('kind')}: one record exceeds {limit} characters; no data was truncated")
-        group.append(record)
-    if group:
-        groups.append(group)
-    return [encode(i + 1, len(groups), group) for i, group in enumerate(groups)]
+codec=_load('text_codec')
 
 
-def _overview(bundle_id, samples, per_sample, aggregate, limit, priority_names, full_names):
-    lines = ['# LL timer transfer overview', '', f'Bundle: `{bundle_id}`',
-             f'Send this file first, then {len(priority_names)} priority part(s).',
-             'The full series is lossless backup; send selected parts only when needed.', '',
-             f'Samples: {len(samples)}; full parts: {len(full_names)}.',
-             'Profile: '+str(sorted({d.get('timer_profile','full') for _,d in samples})),
-             'Units below are raw ticks. Frequency and exact metadata are in priority/full parts.', '',
-             '## Longest core in each rank/iteration', '',
-             '| operation | rank | iter | core | KERNEL ticks | TX cores | RX cores | PREFIX_COMPLETE max | first Probe p50 |',
-             '|---|---:|---:|---:|---:|---:|---:|---:|---:|']
-    omitted = 0
-    for row in per_sample:
-        activity = row['observed_activity']
-        tx = activity.get('tx_observed', 0) + activity.get('tx_rx_observed', 0)
-        rx = activity.get('rx_observed', 0) + activity.get('tx_rx_observed', 0)
-        prefix = row['prefix_stages'].get('PREFIX_COMPLETE', {}).get('maximum', 'missing')
-        probe = row['prefix_stages'].get('BEFORE_FIRST_RECV_POLL', {}).get('p50', 'missing')
-        line = f"| {row['operation']} | {row['rank']} | {row['iteration']} | {row['longest_core']} | {row['kernel_span_ticks'].get('maximum', 'missing')} | {tx} | {rx} | {prefix} | {probe} |"
-        if len(('\n'.join(lines + [line])).encode('utf-8')) < limit - 3500:
-            lines.append(line)
-        else:
-            omitted += 1
-    if omitted:
-        lines.extend(['', f'{omitted} summary rows continue in priority files; raw data are not truncated.'])
-    if len('\n'.join(lines).encode('utf-8')) < limit - 3500:
-        lines.extend(['', '## Observed per-core/per-sample stage totals', '',
-                      'Each row is a separate distribution; parent and child stages must not be added.', '',
-                      '| operation | partition | observed activity | stage | n | p50 ticks | max ticks |',
-                      '|---|---|---|---|---:|---:|---:|'])
-    skipped = 0
-    for row in aggregate:
-        name = row['stage']
-        if name not in (*PREFIX_STAGES, 'INIT', 'INIT_COUNT_BUFFERS', 'KERNEL', 'TOKEN_METADATA',
-                        'TOKEN_PACK', 'RX_METADATA','TIMER_SETUP','SEND_SETUP','SEND_COUNTS','FINAL_DRAIN') and not name.startswith(('PREFIX_', 'COUNT_', 'INIT_', 'SENDER_')):
-            continue
-        stats = row['total_ticks']
-        line = f"| {row['operation']} | {row['partition']} | {row['observed_activity']} | {name} | {stats['observed']} | {stats['p50']} | {stats['maximum']} |"
-        if len(('\n'.join(lines + [line])).encode('utf-8')) < limit - 3500:
-            lines.append(line)
-        else:
-            skipped += 1
-    if skipped:
-        lines.extend(['', f'{skipped} stage summary rows continue in priority files.'])
-    lines.extend(['', '## How to read the data', '', *['- '+note for note in NOTES], '',
-                  '- Prefix stage statistics use only observed records; compare PREFIX_COMPLETE, its children, first Probe and KERNEL together.',
-                  '- Per-sample activity counts are observed positive packet counters. Missing counters do not prove an idle core.',
-                  '- Priority aggregate medians are medians of observed per-core/per-sample values, not differences of medians.',
-                  '- Full sample headers retain configuration, revision/topology fields when recorded, schema, frequency and interval omission counts.',
-                  '- If revision/topology metadata was never recorded, the exporter cannot recover it.',
-                  '- Manifest hashes detect missing, duplicated, reordered or modified full parts.', ''])
-    result = '\n'.join(lines)
-    if len(result) > limit or len(result.encode('utf-8')) > limit:
-        raise ValueError('Overview exceeds transfer limit')
-    return result
+def _safe_name(name):
+    if not isinstance(name,str) or not name or '/' in name or '\\' in name or ':' in name or name in ('.','..'):
+        raise ValueError('Invalid transfer filename')
+    return name
 
 
-def export_bundle(output_dir, report, samples, limit=DEFAULT_LIMIT):
-    """Write bounded files under output_dir/transfer; return the manifest dict.
-
-    An oversized indivisible metadata value is an explicit error before writing
-    any file. The optional limit must be between 4096 and 65535 inclusive.
-    """
-    if type(limit) is not int or not 4096 <= limit <= MAX_LIMIT:
-        raise ValueError('transfer limit must be an integer in [4096, 65535]')
-    samples = list(samples)
-    profiles = defaultdict(set)
-    for _, decoded in samples:
-        profile = decoded.get('timer_profile', 'full' if decoded.get('schema', 0) <= 13 else 'unknown')
-        profiles[decoded.get('operation')].add(profile)
-    if any(len(values) > 1 for values in profiles.values()):
+def _check_profiles(samples):
+    profiles=defaultdict(set)
+    for _,decoded in samples:
+        profiles[decoded.get('operation')].add(decoded.get('timer_profile','full' if decoded.get('schema',0)<=13 else 'unknown'))
+    if any(len(values)>1 for values in profiles.values()):
         raise ValueError('Mixed timer profiles cannot be aggregated; export each capture profile separately')
-    budget = limit - 1024
-    full = list(_full_records(report, samples, budget))
-    bundle_id = _hash(_json(full))[:20]
-    priority, aggregate, selected, summaries, completeness = _priority(samples, report)
-    priority.extend(_tables('stage_aggregate', None, aggregate, budget))
-    for ticks, sample_id, core in selected:
-        meta, decoded = samples[sample_id]
-        priority.append(dict(kind='selected_core', sample=sample_id, core=core, kernel_ticks=ticks,
-                             rank=meta.get('rank'), iteration=meta.get('iteration'),
-                             reason='top four per-sample longest kernel spans; full series contains all cores'))
-        priority.extend(_tables('selected_stages', sample_id,
-                                [r for r in decoded.get('records', []) if r['core'] == core], budget))
-        priority.extend(_tables('selected_intervals', sample_id,
-                                [r for r in decoded.get('intervals', []) if r['core'] == core], budget))
-    full_parts = _pack('full', full, bundle_id, limit)
-    priority_parts = _pack('priority', priority, bundle_id, limit)
-    files = {}
-    manifest_parts = []
-    for series, parts in (('priority', priority_parts), ('full', full_parts)):
-        for index, content in enumerate(parts, 1):
-            name = f'{series}_{index:03d}_of_{len(parts):03d}.txt'
-            files[name] = content
-            parsed = json.loads(content)
-            manifest_parts.append(dict(file=name, series=series, part=index, parts=len(parts),
-                                       chars=len(content), utf8_bytes=len(content.encode('utf-8')),
-                                       sha256=_hash(content), records=len(parsed['records']),
-                                       sample_ids=sorted({r['sample'] for r in parsed['records']
-                                                          if r.get('sample') is not None})))
-    priority_names = [p['file'] for p in manifest_parts if p['series'] == 'priority']
-    full_names = [p['file'] for p in manifest_parts if p['series'] == 'full']
-    files['00_overview.md'] = _overview(bundle_id, samples, summaries, aggregate, limit, priority_names, full_names)
-    expected_world = report.get('world_size')
-    actual = defaultdict(list)
-    for meta, decoded in samples:
-        actual[decoded.get('operation')].append((meta.get('rank'), meta.get('iteration')))
-    expected_iters = (report.get('sampling') or {}).get('diagnostic_iters')
-    if expected_iters is None:
-        values = [i for pairs in actual.values() for _, i in pairs if isinstance(i, int)]
-        expected_iters = max(values) + 1 if values else None
-    expected = ({(r, i) for r in range(expected_world) for i in range(expected_iters)}
-                if isinstance(expected_world, int) and isinstance(expected_iters, int) else None)
-    coverage = {op: dict(observed_samples=len(pairs), unique_samples=len(set(pairs)),
-                        expected_samples=len(expected) if expected is not None else None,
-                        complete=(set(pairs) == expected and len(pairs) == len(set(pairs)))
-                        if expected is not None else None) for op, pairs in actual.items()}
-    manifest = dict(format=FORMAT, bundle_id=bundle_id, limit=limit,
-                    send_first=['00_overview.md', *priority_names],
-                    full_payload_sha256=_hash(_json(full)), full_record_count=len(full),
-                    samples=len(samples), stage_rows=sum(len(d.get('records', [])) for _, d in samples),
-                    interval_rows=sum(len(d.get('intervals', [])) for _, d in samples),
-                    export_complete=True, source_sample_coverage=coverage,
-                    all_observed_kernel_cores_complete=all(x['all_kernel_cores_present'] is True for x in completeness) if completeness else None,
-                    completeness_note='Export is lossless for supplied decoded samples. Expected rank/iteration coverage is separate; intervals were sampled on device.',
-                    series_counts=dict(priority=len(priority_parts), full=len(full_parts)),
-                    part_index=[], notes=list(NOTES))
-    # The index itself may exceed one terminal download for large captures.
-    indexes = _pack('index', [dict(kind='part_index', data=p) for p in manifest_parts], bundle_id, limit)
-    for index, content in enumerate(indexes, 1):
-        name = f'part_index_{index:03d}_of_{len(indexes):03d}.txt'
-        files[name] = content
-        manifest['part_index'].append(dict(file=name, sha256=_hash(content), chars=len(content),
-                                           utf8_bytes=len(content.encode('utf-8'))))
-    files['manifest.json'] = _json(manifest) + '\n'
-    # Validate every byte before writing; no silent partial/truncated bundle.
-    for name, content in files.items():
-        if len(content) > limit or len(content.encode('utf-8')) > limit:
-            raise ValueError(f'{name} exceeds transfer limit; no data was truncated')
-    output = Path(output_dir) / 'transfer'
-    output.mkdir(parents=True, exist_ok=True)
-    # Do not overwrite a different bundle or leave old parts pretending to be current.
-    existing = output / 'manifest.json'
-    if existing.exists() and json.loads(existing.read_text(encoding='utf-8')).get('bundle_id') != bundle_id:
-        raise ValueError('transfer contains a different bundle; choose a new analysis output directory')
-    for name, content in files.items():
-        (output / name).write_bytes(content.encode('utf-8'))
+
+
+def encode_samples(report,samples):
+    """Table-encode every decoded field; no sampling, ranking or rounding."""
+    samples=list(samples);_check_profiles(samples)
+    payload=dict(format=SAMPLE_FORMAT,samples=len(samples),records=list(_full_records(report,samples,codec.MAX_RAW_BYTES)))
+    raw=_json(payload).encode('utf-8')
+    if len(raw)>codec.MAX_RAW_BYTES: raise ValueError('Case payload exceeds512MiB; split capture iterations/ranks explicitly')
+    return raw
+
+
+def _decode_records(records,count):
+    if type(count) is not int or count<0 or not isinstance(records,list) or count>len(records): raise ValueError('Invalid sample count/records')
+    headers={};rows=defaultdict(lambda:defaultdict(list));context=None
+    for record in records:
+        if not isinstance(record,dict): raise ValueError('Invalid transfer record')
+        kind=record.get('kind')
+        if kind=='report_context':
+            if context is not None: raise ValueError('Duplicate report context')
+            context=record['data']
+        elif kind=='sample':
+            sample=record['sample']
+            if type(sample) is not int or not 0<=sample<count or sample in headers: raise ValueError('Duplicate or invalid sample header')
+            headers[sample]=record
+        elif kind in ('stages','intervals'):
+            sample=record['sample'];fields=record['fields']
+            if type(sample) is not int or not 0<=sample<count: raise ValueError('Invalid table sample')
+            if not isinstance(fields,list) or any(not isinstance(f,str) for f in fields) or len(set(fields))!=len(fields):
+                raise ValueError('Invalid table fields')
+            for values in record['rows']:
+                if len(values)!=len(fields): raise ValueError('Malformed table row')
+                rows[sample][kind].append(dict(zip(fields,values)))
+        else: raise ValueError('Unknown transfer record kind')
+    if context is None or set(headers)!=set(range(count)): raise ValueError('Missing context/sample headers')
+    result=[]
+    for sample in range(count):
+        h=headers[sample];decoded=dict(h['decoded'])
+        for kind,key,present,expected in [('stages','records','records_present','expected_stage_rows'),
+                                           ('intervals','intervals','intervals_present','expected_interval_rows')]:
+            if len(rows[sample][kind])!=h[expected]: raise ValueError('Sample row count mismatch')
+            if h[present]: decoded[key]=rows[sample][kind]
+            elif rows[sample][kind]: raise ValueError('Rows for absent field')
+        result.append((h['metadata'],decoded))
+    _check_profiles(result)
+    return context,result
+
+
+def decode_samples(payload):
+    if not isinstance(payload,bytes) or len(payload)>codec.MAX_RAW_BYTES: raise ValueError('Invalid sample payload size')
+    data=json.loads(payload)
+    if data.get('format')!=SAMPLE_FORMAT: raise ValueError('Unsupported sample payload format')
+    return _decode_records(data['records'],data['samples'])
+
+
+def _coverage(report,samples):
+    world=report.get('world_size');iters=(report.get('sampling') or {}).get('diagnostic_iters')
+    if iters is None:
+        observed=[m.get('iteration') for m,_ in samples if type(m.get('iteration')) is int]
+        iters=max(observed)+1 if observed else None
+    expected={(r,i) for r in range(world) for i in range(iters)} if type(world) is int and type(iters) is int else None
+    actual=defaultdict(list);cores=[]
+    for meta,decoded in samples:
+        actual[decoded.get('operation')].append((meta.get('rank'),meta.get('iteration')))
+        seen={r['core'] for r in decoded.get('records',[]) if r['stage']=='KERNEL'}
+        cores.append(len(seen)==decoded.get('active_aiv'))
+    coverage={op:dict(observed_samples=len(pairs),unique_samples=len(set(pairs)),
+        expected_samples=len(expected) if expected is not None else None,
+        complete=set(pairs)==expected and len(pairs)==len(set(pairs)) if expected is not None else None) for op,pairs in actual.items()}
+    return coverage,all(cores) if cores else None
+
+
+def _bounded(content,limit):
+    raw=content.encode('utf-8')
+    return len(content)<=limit and len(raw)+content.count('\n')<=limit
+
+
+def _overview(manifest,report,samples):
+    lines=['# LL compressed transfer', '', 'Send this overview and every part_*.txt; no separate priority/full series.',
+           f"Bundle: {manifest['bundle_id']}; parts: {manifest['series_counts']['compressed']}",
+           f"Payload: {manifest['transport']['raw_bytes']} bytes; compressed: {manifest['transport']['compressed_bytes']} bytes; text including CRLF: {manifest['transmission_bytes_crlf']} bytes.",
+           f"Samples: {len(samples)}; stage rows: {manifest['stage_rows']}; real interval rows: {manifest['interval_rows']}",
+           'Profiles: '+_json(sorted({d.get('timer_profile','full') for _,d in samples})),
+           'Coverage: '+_json(manifest['source_sample_coverage']), '',
+           'All raw ticks, counts, metadata and sampled intervals are in the compressed payload.',
+           'Only this readable overview is selective; no underlying data are discarded.', '',
+           '| operation | rank | iteration | core | KERNEL ticks |', '|---|---:|---:|---:|---:|']
+    longest=[]
+    for meta,decoded in samples:
+        rows=[r for r in decoded.get('records',[]) if r['stage']=='KERNEL']
+        if rows:
+            row=max(rows,key=lambda r:r['total_ticks'])
+            longest.append((row['total_ticks'],decoded['operation'],meta.get('rank'),meta.get('iteration'),row['core']))
+    for ticks,operation,rank,iteration,core in sorted(longest,reverse=True)[:8]:
+        lines.append(f'| {operation} | {rank} | {iteration} | {core} | {ticks} |')
+    lines+=['',*['- '+note for note in NOTES], '', 'Restore: python tests/ll_stage_timer/transfer_report.py restore copied_part*.txt --output-dir restored_case', '']
+    text='\n'.join(lines)
+    if not _bounded(text,min(manifest['limit'],8000)):
+        # Extremely wide coverage metadata stays in the payload, not silently lost.
+        lines=[line for line in lines if not line.startswith('Coverage:')]
+        text='\n'.join(lines)
+    if not _bounded(text,manifest['limit']): raise ValueError('Overview exceeds limit')
+    return text
+
+
+def export_bundle(output_dir,report,samples,limit=DEFAULT_LIMIT):
+    samples=list(samples)
+    payload=encode_samples(report,samples)
+    transport,parts=codec.make_parts(payload,limit)
+    bundle_id=transport['raw_sha256'][:20]
+    names=[f'part_{i:04d}_of_{len(parts):04d}.txt' for i in range(1,len(parts)+1)]
+    coverage,cores=_coverage(report,samples)
+    manifest=dict(format=FORMAT,bundle_id=bundle_id,limit=limit,transport=transport,
+        send_first=['00_overview.md',*names],parts=names,series_counts=dict(compressed=len(parts)),
+        samples=len(samples),stage_rows=sum(len(d.get('records',[])) for _,d in samples),
+        interval_rows=sum(len(d.get('intervals',[])) for _,d in samples),
+        transmission_bytes_lf=sum(len(p.encode('ascii')) for p in parts),
+        transmission_bytes_crlf=sum(len(p)+p.count('\n') for p in parts),
+        export_complete=True,source_sample_coverage=coverage,all_observed_kernel_cores_complete=cores,notes=list(NOTES))
+    files=dict(zip(names,parts));files['00_overview.md']=_overview(manifest,report,samples)
+    files['manifest.json']=_json(manifest)+'\n'
+    if any(not _bounded(content,limit) for content in files.values()): raise ValueError('Transfer metadata exceeds limit')
+    output=Path(output_dir)/'transfer'
+    if output.exists():
+        if not output.is_dir() or set(p.name for p in output.iterdir())!=set(files):
+            raise ValueError('transfer contains a different bundle; choose a new analysis output directory')
+        for name,content in files.items():
+            if (output/name).read_bytes()!=content.encode('utf-8'):
+                raise ValueError('transfer contains a different bundle; choose a new analysis output directory')
+        return manifest
+    output.mkdir(parents=True,exist_ok=False)
+    for name,content in files.items():
+        (output/name).write_bytes(content.encode('utf-8'))
     return manifest
 
 
-def restore_samples(directory):
+def _restore_legacy(directory):
     """Verify all full parts and return exact (report context, decoded samples)."""
     directory = Path(directory)
     manifest = json.loads((directory / 'manifest.json').read_text(encoding='utf-8'))
     records = []
     all_parts = []
     for ordinal, entry in enumerate(manifest['part_index'], 1):
-        raw = (directory / entry['file']).read_bytes()
+        raw = (directory / _safe_name(entry['file'])).read_bytes()
         if hashlib.sha256(raw).hexdigest() != entry['sha256']:
             raise ValueError('Part index hash mismatch')
         index = json.loads(raw)
@@ -394,7 +248,7 @@ def restore_samples(directory):
     if [p['part'] for p in parts] != list(range(1, len(parts) + 1)):
         raise ValueError('Missing, duplicate or reordered full parts')
     for expected in parts:
-        raw = (directory / expected['file']).read_bytes()
+        raw = (directory / _safe_name(expected['file'])).read_bytes()
         if hashlib.sha256(raw).hexdigest() != expected['sha256']:
             raise ValueError('Full part hash mismatch')
         part = json.loads(raw)
@@ -404,31 +258,106 @@ def restore_samples(directory):
         records.extend(part['records'])
     if len(records) != manifest['full_record_count'] or _hash(_json(records)) != manifest['full_payload_sha256']:
         raise ValueError('Full payload incomplete or modified')
-    headers = {}
-    rows = defaultdict(lambda: defaultdict(list))
-    context = None
-    for record in records:
-        if record['kind'] == 'report_context':
-            context = record['data']
-        elif record['kind'] == 'sample':
-            if record['sample'] in headers:
-                raise ValueError('Duplicate sample header')
-            headers[record['sample']] = record
-        elif record['kind'] in ('stages', 'intervals'):
-            for values in record['rows']:
-                if len(values) != len(record['fields']):
-                    raise ValueError('Malformed table row')
-                rows[record['sample']][record['kind']].append(dict(zip(record['fields'], values)))
-    result = []
-    for sample_id in range(manifest['samples']):
-        h = headers[sample_id]
-        decoded = dict(h['decoded'])
-        if (len(rows[sample_id]['stages']) != h['expected_stage_rows']
-                or len(rows[sample_id]['intervals']) != h['expected_interval_rows']):
-            raise ValueError('Sample row count mismatch')
-        if h['records_present']:
-            decoded['records'] = rows[sample_id]['stages']
-        if h['intervals_present']:
-            decoded['intervals'] = rows[sample_id]['intervals']
-        result.append((h['metadata'], decoded))
-    return context, result
+    return _decode_records(records,manifest['samples'])
+
+
+def restore_samples(directory):
+    """Read compressed v2 and historical uncompressed v1 bundles."""
+    directory=Path(directory)
+    manifest=json.loads((directory/'manifest.json').read_text(encoding='utf-8'))
+    if manifest.get('format')==LEGACY_FORMAT: return _restore_legacy(directory)
+    if manifest.get('format')!=FORMAT: raise ValueError('Unsupported transfer format')
+    names=manifest['parts']
+    if len(set(names))!=len(names): raise ValueError('Duplicate part filename')
+    status,payload=codec.inspect_parts([(directory/_safe_name(n)).read_text(encoding='utf-8') for n in names])
+    if payload is None: raise ValueError('Missing parts: '+str(status['missing_parts']))
+    if status['raw_sha256']!=manifest['transport']['raw_sha256'] or status['raw_sha256'][:20]!=manifest['bundle_id']:
+        raise ValueError('Payload identity mismatch')
+    return decode_samples(payload)
+
+
+def prepare_restored(context,samples,trace_iteration=0,render=True):
+    """Validate and render offline files in memory before touching the output directory."""
+    samples=list(samples);files={'context.json':_json(context)+'\n',
+        'decoded_samples.json':_json([dict(metadata=m,decoded=d) for m,d in samples])+'\n'}
+    if render:
+        trace=_load('transfer_trace').trace_from_decoded(samples,trace_iteration)
+        files['trace.json']=_json(trace)+'\n'
+        # Complete exports are reanalyzed with the same aggregation code as raw captures.
+        if samples and all(m.get('correctness')=='passed' and 'world_size' in m for m,_ in samples):
+            analysis=_load('analyze');report=analysis.analyze_samples(samples)
+            files['summary.json']=_json(report)+'\n'
+            files['communication_bottleneck.md']=analysis.communication_report.markdown(report['communication'])
+        else:
+            files['analysis_status.json']=_json(dict(status='unavailable',reason='Source metadata lacks complete correctness/world identity; decoded data and real intervals retained.'))+'\n'
+    return files
+
+
+def write_restored(output,context,samples,trace_iteration=0,render=True):
+    files=prepare_restored(context,samples,trace_iteration,render)
+    output=Path(output);output.mkdir(parents=True,exist_ok=False)
+    for name,content in files.items(): (output/name).write_bytes(content.encode('utf-8'))
+    return output
+
+
+def _read_inputs(paths):
+    if '-' in paths:
+        if paths!=['-']: raise ValueError('Use - alone for stdin')
+        return [sys.stdin.read()]
+    return [Path(p).read_text(encoding='utf-8-sig') for p in paths]
+
+
+def main(argv=None):
+    parser=argparse.ArgumentParser(description=__doc__)
+    commands=parser.add_subparsers(dest='command',required=True)
+    show=commands.add_parser('show',help='Print exactly one checked part')
+    show.add_argument('directory',type=Path);show.add_argument('--part',type=int,required=True)
+    show.add_argument('--group',type=int,help='Suite group ordinal; omit only for a one-group suite')
+    inspect=commands.add_parser('inspect',help='Check pasted parts and list missing pieces')
+    inspect.add_argument('texts',nargs='+')
+    restore=commands.add_parser('restore',help='Restore copied parts and generate trace locally')
+    restore.add_argument('texts',nargs='+');restore.add_argument('--output-dir',required=True,type=Path)
+    restore.add_argument('--trace-iteration',type=int,default=0);restore.add_argument('--no-render',action='store_true')
+    args=parser.parse_args(argv)
+    try:
+        if args.command=='show':
+            manifest=json.loads((args.directory/'manifest.json').read_text(encoding='utf-8'))
+            if manifest.get('format')==FORMAT:
+                if args.group is not None: raise ValueError('--group is only for suite bundles')
+                if not 1<=args.part<=len(manifest['parts']): raise ValueError('Invalid part number')
+                name=_safe_name(manifest['parts'][args.part-1]);expected=manifest['transport']['raw_sha256']
+            elif manifest.get('format')=='ll-timer-suite-v1':
+                group=args.group or (1 if len(manifest['groups'])==1 else None)
+                if group is None or not 1<=group<=len(manifest['groups']): raise ValueError('Supply a valid --group ordinal')
+                info=manifest['groups'][group-1];count=info['part_count']
+                if not 1<=args.part<=count: raise ValueError('Invalid part number')
+                name=f'suite_{group:03d}_part_{args.part:03d}_of_{count:03d}.txt';expected=info['payload_sha256']
+            else: raise ValueError('show requires a compressed manifest')
+            text=(args.directory/name).read_text(encoding='utf-8')
+            status,_=codec.inspect_parts([text])
+            if status['raw_sha256']!=expected: raise ValueError('Part identity mismatch')
+            sys.stdout.write(text)
+        elif args.command=='inspect':
+            states=[codec.inspect_parts(group)[0] for group in codec.group_parts(_read_inputs(args.texts))]
+            print(json.dumps(states,indent=2))
+        else:
+            groups=codec.group_parts(_read_inputs(args.texts))
+            status,payload=codec.inspect_parts(groups[0])
+            if payload is None: raise ValueError('Missing parts: '+str(status['missing_parts']))
+            kind=json.loads(payload).get('format')
+            if kind==SAMPLE_FORMAT:
+                if len(groups)!=1: raise ValueError('Restore different cases separately, or use a suite bundle')
+                context,samples=decode_samples(payload)
+                write_restored(args.output_dir,context,samples,args.trace_iteration,not args.no_render)
+            elif kind=='ll-timer-suite-v1':
+                del payload
+                _load('suite_transfer').restore_text_groups(groups,args.output_dir,
+                    trace_iteration=args.trace_iteration,render=not args.no_render)
+            else: raise ValueError('Unsupported or mixed payload formats')
+            print('Verified and restored: '+str(args.output_dir))
+    except (ValueError,OSError,KeyError,TypeError) as error:
+        parser.exit(1,str(error)+'\n')
+    return 0
+
+
+if __name__=='__main__':raise SystemExit(main())

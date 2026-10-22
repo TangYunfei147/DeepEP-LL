@@ -289,38 +289,17 @@ def _write_performance_compare(suite):
 
 
 def write_send_first(suite):
-    """Bound the combined transfer index too; every path is relative to the suite."""
+    """Compress all available cases once, after the matrix has finished."""
     suite = Path(suite)
-    lines = ['LL staged diagnosis: send this index, then the listed overview/priority files.',
-             'OFF perf is the performance baseline. Every ON profile is an independent capture.',
-             'Do not add costs from different profiles or merge their timestamps.', '']
-    if _write_performance_compare(suite) is not None:
-        lines += ['Send PERFORMANCE_COMPARE.txt first: actual active-capture full task time versus OFF.', '']
-    off = suite / 'runs/off/summary.csv'
-    if off.is_file():
-        lines += ['OFF formal result: runs/off/summary.csv', '']
-    for path in sorted((suite / 'analysis').rglob('transfer/manifest.json')):
-        manifest = json.loads(path.read_text(encoding='utf-8'))
-        lines.append(f"Bundle {manifest['bundle_id']} ({path.parent.relative_to(suite).as_posix()}):")
-        lines.extend((path.parent / filename).relative_to(suite).as_posix() for filename in manifest['send_first'])
-    if len(lines) < 6:
-        lines.append('No parsed timer bundles yet. Complete/collect all ranks, then use --analyze-existing.')
-    parts = []
-    text = ''
-    for line in lines:
-        if len((line + '\n').encode('utf-8')) > LIMIT - 128:
-            raise ValueError('Transfer index path exceeds supported length')
-        if len((text + line + '\n').encode('utf-8')) > LIMIT - 128:
-            parts.append(text)
-            text = ''
-        text += line + '\n'
-    if text:
-        parts.append(text)
-    for index, content in enumerate(parts):
-        name = 'SEND_FIRST.txt' if index == 0 else f'SEND_FIRST_{index+1:03d}.txt'
-        if index+1 < len(parts):
-            content += f'Continued in SEND_FIRST_{index+2:03d}.txt\n'
-        (suite / name).write_bytes(content.encode('utf-8'))
+    _write_performance_compare(suite)
+    spec = importlib.util.spec_from_file_location('ll_suite_transfer', Path(__file__).with_name('suite_transfer.py'))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    manifest = module.export_suite(suite, limit=LIMIT)
+    overview = suite / manifest['output'] / '00_overview.txt'
+    # This is a replaceable pointer to immutable content-addressed bundles.
+    # Repacking after collecting additional ranks preserves earlier exports.
+    (suite / 'SEND_FIRST.txt').write_bytes(overview.read_bytes())
     return suite / 'SEND_FIRST.txt'
 
 
@@ -334,13 +313,14 @@ def analyze_existing(suite, root=ROOT, python=sys.executable):
             continue
         destination = suite / 'analysis' / stage['name']
         if destination.exists():
-            if len(list(destination.rglob('transfer/manifest.json'))) == len(plan['matrix']['B']):
-                continue
-            raise ValueError(f'Existing incomplete analysis requires a fresh output directory: {destination}')
+            # Preserve prior parsed results. The suite coverage report marks
+            # missing B/rank/iterations explicitly rather than claiming success.
+            continue
+        if not (suite / 'runs' / stage['name']).exists():
+            continue
         command = [python, str(Path(root) / 'tests/ll_stage_timer/analyze.py'),
                    str(suite / 'runs' / stage['name']), '--op', 'dispatch', '--output-dir', str(destination)]
         subprocess.run(command, cwd=root, check=True)
-        write_send_first(suite)
     return write_send_first(suite)
 
 
@@ -401,8 +381,8 @@ def execute(plan):
         _command(stage['run'], plan, env, logs / f'{profile}-run.log')
         if stage['timer'] and plan['node'] == 0 and not plan['defer_analysis']:
             _command(stage['analyze'], plan, env, logs / f'{profile}-analyze.log')
-        if plan['node'] == 0:
-            write_send_first(suite)
+    if plan['node'] == 0:
+        write_send_first(suite)
     return suite / 'SEND_FIRST.txt'
 
 

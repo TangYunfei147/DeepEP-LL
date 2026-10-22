@@ -373,3 +373,16 @@ Used conda initialization + /home/tyf/0env.sh (py311_tyf), local Git bundle uplo
 validated offline SDK copy and project-local build tools from the prior small-B
 validation. No external downloads, shared-environment changes, wheel installation
 or NPU/communication launch. Target device correctness/performance remains pending.
+
+## 2026-10-22 offline compressed transfer
+
+Only tests/ll_stage_timer Python exporters, restore/render helpers, CPU tests and
+usage documents changed. csrc, deep_ep, cmake and build_support are byte-for-byte
+unchanged from0f6f02e; no ON/OFF native recompilation or device run was needed.
+Local regression:494passed/29skipped in23.51s (tests/ll_stage_timer and the elastic
+LL ST contract). Skips require a C++ compiler or POSIX environment. Compression,
+missing/corrupt/mixed inputs, CRLF limits, oldv1 imports, multi-case restore,
+exact decoded-field roundtrip and actual interval rendering are covered.
+The two existing user-file byte benchmarks reduced transmitted text72.81% and
+86.04% including headers/CRLF, with identical restored bytes. This is a data
+transport result, not a device latency claim. See COMPRESSED_TRANSFER.md.

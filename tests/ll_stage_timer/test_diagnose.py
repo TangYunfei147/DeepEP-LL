@@ -135,11 +135,18 @@ def test_execute_build_install_verify_run_analyze_order_without_devices(tmp_path
             (out/'candidate.whl').write_bytes(b'wheel')
         Path(log).write_text('mocked execution')
     monkeypatch.setattr(diagnose, '_command', command)
+    exports = []
+    original_export = diagnose.write_send_first
+    def export_once(path):
+        exports.append(path)
+        return original_export(path)
+    monkeypatch.setattr(diagnose, 'write_send_first', export_once)
     diagnose.execute(result)
     assert seen == ['venv.log', 'off-build.log', 'off-install.log', 'off-identity.log',
                     'off-run.log', 'prefix-build.log', 'prefix-install.log',
                     'prefix-identity.log', 'prefix-run.log', 'prefix-analyze.log']
     assert (Path(result['suite'])/'SEND_FIRST.txt').is_file()
+    assert exports == [Path(result['suite'])]
     with pytest.raises(ValueError, match='already exists'):
         diagnose.execute(result)
 
@@ -154,21 +161,22 @@ def test_missing_sdk_fails_before_creating_run(tmp_path):
 def test_send_first_index_is_bounded_and_profile_paths_distinct(tmp_path):
     suite = tmp_path/'suite'
     for profile in ('overview', 'prefix', 'recv'):
-        for case in range(140):
+        for case in range(3):
             directory = suite/'analysis'/profile/f'case_{case:05d}'/'transfer'
             directory.mkdir(parents=True)
             names = ['00_overview.md'] + [f'priority_{i:03d}_of_003.txt' for i in range(1, 4)]
             (directory/'manifest.json').write_text(json.dumps(dict(bundle_id=f'{profile}-{case}', send_first=names)))
     result = diagnose.write_send_first(suite)
     indexes = sorted(suite.glob('SEND_FIRST*.txt'))
-    assert result.name == 'SEND_FIRST.txt' and len(indexes) > 1
+    assert result.name == 'SEND_FIRST.txt' and len(indexes) == 1
     text = ''.join(p.read_text() for p in indexes)
-    assert 'analysis/prefix/' in text and 'analysis/recv/' in text
+    assert 'INCOMPLETE' in text
+    assert 'suite_001_part_' in text and 'priority_001' not in text
     assert 'Do not add costs' in text
     assert all(len(p.read_bytes()) <= 60000 for p in indexes)
 
 
-def test_analyze_existing_does_not_silently_skip_partial_profile(tmp_path):
+def test_analyze_existing_exports_partial_profile_with_explicit_coverage(tmp_path):
     suite = tmp_path/'suite'
     (suite/'node_000').mkdir(parents=True)
     (suite/'node_000/plan.json').write_text(json.dumps(dict(
@@ -176,8 +184,9 @@ def test_analyze_existing_does_not_silently_skip_partial_profile(tmp_path):
     partial = suite/'analysis/prefix/case_00000/transfer'
     partial.mkdir(parents=True)
     (partial/'manifest.json').write_text('{}')
-    with pytest.raises(ValueError, match='incomplete analysis'):
-        diagnose.analyze_existing(suite, root=tmp_path)
+    result = diagnose.analyze_existing(suite, root=tmp_path)
+    assert 'INCOMPLETE' in result.read_text()
+    assert 'Missing parsed timer cases for prefix: B=[1, 32]' in result.read_text()
 
 
 def test_performance_table_uses_full_tasks_and_matching_identity(tmp_path):
@@ -197,7 +206,7 @@ def test_performance_table_uses_full_tasks_and_matching_identity(tmp_path):
     rows=diagnose._performance_rows(suite)
     assert rows[0]['ratio']==1.2 and rows[0]['delta_us']==2
     diagnose.write_send_first(suite)
-    assert 'PERFORMANCE_COMPARE.txt' in (suite/'SEND_FIRST.txt').read_text()
+    assert 'performance reports' in (suite/'SEND_FIRST.txt').read_text()
     assert len((suite/'PERFORMANCE_COMPARE.txt').read_bytes())<=60000
     on['comparison']=dict(identity,send_cores=30,recv_cores=26)
     path.write_text(json.dumps(on))

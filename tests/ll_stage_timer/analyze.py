@@ -132,14 +132,21 @@ def overlap_receive_report(samples):
 
 
 def analyze(paths, frequency_hz=None, return_samples=False):
-    configurations={};ranks={};groups={};identity=None;stage_max={};measured={};worker_roles={}
-    wait_samples=[]
+    samples=[]
     for path in paths:
         saved=json.loads(path.read_text())
-        meta=saved['metadata']
+        decoded=timer.parse_records(saved['raw'],saved['operation'],frequency_hz if frequency_hz is not None else saved['frequency_hz'])
+        samples.append((saved['metadata'],decoded))
+    result=analyze_samples(samples)
+    return (result,samples) if return_samples else result
+
+
+def analyze_samples(samples):
+    """Reanalyze complete decoded captures after lossless offline transfer."""
+    configurations={};ranks={};groups={};identity=None;stage_max={};measured={};worker_roles={}
+    wait_samples=list(samples)
+    for meta,report in wait_samples:
         if meta.get('correctness')!='passed':raise ValueError('Missing instrumented correctness evidence')
-        report=timer.parse_records(saved['raw'],saved['operation'],frequency_hz if frequency_hz is not None else saved['frequency_hz'])
-        wait_samples.append((meta,report))
         common=(meta['world_size'],meta['config'],(report['active_aiv'],report['send_cores']),report['boundary_mode'],report['frequency_hz'],
                 meta.get('run_id'),meta.get('seed'),meta.get('case_id'),meta.get('sampling'),report['schema'],meta.get('comparison'),report.get('timer_profile','full'))
         if identity is not None and common!=identity:raise ValueError('Mixed configurations or timer modes')
@@ -191,7 +198,7 @@ def analyze(paths, frequency_hz=None, return_samples=False):
                 per_rank_stage_max=[dict(operation=op,rank=rank,stage=stage,unit=unit,**stats(list(values.values())))
                                     for (op,rank,stage),values in sorted(stage_max.items())],
                 note='Per-call diagnostic stage totals; nested/parallel stages cannot be added. No cross-rank timestamp subtraction.')
-    return (result,wait_samples) if return_samples else result
+    return result
 
 
 def discover(source, latest=False):
