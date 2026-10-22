@@ -87,7 +87,8 @@ DISPATCH_DEDUP_EP_DEDUP_INLINE EpServerDedupCountLayout DispatchServerDedupCount
 DISPATCH_DEDUP_EP_DEDUP_INLINE uint64_t DispatchSinglePrefixStageUbBytes(uint32_t experts)
 {
     return 128U+((uint64_t(experts)*32U+256U+255U)/256U)*256U+
-           2U*((uint64_t(experts)*4U+31U)/32U)*32U;
+           ((uint64_t(experts)*4U+255U)/256U)*256U+
+           ((uint64_t(experts)*4U+31U)/32U)*32U;
 }
 
 // Peak sendCnt allocation: four route-sized UB buffers plus count records/histogram.

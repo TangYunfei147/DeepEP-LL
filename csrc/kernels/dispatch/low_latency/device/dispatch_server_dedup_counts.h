@@ -6,6 +6,7 @@
 
 #include "kernel_operator.h"
 #include "dispatch_frequency_histogram.h"
+#include "dispatch_prefix_scan.h"
 #include "../common/ll_overlap_layout.h"
 #include "../common/ll_stage_timer_device.h"
 #include "adv_api/reduce/sum.h"
@@ -358,7 +359,7 @@ __aicore__ inline void ServerDedupCounts::PrepareRecvCnt()
     startStatusIndex_=0U;endStatusIndex_=rscvStatusNum_;recStatusNumPerCore_=rscvStatusNum_;
     RecvPool().InitBuffer(scalarBuf_,96U);
     RecvPool().InitBuffer(waitStatusBuf_,Ceil(rscvStatusNum_*32U+256U,256U)*256U);
-    RecvPool().InitBuffer(gatherMaskOutBuf_,Ceil(rscvStatusNum_*4U,32U)*32U);
+    RecvPool().InitBuffer(gatherMaskOutBuf_,Ceil(rscvStatusNum_*4U,256U)*256U);
     RecvPool().InitBuffer(sumContinueBuf_,Ceil(rscvStatusNum_*4U,32U)*32U);
     RecvPool().InitBuffer(prefixPublishBuf_,32U);
 }
@@ -495,11 +496,11 @@ __aicore__ inline void ServerDedupCounts::CalRecvAndSetFlag()
     if (aivId_!=kLlSendCoreNum) return;
     LL_SEG_SCOPE(BUILD_RECV_CUMSUM);
     auto prefix=gatherMaskOutBuf_.Get<int32_t>();
-    uint32_t cumulative=0;
-    for (uint32_t i=0;i<rscvStatusNum_;++i) {
-        cumulative+=uint32_t(prefix.GetValue(i));
-        prefix.SetValue(i,cumulative);
-    }
+    // Gather completion and scalar/Vector ownership precede the VF; data-ready
+    // publication below still waits for the actual prefix DMA completion.
+    SyncFunc<HardEvent::S_V>();
+    asc_vf_call<R0PrefixScan>(reinterpret_cast<__ubuf__ uint32_t*>(prefix.GetPhyAddr()),rscvStatusNum_);
+    SyncFunc<HardEvent::V_MTE3>();
     GlobalTensor<int32_t> workspace,output;
     workspace.SetGlobalBuffer(reinterpret_cast<__gm__ int32_t*>(recvCntWorkspaceGM_));
     workspace.SetL2CacheHint(CacheMode::CACHE_MODE_DISABLE);

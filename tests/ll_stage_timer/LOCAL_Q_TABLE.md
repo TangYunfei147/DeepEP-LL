@@ -1,3 +1,10 @@
+最新叠加：移植group-compact@9e24a79的R0整数前缀VF扫描，基线为b6c4efb。
+本次单独提交便于测量“VF q播种 + R0前缀向量化”的增量收益。
+R0前缀临时区按256B补齐，构建标识更新为19000+S以拒绝旧Host/Device预算混装；
+wire、epoch及schema12保持，所有rank完整重装wheel。下文18000+S仅描述此前q实验。
+PREFIX_COMPLETE仍负责等待/搬入及R0提取本地专家计数，24项GetValue/SetValue未改。
+被向量化的是CAL_CUMSUM/BUILD_RECV_CUMSUM中的全表scan；详见R0_PREFIX.md。
+
 当前VF播种版本叠加在Scalar q表提交af46122上，作为一个独立提交。
 A/B请以af46122为A、当前VF提交为B；原始无q表基线仍为f7c7848。
 用户报告Scalar q表比原始基线劣化约10%，此次旨在隔离前缀播种的影响，尚无性能结论。

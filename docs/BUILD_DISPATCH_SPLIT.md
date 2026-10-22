@@ -199,3 +199,28 @@ Logs .tmp/q-vf-001.log; fixture output .tmp/q-vf-final.
 No CANN compilation, full wheel link, NPU correctness or performance validation.
 A3 cannot execute this A5-only VF API. Use target ON/OFF compile procedure above
 and LOCAL_Q_TABLE.md for independent OFF A/B, including PREPARE_INPUT overhead.
+
+## R0 uint32 vector prefix (2026-10-22)
+
+One A5 VF replaces the serial per-entry prefix loop, six fixed register scan
+steps per64-element block. Seven mode TUs and O2 stay unchanged; no new mode.
+256B padded gather buffer is reflected in the common Host/device UB formula.
+Config19000+S rejects old layout builds; wire/epoch/schema12 unchanged.
+Native CPU semantic mock covers lengths0..1024, zeros, ones, random counts,
+values beyond FP32 exact integers, masked tail preservation and gather bounds.
+Related CPU/Host/profiler/layout tests51pass (4.97s), log .tmp/prefix-scan-001.log.
+These simulate public VF operation semantics, not actual AscendC instructions.
+A3_163_docker failed hostname resolution before any remote compile command ran.
+No CANN ON/OFF cold build, wheel linkage or NPU performance has been validated.
+Retain target cold-build and correctness/OFF profiling requirements.
+
+## Prefix VF integrated with local q VF (2026-10-22)
+
+Port of group-compact@9e24a79 onto local-q-table@b6c4efb as a separate commit.
+Conflicts were documentation append conflicts; both q and prefix records retained.
+Actual prefix VF, counts integration and Host buffer padding match the reference.
+Local q VF seeding, packet schedule and receive transport remain unchanged.
+Related production CPU/VF mock, q, Host, layout and ST checks:60 passed (7.98s),
+log .tmp/q-prefix-001.log. No CANN compile, full wheel or NPU validation performed.
+Build identifier19000+S requires matching full Host/device installation; wire and
+epoch are unchanged. Compare against b6c4efb using complete OFF kernel timing.

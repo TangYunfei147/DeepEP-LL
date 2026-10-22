@@ -18,7 +18,7 @@ assert native.low_latency_implementation=='g4-r0-prefix'
 assert native.low_latency_overlap_stage==3
 cfg=native.low_latency_core_config()
 assert native.low_latency_stage_timer_enabled
-assert native.low_latency_core_protocol==18000+cfg["send_cores"]
+assert native.low_latency_core_protocol==19000+cfg["send_cores"]
 assert native.low_latency_stage_timer_layout()==dict(schema=SCHEMA,slots=SLOTS,fields=FIELDS,stages=list(STAGES))
 trace=StageTrace(object(),'dispatch')
 cfg=native.low_latency_core_config()

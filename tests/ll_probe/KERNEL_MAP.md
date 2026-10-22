@@ -76,3 +76,6 @@ receive_tasks.h按记录段生成tokenPos、一次生成pendingIdx；Host和over
 CalTokenSendExpertCnt只查表；Host/overlap核算qSub直方图最小容量。收发顺序和wire不变。
 
 q表VF播种：device/dispatch_frequency_histogram.h复用既有实现，common/ll_local_q.h仅本片更新。
+
+R0 uint32前缀VF：device/dispatch_prefix_scan.h；counts CalRecvAndSetFlag仅调用VF并同步V_MTE3。
+count_layout DispatchSinglePrefixStageUbBytes包含256B对齐读缓冲，协议标识19000+S。

@@ -1,3 +1,20 @@
+## 2026-10-22：R0整数向量前缀
+
+当前配置标识19000+S（取代下文历史17000/18000），Stage3/schema12、wire与epoch协议不变。
+384项分成6个64项寄存器块，每块6级整数gather/add扫描，段间carry在寄存器中传递。
+不使用FP32转换，不再384次GetValue/SetValue。输入缓冲按256B补齐，最后一段掩码存储，
+不读越界、不写尾部。E384原缓冲已满足对齐，UB总量和lane不变；其他长度最多多224B。
+继续保留V_MTE3及前缀写入完成后发布ready的顺序，不能删除等待冒充优化。
+
+全rank完整重装wheel，无需仅因此重建SDK。对比BUILD_RECV_CUMSUM及整体OFF kernel；
+WAIT_RECV_COUNTS是另一个成本，不会被这项修改消除。
+本地51项相关检查通过；后续标识检查另验。A3_163_docker连接失败，未进入远端编译。
+尚无CANN/设备验证或性能收益结论。
+
+实现依据：asc-devkit 9.2.0@4d9fe40502b3423a344d570fd1a8be343cfca4a5的公开
+asc_gather/asc_arange/asc_select/整数add接口。高层CumSum只支持half/float，
+因此没有直接用于整数计数。A5寄存器接口不支持A3运行。
+
 当前增量：非去重M<=32恢复S发送全部路由、R专职接收，协议18000+S。
 去重M>32保持4ec82a5的原始路径。下文所有核共享接收仅适用于去重。
 非去重R核仍负责SEND_COUNTS和R0前缀，不建本组发送描述符；S不等待前缀。

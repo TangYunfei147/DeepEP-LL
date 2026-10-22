@@ -46,3 +46,10 @@ qWork持久保存本片q，qSub播种私有专家直方图，内部量化只能�
 
 q前缀播种现复用CountFrequency VF，V_S后只做本片Scalar更新；空片段跳过。
 保持18000+S及收发协议，候选ST检查low_latency_q_seed_vf。A/B基线af46122。
+
+R0前缀生成改为device/dispatch_prefix_scan.h的uint32 VF扫描：64项/段、6级gather/add、寄存器carry。
+输入缓冲按256B补齐，Host与Device共用预算。配置标识19000+S，wire/epoch和schema12不变。
+无逐项Scalar累加，不使用float转换；A3不支持该A5 VF，不能作为运行性能验收。
+
+当前q分支叠加9e24a79 R0前缀VF，构建标识19000+S，q表VF播种保持。
+PREFIX_COMPLETE本地专家计数提取仍Scalar；没有改变wire/epoch或发送顺序。
