@@ -20,7 +20,9 @@ def idle():
     if not ids or 'Process id in container' not in text:
         raise RuntimeError('NPU occupancy unavailable: paused')
     import re
-    if re.search(r'^\|\s*\d+\s+\d+\s+', text, re.M):
+    devices = set(re.findall(r'^\|\s*(\d+)\s*\|\s*Ascend', text, re.M))
+    empty = set(re.findall(r'No running processes found in NPU (\d+)', text))
+    if not devices or empty != devices:
         raise RuntimeError('NPU task exists: paused')
     return text
 
