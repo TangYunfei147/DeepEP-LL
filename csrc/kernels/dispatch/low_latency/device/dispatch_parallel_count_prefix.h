@@ -34,7 +34,8 @@ __aicore__ inline void ServerDedupCounts::PrepareParallelRecvCnt()
 __aicore__ inline bool ServerDedupCounts::TryParallelRecvCnt()
 {
     if(!recStatusNumPerCore_)return true;
-    LL_SEG_SCOPE(WAIT_RECV_COUNTS); LL_SEG_SCOPE(POLL_RECV_COUNTS);
+    LL_SEG_SCOPE(WAIT_RECV_COUNTS);
+    LL_SEG_SCOPE(POLL_RECV_COUNTS);
     LL_SEG_COUNT(POLL_RECV_COUNTS_ITERATIONS,1U);
     auto status=waitStatusBuf_.Get<float>();
     DataCopy(status,windowInstatusFp32Tensor_[uint64_t(startStatusIndex_)*CNT_GM_STRIDE_BLOCKS*8U],
