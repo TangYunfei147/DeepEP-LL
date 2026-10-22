@@ -15,6 +15,7 @@
 #include "../common/ll_receive_priority.h"
 #include "dispatch_server_dedup_receive_packet.h"
 #include "dispatch_flag_probe.h"
+#include "dispatch_recv_metadata_batch.h"
 
 namespace DispatchDedup {
 using namespace AscendC;
@@ -120,6 +121,7 @@ public:
         const uint32_t available = (kEpServerDedupCountUbBytes - fixed) / laneStride_;
         lanes_ = overlap_.enabled ? overlap_.recvLanes : (available < 8U ? available : 8U);  // Safe inputs guarantee at least one lane.
         pipe_->InitBuffer(lanesBuf_, lanes_ * laneStride_);
+        metadataBatch_.Prepare(LlMakeRecvMetadataBatchLayout(tasks_.Count(),bs_,enableDedup_,overlap_),pipe_);
         if (!overlap_.enabled) for (uint32_t lane = 0; lane < lanes_; ++lane) SetFlag<HardEvent::MTE3_MTE2>(lane);
 
     }
@@ -185,6 +187,8 @@ public:
         // This is the end of wait instruction submission, not a new Scalar
         // completion barrier. The existing final PIPE_ALL establishes completion.
 
+        { LL_SEG_SCOPE(RX_META_OUTPUT);
+          metadataBatch_.Flush(tokenType_,destinationIndex_,tasks_.Begin()); }
         ClearFlags();
 
         // 最终流水屏障确保输出、relay 和标记清理完成。
@@ -331,7 +335,9 @@ private:
         auto header = tail.Header();
         const uint32_t role = enableDedup_ ? header.GetValue(3U) : 0U;
         const bool firstHop = enableDedup_ && role == uint32_t(EpServerDedupTokenType::FirstHop);
-        if (enableDedup_)
+        if (metadataBatch_.Enabled())
+            metadataBatch_.Snapshot(j,role,tasks_.Position(j),header);
+        else if (enableDedup_)
             BuildServerDedupMetadata(type, destination, role, tasks_.Position(j));
         // Forwarding changes only header[3]; header[0..2] remains immutable
         // until the existing MTE3_MTE2 lane retirement.
@@ -391,8 +397,10 @@ private:
         }
         LL_SEG_END(payloadOut,RX_PAYLOAD_OUTPUT);
         LL_SEG_BEGIN(metaOut,RX_META_OUTPUT);
-        if (enableDedup_) DataCopyPad(tokenType_[row], type, {1U, 4U, 0U, 0U, 0U});
-        DataCopyPad(destinationIndex_[uint64_t(row) * 3U], destination, {1U, 12U, 0U, 0U, 0U});
+        if (!metadataBatch_.Enabled()) {
+            if (enableDedup_) DataCopyPad(tokenType_[row], type, {1U, 4U, 0U, 0U, 0U});
+            DataCopyPad(destinationIndex_[uint64_t(row) * 3U], destination, {1U, 12U, 0U, 0U, 0U});
+        }
         if (expertTimer_) expertTimer_->End(expert, LlExpertTimer::OutputWrite);
         if (firstHop) {
             DataCopyPad(relayReadIndex_[uint64_t(row) * k_ * 2U], tail.ReadIndex(), {1U, k_ * 8U, 0U, 0U, 0U});
@@ -429,6 +437,7 @@ private:
     uint32_t hiddenBytes_ = 0U, laneStride_ = 0U, lanes_ = 0U;
     EpServerDedupDataLayout data_{};
     ServerDedupReceiveTasks tasks_;
+    ServerDedupRecvMetadataBatch metadataBatch_;
     TBuf<> prefixBuf_, flagsBuf_, sumBuf_, workBuf_, probeIdxBuf_, lanesBuf_;
     GlobalTensor<uint8_t> expandX_, dynamicScales_;
     GlobalTensor<uint32_t> tokenType_, destinationIndex_, relayReadIndex_;
