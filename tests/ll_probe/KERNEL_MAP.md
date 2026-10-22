@@ -88,3 +88,8 @@ common/ll_ablation_config.h selects0..4; protocol29000+100*mode+S rejects mixed
 wheels. Schema14 adds ABLATION_READY_RECV, retaining5120B/core. Preload/prepack
 are prequantized FP8-only; ready replay suppresses duplicate relay and delays flag
 cleanup. Production use/combine is not supported by the ablation launcher.
+
+Receiver breakdown mode5: see tests/ll_ablation/RECEIVER_BREAKDOWN.md. Schema15
+has121metrics and5120B/core. Mode5 snapshots layout in tokenPos bit31, restores
+flags outside each timer, rotates three arms and validates payload/scales after
+each arm. Strict EP16/B=M256/H3584/K8/E384/FP8 admission protects the bit layout.

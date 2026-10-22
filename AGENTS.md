@@ -57,3 +57,11 @@ PREFIX_COMPLETE本地专家计数提取仍Scalar；没有改变wire/epoch或发�
 当前schema13通信诊断：108metrics/192采样事件/每核5120B。SEND_SETUP与首包前区间分开。
 First区间从KERNEL起点到第一次DataCopy/Probe之前，空任务不补零；保留无新排空的observe语义。
 新报告tests/ll_stage_timer/communication_report.py，参考COMMUNICATION_DIAGNOSTICS.md。
+
+## Receiver replay breakdown
+
+experiment/ll-g4-ablations mode5 uses one ON wheel for three paired replay arms.
+Schema15/121metrics retains5120B/core; protocol29500+S. Read
+tests/ll_ablation/RECEIVER_BREAKDOWN.md before changing snapshot/restore/validation
+or cache-worktree migration. Shape is explicitly restricted to EP16/B=M256/
+H3584/K8/E384/prequantized FP8. Never apply skip-flags to a live receive path.

@@ -132,6 +132,7 @@ public:
         if (enableDedup_ || core_>=sendCores_) receiver_.ReplayReadyForAblation(kind);
     }
     __aicore__ inline void RestoreReadyForAblation() { receiver_.RestoreReadyFlagsForAblation(); }
+    __aicore__ inline uint32_t ValidateReplayOutput() { return receiver_.ValidateReplayOutput(); }
     __aicore__ inline uint32_t ReplayOrder() const { return ablationOrder_; }
     __aicore__ inline uint32_t ReplayFlagBatches() const { return receiver_.ReplayFlagBatches(); }
     __aicore__ inline uint32_t ReplayPayloadBytes() const { return receiver_.ReplayPayloadBytes(); }

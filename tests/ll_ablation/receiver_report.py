@@ -4,11 +4,13 @@ import importlib.util
 import json
 from pathlib import Path
 import statistics
+import csv
 from common import ROOT,write_json
 
 CASES={'baseline':('ABLATION_READY_RECV','REPLAY_BASE_FLAGS_PLUS1','REPLAY_BASE_BYTES_PLUS1'),
        'skip-flags':('ABLATION_SKIP_FLAGS','REPLAY_SKIP_FLAGS_PLUS1','REPLAY_SKIP_BYTES_PLUS1'),
        'no-payload-output':('ABLATION_NO_PAYLOAD','REPLAY_NOOUT_FLAGS_PLUS1','REPLAY_NOOUT_BYTES_PLUS1')}
+ERRORS={'baseline':'REPLAY_BASE_ERRORS_PLUS1','skip-flags':'REPLAY_SKIP_ERRORS_PLUS1','no-payload-output':'REPLAY_NOOUT_ERRORS_PLUS1'}
 
 def decode_sample(decoded):
     if decoded['schema']!=15:raise ValueError('Receiver breakdown requires schema15')
@@ -19,9 +21,11 @@ def decode_sample(decoded):
     for core,stages in sorted(cores.items()):
         arms={}
         for name,(duration,flags,output) in CASES.items():
-            if any(stage not in stages for stage in (duration,flags,output,'REPLAY_ORDER_PLUS1')):
+            if any(stage not in stages for stage in (duration,flags,output,'REPLAY_ORDER_PLUS1',ERRORS[name])):
                 raise ValueError('Incomplete operation counters or replay envelope')
             if stages[duration]['calls']!=1:raise ValueError('Replay envelope must occur once')
+            if stages[ERRORS[name]]['calls']!=1 or stages[ERRORS[name]]['total_ticks']:
+                raise ValueError(f'{name}: per-arm payload/scale verification failed')
             f=stages[flags]['calls']-1;b=stages[output]['calls']-1
             if min(f,b)<0 or stages[flags]['total_ticks'] or stages[output]['total_ticks']:
                 raise ValueError('Invalid replay operation counter')
@@ -86,15 +90,31 @@ def report(directory):
         aggregate[case]=dict(per_iteration=per_iteration,
             median_max_duration_us={name:statistics.median(r['us'][name] for r in per_iteration) for name in CASES},
             median_skip_flags_delta_us=statistics.median(r['skip_flags_delta_us'] for r in per_iteration),
-            median_no_output_delta_us=statistics.median(r['no_output_delta_us'] for r in per_iteration))
+            median_no_output_delta_us=statistics.median(r['no_output_delta_us'] for r in per_iteration),
+            per_rank=[dict(rank=rank,median_duration_us={name:statistics.median(
+                r['max_core_us'][name] for r in rows if r['rank']==rank) for name in CASES}) for rank in range(16)])
     return dict(identity=identity,summary=aggregate,samples=samples,
         interpretation='Paired warm replay arms in one wheel; restore/sync excluded, pending reset/cleanup/drain included. Deltas overlap and must not be added. Old40us is not the new baseline.')
 
 def main():
     p=argparse.ArgumentParser();p.add_argument('directory',type=Path);p.add_argument('--output',type=Path,required=True)
     a=p.parse_args()
-    if a.output.exists():raise ValueError('Output exists')
-    result=report(a.directory);write_json(a.output,result)
+    core_file=a.output.with_suffix('.cores.csv');sample_file=a.output.with_suffix('.rank_samples.csv')
+    if any(p.exists() for p in (a.output,core_file,sample_file)):raise ValueError('Output exists')
+    result=report(a.directory)
+    core_rows=[];rank_rows=[]
+    for case,rows in result.pop('samples').items():
+        for row in rows:
+            base=dict(case=case,rank=row['rank'],iteration=row['iteration'],order=row['order'])
+            rank_rows.append(dict(**base,**row['max_core_us'],skip_flags_delta_us=row['skip_flags_delta_us'],no_output_delta_us=row['no_output_delta_us']))
+            for core in row['cores']:
+                values={name.replace('-','_')+'_'+key:value for name,arm in core['arms'].items() for key,value in arm.items()}
+                core_rows.append(dict(**base,core=core['core'],**values))
+    for file,rows in ((core_file,core_rows),(sample_file,rank_rows)):
+        with file.open('w',newline='') as stream:
+            writer=csv.DictWriter(stream,fieldnames=list(rows[0]));writer.writeheader();writer.writerows(rows)
+    result['detail_files']={'per_core':core_file.name,'rank_samples':sample_file.name}
+    write_json(a.output,result)
     print(json.dumps(result['summary'],indent=2));print(a.output)
 
 if __name__=='__main__':main()

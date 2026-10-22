@@ -106,6 +106,7 @@ extern "C" [[bisheng::core_ratio(0, 1)]] __global__ __aicore__ void LL_VARIANT_K
                 const auto begin=timer.Begin(stage);
                 kernel.ReplayReadyForAblation(kind);
                 timer.End(stage,begin);
+                timer.Count(static_cast<LlStageTimer::Stage>(118U+kind),kernel.ValidateReplayOutput()+1U);
                 // +1 makes an executed zero count distinguishable from missing instrumentation.
                 timer.Count(static_cast<LlStageTimer::Stage>(111U+kind*2U),kernel.ReplayFlagBatches()+1U);
                 timer.Count(static_cast<LlStageTimer::Stage>(112U+kind*2U),kernel.ReplayPayloadBytes()+1U);

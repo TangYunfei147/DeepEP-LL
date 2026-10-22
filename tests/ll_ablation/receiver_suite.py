@@ -26,7 +26,9 @@ def commands(a):
                '--send-cores',str(a.send_cores),'--revision',revision,'--prepare-sdk','--resume']
         donor=ROOT/'.ablation/wheels'/f'ready-replay-ON-s{a.send_cores}'/'manifest.json'
         if not a.fresh_build and donor.is_file():build+=['--reuse-workspace-manifest',str(donor)]
-        elif a.offline_deps:build+=['--offline-deps',str(a.offline_deps.resolve())]
+        elif a.offline_deps:
+            bundle=a.offline_deps if a.offline_deps.is_absolute() else ROOT/a.offline_deps
+            build+=['--offline-deps',str(bundle.resolve())]
         result.append(build)
     if a.build_only:return result
     env=ROOT/'.ablation/envs'/tag

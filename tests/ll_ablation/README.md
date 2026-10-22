@@ -215,3 +215,10 @@ tracked files (staged or unstaged) or to a submodule commit still stop the build
 and list exact paths, because those changes would not be included in HEAD.
 No reset, clean, automatic stash or source overwrite is performed. Both --devices
 and --device are accepted by suite.py; quote the visibility variable.
+
+## Receiver40us follow-up
+
+Use [RECEIVER_BREAKDOWN.md](RECEIVER_BREAKDOWN.md) and receiver_suite.py for the
+new paired baseline/skip-flags/no-payload-output experiment. It builds one ON
+wheel and preferentially reuses the old ready-replay build worktree/SDK/cache.
+The original suite.py still runs only its five original modes.

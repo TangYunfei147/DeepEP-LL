@@ -202,6 +202,30 @@ public:
         timer_=nullptr; // Replay has its own envelope; do not double normal metrics.
         Run();
     }
+    // Exact per-arm verification outside the timed envelope, using retained real
+    // packets as reference. The normal prefill is also checked by the Host ST.
+    __aicore__ inline uint32_t ValidateReplayOutput() {
+        if(!tasks_.Count())return 0U;
+        if(lanes_<2U){AscendC::Trap();return 1U;}
+        auto expected=lanesBuf_.Get<uint8_t>();
+        auto actual=expected[laneStride_];
+        uint32_t errors=0U;
+        for(uint32_t j=0;j<tasks_.Count();++j) {
+            GlobalTensor<uint8_t> input;input.SetGlobalBuffer(Slot(j));
+            DataCopyPad(expected,input,{uint16_t(data_.blockCount),480U,32U,0U,0U},{false,0U,0U,uint8_t(0)});
+            const uint32_t row=tasks_.Begin()+j;
+            DataCopyPad(actual,expandX_[uint64_t(row)*hiddenBytes_],{1U,hiddenBytes_,0U,0U,0U},{false,0U,0U,uint8_t(0)});
+            if constexpr(WireFp8)DataCopyPad(actual[uint32_t(data_.quantCount)],dynamicScales_[uint64_t(row)*data_.scaleBytes],
+                {1U,uint32_t(data_.scaleBytes),0U,0U,0U},{false,0U,0U,uint8_t(0)});
+            ServerDedupReceiveSync<HardEvent::MTE2_S>();
+            auto lhs=expected.template ReinterpretCast<uint32_t>();
+            auto rhs=actual.template ReinterpretCast<uint32_t>();
+            for(uint32_t i=0;i<hiddenBytes_/4U;++i)errors+=lhs.GetValue(i)!=rhs.GetValue(i);
+            if constexpr(WireFp8)for(uint32_t i=0;i<uint32_t(data_.scaleBytes)/4U;++i)
+                errors+=lhs.GetValue(uint32_t(data_.quantCount)/4U+i)!=rhs.GetValue(uint32_t(data_.quantCount)/4U+i);
+        }
+        PipeBarrier<PIPE_ALL>();return errors;
+    }
     __aicore__ inline uint32_t ReplayFlagBatches() const { return ablationFlagBatches_; }
     __aicore__ inline uint32_t ReplayPayloadBytes() const { return ablationPayloadBytes_; }
     // Restore known-ready flags outside the measured envelope, before every arm.

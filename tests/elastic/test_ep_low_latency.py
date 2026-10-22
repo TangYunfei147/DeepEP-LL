@@ -891,7 +891,7 @@ def diagnostic_calls(buffer, invoke, check, args, operation, rank, m, mode,
         agree_check(lambda: check(output), args, rank)
         metadata = dict(rank=rank, world_size=world, iteration=iteration,
                         comparison=comparison_metadata(args,world,m),
-                        run_id=Path(args.run_directory).name, seed=args.seed, case_id=args.case_id,
+                        run_id=Path(args.run_directory).name, seed=args.seed, case_id=args.case_id, route=mode,
                         correctness="passed", config={**case_config(args, m),
                         "logical_group_size": logical_group},
                         protocol="stabilized diagnostic tail; Exp+scalar all_reduce; deferred validation/export; excluded from profiler",

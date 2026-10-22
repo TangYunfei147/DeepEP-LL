@@ -7,7 +7,7 @@
 namespace LlStageTimer {
 constexpr uint32_t kSchema = 15U;
 constexpr uint64_t kMagic = 0x4c4c5431ULL;
-constexpr uint32_t kTraceRecords = 192U, kMetrics = 118U;
+constexpr uint32_t kTraceRecords = 192U, kMetrics = 121U;
 constexpr uint32_t kRecords = kTraceRecords + kMetrics;
 // Same 16-byte event/metric records as dc_seg. LL keeps per-core 512B alignment.
 constexpr uint32_t kSlots = 80U, kFields = 8U;
@@ -132,6 +132,9 @@ enum Stage : uint32_t {
     REPLAY_NOOUT_FLAGS_PLUS1 = 115,
     REPLAY_NOOUT_BYTES_PLUS1 = 116,
     REPLAY_ORDER_PLUS1 = 117,
+    REPLAY_BASE_ERRORS_PLUS1 = 118,
+    REPLAY_SKIP_ERRORS_PLUS1 = 119,
+    REPLAY_NOOUT_ERRORS_PLUS1 = 120,
     StageCount = kMetrics
 };
 constexpr const char* kNames[] = {
@@ -253,6 +256,10 @@ constexpr const char* kNames[] = {
     "REPLAY_NOOUT_FLAGS_PLUS1",
     "REPLAY_NOOUT_BYTES_PLUS1",
     "REPLAY_ORDER_PLUS1",
+    "REPLAY_BASE_ERRORS_PLUS1",
+    "REPLAY_SKIP_ERRORS_PLUS1",
+    "REPLAY_NOOUT_ERRORS_PLUS1",
+
 
 
 
