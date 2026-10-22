@@ -119,3 +119,13 @@ stderr and per-core tail50 summary. Keep machine topology with the results.
 4. A faster vector index microkernel does not establish faster flag polling. Any
    flag reduction/decode change must preserve exact readiness semantics, packet
    markers, lane event ownership and relay-before-output ordering.
+
+## Follow-up stage probes
+
+Modes10/11 compare repeated UB source-mask updates with a register accumulator;
+three runtime-loaded first-hop bit positions/token are identical in both paths.
+Modes12/13 compare four-word DIRECT descriptors (including cached q) against
+three populated words with q fetched at use. Allocation/stride remain identical.
+The extended runner rotates14modes; earlier10-mode results remain historical.
+See STAGE_OPPORTUNITIES.md for the production dependency audit and RESULTS.md
+for the27machine measurements. These modes do not modify production dispatch.

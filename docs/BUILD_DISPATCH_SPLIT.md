@@ -280,3 +280,9 @@ Scalar8configurations all passed checksum checks; transfer tx modes0/1/2 passed.
 Further transfer launches paused on external NPU tasks as explicitly requested.
 Required CPU contracts43passed/2skipped; runner guards5passed. See
 ../tests/ll_micro/RESULTS.md for measured costs, raw locations and limitations.
+
+Stage follow-up: e785b3d/f984751 add4runtime modes inside the standalone scalar
+probe only, no production template dimension. On authorized27 CANN9.3.0
+O2/dav-3510 compile/link and all14mode checksums passed; runtime-mask correction
+avoids constant-folded arithmetic. Final measured f984751 results in
+tests/ll_micro/RESULTS.md, runner guards5passed.26 was busy and not used.

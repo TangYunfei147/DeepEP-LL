@@ -81,3 +81,33 @@ Local verification: required dispatch/source/ST contracts43passed/2compiler skip
 occupancy fail-closed and per-core tail50 tests5passed. Initial local pytest
 missing basetemp parent was fixed before the passing run. Production wheel/ON-OFF
 linking was not repeated because production sources/build graph did not change.
+
+## Stage audit follow-up on177.22.27.1
+
+26 remained occupied, so no job was launched there. 27 was inspected idle, then
+production-target O2/dav-3510 compilation and a device0 checksum run succeeded.
+First fixed-mask pilot e785b3d is retained in stages-001 but is not used as the
+main mask result. The corrected f984751 loads mask bits from runtime UB inputs
+in both versions, avoiding constant-folded mask arithmetic. It passed all14modes,
+10warmups/100samples at56AIV/32repeats/count32; tail50 per-core medians are below.
+
+| Operation | Original ticks/repeat | Candidate ticks/repeat | Interpretation |
+|---|---:|---:|---|
+| 32token masks,3first-hop bits/token |1397.984|875.078|register accumulation removes repeated UB mask read/write|
+| 32DIRECT descriptors plus consumption |1852.594|1505.563|read immutable q at use instead of descriptor roundtrip|
+
+At1GHz, savings are .523us/32tokens and .347us/32DIRECT tasks. This is roughly
+16.3ns/token with3first hops and10.8ns/DIRECT task in this synthetic workload,
+not a prediction for full dispatch. Production first-hop counts, register pressure
+and overlapping input prefetch differ. No production candidate was applied yet.
+The same corrected binary measured plain-q2232.563ticks vs packed-q2362.438ticks
+per72-route construction, consistent in direction with the earlier26 result.
+
+Raw location on27:
+`/home/tyf/Q4_remote_test/DeepEP-LL-scalar-probes/tests/ll_micro/results/stages-002/`.
+Build/run logs: `.logs/stage-build-002.log` and `.logs/stage-run-002.log` under the
+authorized root. All14mode checksums passed; no NPU correctness claim is made for
+any fused receiver VF or modified production dispatch.
+
+The complete source-stage audit, priorities and protocol requirements are in
+[STAGE_OPPORTUNITIES.md](STAGE_OPPORTUNITIES.md). Runner regression5passed.
