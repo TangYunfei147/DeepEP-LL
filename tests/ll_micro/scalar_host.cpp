@@ -16,8 +16,8 @@ int main(int argc,char** argv){try{
     CK(aclrtMemcpy(ids,8192,routes.data(),8192,ACL_MEMCPY_HOST_TO_DEVICE));
     void* result;CK(aclrtMalloc(&result,cores*32,ACL_MEM_MALLOC_HUGE_FIRST));std::vector<uint64_t> values(cores*4);
     std::puts("sample,core,mode,repeats,count,ticks,checksum,event_us");
-    for(int sample=-10;sample<100;++sample) for(uint32_t order=0;order<10;++order){
-        uint32_t mode=(order+uint32_t(sample+10))%10; // Rotate order to reduce drift bias.
+    for(int sample=-10;sample<100;++sample) for(uint32_t order=0;order<14;++order){
+        uint32_t mode=(order+uint32_t(sample+10))%14; // Rotate order to reduce drift bias.
         aclrtEvent a,b;CK(aclrtCreateEventWithFlag(&a,ACL_EVENT_TIME_LINE));CK(aclrtCreateEventWithFlag(&b,ACL_EVENT_TIME_LINE));
         CK(aclrtRecordEvent(a,stream));scalar_micro_do(cores,stream,(uint8_t*)ids,(uint8_t*)result,mode,repeats,count);
         CK(aclrtRecordEvent(b,stream));CK(aclrtSynchronizeStream(stream));float ms;CK(aclrtEventElapsedTime(&ms,a,b));
@@ -25,6 +25,8 @@ int main(int argc,char** argv){try{
         uint64_t expected=0;
         if(mode==1||mode==2||mode==9)for(uint32_t j=0;j<count;++j)for(uint32_t k=0;k<3;++k)expected+=(j*4+k)%384;
         if(mode==7||mode==8)for(auto v:routes)expected+=v;
+        if(mode==10||mode==11)expected=uint64_t(count)*15;
+        if(mode==12||mode==13)for(uint32_t j=0;j<count;++j)expected+=j/8+j%8+j%384+(512+j)%384;
         if(mode==3)expected=72;
         if(mode==4)expected=72ULL*65536+71*72/2;
         if(mode==5||mode==6)expected=uint64_t(count)*(count-1)/2;

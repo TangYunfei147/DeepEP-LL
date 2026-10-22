@@ -11,7 +11,8 @@ import time
 HERE = Path(__file__).resolve().parent
 NAMES = ['empty', 'metadata_scalar_copy', 'metadata_vector_copy', 'q_plain',
          'q_packed', 'pending_scalar', 'pending_vector', 'route_dma',
-         'route_preloaded', 'metadata_header_alias']
+         'route_preloaded', 'metadata_header_alias', 'mask_ub_updates', 'mask_register',
+         'direct_q_cached', 'direct_q_late']
 
 def idle():
     text = subprocess.check_output(['npu-smi', 'info'], text=True)

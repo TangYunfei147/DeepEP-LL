@@ -12,9 +12,32 @@ extern "C" [[bisheng::core_ratio(0,1)]] __global__ __aicore__ void ll_scalar_mic
     SetFlag<HardEvent::S_V>(0); WaitFlag<HardEvent::S_V>(0);
     Duplicate(dst,0U,1024); Duplicate(hist,0U,384);
     PipeBarrier<PIPE_ALL>();
+    uint64_t observed=0;
     uint64_t begin=GetSystemCycle();
     for(uint32_t r=0;r<repeats;++r) {
-        if(mode==1) { // Original receiver snapshot: 3 scalar loads + stores.
+        if(mode==10 || mode==11) {
+            for(uint32_t j=0;j<count;++j) {
+                if(mode==10) {
+                    dst.SetValue(j,1U);
+                    for(uint32_t g=0;g<3;++g)dst.SetValue(j,dst.GetValue(j)|(2U<<g));
+                } else {
+                    uint32_t mask=1;
+                    for(uint32_t g=0;g<3;++g)mask|=2U<<g;
+                    dst.SetValue(j,mask);
+                }
+            }
+        } else if(mode==12 || mode==13) {
+            for(uint32_t j=0;j<count;++j) {
+                dst.SetValue(j*4,j/8);dst.SetValue(j*4+1,j%8);dst.SetValue(j*4+2,src.GetValue(j));
+                if(mode==12)dst.SetValue(j*4+3,src.GetValue(512+j));
+            }
+            uint64_t sum=0;
+            for(uint32_t j=0;j<count;++j) {
+                sum+=dst.GetValue(j*4)+dst.GetValue(j*4+1)+dst.GetValue(j*4+2);
+                sum+=mode==12 ? dst.GetValue(j*4+3) : src.GetValue(512+j);
+            }
+            observed=sum;
+        } else if(mode==1) { // Original receiver snapshot: 3 scalar loads + stores.
             for(uint32_t j=0;j<count;++j)
                 for(uint32_t k=0;k<3;++k) dst.SetValue(j*4+k,src.GetValue(j*4+k));
         } else if(mode==2) { // Vector-copy candidate, including readiness cost.
@@ -57,6 +80,8 @@ extern "C" [[bisheng::core_ratio(0,1)]] __global__ __aicore__ void ll_scalar_mic
     }
     if(mode==7 || mode==8)for(uint32_t j=0;j<2048;++j)checksum+=src.GetValue(j);
     if(mode==9)for(uint32_t j=0;j<count;++j)for(uint32_t k=0;k<3;++k)checksum+=src.GetValue(j*4+k);
+    if(mode==10 || mode==11)for(uint32_t j=0;j<count;++j)checksum+=dst.GetValue(j);
+    if(mode==12 || mode==13)checksum=observed;
     GlobalTensor<uint64_t> out;out.SetGlobalBuffer((__gm__ uint64_t*)result+GetBlockIdx()*4);
     auto record=src.ReinterpretCast<uint64_t>();
     record.SetValue(0,end-begin);record.SetValue(1,checksum);record.SetValue(2,mode);record.SetValue(3,count);
