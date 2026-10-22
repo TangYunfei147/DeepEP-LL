@@ -12,11 +12,12 @@ def main():
     parser.add_argument('--output',required=True)
     parser.add_argument('--jobs',type=int,default=4)
     parser.add_argument('--timer',choices=('ON','OFF'),default='ON')
+    parser.add_argument('--source-headers',action='store_true',help='Compile-only with pinned SHMEM source headers; does not validate SDK linking')
     args=parser.parse_args()
     if not 1<=args.jobs<=64: parser.error('jobs must be 1..64')
     out=Path(args.output);out=out if out.is_absolute() else ROOT/out
     out.mkdir(parents=True,exist_ok=False)
-    cann=Path(os.environ['ASCEND_HOME_PATH']);sdk=ROOT/'third-party/shmem/install/shmem'
+    cann=Path(os.environ['ASCEND_HOME_PATH']);sdk=ROOT/('third-party/shmem' if args.source_headers else 'third-party/shmem/install/shmem')
     flags=['-O2','-std=c++17','-fPIC','-xasc','--npu-arch=dav-3510','--cce-auto-infer-kernel-type=false',
            '-DCATLASS_ARCH=3510','-DUSE_SIMT','-DL2_CACHE_HINT',
            '-DDEEPEP_LL_SEND_CORES='+os.environ.get('DEEPEP_LL_SEND_CORES','28'),
@@ -36,7 +37,7 @@ def main():
         return row
     start=time.perf_counter()
     with ThreadPoolExecutor(max_workers=args.jobs) as pool: rows=list(pool.map(compile_one,sources))
-    report=dict(timer=args.timer,jobs=args.jobs,seconds=time.perf_counter()-start,flags=flags,
+    report=dict(timer=args.timer,source_headers=args.source_headers,jobs=args.jobs,seconds=time.perf_counter()-start,flags=flags,
         revision=subprocess.check_output(['git','-C',str(ROOT),'rev-parse','HEAD'],text=True).strip(),units=rows)
     (out/'timing.json').write_text(json.dumps(report,indent=2))
     print('COMPILE_RESULT '+json.dumps(report),flush=True)

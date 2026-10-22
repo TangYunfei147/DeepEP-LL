@@ -2,6 +2,7 @@
 import os
 from pathlib import Path
 import runpy
+import json
 for name in ('CUDA_VISIBLE_DEVICES','ASCEND_RT_VISIBLE_DEVICES','ASCEND_VISIBLE_DEVICES','PROBE_VISIBLE_DEVICES'):
     if os.environ.get(name) != '0,1':
         raise RuntimeError('A5-only schema validation requires all device visibility variables fixed to 0,1')
@@ -14,7 +15,7 @@ from deep_ep._native import require_native
 from deep_ep.utils.ll_stage_timer import StageTrace, STAGES, SLOTS, FIELDS, SCHEMA
 torch.npu.set_device(0)
 native=require_native('LL timer schema validation')
-assert native.low_latency_implementation=='g4-r0-prefix'
+assert native.low_latency_implementation==json.loads((ROOT/'tests/ll_stage_timer/branch.json').read_text())['implementation']
 assert native.low_latency_overlap_stage==3
 cfg=native.low_latency_core_config()
 assert native.low_latency_stage_timer_enabled

@@ -43,7 +43,8 @@ def expected_overlap_stage():
 
 def validate_overlap_stage_capability(capability):
     expected=expected_overlap_stage()
-    if capability.get('implementation')!='g4-r0-prefix' or capability.get('overlap_stage')!=expected:
+    implementation=json.loads((PROJECT_ROOT/'tests/ll_stage_timer/branch.json').read_text())['implementation']
+    if capability.get('implementation')!=implementation or capability.get('overlap_stage')!=expected:
         raise RuntimeError(f'Rebuild/install overlap A/B stage {expected} from this checkout on every rank')
 
 

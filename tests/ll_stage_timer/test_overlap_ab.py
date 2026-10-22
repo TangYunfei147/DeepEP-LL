@@ -1,7 +1,7 @@
 """A/B identity, policies and metric boundaries; no NPU usage."""
 import importlib.util
 from pathlib import Path
-import shutil,subprocess
+import shutil,subprocess,json
 import pytest
 ROOT=Path(__file__).resolve().parents[2]
 def load(name,path):
@@ -11,11 +11,11 @@ st=load('ab_entry','tests/elastic/test_ep_low_latency.py')
 
 def test_stale_wheel_stage_rejected_even_without_timer():
     stage=st.expected_overlap_stage()
-    st.validate_overlap_stage_capability(dict(implementation='g4-r0-prefix',overlap_stage=stage))
+    st.validate_overlap_stage_capability(dict(implementation=json.loads((ROOT/'tests/ll_stage_timer/branch.json').read_text())['implementation'],overlap_stage=stage))
     for wrong in (0,1,2,3,4,5,None):
         if wrong==stage:continue
         with pytest.raises(RuntimeError,match='Rebuild/install'):
-            st.validate_overlap_stage_capability(dict(implementation='g4-r0-prefix',overlap_stage=wrong))
+            st.validate_overlap_stage_capability(dict(implementation=json.loads((ROOT/'tests/ll_stage_timer/branch.json').read_text())['implementation'],overlap_stage=wrong))
     with pytest.raises(RuntimeError):
         st.validate_overlap_stage_capability(dict(implementation='g4-overlap-recv',overlap_stage=stage))
 
