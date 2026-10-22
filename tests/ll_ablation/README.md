@@ -2,9 +2,10 @@
 
 Branch `experiment/ll-g4-ablations`, algorithm base `197052c` (plain q, optimized
 receiver destination metadata). This is separate from the earlier standalone
-bandwidth probes. **CPU checks and CANN device-object compilation passed. Full-wheel linking and
-EP16 device correctness are not yet validated. Run the correctness gates before
-interpreting performance.**
+bandwidth probes. **The user has supplied target-machine run results; local CPU
+and remote device-object checks do not replace that device evidence. Passing the
+existing checks does not establish causal isolation of the ablations.** Read
+[EXPERIMENT_AUDIT.md](EXPERIMENT_AUDIT.md) before interpreting the results.
 
 The target is B=M256, H3584, K8, E384, prequantized FP8, int32 E8M0 scale packs,
 do_cpu_sync0. Other dtype/scale combinations are rejected by the launcher for this
@@ -20,11 +21,14 @@ suite. Ordinary routes and weights remain real and reproducible in every mode.
 | prepack / 3 | Same zero/unity payload | Also initialize packed output lanes once and skip per-packet payload Copy; still construct real wire tail and marker | OFF profiler kernel |
 | ready-replay / 4 | Original payload | Full dispatch prefill without clearing packet flags; then replay receiver with all data already ready, suppress duplicate relay, finally clear flags | ON device-cycle envelope only |
 
-First compare baseline and fixed-payload to identify content effects. Then compare
-fixed-payload vs preload (input path), and preload vs prepack (packing path).
-Preload/prepack initialization remains inside the kernel; differences are actual
-changed-program costs, not ideal zero-cost hardware estimates. They do not skip
-routing, q construction, counting, prefix calculation or communication.
+Baseline versus fixed-payload tests sensitivity to this change of input content.
+Fixed-payload versus preload, and preload versus prepack, compare concrete
+replacement implementations. They do not isolate the original input/packing
+costs. Preload adds scalar scale initialization; prepack adds lane initialization
+and moves tail/q construction behind the output-lane wait, changing overlap.
+Initialization remains inside the kernel. A zero or negative latency difference
+does not prove that the removed work is free or has no optimization potential.
+Routing, q construction, counting, prefix calculation and communication remain.
 
 Mode4 uses retained real incoming packets and the original task-to-slot table.
 The first pass completes normal input/output/relay dependencies; no flags are
@@ -41,6 +45,9 @@ Not implemented here: pre-generated full route descriptors, cross-rank frozen
 sender replay, or a no-send full LL kernel. Those need separate state/identity
 design. “No-send” is already available in the standalone micro suite, and must
 not be achieved by deleting sends while leaving live receivers waiting.
+The modes in this suite do not independently measure TX/RX/relay bandwidth or a
+communication startup intercept; that requires separately controlled byte/packet
+counts, completion boundaries and size sweeps.
 
 ## Isolation and correctness
 
@@ -49,7 +56,9 @@ on load. All ranks agree on mode, split, timer settings and wheel SHA before SHM
 creation. Schema14 adds one replay metric; per-core timer allocation remains5120B.
 The generic historical compare.py is not used; use this directory's compare.py.
 
-Baseline/replay keep full payload correctness checks. Fixed/preloaded/prepacked
+Baseline/replay keep Host payload checks after the entire kernel invocation.
+For replay, that is the final replay output, not an independent check of the
+prefill before replay overwrites it. Fixed/preloaded/prepacked
 validate exact zero payload, unity scale bits, expected output counts/shapes and
 cross-mode fingerprints for all valid destination rows, source weights, count
 outputs and (when dedup enabled) token types/source masks/valid relay entries and
@@ -57,6 +66,11 @@ weights. Uninitialized reserved relay tail bytes are not hashed. Fingerprints ar
 The baseline is necessary: constant payload alone cannot validate row identity.
 Three correctness rounds change routes and reuse both protocol windows before
 sampling. Never use --skip-check or combine with these diagnostic wheels.
+
+The sampling closure retains the routes of the last correctness round. With
+the default seed0 and correctness_repeats3, the measured routes use seed2, while
+historical capture metadata still labels seed0. Preserve the recorded seed and
+report the effective route seed separately; do not silently relabel old files.
 
 ## Prepare environment
 
@@ -201,10 +215,13 @@ without overwriting different files. Normal latency uses max-rank mean profiler
 kernel duration. Replay reports max-core duration per rank/iteration, retaining
 ticks and frequency-based microseconds; no cross-rank clock subtraction.
 
-88->70us requires18us reduction. If fixed-payload->prepack recovers much less,
-payload handling alone cannot explain that target. If replay is short while the
-live path is long, investigate data arrival/routing/communication overlap. These
-are directional tests, not independent additive savings or a promise of70us.
+88->70us requires18us reduction in the same complete OFF dispatch measurement.
+The current preload/prepack differences cannot establish an upper bound on
+payload-path optimization, because they add initialization and change scheduling.
+Replay omits preparation, live arrival and duplicate relay and changes concurrency;
+its duration cannot be subtracted from full dispatch to obtain communication cost.
+Use these results to form hypotheses, then verify candidates with repeated,
+interleaved OFF baseline/candidate runs. Do not add ablation differences.
 
 ## Build source guard
 
@@ -216,9 +233,24 @@ and list exact paths, because those changes would not be included in HEAD.
 No reset, clean, automatic stash or source overwrite is performed. Both --devices
 and --device are accepted by suite.py; quote the visibility variable.
 
-## Receiver40us follow-up
+## Receiver replay follow-up
 
 Use [RECEIVER_BREAKDOWN.md](RECEIVER_BREAKDOWN.md) and receiver_suite.py for the
 new paired baseline/skip-flags/no-payload-output experiment. It builds one ON
 wheel and preferentially reuses the old ready-replay build worktree/SDK/cache.
 The original suite.py still runs only its five original modes.
+
+The offline audit/export path reads an existing run without rebuilding or
+installing a wheel, or starting NPU work:
+
+```bash
+python3 tests/ll_ablation/receiver_export.py \
+  .ablation/results/recv40-002-ready-breakdown \
+  --output-dir .ablation/results/recv40-002-export
+```
+
+Use a new output directory. JSON parts contain ASCII only and each is at most
+60000 bytes/characters, so they can be sent separately. The updated receiver
+suite automatically exports after generating its report. Offline regrouping can
+expose execution-position effects; it cannot recover missing layout/order checks
+or turn the existing replay into a causal decomposition.

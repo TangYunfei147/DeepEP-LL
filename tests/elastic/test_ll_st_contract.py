@@ -55,6 +55,19 @@ def test_unique_routes_and_expanded_counts():
     assert sum(len(rows) for rank in range(16) for rows in st.expert_entries(routes, 128, 16, rank)) == 16 * 8 * 8
 
 
+def test_requested_and_actual_sampling_routes_are_distinct_metadata():
+    args=st.make_parser().parse_args(['--seed','0'])
+    args.runtime_identity={'transport':'mte'}
+    legacy=st.comparison_metadata(args,16,256)
+    assert legacy['seed']==legacy['requested_seed']==0
+    assert legacy['actual_route_seed'] is None and legacy['route_digest'] is None
+    args.actual_route_seed=2
+    args.ablation_route_digest='recorded-route-digest'
+    actual=st.comparison_metadata(args,16,256)
+    assert actual['seed']==actual['requested_seed']==args.seed==0
+    assert actual['actual_route_seed']==2 and actual['route_digest']=='recorded-route-digest'
+
+
 def test_kernel_csv_contract(tmp_path):
     path = tmp_path / "kernel_details.csv"
     path.write_text(

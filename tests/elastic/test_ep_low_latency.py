@@ -104,6 +104,8 @@ def comparison_metadata(args, world, m):
                 perf_enabled=not args.skip_perf_test, world_size=world,
                 local_world_size=int(os.environ.get('LOCAL_WORLD_SIZE',args.num_processes)),
                 case=case_config(args,m), route=args.route, seed=args.seed,
+                requested_seed=args.seed, actual_route_seed=getattr(args,'actual_route_seed',None),
+                route_digest=getattr(args,'ablation_route_digest',None),
                 warmup=args.warmup, num_iters=args.num_iters, perf_tail=args.perf_tail,
                 delay_rows=args.delay_rows, delay_cols=args.delay_cols, group_backend=args.group_backend,
                 timer_mode=args.ll_timer_mode if args.ll_stage_timer else None,
@@ -891,7 +893,9 @@ def diagnostic_calls(buffer, invoke, check, args, operation, rank, m, mode,
         agree_check(lambda: check(output), args, rank)
         metadata = dict(rank=rank, world_size=world, iteration=iteration,
                         comparison=comparison_metadata(args,world,m),
-                        run_id=Path(args.run_directory).name, seed=args.seed, case_id=args.case_id, route=mode,
+                        run_id=Path(args.run_directory).name, seed=args.seed,
+                        requested_seed=args.seed, actual_route_seed=getattr(args,'actual_route_seed',None),
+                        route_digest=getattr(args,'ablation_route_digest',None), case_id=args.case_id, route=mode,
                         correctness="passed", config={**case_config(args, m),
                         "logical_group_size": logical_group},
                         protocol="stabilized diagnostic tail; Exp+scalar all_reduce; deferred validation/export; excluded from profiler",
@@ -933,6 +937,7 @@ def run_case(buffer, args, rank, world, m, mode):
 
     progress("prepare")
     routes = make_routes(world, args.num_tokens, args.num_topk, args.num_experts, args.seed, mode)
+    args.actual_route_seed = args.seed
     args.ablation_route_digest = __import__("hashlib").sha256(json.dumps(routes).encode()).hexdigest()
     entries = expert_entries(routes, args.num_experts, world, rank)
     counts = [len(rows) for rows in entries]
@@ -998,6 +1003,7 @@ def run_case(buffer, args, rank, world, m, mode):
             # Reuse both protocol windows with changed routing, on the same Session.
             completion_boundary(args)
             routes = make_routes(world, args.num_tokens, args.num_topk, args.num_experts, args.seed + repeat, mode)
+            args.actual_route_seed = args.seed + repeat
             args.ablation_route_digest = __import__("hashlib").sha256(json.dumps(routes).encode()).hexdigest()
             entries = expert_entries(routes, args.num_experts, world, rank)
             counts = [len(rows) for rows in entries]
@@ -1014,6 +1020,9 @@ def run_case(buffer, args, rank, world, m, mode):
             "backend": "ll",
             "config": case_config(args, m),
             "tested_operations": ["dispatch"],
+            "requested_seed": args.seed,
+            "actual_route_seed": args.actual_route_seed,
+            "route_digest": args.ablation_route_digest,
         }
         perf = sample_operation(buffer, dispatch,
             lambda output: verify_dispatch(output[0], output[3], entries, args, world, m),
