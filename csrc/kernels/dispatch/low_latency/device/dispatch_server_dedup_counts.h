@@ -7,6 +7,7 @@
 #include "kernel_operator.h"
 #include "ll_transport.h"
 #include "ll_count_frame_transport.h"
+#include "ll_count_frame_receive.h"
 #include "../common/ll_count_frame_layout.h"
 #include "adv_api/reduce/sum.h"
 #include "../common/ep_memory_server_dedup_count_layout.h"
@@ -552,6 +553,10 @@ __aicore__ inline void ServerDedupCounts::WaitDispatch()
     gatherTmpTensor.SetValue(0, 1U);
     float compareTarget = static_cast<float>(1.0) * recStatusNumPerCore_;
     float sumOfFlag = static_cast<float>(-1.0);
+    LlCountReadPlan readPlan;
+    if (packedFrames_ && !BuildCountReadPlan(rscvStatusNum_, epWorldSize_,
+            useAllCoreCount_ ? coreNum_ : aivUsedCumSum_, epRankId_,
+            startStatusIndex_, recStatusNumPerCore_, readPlan)) { Trap(); return; }
 
     DataCopyParams intriParams{static_cast<uint16_t>(recStatusNumPerCore_), 1,
                                static_cast<uint16_t>(CNT_GM_STRIDE_BLOCKS - 1U), 0};
@@ -560,12 +565,7 @@ __aicore__ inline void ServerDedupCounts::WaitDispatch()
     while (sumOfFlag != compareTarget) {
         deadline.Check();
         if (packedFrames_) {
-            for (uint32_t i = 0; i < recStatusNumPerCore_; ++i) {
-                const uint32_t logical = startStatusIndex_ + i;
-                const auto frame = CountFrame(rscvStatusNum_, epWorldSize_,
-                    useAllCoreCount_ ? coreNum_ : aivUsedCumSum_, epRankId_, logical % epWorldSize_, logical / epWorldSize_);
-                DataCopy(statusFp32Tensor_[i * 8U], windowInstatusFp32Tensor_[frame.commitOffset / sizeof(float)], 8U);
-            }
+            ReadCountFrames(statusFp32Tensor_, windowInstatusFp32Tensor_, readPlan, false);
         } else DataCopy(statusFp32Tensor_,
                  windowInstatusFp32Tensor_[startStatusIndex_ * kEpServerDedupCountGmStride / sizeof(float)],
                  intriParams);
@@ -578,12 +578,7 @@ __aicore__ inline void ServerDedupCounts::WaitDispatch()
     if (packedFrames_) {
         // Commit acquired: load the actual dense records, preserving the old
         // logical expert/source ordering for prefix sums and Receiver metadata.
-        for (uint32_t i = 0; i < recStatusNumPerCore_; ++i) {
-            const uint32_t logical = startStatusIndex_ + i;
-            const auto frame = CountFrame(rscvStatusNum_, epWorldSize_,
-                useAllCoreCount_ ? coreNum_ : aivUsedCumSum_, epRankId_, logical % epWorldSize_, logical / epWorldSize_);
-            DataCopy(statusFp32Tensor_[i * 8U], windowInstatusFp32Tensor_[frame.recordOffset / sizeof(float)], 8U);
-        }
+        ReadCountFrames(statusFp32Tensor_, windowInstatusFp32Tensor_, readPlan, true);
         SyncFunc<HardEvent::MTE2_V>();
     }
     GatherSumRecvCnt(gatherMaskOutTensor, gatherTmpTensor, statusSumOutTensor);

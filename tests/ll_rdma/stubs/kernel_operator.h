@@ -35,11 +35,21 @@ template<class T> struct LocalTensor {
 };
 template<class T> struct GlobalTensor {
     T* p=nullptr;
+    GlobalTensor<T> operator[](uint64_t index) { return {p + index}; }
     T& operator()(uint32_t index) { return p[index]; }
     void SetGlobalBuffer(T* q) { p=q; }
     void SetL2CacheHint(CacheMode) {}
 };
 struct DataCopyExtParams { uint16_t count; uint32_t bytes, srcStride, dstStride, reserved; };
+struct DataCopyParams { uint16_t blockCount, blockLen, srcStride, dstStride; };
+inline uint32_t stridedCopies = 0;
+template<class T> void DataCopy(LocalTensor<T> dst, GlobalTensor<T> src, DataCopyParams c) {
+    ++stridedCopies;
+    for (uint32_t i=0; i<c.blockCount; ++i)
+        std::memcpy(reinterpret_cast<uint8_t*>(dst.p) + i*(c.blockLen+c.dstStride)*32U,
+                    reinterpret_cast<const uint8_t*>(src.p) + i*(c.blockLen+c.srcStride)*32U,
+                    c.blockLen*32U);
+}
 template<class T> struct DataCopyPadExtParams { bool pad; uint8_t left, right; T value; };
 template<class T> void DataCopy(GlobalTensor<T> d, LocalTensor<T> s, uint32_t n) { std::memcpy(d.p,s.p,n*sizeof(T)); }
 template<class T> void DataCopy(LocalTensor<T> d, GlobalTensor<T> s, uint32_t n) { std::memcpy(d.p,s.p,n*sizeof(T)); }

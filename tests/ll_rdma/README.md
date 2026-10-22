@@ -6,6 +6,9 @@
 计数帧合并见[PACKED_COUNT_FRAMES.md](PACKED_COUNT_FRAMES.md)。两项为顺序独立提交，
 全rank更新完整wheel，SHMEM不变。
 
+后续count_recv分段步长读取优化见[COUNT_RECV_STRIDED.md](COUNT_RECV_STRIDED.md)，
+保持协议7与原接收顺序，减少轮询中的映射计算及DMA提交。
+
 2026-10-22：NDR初始化、barrier和销毁改为现有HCCL ProcessGroup的Host协调，
 先完成本卡全部stream，再交换所有rank状态；生产路径不再启动设备barrier。
 **SHMEM不改、不打补丁，无需重建原SDK，只需全rank更新完整wheel**。
