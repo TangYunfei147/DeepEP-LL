@@ -1,7 +1,7 @@
 {
-  "baseline": "metadata candidate 1; historical instrumentation baseline fb9263d",
+  "baseline": "metadata candidates 1+2; historical instrumentation baseline fb9263d",
   "files": {
-    "csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_send.h": "3197e4bb20b473b74f2a419d648006a696eb0e9929e8fe23ddb48e5758796789",
+    "csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_send.h": "4d0d895022709d5f91f9e048982b792387fd7f3e6de32e191a90961c116a8f55",
     "csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_recv.h": "c4ae709af332347b1792229f6282b2dc926cba86222e68ecee979b8760c472c3",
     "csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_counts.h": "0a1fff89bf580dd730e80a804690f863dcbc4939d75f33983bb3f3b2580278cc"
   }

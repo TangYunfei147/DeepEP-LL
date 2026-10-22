@@ -88,3 +88,13 @@ A版本固定f7c7848，B版本取该候选提交。相同路由seed、dtype/scal
 
 本次未执行CANN编译、ON/OFF cold build、完整wheel链接或NPU测试。
 编译验证流程仍见docs/BUILD_DISPATCH_SPLIT.md；CPU通过不代表A5正确性或性能通过。
+
+## Packed-route A/B candidate (2026-10-22)
+
+For B*K<=65536 and E<=65536, the existing 4-byte q slot holds
+`expert | (q << 16)`. FillTail reads that word directly; consumers requiring q
+decode its upper half. The conservative bound also covers repeated experts.
+Larger configurations retain full uint32 q and the original tail encoding.
+VF prefix seeding, first-token q=0, send order, wire format and UB allocation
+are unchanged. Local q construction adds encoding; OFF A/B must account for
+that setup cost, not just reduced TOKEN_METADATA. No measured speedup yet.

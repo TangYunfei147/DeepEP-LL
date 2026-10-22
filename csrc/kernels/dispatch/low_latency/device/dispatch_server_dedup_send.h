@@ -161,6 +161,7 @@ public:
         qShard_=LlLocalQShard(bs_,k_,sendCores_,GetBlockIdx(),enableDedup_);
         // qWork is persistent; quantization only uses qDst, never this table.
         qTable_=qWorkBuf_.Get<uint32_t>();
+        packedQ_=LlCanPackLocalQ(bs_,k_,localExperts_*uint32_t(args_->rankSize));
         if (qShard_.count) {
             auto histogram=qSubBuf_.Get<uint32_t>();
             auto* out=reinterpret_cast<__ubuf__ uint32_t*>(histogram.GetPhyAddr());
@@ -178,7 +179,7 @@ public:
             LL_SEG_END(seedIssue,Q_SEED_SUBMIT);
             { LL_SEG_SCOPE(Q_SEED_WAIT); Sync<HardEvent::V_S>(); }
             { LL_SEG_SCOPE(Q_LOCAL_UPDATE);
-              LlFinishLocalQ(routeIds_,histogram,qTable_,k_,qShard_); }
+              LlFinishLocalQ(routeIds_,histogram,qTable_,k_,qShard_,packedQ_); }
         }
         // 每个 512B 块尾部的 32B 标记预置为 1；发送时 payload 和标记一起搬运。
         // 初始 MTE3_V 事件让 lane 首次可写，后续复用由上一包的发送完成事件控制。
@@ -460,7 +461,8 @@ private:
     {
         LL_SEG_SCOPE(CAL_TOKEN);
         (void)expert; // The original route index uniquely identifies its q.
-        return qTable_.GetValue(index-qShard_.begin);
+        const uint32_t value=qTable_.GetValue(index-qShard_.begin);
+        return packedQ_ ? value>>16U : value;
     }
     template <class Fp8Type>
     // 摘要：以每 32 元素为一组生成 MXFP8 scale 和量化数据，复用 q 计算的临时 UB。
@@ -501,10 +503,17 @@ private:
         for (uint32_t k = firstK + 1U; mask != 0U && k < k_; ++k)
             if (mask & (uint32_t(1) << k)) {
                 const uint32_t routeIndex = (start_ + token) * k_ + k;
-                const uint32_t expert = uint32_t(routeIds_.GetValue(routeIndex));
-                const uint32_t q = CalTokenSendExpertCnt(expert, routeIndex);
+                uint32_t packed;
+                if (packedQ_) {
+                    LL_SEG_SCOPE(CAL_TOKEN);
+                    packed=qTable_.GetValue(routeIndex-qShard_.begin);
+                } else {
+                    const uint32_t expert=uint32_t(routeIds_.GetValue(routeIndex));
+                    const uint32_t q=CalTokenSendExpertCnt(expert,routeIndex);
+                    packed=expert | (q<<16U);
+                }
                 ++entries;
-                index.SetValue(entries * 2U, expert | (q << 16U));
+                index.SetValue(entries * 2U, packed);
                 weights.SetValue(entries * 2U + 1U, routeWeights_.GetValue(token * k_ + k));
             }
         index.SetValue(0U, entries);
@@ -639,6 +648,7 @@ private:
     bool enableDedup_ = false;
     LlQShard qShard_{};
     LocalTensor<uint32_t> qTable_;
+    bool packedQ_=false;
     TBufPool<TPosition::VECCALC, 16>* scratch_ = nullptr;
     uint32_t sendCores_ = 0;
     uint32_t bs_ = 0, h_ = 0, k_ = 0, localExperts_ = 0, start_ = 0, count_ = 0;

@@ -268,3 +268,19 @@ from header[0..2]. Original role snapshot, terminal destination, relay ordering,
 all synchronization and lane retirement remain unchanged. No extra UB, launch
 mode or template dimension. CANN compilation and NPU performance are unverified.
 Candidate 1 local required contracts and relay checks: 70 passed, 3 skipped (no C++ compiler). Initial pytest temp-directory failure resolved by using project-local --basetemp.
+
+Candidate 2 stores expert|q<<16 in existing qWork for B*K<=65536/E<=65536;
+larger shapes retain uint32 q. No new UB, template dimensions or synchronization.
+Final targeted Python checks: 79 passed; 3 compiler-discovery skips. Two native
+q fixtures could not compile with the existing Zig toolchain: initial sandbox
+temporary-file rename denial, then libc/libc++ build Unexpected errors after
+redirecting temp/cache into the project. Native equivalence remains unverified;
+this is not a passing CANN/device validation. Updated fixtures cover packed and
+unpacked q, duplicate experts, reordered reads, empty shards and large q.
+
+A/B: c038f44 = original; 197052c = receiver only; candidate 2 HEAD = both.
+For sender only, cherry-pick candidate 2 onto c038f44; resolve the diagnostic
+manifest to retain the original receiver digest (the send algorithm is independent).
+Rebuild the same OFF/ON variant and S/R on every rank. Compare OFF kernel time;
+ON compare SEND_SETUP/Q_LOCAL_UPDATE/TOKEN_METADATA/RX_METADATA and overall time.
+Keep CAL_TOKEN scope on packed tail reads to avoid reducing probe calls alone.

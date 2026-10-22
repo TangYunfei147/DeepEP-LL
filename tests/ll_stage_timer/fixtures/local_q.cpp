@@ -14,12 +14,16 @@ struct Tensor {
  void SetValue(uint32_t i,uint32_t x){v->at(i)=x;}
 };
 int main(){
+ assert(DispatchDedup::LlCanPackLocalQ(256,8,384));
+ assert(DispatchDedup::LlCanPackLocalQ(65536,1,65536));
+ assert(!DispatchDedup::LlCanPackLocalQ(65536,2,384));
+ assert(!DispatchDedup::LlCanPackLocalQ(1,8,65537));
  std::mt19937 rng(6217);
  for(unsigned b:{1U,3U,8U,32U,48U,256U})
  for(unsigned k:{1U,3U,8U,32U})
  for(unsigned e:{32U,384U,1024U})
  for(unsigned s:{1U,10U,28U,55U})
- for(bool dedup:{false,true}) for(bool repeated:{false,true}) {
+ for(bool dedup:{false,true}) for(bool repeated:{false,true}) for(bool packed:{false,true}) {
   std::vector<uint32_t> ids((b*k+63)/64*64,7),ref(b*k),hist(e);
   for(unsigned t=0;t<b;++t) {
    std::vector<unsigned> pool(e);
@@ -36,11 +40,11 @@ int main(){
    std::vector<uint32_t> q(part.count),counts(e,0xdeadbeef);
    if(part.count) {
     DispatchDedup::CountFrequency<true>(counts.data(),ids.data(),part.begin,0,e);
-    DispatchDedup::LlFinishLocalQ(Tensor{&ids},Tensor{&counts},Tensor{&q},k,part);
+    DispatchDedup::LlFinishLocalQ(Tensor{&ids},Tensor{&counts},Tensor{&q},k,part,packed);
    }
-   for(unsigned i=0;i<part.count;++i)assert(q[i]==ref[part.begin+i]);
+   for(unsigned i=0;i<part.count;++i)assert(q[i]==(packed ? (ids[part.begin+i] | (ref[part.begin+i]<<16U)) : ref[part.begin+i]));
    // Reordered DIRECT and FIRST_HOP tail reads must still use original q.
-   for(unsigned i=part.count;i>0;--i)assert(q[i-1]==ref[part.begin+i-1]);
+   for(unsigned i=part.count;i>0;--i)assert((packed ? q[i-1]>>16U : q[i-1])==ref[part.begin+i-1]);
    if(!part.count)for(auto value:counts)assert(value==0xdeadbeef);
   }
   assert(coverage==b*k);
