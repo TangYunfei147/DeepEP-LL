@@ -551,3 +551,28 @@ Regression includes the actual ST metadata structure for16ranks/multiple
 iterations, whole-directory analysis and exact export/restore. This Python-only
 fix requires neither kernel rebuild nor new sampling; rerun offline analysis
 on the existing raw files. No device performance or compilation claim is added.
+
+## 2026-10-23 build all variants before sampling
+
+diagnose.py now builds both OFF and sparse wheels before installing and
+Host-verifying every variant. Only after all checks pass may any device sampling
+begin. --skip-build also verifies the entire wheel set before the first run.
+S/R is captured from the explicit build environment and checked against wheel
+metadata and the native protocol constant; verification does not call the
+device-querying low_latency_core_config().
+
+--build-only needs no device/endpoint arguments, preserves inherited visibility,
+and stops after atomically publishing node_000/wheel-map.json with relative
+wheel paths. It neither invokes the device launcher nor consumes transmission
+budget. Reuse with a fresh run-name and --skip-build --wheel-map. Each host must
+finish its independent build before all hosts start sampling; there is no
+cross-host build barrier in the ordinary one-command mode.
+
+Final local Python regression for the identity fix and execution ordering:
+703passed/44environment skips in53.98s. Tests include second-variant compilation
+failure, either wheel's identity failure, no device runs before all verification,
+build-only with no devices, unchanged visibility, no report/send-budget output,
+and wheel-map reuse after moving a checkout with spaces. The pure CPU plan for
+S30/R26 returns build_only=true, visibility=null and both stage.run=null.
+Evidence: .tmp/build-first-identity-final.log. Native sources and build graph are
+unchanged by these two fixes; no actual CANN build or NPU run was performed.

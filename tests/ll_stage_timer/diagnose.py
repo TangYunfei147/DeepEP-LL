@@ -1,8 +1,9 @@
-"""Serially run the small-B OFF baseline and one sparse milestone capture.
+"""Build and verify both wheels before running OFF and sparse capture serially.
 
 Load the target's Python/CANN environment first (for example, source
 /home/tyf/0env.sh), then invoke this file with explicit --devices and launcher
 topology arguments. No dependencies are downloaded, no shared Python is changed.
+Use --build-only to prepare both wheels without device or launcher arguments.
 """
 import argparse
 import importlib.util
@@ -44,6 +45,8 @@ def parser():
     p.add_argument('--settle-iters', type=int, default=100)
     p.add_argument('--diag-iters', type=int, default=5)
     p.add_argument('--plan', action='store_true', help='Print all commands without creating files/importing NPU/building')
+    p.add_argument('--build-only', action='store_true',
+                   help='Build and Host-verify OFF+sparse wheels only; no devices/topology required, no sampling')
     p.add_argument('--skip-build', action='store_true', help='Require --wheel-map; native identity still checked')
     p.add_argument('--wheel-map', type=Path, help='JSON mapping off/profile -> existing local wheel path')
     p.add_argument('--defer-analysis', action='store_true', help='Collect rank-local files before --analyze-existing')
@@ -97,10 +100,12 @@ def make_plan(args, forwarded, root=ROOT, python=sys.executable):
         if token.split('=', 1)[0] in CONTROLLED:
             raise ValueError(f'{token} is controlled by diagnose.py; use its matrix/profile options')
     devices = _forward_value(forwarded, '--devices')
-    if not devices or not re.fullmatch(r'\d+(,\d+)*', devices):
+    if not devices and args.build_only:
+        devices = ''
+    elif not devices or not re.fullmatch(r'\d+(,\d+)*', devices):
         raise ValueError('Supply explicit launcher --devices (16 distinct devices per host)')
-    ids = [int(value) for value in devices.split(',')]
-    if len(ids) != 16 or len(set(ids)) != 16:
+    ids = [int(value) for value in devices.split(',')] if devices else []
+    if devices and (len(ids) != 16 or len(set(ids)) != 16):
         raise ValueError('Launcher requires 16 distinct devices per host')
     nodes = int(_forward_value(forwarded, '--num-nodes', '1'))
     node = int(_forward_value(forwarded, '--node-rank', '0'))
@@ -123,6 +128,12 @@ def make_plan(args, forwarded, root=ROOT, python=sys.executable):
         raise ValueError('New captures require --profiles sparse; legacy full/phase captures are offline-analysis only')
     if args.skip_build != bool(args.wheel_map):
         raise ValueError('--skip-build and --wheel-map must be supplied together')
+    if args.build_only and args.skip_build:
+        raise ValueError('--build-only cannot be combined with --skip-build/--wheel-map')
+    send = int(os.environ.get('DEEPEP_LL_SEND_CORES', '28'))
+    recv = int(os.environ.get('DEEPEP_LL_RECV_CORES', '28'))
+    if send <= 0 or recv <= 0 or send + recv != 56:
+        raise ValueError('DEEPEP_LL_SEND_CORES and DEEPEP_LL_RECV_CORES must be positive and sum to 56')
     suite = _within_project(Path(args.output_root) / args.run_name, root)
     node_dir = suite / f'node_{node:03d}'
     venv = node_dir / 'venv'
@@ -150,17 +161,22 @@ def make_plan(args, forwarded, root=ROOT, python=sys.executable):
                            build=[str(executable), '-m', 'build', '--wheel', '--no-isolation',
                                   '--outdir', str(wheel_dir)],
                            install=[str(executable), '-m', 'pip', 'install', '--no-index', '--no-deps',
-                                    '--force-reinstall', '{wheel}'], run=run,
+                                    '--force-reinstall', '{wheel}'], run=None if args.build_only else run,
                            analyze=[str(executable), str(root / 'tests/ll_stage_timer/analyze.py'), str(results),
-                                    '--op', 'dispatch', '--output-dir', str(suite / 'analysis' / profile)] if timer else None))
+                                    '--op', 'dispatch', '--output-dir', str(suite / 'analysis' / profile)] if timer and not args.build_only else None))
     return dict(format='ll-staged-diagnosis-v1', root=str(root), suite=str(suite), node=node, nodes=nodes,
                 python=python, venv=str(venv), venv_python=str(executable), node_dir=str(node_dir),
                 create_venv=[python, '-m', 'venv', '--system-site-packages', str(venv)],
-                device_visibility=devices, matrix=dict(B=args.bs, M=args.m, H=args.hidden, K=args.topk,
+                device_visibility=None if args.build_only else devices,
+                core_split=dict(send=send, recv=recv),
+                matrix=dict(B=args.bs, M=args.m, H=args.hidden, K=args.topk,
                                                        E=args.experts, dtype=args.dtype, cpu_sync=args.cpu_sync),
                 stages=stages, skip_build=args.skip_build, wheel_map=str(args.wheel_map) if args.wheel_map else None,
+                build_only=args.build_only, wheel_map_output=str(node_dir / 'wheel-map.json'),
                 defer_analysis=args.defer_analysis, transfer_mode=args.transfer_mode,
-                note='Run OFF then sparse sequentially in the same matrix order on all hosts; device runs never overlap. '
+                note='Build all variants, then install and Host-verify every wheel before any device run. '
+                     'Build-only stops after writing the relative-path wheel map; it never launches NPU work. '
+                     'Run OFF then sparse sequentially in the same matrix order on all hosts; device runs never overlap. '
                      'The same sparse capture supports initialization/count/prefix/send/receive analysis together. '
                      'Use full profiler task durations for ON/OFF perturbation; internal milestones are not OFF costs.')
 
@@ -175,10 +191,14 @@ def _environment(plan, stage=None):
         path = work / suffix
         path.mkdir(parents=True, exist_ok=True)
         env[variable] = str(path)
-    for name in ('CUDA_VISIBLE_DEVICES', 'ASCEND_RT_VISIBLE_DEVICES', 'ASCEND_VISIBLE_DEVICES', 'PROBE_VISIBLE_DEVICES'):
-        env[name] = plan['device_visibility']
+    if not plan.get('build_only', False):
+        for name in ('CUDA_VISIBLE_DEVICES', 'ASCEND_RT_VISIBLE_DEVICES', 'ASCEND_VISIBLE_DEVICES', 'PROBE_VISIBLE_DEVICES'):
+            env[name] = plan['device_visibility']
     env.update(PIP_NO_INDEX='1', PIP_DISABLE_PIP_VERSION_CHECK='1', PYTHONDONTWRITEBYTECODE='1',
                DEEPEP_NPU_ARCH='Ascend950')
+    if 'core_split' in plan:
+        env['DEEPEP_LL_SEND_CORES'] = str(plan['core_split']['send'])
+        env['DEEPEP_LL_RECV_CORES'] = str(plan['core_split']['recv'])
     env.pop('SHMEM_ROOT', None)
     env.pop('CATLASS_ROOT', None)
     library = str(Path(plan['root']) / 'third-party/shmem/install/shmem/lib')
@@ -217,11 +237,15 @@ def _wheel_map(plan):
     return result
 
 
-def _verify_code(stage, implementation):
+def _verify_code(stage, implementation, core_split=None):
     # The installed-wheel helper prevents checkout PYTHONPATH shadowing.
     if stage['profile'] != 'sparse':
         raise ValueError('New captures require sparse milestone wheels; legacy profiles are offline-analysis only')
     profile_id = 6
+    core_checks = '' if core_split is None else f"""
+require(info.get('ll_send_cores') == {core_split['send']!r} and info.get('ll_recv_cores') == {core_split['recv']!r}, 'wheel S/R differs from requested build configuration')
+require(native.low_latency_core_protocol == {19000 + core_split['send']!r}, 'native core protocol differs from requested S/R')
+"""
     return f"""import json
 import runpy
 from pathlib import Path
@@ -240,10 +264,29 @@ require(layout.get('timer_profile') == {stage['profile']!r} and layout.get('time
 runpy.run_path('tests/elastic/test_ep_low_latency.py')['validate_sparse_timer_layout'](layout)
 info_path = Path(package.__file__).resolve().parent / '_build_info.json'
 info = json.loads(info_path.read_text(encoding='utf-8'))
+require(info.get('ll_stage_timer') is {stage['timer']!r} and info.get('ll_timer_profile') == {stage['profile']!r}, 'wheel build metadata differs from requested timer configuration')
+{core_checks}
 fingerprint = runpy.run_path('build_support.py')['source_fingerprint']()
 require(info.get('source_sha256') == fingerprint, 'installed wheel source fingerprint differs from this checkout; rebuild matching wheels')
 print('installed wheel identity and source fingerprint verified:', info_path)
 """
+
+
+def _publish_wheel_map(plan, wheels):
+    """Publish only after every wheel passed Host-only identity verification.
+
+    Paths are relative to this map, so a checkout and its build directory can
+    move together without embedding the original machine's absolute paths.
+    """
+    destination = Path(plan['node_dir']) / 'wheel-map.json'
+    values = {stage['name']: Path(os.path.relpath(wheels[stage['name']], destination.parent)).as_posix()
+              for stage in plan['stages']}
+    temporary = destination.with_suffix('.json.tmp')
+    with temporary.open('x', encoding='utf-8', newline='\n') as stream:
+        json.dump(values, stream, indent=2)
+        stream.write('\n')
+    os.replace(temporary, destination)
+    return destination
 
 
 def _performance_rows(suite):
@@ -380,7 +423,8 @@ def execute(plan, *, receipt=None):
     sdk = root / 'third-party/shmem/install/shmem'
     if not (sdk / 'deepep-sdk.json').is_file() or not (sdk / 'include/host/shmem_host_def.h').is_file():
         raise ValueError('Prepare the locked project-local SHMEM SDK first; diagnose never downloads or rebuilds it')
-    _validate_launcher_before_build(plan)
+    if not plan.get('build_only', False):
+        _validate_launcher_before_build(plan)
     wheels = _wheel_map(plan)
     required = ['torch', 'torch_npu'] + ([] if plan['skip_build'] else ['build', 'setuptools', 'wheel', 'pybind11'])
     missing = [module for module in required if importlib.util.find_spec(module) is None]
@@ -393,6 +437,8 @@ def execute(plan, *, receipt=None):
     logs.mkdir(exist_ok=True)
     _command(plan['create_venv'], plan, env, logs / 'venv.log')
     implementation = json.loads((root / 'tests/ll_stage_timer/branch.json').read_text())['implementation']
+    # Do not interleave build and device sampling. A later variant's compiler or
+    # identity failure must be observable before the first OFF launch.
     for stage in plan['stages']:
         env = _environment(plan, stage)
         profile = stage['name']
@@ -404,10 +450,25 @@ def execute(plan, *, receipt=None):
             if len(candidates) != 1:
                 raise ValueError(f'Expected exactly one newly built wheel in {wheel_dir}')
             wheels[profile] = str(candidates[0])
+    for stage in plan['stages']:
+        env = _environment(plan, stage)
+        profile = stage['name']
         command = [wheels[profile] if value == '{wheel}' else value for value in stage['install']]
         _command(command, plan, env, logs / f'{profile}-install.log')
-        _command([plan['venv_python'], '-c', _verify_code(stage, implementation)],
+        _command([plan['venv_python'], '-c', _verify_code(stage, implementation, plan.get('core_split'))],
                  plan, env, logs / f'{profile}-identity.log')
+    wheel_map = _publish_wheel_map(plan, wheels)
+    if plan.get('build_only', False):
+        return wheel_map
+    for stage in plan['stages']:
+        env = _environment(plan, stage)
+        profile = stage['name']
+        # Verification leaves the last variant installed. Restore the exact
+        # wheel before each stage and recheck it without opening an NPU context.
+        command = [wheels[profile] if value == '{wheel}' else value for value in stage['install']]
+        _command(command, plan, env, logs / f'{profile}-run-install.log')
+        _command([plan['venv_python'], '-c', _verify_code(stage, implementation, plan.get('core_split'))],
+                 plan, env, logs / f'{profile}-run-identity.log')
         _command(stage['run'], plan, env, logs / f'{profile}-run.log')
         if stage['timer'] and plan['node'] == 0 and not plan['defer_analysis']:
             _command(stage['analyze'], plan, env, logs / f'{profile}-analyze.log')
@@ -430,6 +491,8 @@ def main(argv=None):
     receipt = {}
     try:
         if args.analyze_existing:
+            if args.build_only:
+                raise ValueError('--build-only cannot be combined with --analyze-existing')
             if args.plan:
                 print(json.dumps(dict(analyze_existing=str(args.analyze_existing),
                                       transfer_mode=args.transfer_mode, mutation=False)))
@@ -442,7 +505,12 @@ def main(argv=None):
             print(json.dumps(plan, indent=2))
             return 0
         path = execute(plan, receipt=receipt)
-        _print_summary_receipt(path, receipt)
+        if plan.get('build_only', False):
+            print('OFF and sparse wheels built and Host-verified; no device sampling was run.')
+            print('Wheel map (local build artifact; do not send): ' + str(path))
+            print('Run with a fresh --run-name, explicit devices/topology, and --skip-build --wheel-map ' + str(path))
+        else:
+            _print_summary_receipt(path, receipt)
     except (ValueError, RuntimeError) as exc:
         p.exit(1, f'{exc}\n')
     return 0

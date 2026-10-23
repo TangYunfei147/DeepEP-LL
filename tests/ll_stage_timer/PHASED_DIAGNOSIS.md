@@ -30,7 +30,8 @@ python tests/ll_stage_timer/diagnose.py \
 这些设备是目标机实际EP作业的示例，不扩大任何验证机的设备授权。多机每台执行同一命令，仅修改node-rank，并确保实际总rank数与期望EP一致。
 入口继承构建环境的S/R，不会把用户配置改成默认28/28；OFF与sparse必须一致。只检查CPU计划可追加`--plan`，不会构建或启动设备。
 
-入口顺序执行两组：
+入口先完成OFF与sparse两份wheel的全部构建，再分别隔离安装并校验Host身份、源码指纹和S/R；全部通过后才开始设备运行。
+任一构建或身份校验失败都不会启动第一组OFF采样。设备阶段依次为：
 
 1. **OFF**：完整未插桩wheel，正式profiler 10预热/100采集/尾50。
 2. **sparse**：完整schema15 ON wheel，先稳定100轮，再采5轮；实际capture调用也被profiler包住，用来量化打点扰动。
@@ -42,6 +43,41 @@ python tests/ll_stage_timer/diagnose.py \
 默认一键入口会构建OFF和sparse wheel，并分别装入该运行目录的system-site-packages隔离venv，复用已有torch/torch_npu，不改共享Python、不联网安装依赖。
 网络受限机器缺少依赖时先在本地准备并上传wheel。`--skip-build --wheel-map <JSON>`只用于已有匹配的OFF/sparse wheel，仍检查schema、profile、S/R和源码指纹。
 结果位于`diagnostic-runs/<run-name>/`，输出目录不能放入源码指纹扫描目录。
+
+## 先独立编译，再单独运行
+
+只准备两份wheel、不启动设备作业时，使用新目录名：
+
+```bash
+export DEEPEP_LL_SEND_CORES=30 DEEPEP_LL_RECV_CORES=26
+python tests/ll_stage_timer/diagnose.py \
+  --build-only --run-name small_b_sparse_build_001
+```
+
+这条命令无需设备列表或通信端口，继承已有设备可见性限制，不调用设备查询/分配或测试launcher。
+它完成OFF及sparse构建和Host身份验证后才发布：
+`diagnostic-runs/small_b_sparse_build_001/node_000/wheel-map.json`。
+map中的wheel路径相对map目录，可随整个工程及产物搬迁；map只留本地，不需要发送。
+追加`--plan`只显示计划。构建依赖、CANN环境及已校验SDK要求与前述一致。
+
+之后保持相同S/R，用新运行目录执行：
+
+```bash
+python tests/ll_stage_timer/diagnose.py \
+  --skip-build \
+  --wheel-map diagnostic-runs/small_b_sparse_build_001/node_000/wheel-map.json \
+  --run-name small_b_sparse_run_001 \
+  --bs 1 2 4 8 16 24 32 --m 32 \
+  --hidden 3584 --topk 8 --experts 384 --dtype fp8 --cpu-sync 0 \
+  --devices 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 \
+  --num-nodes "$NNODES" --node-rank "$NODE_RANK" \
+  --master-addr "$MASTER_ADDR" --master-port "$MASTER_PORT" \
+  --shmem-port "$SHMEM_PORT"
+```
+
+复用流程仍先验证两份wheel全部匹配，再运行；不会因`--skip-build`跳过身份检查。
+多机时，每台先完成独立编译，再一起启动运行命令。一键流程只保证本机全部构建先完成，没有跨主机构建屏障。
+编译目录与运行目录分开；已经存在的目录不会覆盖。最终仍只发送运行目录的SEND_FIRST及明确需要的补充，累计最多10次。
 
 多机非共享文件系统可用`--defer-analysis`。完成后按原相对路径汇集各rank的sample文件，保留rank0的summary和active_capture报告，再执行：
 

@@ -68,3 +68,6 @@ R0的PREFIX_LOCAL_DONE仅为原前缀阶段下发边界；小B并行路径有原
 首轮只发SEND_FIRST，摘要及必要定点补充累计最多10次，重复内容不重发。包数/轮询比例未采集，不补零。
 schema15须全rank完整重编；内部sparse15链接符号与Host/device布局检查拒绝旧库混装，SDK不因此重建。
 26/27本次SSH均超时；本地CPU/Zig通过不代表Bisheng编译、设备正确性或目标性能已验证。详见PHASED_DIAGNOSIS.md及BUILD_DISPATCH_SPLIT.md。
+
+诊断入口须先完成全部OFF/sparse编译及Host身份校验，再开始任何设备采样。--build-only独立编译无需设备/拓扑，保留已有可见性，成功后发布相对路径wheel-map.json；运行以新目录配合--skip-build复用并重新核验。多机先各自编译完成再统一运行，不假定脚本有跨机构建屏障。
+active_capture_profile的kernel_us/status/reason属于逐rank/轮次观察值，不作共同身份；measurement口径及shape/source/SR/schema/profile保护保留。

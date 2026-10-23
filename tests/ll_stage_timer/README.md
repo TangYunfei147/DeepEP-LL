@@ -23,9 +23,19 @@ python tests/ll_stage_timer/diagnose.py \
 ```
 
 拓扑和端口变量沿用实际作业；单机EP16为NNODES=1、NODE_RANK=0。设备列表只用于获分配的目标设备，不扩大验证机授权。追加`--plan`只检查CPU计划。
-命令顺序构建并运行OFF与sparse两组，OFF采用10预热/100采集/尾50，sparse稳定100轮后采5轮并测active-capture完整profiler开销。
+命令先构建并Host校验全部OFF/sparse wheel，全部通过后才依次运行两组。OFF采用10预热/100采集/尾50，sparse稳定100轮后采5轮并测active-capture完整profiler开销。
 **全rank必须使用完整重编的schema15 wheel和新的run-name**，入口负责工程内隔离安装；不强制重建已校验的SDK，不联网下载依赖、不改共享Python。
 详细配置、多机汇集、轮次和验证边界以[PHASED_DIAGNOSIS.md](PHASED_DIAGNOSIS.md)为准。
+
+也可以先独立编译，不传设备或通信参数：
+
+```bash
+DEEPEP_LL_SEND_CORES=30 DEEPEP_LL_RECV_CORES=26 \
+python tests/ll_stage_timer/diagnose.py --build-only --run-name small_b_sparse_build_001
+```
+
+成功后，运行时在上面的多B命令中增加`--skip-build --wheel-map diagnostic-runs/small_b_sparse_build_001/node_000/wheel-map.json`，并使用新的运行目录名。
+多机先分别完成编译，再统一启动运行；相同S/R须同时用于编译和运行。map留在本地，不发送。完整拆分命令见上述指南。
 
 ## 发送内容与解读
 

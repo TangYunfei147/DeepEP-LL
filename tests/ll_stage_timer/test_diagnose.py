@@ -1,4 +1,5 @@
 """CPU-only checks of staged launch ordering, isolation and transfer indexes."""
+import builtins
 import importlib.util
 import json
 from pathlib import Path
@@ -185,9 +186,12 @@ def test_execute_build_install_verify_run_analyze_order_without_devices(tmp_path
     receipt = {}
     output = diagnose.execute(result, receipt=receipt)
     assert output == Path(result['suite']) / 'SEND_FIRST.txt'
-    assert seen == ['venv.log', 'off-build.log', 'off-install.log', 'off-identity.log',
-                    'off-run.log', 'sparse-build.log', 'sparse-install.log',
-                    'sparse-identity.log', 'sparse-run.log'] + (['sparse-analyze.log'] if node == 0 else [])
+    assert seen == ['venv.log', 'off-build.log', 'sparse-build.log',
+                    'off-install.log', 'off-identity.log', 'sparse-install.log', 'sparse-identity.log',
+                    'off-run-install.log', 'off-run-identity.log', 'off-run.log',
+                    'sparse-run-install.log', 'sparse-run-identity.log', 'sparse-run.log'] + (['sparse-analyze.log'] if node == 0 else [])
+    mapping = json.loads((Path(result['node_dir']) / 'wheel-map.json').read_text())
+    assert mapping == dict(off='wheels/off/candidate.whl', sparse='wheels/sparse/candidate.whl')
     assert output.is_file() is (node == 0)
     assert exports == ([(Path(result['suite']), transfer_mode or 'summary')] if node == 0 else [])
     assert receipt == (dict(new_count=1, issued=1, remaining=9) if node == 0 else {})
@@ -374,14 +378,26 @@ def test_installed_wheel_source_and_native_layout_are_checked(tmp_path,monkeypat
     result=plan(tmp_path,'--profiles','sparse')
     package=tmp_path/'installed/deep_ep'
     package.mkdir(parents=True)
-    (package/'_build_info.json').write_text(json.dumps(dict(source_sha256='matching-source')))
+    info = dict(source_sha256='matching-source', ll_stage_timer=True, ll_timer_profile='sparse',
+                ll_send_cores=30, ll_recv_cores=26)
+    (package/'_build_info.json').write_text(json.dumps(info))
     from tests.elastic import test_ep_low_latency as st
     points=runpy.run_path(str(diagnose.ROOT/'deep_ep/utils/ll_stage_timer.py'))['SPARSE_POINTS']
     layout=dict(schema=15,slots=8,fields=8,recording='sparse-milestones',
                 points=list(points),timer_profile='sparse',timer_profile_id=6)
     native=SimpleNamespace(low_latency_implementation='candidate',low_latency_stage_timer_enabled=True,
+                           low_latency_core_protocol=19030,
                            low_latency_stage_timer_profile='sparse',low_latency_stage_timer_profile_id=6,
                            low_latency_stage_timer_layout=lambda:dict(layout))
+    def no_device_query(*args, **kwargs):
+        raise AssertionError('Host identity verification must not query or initialize a device')
+    native.low_latency_core_config = no_device_query
+    real_import = builtins.__import__
+    def host_only_import(name, *args, **kwargs):
+        if name.split('.')[0] in ('torch', 'torch_npu'):
+            raise AssertionError('Host identity verification must not import an NPU framework')
+        return real_import(name, *args, **kwargs)
+    monkeypatch.setattr(builtins, '__import__', host_only_import)
     monkeypatch.setitem(sys.modules,'deep_ep._native',SimpleNamespace(require_native=lambda _:native))
     def fake_run_path(path):
         if path=='tests/elastic/test_dispatch.py':
@@ -394,14 +410,20 @@ def test_installed_wheel_source_and_native_layout_are_checked(tmp_path,monkeypat
             return dict(source_fingerprint=lambda:'matching-source')
         raise AssertionError(path)
     monkeypatch.setattr(runpy,'run_path',fake_run_path)
-    code=diagnose._verify_code(result['stages'][1],'candidate')
+    code=diagnose._verify_code(result['stages'][1],'candidate', dict(send=30, recv=26))
     exec(code,{})
     native.low_latency_stage_timer_layout=lambda:dict(timer_profile='recv',timer_profile_id=5)
     with pytest.raises(RuntimeError,match='layout mismatch'):
         exec(code,{})
     native.low_latency_stage_timer_layout=lambda:dict(layout)
-    (package/'_build_info.json').write_text(json.dumps(dict(source_sha256='old-source')))
+    (package/'_build_info.json').write_text(json.dumps(dict(info, source_sha256='old-source')))
     with pytest.raises(RuntimeError,match='source fingerprint differs'):
+        exec(code,{})
+    (package/'_build_info.json').write_text(json.dumps(dict(info, ll_send_cores=28, ll_recv_cores=28)))
+    with pytest.raises(RuntimeError,match='S/R differs'):
+        exec(code,{})
+    (package/'_build_info.json').write_text(json.dumps(dict(info, ll_stage_timer=False)))
+    with pytest.raises(RuntimeError,match='build metadata'):
         exec(code,{})
 
 
@@ -446,3 +468,143 @@ def test_missing_endpoint_fails_before_venv_and_build(tmp_path,monkeypatch):
     with pytest.raises(ValueError,match='Explicit MASTER_ADDR'):
         diagnose.execute(result)
     assert not Path(result['suite']).exists()
+
+
+def _mock_build_environment(root, monkeypatch, *, fail_log=None):
+    sdk = root / 'third-party/shmem/install/shmem'
+    (sdk / 'include/host').mkdir(parents=True)
+    (sdk / 'include/host/shmem_host_def.h').write_text('header')
+    (sdk / 'deepep-sdk.json').write_text('{}')
+    (root / 'tests/ll_stage_timer').mkdir(parents=True)
+    (root / 'tests/ll_stage_timer/branch.json').write_text('{"implementation":"candidate"}')
+    monkeypatch.setattr(diagnose.importlib.util, 'find_spec', lambda name: object())
+    seen = []
+    def command(argv, actual_plan, env, log):
+        seen.append(Path(log).name)
+        if Path(log).name == fail_log:
+            raise RuntimeError('intentional build or identity failure')
+        if '-m' in argv and 'build' in argv:
+            out = Path(argv[argv.index('--outdir') + 1])
+            (out / 'candidate.whl').write_bytes(b'wheel')
+        Path(log).write_text('mocked execution')
+    monkeypatch.setattr(diagnose, '_command', command)
+    return seen
+
+
+@pytest.mark.parametrize('skip_build', [False, True])
+@pytest.mark.parametrize('fail_log', ['off-identity.log', 'sparse-identity.log'])
+def test_every_wheel_identity_must_pass_before_any_device_launch(tmp_path, monkeypatch, skip_build, fail_log):
+    arguments = []
+    if skip_build:
+        (tmp_path / 'off.whl').write_bytes(b'off')
+        (tmp_path / 'sparse.whl').write_bytes(b'sparse')
+        (tmp_path / 'input-map.json').write_text(json.dumps(dict(off='off.whl', sparse='sparse.whl')))
+        arguments = ['--skip-build', '--wheel-map', 'input-map.json']
+    result = plan(tmp_path, *arguments)
+    seen = _mock_build_environment(tmp_path, monkeypatch, fail_log=fail_log)
+    monkeypatch.setattr(diagnose, '_validate_launcher_before_build', lambda plan: None)
+    with pytest.raises(RuntimeError, match='intentional'):
+        diagnose.execute(result)
+    assert not any('-run' in name or '-analyze' in name for name in seen)
+    assert not (Path(result['node_dir']) / 'wheel-map.json').exists()
+    assert not (Path(result['suite']) / 'SEND_FIRST.txt').exists()
+    assert not (Path(result['suite']) / 'triage').exists()
+    assert ('off-build.log' in seen) is (not skip_build)
+
+
+def test_second_variant_build_failure_cannot_run_first_variant(tmp_path, monkeypatch):
+    result = plan(tmp_path)
+    seen = _mock_build_environment(tmp_path, monkeypatch, fail_log='sparse-build.log')
+    monkeypatch.setattr(diagnose, '_validate_launcher_before_build', lambda plan: None)
+    with pytest.raises(RuntimeError, match='intentional'):
+        diagnose.execute(result)
+    assert seen == ['venv.log', 'off-build.log', 'sparse-build.log']
+    assert not (Path(result['node_dir']) / 'wheel-map.json').exists()
+
+
+def test_build_only_needs_no_devices_or_endpoints_and_preserves_visibility(tmp_path, monkeypatch):
+    monkeypatch.setenv('DEEPEP_LL_SEND_CORES', '30')
+    monkeypatch.setenv('DEEPEP_LL_RECV_CORES', '26')
+    monkeypatch.setenv('ASCEND_RT_VISIBLE_DEVICES', '0,1')
+    monkeypatch.delenv('PROBE_VISIBLE_DEVICES', raising=False)
+    args, forwarded = diagnose.parser().parse_known_args(['--run-name', 'compile', '--build-only'])
+    result = diagnose.make_plan(args, forwarded, root=tmp_path)
+    assert result['build_only'] is True and result['device_visibility'] is None
+    assert result['core_split'] == dict(send=30, recv=26)
+    assert all(stage['run'] is None and stage['analyze'] is None for stage in result['stages'])
+    seen = _mock_build_environment(tmp_path, monkeypatch)
+    def forbid(*args, **kwargs):
+        raise AssertionError('Build-only must not validate launcher topology, sample, analyze, or issue a send budget')
+    monkeypatch.setattr(diagnose, '_validate_launcher_before_build', forbid)
+    monkeypatch.setattr(diagnose, 'write_send_first', forbid)
+    receipt = {}
+    result_path = diagnose.execute(result, receipt=receipt)
+    assert result_path == Path(result['node_dir']) / 'wheel-map.json'
+    assert receipt == {}
+    assert seen == ['venv.log', 'off-build.log', 'sparse-build.log',
+                    'off-install.log', 'off-identity.log', 'sparse-install.log', 'sparse-identity.log']
+    assert json.loads(result_path.read_text()) == dict(off='wheels/off/candidate.whl', sparse='wheels/sparse/candidate.whl')
+    assert not (Path(result['suite']) / 'runs').exists()
+    assert not (Path(result['suite']) / 'triage').exists()
+    # Compiling and constant-layout imports inherit any explicit device limit.
+    # They neither query devices nor synthesize a default visible device set.
+    env = diagnose._environment(result, result['stages'][0])
+    assert env['ASCEND_RT_VISIBLE_DEVICES'] == '0,1'
+    assert 'PROBE_VISIBLE_DEVICES' not in env
+    assert env['DEEPEP_LL_SEND_CORES'] == '30' and env['DEEPEP_LL_RECV_CORES'] == '26'
+
+
+def test_build_only_plan_cli_has_no_mutation_or_device_commands(monkeypatch, capsys):
+    def forbid(*args, **kwargs):
+        raise AssertionError('Pure build planning must not execute')
+    monkeypatch.setattr(diagnose, 'execute', forbid)
+    monkeypatch.setattr(subprocess, 'run', forbid)
+    monkeypatch.setattr(Path, 'mkdir', forbid)
+    assert diagnose.main(['--build-only', '--plan', '--run-name', 'compile']) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result['build_only'] is True and result['device_visibility'] is None
+    assert all(stage['run'] is None and stage['analyze'] is None for stage in result['stages'])
+
+
+def test_normal_run_still_requires_explicit_devices(tmp_path):
+    args, forwarded = diagnose.parser().parse_known_args(['--run-name', 'run'])
+    with pytest.raises(ValueError, match='explicit launcher --devices'):
+        diagnose.make_plan(args, forwarded, root=tmp_path)
+
+
+def test_relative_wheel_map_survives_checkout_move_and_new_run(tmp_path, monkeypatch):
+    root = tmp_path / 'Original Project'
+    root.mkdir()
+    args, forwarded = diagnose.parser().parse_known_args(['--run-name', 'compile', '--build-only'])
+    result = diagnose.make_plan(args, forwarded, root=root)
+    _mock_build_environment(root, monkeypatch)
+    mapping = diagnose.execute(result)
+    map_relative = mapping.relative_to(root)
+    destination = tmp_path / 'Moved Project'
+    root.rename(destination)
+    reused = plan(destination, '--skip-build', '--wheel-map', str(map_relative))
+    wheels = diagnose._wheel_map(reused)
+    assert set(wheels) == {'off', 'sparse'}
+    assert all(Path(wheel).is_relative_to(destination) and Path(wheel).is_file() for wheel in wheels.values())
+    assert all(not Path(value).is_absolute() for value in json.loads((destination / map_relative).read_text()).values())
+    assert Path(reused['suite']).name == 'batch1'
+
+
+def test_build_only_cli_prints_map_without_summary_or_send_receipt(monkeypatch, capsys):
+    target = Path('diagnostic-runs/compile/node_000/wheel-map.json')
+    monkeypatch.setattr(diagnose, 'make_plan', lambda *args: dict(build_only=True))
+    monkeypatch.setattr(diagnose, 'execute', lambda plan, receipt=None: target)
+    assert diagnose.main(['--build-only', '--run-name', 'compile']) == 0
+    output = capsys.readouterr().out
+    assert str(target) in output and '--skip-build --wheel-map' in output
+    assert 'no device sampling was run' in output
+    assert 'SEND_FIRST.txt' not in output and '/10 issued' not in output
+
+
+def test_build_only_cannot_analyze_existing_or_skip_its_build(tmp_path, capsys):
+    with pytest.raises(ValueError, match='cannot be combined'):
+        plan(tmp_path, '--build-only', '--skip-build', '--wheel-map', 'old-map.json')
+    with pytest.raises(SystemExit) as error:
+        diagnose.main(['--build-only', '--analyze-existing', 'diagnostic-runs/existing'])
+    assert error.value.code == 1
+    assert '--build-only cannot be combined' in capsys.readouterr().err
