@@ -98,22 +98,23 @@ public:
             return;
         }
 
-        // 3. 为每批最多 16 个 packet 的块标记分配探测/归约空间。
+        // Keep the baseline's 16-packet allocation and lane budget; this
+        // candidate changes only the number of packets examined per probe.
         // flags 和 work 额外留尾部空间，覆盖归约实现的对齐读取；先清零 flags 的无效区域。
         const uint32_t blocks = uint32_t(data_.blockCount);
-        const uint32_t flagsBytes = kProbeBatch * blocks * 32U + 256U;
+        const uint32_t flagsBytes = kProbeCapacity * blocks * 32U + 256U;
         // CANN 9.1/A5 Sum stores ceil(B*8/64) partials per row at a
         // 32-element stride. Reserve all rows plus a full-vector tail read.
-        const uint32_t workBytes = kProbeBatch * uint32_t(DispatchDedupAlign((blocks + 7U) / 8U, 32U)) * 4U + 256U;
+        const uint32_t workBytes = kProbeCapacity * uint32_t(DispatchDedupAlign((blocks + 7U) / 8U, 32U)) * 4U + 256U;
         pipe_->InitBuffer(flagsBuf_, flagsBytes);
-        pipe_->InitBuffer(sumBuf_, kProbeBatch * 32U);
+        pipe_->InitBuffer(sumBuf_, kProbeCapacity * 32U);
         pipe_->InitBuffer(workBuf_, workBytes);
         // LoadAlign may read past the masked tail, including inactive rows.
         Duplicate(flagsBuf_.Get<float>(), 0.0f, flagsBytes / 4U);
         ServerDedupReceiveSync<HardEvent::V_MTE2>();
-        pipe_->InitBuffer(probeIdxBuf_, kProbeBatch * 4U);
+        pipe_->InitBuffer(probeIdxBuf_, kProbeCapacity * 4U);
         const uint32_t tablesBytes = 2U * uint32_t(DispatchDedupAlign(uint64_t(tasks_.Count()) * 4U, 32U));
-        const uint32_t fixed = prefixBytes + tablesBytes + flagsBytes + workBytes + kProbeBatch * 36U;
+        const uint32_t fixed = prefixBytes + tablesBytes + flagsBytes + workBytes + kProbeCapacity * 36U;
         // 剩余 UB 作为最多 8 路预取 lane；每路包括完整 packet 和 64B 输出元数据。
         // MTE3_MTE2 事件保护 lane：旧包的输出和 relay 读完后，下一次加载才可覆盖。
         laneStride_ = uint32_t(data_.tokenStride) + 64U;
@@ -124,7 +125,7 @@ public:
 
     }
 
-    // At most one 16-slot snapshot; no ready packet means return to local TX.
+    // At most one 8-slot snapshot; no ready packet means return to local TX.
     __aicore__ inline bool TryBatch() {
         if (!tasks_.PendingCount()) return false;
         LL_SEG_SCOPE(LOCAL_WINDOW_COPY);
@@ -194,8 +195,10 @@ public:
     }
 
 private:
-    static constexpr uint32_t kProbeBatch = 16U;
-    static_assert(kProbeBatch<=16U,"priority order uses four-bit snapshot positions");
+    static constexpr uint32_t kProbeCapacity = 16U;
+    static constexpr uint32_t kProbeBatch = 8U;
+    static_assert(kProbeBatch<=kProbeCapacity,"probe must fit the baseline allocation");
+    static_assert(kProbeCapacity<=16U,"priority order uses four-bit snapshot positions");
     struct ProbeResult {
         uint32_t readyMask = 0U;
         uint32_t keepFlagsMask = 0U;
