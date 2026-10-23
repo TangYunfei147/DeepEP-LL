@@ -1,9 +1,28 @@
 # Control-path candidates: commit-by-commit A/B
 
-`commits.json` is the ordered source manifest: baseline followed by four cumulative
-optimization commits. Each wheel contains one committed revision, timer OFF,
+`commits.json` is the default source manifest for independent candidates based on
+`868ddf8`: revert source-mask accumulation, reduce the flag batch from16 to8,
+and prefetch flags across batches. Each candidate is compared with the declared
+reference, not with the preceding candidate. The actual revisions and labels are
+recorded in that manifest. Each wheel contains one committed revision, timer OFF,
 logical G4 and S30/R26 by default. All wheels finish building before any device
 run starts. Dispatch and combine are both tested.
+
+| Default label | Commit | Independent change from868ddf8 |
+|---|---|---|
+| baseline | `868ddf8` | Original16-packet probe, source-mask accumulation retained |
+| source-mask-revert | `85d05f4` | Restore original source-mask UB writes only |
+| flag-batch8 | `1c29599` | Probe8packets, retain16-packet storage and the original lane budget |
+| flag-prefetch16 | `c1e4faa` | Pair two16-packet snapshots; overlap the second flag probe with first-batch consumption |
+
+Every candidate has868ddf8 as its direct Git parent. The delivery branch retains
+these sibling commits as merge parents while its default production kernel tree
+stays identical to868ddf8. The suite builds the exact manifest revision, not the
+delivery branch's HEAD. Details, validation limits and target commands are in
+[RECEIVE_CANDIDATES.md](RECEIVE_CANDIDATES.md).
+
+The earlier cumulative experiment remains available through
+`--commits tests/ll_control_opt/commits-cumulative.json`:
 
 | Label | Commit | Cumulative change |
 |---|---|---|
@@ -13,13 +32,37 @@ run starts. Dispatch and combine are both tested.
 | flag-vf | `868ddf8` | Fuse eight-block flag reduction and ready/layout masks in one VF |
 | metadata-batch | `d00e87f` | Batch type/destination output in spare UB, retaining the lane count |
 
-The last row includes all four optimizations. These are production candidates,
+In that historical manifest, the last row includes all four optimizations. These are production candidates,
 not skip-flag or no-payload ablations. The generic flag path remains for other
 block counts. Metadata batching requires dedup, B>32, overlap enabled and enough
 unused conservative UB budget; otherwise it uses the original per-packet path.
 At35..39rows it adds608..640bytes/core, never beyond230KiB and never by reducing
 send/receive lanes. FIRST_HOP forwarding and payload issue order are unchanged;
 type/destination publication moves to the existing receive completion boundary.
+The new independent candidates do not inherit that metadata-batch commit.
+
+## Explicit comparison references
+
+Schema2 allows sibling commits. A top-level `comparison_base` supplies the
+default reference; each entry may override it. A reference can be a Git revision
+or a manifest label, and must itself be measured in the same manifest. The first
+entry is still labelled `baseline` and references itself. For example:
+
+```json
+{
+  "schema": 2,
+  "comparison_base": "868ddf84cb77c51dcf15416e8f6053b4cf851858",
+  "commits": [
+    {"label": "baseline", "revision": "868ddf84cb77c51dcf15416e8f6053b4cf851858"},
+    {"label": "candidate", "revision": "<candidate-commit>", "comparison_base": "baseline"}
+  ]
+}
+```
+
+Use the checked-in manifest for execution; the example contains a placeholder.
+Legacy schema1 manifests retain their cumulative ancestor-order validation and
+compare each candidate with the preceding manifest entry. Adding
+`comparison_base` to a schema1 manifest is rejected instead of silently ignoring it.
 
 The main metric is **`summary.csv` → `mean_kernel_us`**, separately for dispatch
 and combine: the arithmetic mean of all ranks' last50 kernel samples. This is not
@@ -46,7 +89,7 @@ export SHMEM_PORT=29601
 export ASCEND_RT_VISIBLE_DEVICES=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15
 
 python3 tests/ll_control_opt/suite.py \
-  --resume --send-cores 30 --run-prefix b256-control-001
+  --resume --send-cores 30 --rounds 4 --order alternating --run-prefix b256-independent-001
 ```
 
 `--devices "$ASCEND_RT_VISIBLE_DEVICES"` is optional when that variable is set.
@@ -71,7 +114,7 @@ The plan prints every exact argument before execution:
 
 ```bash
 python3 tests/ll_control_opt/suite.py \
-  --resume --send-cores 30 --run-prefix b256-control-001 --plan
+  --resume --send-cores 30 --rounds 4 --order alternating --run-prefix b256-independent-001 --plan
 ```
 
 In a multi-machine job, launch the same command and run prefix on every machine
@@ -81,7 +124,7 @@ their selected devices idle. It first waits for preparation to finish everywhere
 then checks device occupancy and exchanges the idle status immediately before
 launch; an early-finishing host does not rely on an occupancy check performed
 while another host was still compiling. It compares the ordered commit list, current
-commit/round, shape, split and run prefix before allowing the ST to start.
+commit/round, execution order/position, shape, split and run prefix before allowing the ST to start.
 The default wait limit is3600 seconds (`--ready-timeout`); no NPU is initialized
 by this rendezvous. Existing ST distributed synchronization and connection
 timeouts then apply normally. Runtime commit identity is supplied through
@@ -95,7 +138,8 @@ the script never probes alternate ports or kills its owner. To select one:
 
 ```bash
 python3 tests/ll_control_opt/suite.py \
-  --resume --send-cores 30 --run-prefix b256-control-001 --control-port 29602
+  --resume --send-cores 30 --rounds 4 --order alternating \
+  --run-prefix b256-independent-001 --control-port 29602
 ```
 
 Single-machine runs create no readiness socket and require no additional port.
@@ -114,7 +158,7 @@ python3 tests/ll_control_opt/suite.py \
 
 # After all machines finish building, execute this on each machine.
 python3 tests/ll_control_opt/suite.py \
-  --run-only --send-cores 30 --run-prefix b256-control-001
+  --run-only --send-cores 30 --rounds 4 --order alternating --run-prefix b256-independent-001
 ```
 
 All Python environments use project-local venvs with `--system-site-packages` and
@@ -127,8 +171,9 @@ binary hashes are not assumed reproducible across toolchain installations.
 
 ## Native/SDK cache and offline dependencies
 
-The default build workspace is `.tmp/ll-control-opt/source-s30`. It advances from
-baseline to the final candidate with detached Git checkouts. All commits use the
+The default build workspace is `.tmp/ll-control-opt/source-s30`. It switches
+between the selected commits, including siblings or an earlier baseline, using
+detached Git checkouts. All commits use the
 same build/SDK directories, letting CMake depfiles reuse unchanged Host/HT/device
 objects. Every new wheel runs `scripts/build_shmem.py` for SDK identity/hash
 validation and enters the normal `pip wheel --no-build-isolation --no-deps`
@@ -176,8 +221,9 @@ python3 tests/ll_control_opt/suite.py \
   --build-workspace .tmp/existing-production-worktree
 ```
 
-It must be at an ancestor of the first missing commit, have the same pinned
-dependencies, and have no tracked edits or untracked source files. The primary
+It must belong to the same Git repository, have the same dependency-lock content
+and pinned Git dependencies, and have no tracked edits or untracked source files.
+The previous HEAD need not be an ancestor of the next candidate. The primary
 checkout is never accepted as the build workspace. Generated ablation headers
 are not silently restored or deleted; an ablation worktree with such edits is
 rejected as a native build workspace. Copying only its pinned SHMEM source/SDK
@@ -199,7 +245,7 @@ the recorded PID before manually removing its stale `.lock` file.
 By default node0 writes:
 
 ```text
-results/ll-control-opt/b256-control-001/
+results/ll-control-opt/b256-independent-001/
   suite-plan.node-0.json
   baseline/round-001/summary.csv
   baseline/round-001/summary.json
@@ -226,22 +272,42 @@ cannot override the suite's explicit16-process/node topology.
 | Column | Meaning |
 |---|---|
 | `mean_kernel_us` | User-requested `summary.csv` mean |
-| `baseline_delta_us/pct` | Current minus the first baseline commit |
-| `parent_delta_us/pct` | Current minus the preceding optimization commit |
+| `baseline_label/revision`, `baseline_delta_us/pct` | Current minus the manifest's first baseline entry in the same round |
+| `reference_label/revision`, `reference_delta_us/pct` | Current minus the explicitly resolved reference in the same round |
+| `parent_delta_us/pct` | Legacy cumulative manifests only; empty for independent candidates |
+| `previous_manifest_label/revision`, `previous_manifest_delta_us/pct` | Descriptive difference from the preceding manifest row; not a causal estimate and not necessarily the previous execution |
+| `execution_position` | Actual1-based position within that round |
 
-Negative deltas mean lower latency. Improvements are cumulative; a difference
-between adjacent commits estimates that commit under this fixed sampling setup.
-Use `--rounds 3` to repeat full commit sweeps without changing the ST's100/50
-sampling definition. Results remain per round; fixed execution order can still
-have temporal drift, so a single sweep does not establish a stable percent gain.
+Negative deltas mean lower latency. Independent candidates have no inferred
+parent-to-child performance attribution: `reference_delta` is the primary
+candidate-versus-control comparison. Rows remain in manifest order regardless
+of execution order, and reference lookup uses the manifest labels/revisions.
+
+`--order alternating` is the default: odd rounds run baseline,A,B,C and even
+rounds run C,B,A,baseline. `--order manifest` repeats the fixed manifest order.
+Building always follows manifest order and reuses each completed wheel; reversing
+the performance execution does not trigger additional builds. The default is
+still one round; the commands above explicitly request four rounds so each
+direction occurs twice. All rounds retain the ST's10/100/last50 sampling definition.
+Alternation reduces execution-position imbalance but does not eliminate temporal
+drift or predecessor effects; a single sweep does not establish a stable gain.
+Incomplete rounds are rejected rather than compared with a baseline from another round.
 
 CPU plan/synthetic-cache tests do not demonstrate target-device correctness,
 CANN linkage, or performance. Those require the generated full wheel/ST runs.
 
-Validation completed for this delivery:76CPU tests passed on27, including real
+Historical cumulative delivery validation:76CPU tests passed on27, including real
 C++ semantic mocks and the multi-node readiness handshake exercised on loopback.
 Final candidate source d00e87f compiled and linked complete CANN9.3.0/O2/S30R26
 OFF and ON wheels. A real no-op OFF wheel rebuild took1.578s without changing any
 native object; editing a device header rebuilt the7dependent LL objects in38.216s.
 These checks did not run NPU kernels or establish speedups. Full evidence and
 log paths are recorded in [BUILD_DISPATCH_SPLIT.md](../../docs/BUILD_DISPATCH_SPLIT.md).
+
+The independent-manifest update passed58local CPU tests: explicit-reference
+validation, forward/reverse planning, same-round comparisons, sibling/parent
+worktree switching, repeated cache reuse, dirty/dependency/corrupt-wheel rejection,
+and readiness handshake/error propagation. The Windows sandbox blocked local Git
+IPC; those tests ran outside it in a short project-local temporary directory.
+This update has no new Linux/CANN or NPU validation; historical cumulative wheel
+results do not validate the independent kernels.

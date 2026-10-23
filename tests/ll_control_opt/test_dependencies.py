@@ -3,6 +3,7 @@ import importlib.util
 import json
 from pathlib import Path
 import subprocess
+import zipfile
 
 import pytest
 
@@ -287,3 +288,123 @@ def test_dependency_staging_never_bypasses_real_sdk_validation(project, monkeypa
     assert caught.value.returncode == 19
     assert invoked == ['sdk validation']
     assert not build.manifest_path(root, git(root, 'rev-parse', 'HEAD'), 30).exists()
+
+
+@pytest.fixture
+def sibling_build(tmp_path, monkeypatch):
+    """Keep Git/cache operations real; replace only Linux SDK/wheel commands."""
+    root = init(tmp_path / 'sibling project with spaces')
+    (root / '.gitignore').write_text('/.tmp/\n/.cache/\n/.logs/\n/third-party/\n', encoding='utf-8')
+    (root / 'dependencies.lock.json').write_text('{}\n', encoding='utf-8')
+    (root / 'kernel.h').write_text('baseline\n', encoding='utf-8')
+    baseline = commit(root, 'common baseline')
+    (root / 'kernel.h').write_text('candidate a\n', encoding='utf-8')
+    first = commit(root, 'independent candidate a')
+    git(root, 'checkout', '--detach', baseline)
+    (root / 'kernel.h').write_text('candidate b\n', encoding='utf-8')
+    second = commit(root, 'independent candidate b')
+    observed = []
+    original_run = subprocess.run
+
+    def run(command, *args, **kwargs):
+        if len(command) > 1 and command[1] == 'scripts/build_shmem.py':
+            source = Path(kwargs['cwd'])
+            observed.append(('sdk', git(source, 'rev-parse', 'HEAD'), source))
+            if not (source / build.SDK).exists():
+                sdk(source)
+            return subprocess.CompletedProcess(command, 0)
+        if '-m' in command and 'wheel' in command:
+            source = Path(kwargs['cwd'])
+            revision = git(source, 'rev-parse', 'HEAD')
+            observed.append(('wheel', revision, source))
+            assert '--no-deps' in command and '--no-build-isolation' in command
+            assert kwargs['env']['DEEPEP_LL_STAGE_TIMER'] == 'OFF'
+            output = Path(command[command.index('--wheel-dir') + 1])
+            with zipfile.ZipFile(output / 'fixture.whl', 'w') as archive:
+                archive.writestr('deep_ep/_C.fixture.so', revision.encode())
+                archive.writestr('deep_ep/libdeepep_kernels.so', (source / 'kernel.h').read_bytes())
+            return subprocess.CompletedProcess(command, 0)
+        return original_run(command, *args, **kwargs)
+
+    monkeypatch.setattr(build.subprocess, 'run', run)
+    return root, baseline, first, second, observed
+
+
+def test_sibling_switches_rebuild_once_then_resume_in_any_round_order(sibling_build):
+    root, baseline, first, second, observed = sibling_build
+    first_manifest = build.build(first, 30, root=root)
+    source = observed[0][2]
+    cache = source / '.cache/native-object.fixture'
+    cache.write_bytes(b'preserved compiler cache')
+    paths = {first: first_manifest}
+    # A sibling transition and a transition back to the common parent must
+    # both enter the normal build, rather than needing a fresh worktree.
+    for revision in (second, baseline):
+        paths[revision] = build.build(revision, 30, root=root)
+        assert git(source, 'rev-parse', 'HEAD') == revision
+        assert cache.read_bytes() == b'preserved compiler cache'
+    assert [(kind, revision) for kind, revision, _ in observed] == [
+        (kind, revision) for revision in (first, second, baseline) for kind in ('sdk', 'wheel')]
+    assert len({location for _, _, location in observed}) == 1
+    before = {path: path.read_bytes() for path in paths.values()}
+    for revision in (baseline, first, second, second, baseline, first):
+        assert build.build(revision, 30, root=root, resume=True) == paths[revision]
+        build.verify_manifest(paths[revision], revision, 30, root)
+    assert len(observed) == 6
+    assert {path: path.read_bytes() for path in paths.values()} == before
+    assert git(source, 'rev-parse', 'HEAD') == baseline
+    assert git(root, 'rev-parse', 'HEAD') == second
+
+
+@pytest.mark.parametrize('dirty_kind', ['tracked', 'staged', 'untracked'])
+def test_sibling_switch_refuses_dirty_worktree_before_checkout(sibling_build, dirty_kind):
+    root, _, first, second, observed = sibling_build
+    build.build(first, 30, root=root)
+    source = observed[0][2]
+    path = source / ('user-new.h' if dirty_kind == 'untracked' else 'kernel.h')
+    path.write_text('user changes must survive\n', encoding='utf-8')
+    if dirty_kind == 'staged':
+        git(source, 'add', path.name)
+    status = git(source, 'status', '--porcelain')
+    with pytest.raises(RuntimeError, match='dirty build worktree'):
+        build.build(second, 30, root=root)
+    assert git(source, 'rev-parse', 'HEAD') == first
+    assert git(source, 'status', '--porcelain') == status
+    assert path.read_text(encoding='utf-8') == 'user changes must survive\n'
+    assert len(observed) == 2
+    assert not build.manifest_path(root, second, 30).exists()
+
+
+@pytest.mark.parametrize('dependency_change', ['lock', 'gitlink'])
+def test_sibling_cache_rejects_changed_dependency_identity_before_checkout(sibling_build, dependency_change):
+    root, _, first, _, observed = sibling_build
+    build.build(first, 30, root=root)
+    source = observed[0][2]
+    if dependency_change == 'lock':
+        (root / 'dependencies.lock.json').write_text('{"changed": true}\n', encoding='utf-8')
+        changed = commit(root, 'different SDK identity')
+        expected = 'Dependency identity changed'
+    else:
+        git(root, 'update-index', '--add', '--cacheinfo', f'160000,{first},third-party/shmem')
+        git(root, 'commit', '-qm', 'different pinned dependency')
+        changed = git(root, 'rev-parse', 'HEAD')
+        expected = 'Pinned Git dependencies changed'
+    with pytest.raises(RuntimeError, match=expected):
+        build.build(changed, 30, root=root)
+    assert git(source, 'rev-parse', 'HEAD') == first
+    assert len(observed) == 2
+    assert not build.manifest_path(root, changed, 30).exists()
+
+
+def test_later_round_rejects_corrupt_finished_wheel_without_overwriting(sibling_build):
+    root, _, first, second, observed = sibling_build
+    manifest_path = build.build(first, 30, root=root)
+    build.build(second, 30, root=root)
+    identity = json.loads(manifest_path.read_text(encoding='utf-8'))
+    wheel = build.resolve(manifest_path.parent, identity['wheel'])
+    wheel.write_bytes(b'damaged wheel retained for inspection')
+    with pytest.raises(RuntimeError, match='corrupt'):
+        build.build(first, 30, root=root, resume=True)
+    assert wheel.read_bytes() == b'damaged wheel retained for inspection'
+    assert len(observed) == 4
+    assert git(observed[0][2], 'rev-parse', 'HEAD') == second

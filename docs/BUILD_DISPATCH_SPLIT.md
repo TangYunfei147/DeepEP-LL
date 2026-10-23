@@ -325,3 +325,33 @@ suite --build-only --resume then reused that baseline and built all four candida
 wheels, publishing five verified manifests under .tmp/ll-control-opt/wheels.
 No NPU devices were used. Existing failed attempts and caches were retained;
 no cleanup, SDK rebuild, external download or kernel change was needed.
+
+## Independent receive candidates (2026-10-23)
+
+The default control suite now compares868ddf8 with three direct children:
+85d05f4 restores source-mask UB writes,1c29599 probes8packets while retaining
+16-packet allocation/lane budgeting, and c1e4faa pipelines two adjacent16-packet
+flag snapshots. The prefetch uses one additional64B ID snapshot and only the
+original spare UB. Seven dispatch TUs, production O2 and all input modes remain;
+no new launch mode or public kernel ABI is introduced.
+
+The user stated27was unavailable and requested local checks only. Source-mask
+contracts45passed, batch8contracts/layout51passed, prefetch contracts/native
+model52passed, and suite/cache/real-loopback58passed. These batches overlap.
+Native CPU tests compile actual Host selection, flag VF under a SIMD mock,
+pair orchestration, pending-table operations and layout helpers. They do not
+compile the AscendC receiver with Bisheng or execute hardware DMA/events.
+
+Local logs in DeepEP-LL-control-opt: .tmp/no-mask-contracts-001.log,
+.tmp/batch8-contracts-002.log; prefetch log inside its validation worktree:
+.tmp/rx-prefetch/.tmp/prefetch-required002.log. Initial Windows sandbox native
+process/cache failures and default-encoding failures were resolved using an
+approved local CPU check with project-owned cache/temp directories and UTF-8.
+No SSH connection, SDK/system modification, CANN build or NPU execution took
+place for these commits. Earlier d00e87f CANN evidence cannot be carried forward.
+
+Target --build-only --resume compiles all four exact OFF wheels, including
+regular native dependency checks on sibling checkout switches. New ON/OFF cold
+timings and full ON linkage remain unverified while the target compiler is
+unavailable. Commands and diagnostic limits:
+tests/ll_control_opt/RECEIVE_CANDIDATES.md.

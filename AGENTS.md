@@ -58,7 +58,7 @@ PREFIX_COMPLETE本地专家计数提取仍Scalar；没有改变wire/epoch或发�
 First区间从KERNEL起点到第一次DataCopy/Probe之前，空任务不补零；保留无新排空的observe语义。
 新报告tests/ll_stage_timer/communication_report.py，参考COMMUNICATION_DIAGNOSTICS.md。
 
-## Production control-path candidates
+## Historical cumulative control-path candidates
 
 kernel/ll-g4-control-opt starts at197052c and retains production protocol19000+S,
 schema13, S+R56 and seven dispatch TUs. Four cumulative commits are pinned in
@@ -77,3 +77,25 @@ See tests/ll_control_opt/README.md and docs/BUILD_DISPATCH_SPLIT.md for validati
 The core-only suite disables MegaMoE/fused components: do not require CATLASS or
 its test/DSL dependencies. Reused SHMEM SDKs still need full standard validation;
 only cold SDK builds need the JSON source asset. Preserve failed build caches.
+
+## Independent receive candidates (2026-10-23)
+
+Default suite baseline is868ddf8 (batch16). Independent direct children are
+85d05f4 source-mask revert,1c29599 batch8 with unchanged16-slot allocations,
+and c1e4faa paired flag prefetch. Metadata batching is absent. The delivery
+branch keeps the baseline kernel tree and retains candidate commits as merge
+parents; suite manifests always select an exact revision. Do not accumulate
+these candidates or interpret adjacent rows as parent-to-child gains.
+
+Prefetch keeps both pending snapshots immutable until consumed, removes B
+before A, and checks spare64B only after choosing the original lanes. No
+asynchronous probe may survive TryBatch or a cooperative callback. Preserve
+MTE2_V6/V_S6 ownership, original payload event domains and serial fallback.
+Pending traversal can differ from baseline. Timer RECV_POLL/RX_FLAG_REDUCE
+submission/join fragments have different calls semantics; do not infer old
+per-probe averages or DMA duration. See tests/ll_control_opt/RECEIVE_CANDIDATES.md.
+
+The user explicitly deferred27connection and requested local checks only.
+CPU checks do not constitute new CANN/NPU validation. Do not reuse historical
+d00e87f build results as evidence for these commits. S+R56/G4/O2/protocol19000+S
+and the original ST10/100/last50 protocol remain unchanged.

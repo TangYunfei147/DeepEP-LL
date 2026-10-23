@@ -270,10 +270,15 @@ def build(revision, send_cores, *, root=ROOT, workspace=None, offline_deps=None,
                 raise RuntimeError('Build workspace must be a worktree of this repository')
             clean_source(source)
             previous = git(source, 'rev-parse', 'HEAD')
-            if subprocess.run(['git', '-C', str(root), 'merge-base', '--is-ancestor', previous, revision]).returncode:
-                raise RuntimeError(f'Cache workspace {previous} cannot fast-forward to {revision}; use a fresh --build-workspace')
             if git(source, 'show', previous + ':dependencies.lock.json') != git(root, 'show', revision + ':dependencies.lock.json'):
                 raise RuntimeError('Dependency identity changed; use a fresh build workspace')
+            # A detached checkout may move between sibling candidates. It never
+            # discards user edits; the normal native build below still checks
+            # all dependency timestamps/configuration after each switch.
+            previous_links = git(source, 'ls-tree', '-r', previous).splitlines()
+            target_links = git(root, 'ls-tree', '-r', revision).splitlines()
+            if [line for line in previous_links if line.startswith('160000 ')] != [line for line in target_links if line.startswith('160000 ')]:
+                raise RuntimeError('Pinned Git dependencies changed; use a fresh build workspace')
             subprocess.run(['git', '-C', str(source), 'checkout', '--no-recurse-submodules', '--detach', revision], check=True)
         else:
             subprocess.run(['git', '-C', str(root), 'worktree', 'add', '--detach', str(source), revision], check=True)

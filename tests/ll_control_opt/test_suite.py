@@ -45,7 +45,7 @@ def repository(tmp_path):
 
 
 def args(commits):
-    return argparse.Namespace(commits=commits, send_cores=30, rounds=1, build_only=False, run_only=False,
+    return argparse.Namespace(commits=commits, send_cores=30, rounds=1, order='alternating', build_only=False, run_only=False,
                               devices=','.join(map(str, range(16))), run_prefix='b256-001',
                               output_dir=Path('results/test'), num_nodes=2, node_rank=1,
                               master_addr='192.0.2.1', master_port=6000, shmem_port=6001,
@@ -155,11 +155,82 @@ def test_summary_rejects_incomplete_or_mismatched_data(tmp_path, problem):
 
 
 def test_parent_deltas_are_not_always_baseline_deltas():
-    entries = [dict(label=label, revision=label) for label in ('baseline', 'one', 'two')]
+    labels = ('baseline', 'one', 'two')
+    entries = [dict(label=label, revision=label, comparison_label=labels[max(0,index-1)],
+                    comparison_base=labels[max(0,index-1)], comparison_kind='cumulative_parent' if index else 'baseline')
+               for index, label in enumerate(labels)]
     measured = {1: {label: dict(dispatch=value, combine=40) for label, value in [('baseline', 88), ('one', 87), ('two', 89)]}}
     last = suite.comparisons(entries, measured)[-2]
     assert last['baseline_delta_us'] == 1
     assert last['parent_delta_us'] == 2
+    assert last['reference_delta_us'] == 2
+    assert last['previous_manifest_delta_us'] == 2
+
+
+def sibling_revision(root, baseline, text='independent candidate\n'):
+    git(root, 'checkout', '--detach', baseline)
+    (root / 'kernel.h').write_text(text)
+    git(root, 'commit', '-qam', 'independent candidate')
+    return git(root, 'rev-parse', 'HEAD')
+
+
+def test_independent_manifest_uses_explicit_reference_and_alternating_order(tmp_path):
+    root, baseline, candidate, manifest = repository(tmp_path)
+    sibling = sibling_revision(root, baseline)
+    build.write_json(manifest, dict(schema=2, comparison_base=baseline, commits=[
+        dict(label='baseline', revision=baseline), dict(label='one', revision=candidate),
+        dict(label='two', revision=sibling, comparison_base='baseline')]))
+    options = args(manifest)
+    options.rounds = 4
+    plan = suite.make_plan(options, root)
+    assert [row['revision'] for row in plan['commits']] == [baseline, candidate, sibling]
+    assert all(row['comparison_base'] == baseline for row in plan['commits'])
+    assert [row['label'] for row in plan['phases']['run']] == ['baseline','one','two','two','one','baseline'] * 2
+    assert [row['execution_position'] for row in plan['phases']['run']] == [1,2,3] * 4
+    assert [command[command.index('--revision')+1] for command in plan['phases']['build']] == [baseline,candidate,sibling]
+    measured = {round_id: {label: dict(dispatch=value, combine=40) for label, value in [('two',89),('one',87),('baseline',88)]}
+                for round_id in range(1,5)}
+    rows = suite.comparisons(plan['commits'], measured)
+    for row in rows:
+        assert row['reference_revision'] == baseline
+        assert row['parent_delta_us'] is None and row['parent_delta_pct'] is None
+        assert row['reference_delta_us'] == row['baseline_delta_us']
+    second = next(row for row in rows if row['round']==2 and row['label']=='two' and row['operation']=='dispatch')
+    assert second['execution_position'] == 1
+    assert second['reference_delta_us'] == 1
+    assert second['previous_manifest_label'] == 'one'
+    assert second['previous_manifest_delta_us'] == 2
+    options.order = 'manifest'
+    assert [row['label'] for row in suite.make_plan(options, root)['phases']['run']] == ['baseline','one','two'] * 4
+
+
+def test_reference_override_must_be_measured_and_does_not_follow_run_position(tmp_path):
+    root, baseline, candidate, manifest = repository(tmp_path)
+    sibling = sibling_revision(root, baseline)
+    data = dict(schema=2, comparison_base=baseline, commits=[dict(label='baseline',revision=baseline),
+        dict(label='one',revision=candidate,comparison_base=sibling), dict(label='two',revision=sibling)])
+    build.write_json(manifest, data)
+    entries = suite.commits(manifest, root)
+    assert entries[1]['comparison_label'] == 'two'
+    data['commits'].pop()
+    build.write_json(manifest, data)
+    with pytest.raises(ValueError, match='must be measured'):
+        suite.commits(manifest, root)
+
+
+def test_legacy_manifest_still_rejects_sibling_candidates(tmp_path):
+    root, baseline, candidate, manifest = repository(tmp_path)
+    sibling = sibling_revision(root, baseline)
+    build.write_json(manifest, dict(commits=[dict(label='baseline',revision=baseline),
+        dict(label='one',revision=candidate),dict(label='two',revision=sibling)]))
+    with pytest.raises(ValueError, match='cumulative'):
+        suite.commits(manifest, root)
+
+
+def test_comparison_refuses_incomplete_round():
+    entries = [dict(label='baseline',revision='a'),dict(label='one',revision='b')]
+    with pytest.raises(ValueError, match='every manifest entry'):
+        suite.comparisons(entries, {1: {'baseline':dict(dispatch=88,combine=40)}})
 
 
 def test_sequential_builds_reuse_worktree_but_enter_real_build(tmp_path, monkeypatch):

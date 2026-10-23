@@ -1,10 +1,11 @@
 {
-  "baseline_note": "Production source matching the original ablation mode0; no replay or synthetic payloads.",
+  "schema": 2,
+  "comparison_base": "868ddf84cb77c51dcf15416e8f6053b4cf851858",
+  "baseline_note": "Independent siblings of flag-vf: baseline uses batch16, candidates never accumulate; no metadata batching, replay or synthetic payloads.",
   "commits": [
-    {"label": "baseline", "revision": "197052c84f82704fdb6c6f357a2900e90818823f"},
-    {"label": "source-mask", "revision": "0a44d4513c38eb67f39eb165239a81afd1604fe0"},
-    {"label": "pending-suffix", "revision": "4783fed05804248acca5adcd5dacec81eb783e31"},
-    {"label": "flag-vf", "revision": "868ddf84cb77c51dcf15416e8f6053b4cf851858"},
-    {"label": "metadata-batch", "revision": "d00e87f2f687743880f02df1cb4cdaaf398f7c24"}
+    {"label": "baseline", "revision": "868ddf84cb77c51dcf15416e8f6053b4cf851858"},
+    {"label": "source-mask-revert", "revision": "85d05f42e32df546650c3999f88a08fa10df32ef"},
+    {"label": "flag-batch8", "revision": "1c2959992e88f761431e4d9bc712f0f5e37e44bc"},
+    {"label": "flag-prefetch16", "revision": "c1e4faaf32806da84f8818e1ac3eb34864b7958d"}
   ]
 }

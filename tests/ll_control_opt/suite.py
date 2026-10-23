@@ -31,22 +31,50 @@ def safe_name(value):
 def commits(path, root=ROOT):
     data = json.loads(Path(path).read_text(encoding='utf-8'))
     items = data['commits'] if isinstance(data, dict) else data
-    if not isinstance(items, list) or len(items) < 2:
-        raise ValueError('Manifest must contain baseline and candidate commits')
+    schema = data.get('schema', 1) if isinstance(data, dict) else 1
+    if type(schema) is not int or schema not in (1, 2):
+        raise ValueError('Unsupported commit manifest schema; expected1 or2')
+    if not isinstance(items, list) or len(items) < 2 or any(not isinstance(item, dict) for item in items):
+        raise ValueError('Manifest must contain baseline and candidate commit objects')
+    if schema == 1 and ((isinstance(data, dict) and 'comparison_base' in data) or any('comparison_base' in item for item in items)):
+        raise ValueError('Explicit comparison_base requires manifest schema2')
     result, labels, revisions = [], set(), set()
     for item in items:
         label = safe_name(item['label'])
         revision = build.git(root, 'rev-parse', item['revision'] + '^{commit}')
         if label in labels or revision in revisions:
             raise ValueError('Commit labels and revisions must be unique')
-        if result and subprocess.run(['git', '-C', str(root), 'merge-base', '--is-ancestor', result[-1]['revision'], revision]).returncode:
+        if schema == 1 and result and subprocess.run(['git', '-C', str(root), 'merge-base', '--is-ancestor', result[-1]['revision'], revision]).returncode:
             raise ValueError('Candidates must be a cumulative, ancestor-ordered commit chain')
         labels.add(label)
         revisions.add(revision)
         result.append(dict(label=label, revision=revision))
     if result[0]['label'] != 'baseline':
         raise ValueError('The first commit must have label baseline')
+    by_label = {entry['label']: entry for entry in result}
+    by_revision = {entry['revision']: entry for entry in result}
+    for index, (entry, item) in enumerate(zip(result, items)):
+        if schema == 1:
+            reference = result[max(0, index-1)]
+        else:
+            value = item.get('comparison_base', data.get('comparison_base', result[0]['revision']))
+            if not isinstance(value, str) or not value:
+                raise ValueError('comparison_base must be a measured label or Git revision')
+            revision = by_label[value]['revision'] if value in by_label else build.git(root, 'rev-parse', value+'^{commit}')
+            if revision not in by_revision:
+                raise ValueError(f'Comparison reference for {entry["label"]} must be measured in this manifest')
+            reference = by_revision[revision]
+            if (index == 0) != (reference['revision'] == entry['revision']):
+                raise ValueError('Only baseline may reference itself; baseline must use its own revision')
+        entry.update(comparison_base=reference['revision'], comparison_label=reference['label'],
+                     comparison_kind='baseline' if index == 0 else ('cumulative_parent' if schema == 1 else 'explicit_reference'))
     return result
+
+
+def execution_entries(entries, round_id, order):
+    if order not in ('manifest', 'alternating'):
+        raise ValueError('order must be manifest or alternating')
+    return list(reversed(entries)) if order == 'alternating' and round_id % 2 == 0 else list(entries)
 
 
 def device_ids(value):
@@ -125,18 +153,33 @@ def validate_summary(directory, revision, send_cores, num_nodes):
     return values
 
 
-def comparisons(entries, measured):
+def comparisons(entries, measured, order='alternating'):
     rows = []
     for round_id, values in sorted(measured.items()):
+        if set(values) != {entry['label'] for entry in entries}:
+            raise ValueError('Every comparison round must contain every manifest entry')
+        positions = {entry['label']: position for position, entry in enumerate(execution_entries(entries, round_id, order), 1)}
         for index, entry in enumerate(entries):
             for operation in ('dispatch', 'combine'):
                 value = values[entry['label']][operation]
                 baseline = values[entries[0]['label']][operation]
-                parent = values[entries[max(0, index - 1)]['label']][operation]
+                reference = values[entry['comparison_label']][operation]
+                previous = entries[index-1] if index else None
+                previous_value = values[previous['label']][operation] if previous else None
+                cumulative = entry['comparison_kind'] == 'cumulative_parent'
                 rows.append(dict(round=round_id, label=entry['label'], revision=entry['revision'], operation=operation,
+                                 execution_position=positions[entry['label']], comparison_kind=entry['comparison_kind'],
+                                 baseline_label=entries[0]['label'], baseline_revision=entries[0]['revision'],
                                  mean_kernel_us=value, baseline_delta_us=value-baseline,
-                                 baseline_delta_pct=100*(value/baseline-1), parent_delta_us=value-parent,
-                                 parent_delta_pct=100*(value/parent-1)))
+                                 baseline_delta_pct=100*(value/baseline-1),
+                                 reference_label=entry['comparison_label'], reference_revision=entry['comparison_base'],
+                                 reference_delta_us=value-reference, reference_delta_pct=100*(value/reference-1),
+                                 parent_delta_us=value-reference if cumulative else None,
+                                 parent_delta_pct=100*(value/reference-1) if cumulative else None,
+                                 previous_manifest_label=previous['label'] if previous else None,
+                                 previous_manifest_revision=previous['revision'] if previous else None,
+                                 previous_manifest_delta_us=value-previous_value if previous else None,
+                                 previous_manifest_delta_pct=100*(value/previous_value-1) if previous else None))
     return rows
 
 
@@ -300,6 +343,8 @@ def parser():
     result.add_argument('--control-port', type=int, help='CPU readiness port; default first port after MASTER_PORT that is not SHMEM_PORT')
     result.add_argument('--ready-timeout', type=float, default=3600, help='Seconds to wait for all machines to finish preparation before each ST launch')
     result.add_argument('--rounds', type=int, default=1, help='Repeat complete commit sweeps; no changes to each ST sampling protocol')
+    result.add_argument('--order', choices=('alternating', 'manifest'), default='alternating',
+                        help='alternating: odd rounds use manifest order, even rounds reverse it; manifest: repeat fixed order')
     modes = result.add_mutually_exclusive_group()
     modes.add_argument('--build-only', action='store_true')
     modes.add_argument('--run-only', action='store_true')
@@ -347,10 +392,15 @@ def make_plan(args, root=ROOT):
             directory = build.resolve(root, args.output_dir) / args.run_prefix / entry['label'] / f'round-{round_id:03}'
             phases['run'].append(dict(label=entry['label'], revision=entry['revision'], round=round_id,
                                       directory=str(directory), command=st_command(python, args, directory, root)))
-    phases['run'].sort(key=lambda item: (item['round'], next(i for i, e in enumerate(entries) if e['label']==item['label'])))
+    positions = {round_id: {entry['label']: index for index, entry in enumerate(execution_entries(entries, round_id, args.order), 1)}
+                 for round_id in range(1, args.rounds+1)}
+    for item in phases['run']:
+        item['execution_position'] = positions[item['round']][item['label']]
+    phases['run'].sort(key=lambda item: (item['round'], item['execution_position']))
     return dict(commits=entries, phases=phases, metric='summary.csv: pooled mean_kernel_us; dispatch and combine separately',
                 sampling=dict(warmup=10, num_iters=100, perf_tail=50), send_cores=args.send_cores,
                 recv_cores=56-args.send_cores, timer='OFF',
+                order=args.order, rounds=args.rounds, comparison_schema=2,
                 control_protocol='ll-control-ready-v1',
                 control_port=control_port(args) if not args.build_only and args.num_nodes>1 else None)
 
@@ -400,6 +450,7 @@ def main():
             env = run_environment(args, item, manifests[item['label']])
             identity = dict(protocol=plan['control_protocol'], commits=plan['commits'], run_prefix=args.run_prefix,
                             label=item['label'], revision=item['revision'], round=item['round'], rounds=args.rounds,
+                            order=plan['order'], execution_position=item['execution_position'],
                             send_cores=args.send_cores, num_nodes=args.num_nodes, shape=SHAPE)
             ready_barrier(args, dict(identity, phase='prepared'))
             idle_error = None
@@ -418,13 +469,13 @@ def main():
         if args.node_rank != 0:
             print('All ST commands completed. Aggregated summary is written by node0.', flush=True)
             return
-        rows = comparisons(plan['commits'], measured)
+        rows = comparisons(plan['commits'], measured, plan['order'])
         with (base / 'comparison.csv').open('x', newline='', encoding='utf-8') as stream:
             writer = csv.DictWriter(stream, fieldnames=list(rows[0]))
             writer.writeheader()
             writer.writerows(rows)
-        build.write_json(base / 'comparison.json', dict(metric=plan['metric'], rows=rows,
-                         note='Negative delta is faster. FP8 configuration uses BF16 combine. Ordered commit sweeps can have temporal drift; repeat independent runs before claiming a stable gain.'))
+        build.write_json(base / 'comparison.json', dict(comparison_schema=2, metric=plan['metric'], order=plan['order'], rows=rows,
+                         note='Negative delta is faster. References come from the manifest, never execution order. parent_delta is populated only for legacy cumulative manifests; previous_manifest_delta is descriptive, not a causal attribution. FP8 configuration uses BF16 combine. Alternating order reduces position imbalance but does not eliminate temporal drift.'))
         print(base / 'comparison.csv', flush=True)
     finally:
         release()
