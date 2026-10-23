@@ -324,7 +324,7 @@ public:
             { LL_SEG_SCOPE(ROUTE_CLASSIFY);
               Classify(token, directMask, firstHopCount, localMask); }
             LL_SEG_END(classifyBegin, PREPARE_INPUT);
-            uint32_t sourceMask = directMask | localMask;
+            sourceMasks_.SetValue(token, directMask | localMask);
             for (uint32_t group = 0; group < firstHopCount; ++group) {
                 const uint32_t scheduled = LlFirstHopOrder(firstHopCount, rankInGroup, sendCore,
                                                           start_ + token, group);
@@ -334,13 +334,10 @@ public:
                 const uint32_t index = (start_ + token) * k_ + firstK;
                 const uint32_t expert = uint32_t(routeIds_.GetValue(index));
                 SendPacket(input, start_ + token, firstK, expert, CalTokenSendExpertCnt(expert, index), mask);
-                sourceMask |= uint32_t(1) << firstK;
+                sourceMasks_.SetValue(token, sourceMasks_.GetValue(token) | (uint32_t(1) << firstK));
                 // 源端仅标记实际发出的首跳路由；该位置输出权重 1，原路由权重另存包尾。
                 sourceWeights_.SetValue(token * k_ + firstK, 1.0f);
             }
-            // Only Process() publishes this table, after all packet generation.
-            // Keep the token's mask in a register across its first-hop packets.
-            sourceMasks_.SetValue(token, sourceMask);
             // DIRECT 暂不发送，缓存 token/k/expert/q 四元组。q 在此按原始路由计算，
             // 后续按 server 重排发送顺序时仍沿用同一个槽位编号。
             { LL_SEG_SCOPE(DIRECT_PLAN);
