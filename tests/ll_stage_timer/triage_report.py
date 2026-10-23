@@ -8,11 +8,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 LIMIT = 60000
 FORMAT = 'll-triage-report-v1'
-PROFILE_ORDER = ('overview', 'prepare', 'prefix', 'send', 'recv', 'full')
+PROFILE_ORDER = ('sparse', 'overview', 'prepare', 'prefix', 'send', 'recv', 'full')
 ENVELOPES = frozenset(('KERNEL', 'INIT', 'TIMER_SETUP', 'BEFORE_FIRST_SEND',
     'BEFORE_FIRST_RECV_POLL', 'SEND_TOKENS', 'PREPARE_INPUT', 'SEND_COUNTS',
     'CAL_CUMSUM', 'BUILD_RECV_CUMSUM', 'WAIT_CUMSUM', 'PREFIX_COMPLETE',
-    'SEND_SETUP', 'RECV_COPY', 'RECV_POLL', 'RECV_PREPARE'))
+    'SEND_SETUP', 'RECV_COPY', 'RECV_POLL', 'RECV_PREPARE', 'FORMAT_OUTPUT', 'WAIT_RECV_COUNTS'))
 
 
 def _module(name):
@@ -125,10 +125,12 @@ def _essential(data):
         'Span/stage tables: per-rank-round max across observed cores of the initial group (S/R).',
         'Activity tables: observed group counts or ratios per rank-round (not core-time maxima).',
         'INIT and TIMER_SETUP precede KERNEL; entry spans use actual same-core timestamps.',
-        'OFF/ON rows are full profiler kernel tasks; internal spans exclude final uninstrumented sync/export.',
+        'OFF/ON rows are full profiler kernel tasks; sparse internal spans exclude only post-work diagnostic export. Legacy captures may also exclude diagnostic synchronization.',
         'Different profiles are independent runs. Do not add costs, parents/children, or subtract cross-rank clocks.',
         'Probe overhead may slow preparation and reduce later waits. Check ON/OFF before interpreting waits.',
-        'Active-core counts are positive packet counters observed; absent counter rows are not invented.',
+        'Sparse activity counts cores recording FIRST_SEND/PROBE/READY. Packet totals, packet balance and ready/probe ratios are NOT COLLECTED.',
+        'Legacy activity counts positive packet counters only; missing observations are not invented.',
+        'FIRST_SEND->SEND_DONE ends at existing sender retirement and may overlap shared reception; it is not pure link-transfer time.',
         'Matrix: '+_json(data.get('matrix')),
         'Selection: '+_json(data.get('selection','all cases'))+'; coverage above refers to the source matrix.', '',
         'OFF PERFORMANCE (maximum of rank means, full device task)', 'B | route | us']
@@ -148,15 +150,32 @@ def _essential(data):
                      f"{identity['send_cores']}/{identity['recv_cores']} | {coverage['samples']}/{coverage['expected_rank_iterations']} | "
                      f"{_pair(coverage['kernel_core_count'])} | {_num(identity['frequency_hz'])}")
     lines += ['', 'PREPARATION AND KERNEL SPANS (p50/max[n], not additive)',
-              'id/group | KERNEL | INIT | TIMER_SETUP | INIT->first send | INIT->first probe | INIT->KERNEL end']
+              'id/group | KERNEL | INIT | TIMER_SETUP | ENTRY->first send | ENTRY->first probe | ENTRY->WORK_DONE']
     for case in data['cases']:
         for group in ('S', 'R'):
             values = [_pair(_lat(case, name, group)) for name in (
                 'KERNEL', 'INIT', 'TIMER_SETUP', 'entry_to_first_send', 'entry_to_first_probe', 'entry_to_kernel_end')]
             lines.append(f"{case['id']}/{group} | "+' | '.join(values))
-    lines += ['', 'OBSERVED WORK AND READY RATIO (p50/max[n])',
+    sparse_cases = [c for c in data['cases'] if c['metrics']['identity']['schema'] == 15]
+    if sparse_cases:
+        lines += ['', 'SPARSE FIRST-OCCURRENCE ACTIVITY (cores per rank-round, p50/max[n])',
+                  'id/group | first send cores | first probe cores | first ready cores | ENTRY->first ready us']
+        for case in sparse_cases:
+            for group in ('S', 'R'):
+                values = [_pair(_act(case, name, group)) for name in ('first_send_cores', 'first_probe_cores', 'first_ready_cores')]
+                values.append(_pair(_lat(case, 'entry_to_first_ready', group)))
+                lines.append(case['id']+'/'+group+' | '+' | '.join(values))
+        lines += ['', 'SPARSE ENDPOINT SPANS (same core, p50/max[n]; overlap, not additive)',
+                  'id/group | span | us']
+        for case in sparse_cases:
+            for row in case['metrics']['stages']:
+                if row[0] not in ('INIT', 'KERNEL', 'BEFORE_FIRST_SEND', 'BEFORE_FIRST_RECV_POLL'):
+                    lines.append(f"{case['id']}/{row[1]} | {row[0]} | {_pair(row[3])}")
+    lines += ['', 'LEGACY OBSERVED WORK AND READY RATIO (p50/max[n])',
               'id | S TX cores | R RX cores | S TX packets | R RX packets | S max packets/core | R max packets/core | R ready/probed | R probes/ready']
     for case in data['cases']:
+        if case['metrics']['identity']['schema'] == 15:
+            continue
         values = [_pair(_act(case, name, group)) for name, group in (
             ('tx_active_observed', 'S'), ('rx_active_observed', 'R'), ('tx_packets_observed', 'S'),
             ('rx_packets_observed', 'R'), ('tx_positive_max','S'), ('rx_positive_max','R'), ('ready_fraction', 'R'), ('probed_per_ready', 'R'))]
@@ -204,7 +223,7 @@ def render(data, limit=LIMIT):
     tail += ['', 'Exact follow-up only if requested: triage_extract.py <suite> --profile <p> --bs <B> --rank <r> --iteration <i> --core <c> --output-dir <newdir>',
              'Follow-up default ceiling:3 parts, further limited by the remaining cumulative 10-send budget. No archives, manifests or indexes to send.', '']
     for count in (4, 3, 2, 1, 0):
-        lines = essential + ['', f'SELECTED COSTS: top {count} non-envelope stages by median rank-round maximum per group/case; remaining stages stay locally.']
+        lines = essential + ['', f'SELECTED COSTS: top {count} selected stages/spans by median rank-round maximum (may nest/overlap; do not sum) per group/case; remaining stages stay locally.']
         for case in data['cases']:
             lines += _details(case, count)
         text = '\n'.join(lines+tail)

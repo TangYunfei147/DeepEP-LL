@@ -94,6 +94,7 @@ public:
 
         // 空任务核没有拥有的接收槽，完成打点后直接返回，无需参与 packet 轮询。
         if (tasks_.Count() == 0U) {
+            LL_SPARSE_MARK(RECV_PREPARED);
             return;
         }
 
@@ -120,6 +121,7 @@ public:
         lanes_ = overlap_.enabled ? overlap_.recvLanes : (available < 8U ? available : 8U);  // Safe inputs guarantee at least one lane.
         pipe_->InitBuffer(lanesBuf_, lanes_ * laneStride_);
         if (!overlap_.enabled) for (uint32_t lane = 0; lane < lanes_; ++lane) SetFlag<HardEvent::MTE3_MTE2>(lane);
+        LL_SPARSE_MARK(RECV_PREPARED);
 
     }
 
@@ -140,6 +142,7 @@ public:
             count=remaining<kProbeBatch ? remaining:kProbeBatch;
             probe=Probe(scan_,count);
             if (probe.readyMask==0U) { LL_SEG_COUNT(RX_EMPTY_POLLS,1U); scan_+=count; return false; }
+            LL_SPARSE_MARK(FIRST_RECV_READY);
 
             // Current senders mark only FIRST_HOP with KeepFlags; forwarded
             // terminals are Compact. Probe already validated every block flag.
@@ -188,6 +191,7 @@ public:
         { LL_SEG_SCOPE(RECV_COMPLETE_WAIT);
         PipeBarrier<PIPE_ALL>();
         }
+        LL_SPARSE_MARK(RECV_DONE);
     }
 
 private:
@@ -207,6 +211,7 @@ private:
     __aicore__ inline ProbeResult Probe(uint32_t start, uint32_t count)
     {
         LL_SEG_FIRST(BEFORE_FIRST_RECV_POLL);
+        LL_SPARSE_MARK(FIRST_RECV_PROBE);
         LL_SEG_SCOPE(RECV_POLL);
         LL_SEG_COUNT(RX_PROBED,count);
         auto indices = probeIdxBuf_.Get<uint32_t>();

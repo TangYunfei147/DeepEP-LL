@@ -44,12 +44,19 @@ int main(int argc, char** argv)
                 const auto* row = data.data() + c * LlStageTimer::kWordsPerCore;
                 if (row[0] != LlStageTimer::kMagic || row[1] != LlStageTimer::kSchema || row[4] != c || row[6] == 0)
                     throw std::runtime_error("header mismatch");
-                bool repeated=false;
-                for (uint64_t i=0;i<row[6];++i) {
-                    const uint64_t packed=row[8+i*2];
-                    if (uint32_t(packed)==0x8000U+LlStageTimer::RECV_POLL) repeated=(packed>>32U)==3U;
+                using namespace LlStageTimer;
+                const uint64_t expected=(1ULL<<ENTRY)|(1ULL<<INIT_DONE)|(1ULL<<FIRST_RECV_PROBE)|
+                    (1ULL<<FIRST_RECV_READY)|(1ULL<<RECV_DONE)|(1ULL<<WORK_DONE);
+                if (row[6]!=expected || row[7]!=0U || ((row[5]>>24)&255)!=6U)
+                    throw std::runtime_error("sparse point mask/profile mismatch");
+                uint64_t previous=0;
+                for(uint32_t point=0;point<kPointCount;++point) {
+                    const uint64_t tick=row[kRecordWordOffset+point];
+                    if(expected&(1ULL<<point)) {
+                        if(tick<previous)throw std::runtime_error("non-monotonic sparse point");
+                        previous=tick;
+                    } else if(tick) throw std::runtime_error("unvisited point must be zero");
                 }
-                if (!repeated || row[7] != 1U) throw std::runtime_error("repeat/sampling mismatch");
             }
         std::ofstream file(argv[1]);
         if (!file) throw std::runtime_error("cannot create output");
@@ -73,7 +80,7 @@ int main(int argc, char** argv)
         check(aclrtDestroyStream(stream));
         check(aclrtResetDevice(0));
         check(aclFinalize());
-        std::puts("PASS timer device0: per-core records, repeated intervals and guard");
+        std::puts("PASS timer device0: per-core sparse points, first-hit mask and guard");
         return 0;
     } catch (const std::exception& e) {
         std::fprintf(stderr, "FAIL %s\n", e.what());

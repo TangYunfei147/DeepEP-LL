@@ -69,6 +69,7 @@ __aicore__ inline bool ServerDedupCounts::TryParallelRecvCnt()
     SyncFunc<HardEvent::V_S>();
     LL_SEG_END(countValueExtract, COUNT_VALUE_EXTRACT);
     WaitDispatchClearStatus(); // Only this producer's disjoint count slice.
+    LL_SPARSE_MARK(COUNTS_RECEIVED);
     return true;
 }
 __aicore__ inline void ServerDedupCounts::CalcParallelCumsum()
@@ -85,6 +86,7 @@ __aicore__ inline void ServerDedupCounts::CalcParallelCumsum()
         SyncFunc<HardEvent::V_S>(); total=prefix.GetValue(recStatusNumPerCore_-1U);
         LL_SEG_END(prefixLocalScan, PREFIX_LOCAL_SCAN);
     }
+    LL_SPARSE_MARK(PREFIX_LOCAL_DONE);
     LL_SEG_BEGIN(prefixTotalPublish, PREFIX_TOTAL_PUBLISH);
     auto publication=prefixPublishBuf_.Get<uint32_t>();
     publication.SetValue(0U,total);publication.SetValue(1U,prefixGeneration_);
@@ -196,5 +198,6 @@ __aicore__ inline void ServerDedupCounts::CompleteParallelCumsum()
     }
     // Fallback receiver resets TPipe; retire metadata and epoch sources first.
     if(!overlap_.enabled){LL_SEG_SCOPE(TRANSITION_DRAIN);PipeBarrier<PIPE_ALL>();}
+    LL_SPARSE_MARK(PREFIX_READY);
 }
 }

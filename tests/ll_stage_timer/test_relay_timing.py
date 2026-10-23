@@ -128,15 +128,17 @@ def test_mixed_modes_and_missing_completion_rejected():
                             dict(raw=raw(3),operation='dispatch',frequency_hz=1e9)])
 
 
-def test_completion_capture_cannot_be_used_for_combine_or_perf():
+def test_new_st_capture_only_accepts_observe_while_old_relay_is_readable():
     with pytest.raises(ValueError):timer.StageTrace(None,'combine','relay-complete')
     st=load('relay_st','tests/elastic/test_ep_low_latency.py')
-    required=['--ll-stage-timer','--dispatch-only','--skip-perf-test']
-    for missing in required:
-        argv=['--ll-timer-mode','relay-complete']+[a for a in required if a!=missing]
-        with pytest.raises(ValueError,match='requires'):st.validate_args(st.make_parser().parse_args(argv),16)
-    assert st.validate_args(st.make_parser().parse_args(
-        ['--ll-timer-mode','relay-complete']+required),16)==16
+    for mode in ('relay-complete', 'drain'):
+        with pytest.raises(SystemExit):
+            st.make_parser().parse_args(['--ll-timer-mode',mode])
+        args=st.make_parser().parse_args(['--ll-stage-timer','--dispatch-only','--skip-perf-test'])
+        args.ll_timer_mode=mode
+        with pytest.raises(ValueError,match='only observe'):
+            st.validate_args(args,16)
+    assert timer.parse_records(raw(3),'dispatch')['boundary_mode']=='relay-complete'
 
 
 def test_analyzer_exports_distinct_relay_files(tmp_path):
@@ -167,9 +169,9 @@ def test_observe_and_completion_are_not_compared_as_speedup():
 
 
 @pytest.mark.parametrize('enabled',[False,True])
-def test_actual_guard_only_synchronizes_in_explicit_completion_mode(tmp_path,enabled):
+def test_sparse_native_rejects_serializing_modes_and_adds_no_barrier(tmp_path,enabled):
     compiler=shutil.which('g++')
-    if not compiler:pytest.skip('C++ compiler unavailable; native relay diagnostic guard requires target mock')
+    if not compiler:pytest.skip('C++ compiler unavailable; native sparse mode guard requires target mock')
     (tmp_path/'kernel_operator.h').write_text(r'''
 #pragma once
 #include <cstdint>
@@ -196,31 +198,29 @@ template<class T,CacheLine C,DcciDst D>void DataCacheCleanAndInvalid(GlobalTenso
 #include <vector>
 #include "csrc/kernels/dispatch/low_latency/common/ll_stage_timer_device.h"
 int main(){
- for(unsigned mode:{1U,3U}) {
+ for(unsigned mode:{1U,2U,3U}) {
   using namespace LlStageTimer;
   std::vector<uint64_t> storage(kWordsPerCore,0);
-  DeviceTimer timer;AscendC::TPipe pipe;AscendC::sets=AscendC::waits=0;
-  timer.Init(reinterpret_cast<uint8_t*>(storage.data()),1,mode);
-  auto kernel=timer.Begin(KERNEL);
-  {
-   RelayCompletionScope completion(&timer,&pipe);
-   Scope issue(&timer,RELAY_ISSUE);
-   timer.Count(RELAY_PACKETS,2U);AscendC::clock+=50;
-  }
-  timer.End(KERNEL,kernel);timer.Flush();
+  DeviceTimer timer;AscendC::sets=AscendC::waits=0;
+  bool rejected=false;
+  try{timer.Init(reinterpret_cast<uint8_t*>(storage.data()),1,mode);}
+  catch(const std::runtime_error&){rejected=true;}
 #ifdef DEEPEP_LL_STAGE_TIMER
-  assert(AscendC::sets==(mode==3?2U:0U) && AscendC::waits==AscendC::sets);
-  assert((storage[5]&255)==mode);
-  bool issue=false,complete=false,prior=false;
-  for(unsigned i=0;i<storage[6];++i){
-   auto event=uint32_t(storage[8+2*i]);
-   issue|=event==0x8000+RELAY_ISSUE;
-   complete|=event==0x8000+RELAY_COMPLETE;
-   prior|=event==0x8000+RELAY_PRE_DRAIN;
-  }
-  assert(issue && complete==(mode==3) && prior==(mode==3));
+  assert(rejected==(mode!=1));
+  if(rejected)continue;
 #else
+  assert(!rejected);
+#endif
+  unsigned effects=0;
+  LL_SEG_RELAY_COMPLETION(++effects);
+  LL_SEG_COUNT(RELAY_PACKETS,++effects);
+  assert(effects==0);
+  timer.Mark<ENTRY>();timer.Mark<INIT_DONE>();
+  timer.Mark<FIRST_SEND>();timer.Mark<SEND_DONE>();timer.Mark<WORK_DONE>();
+  timer.Flush();
   assert(AscendC::sets==0 && AscendC::waits==0);
+#ifdef DEEPEP_LL_STAGE_TIMER
+  assert(storage[1]==15 && (storage[5]&255)==1);
 #endif
  }
 }

@@ -26,9 +26,9 @@ NOTES = (
     'Stage totals contain nested/overlapping parents and children; never add them.',
     'rank_iteration_max is max across observed cores in that group, then summarized across rank/iteration.',
     'Entry spans use two recorded timestamps from the same core/sample. No cross-rank clock alignment.',
-    'Missing stages/counters are not zero; active core counts mean observed-positive counters.',
+    'Missing stages/counters are not zero. Sparse activity counts first-occurrence milestones, never packets or DMA completions.',
     'Profiles are separate experiments. Instrumentation may slow preparation and reduce subsequent waits.',
-    'Capture spans do not replace OFF profiler time and exclude uninstrumented final synchronization/export.',
+    'Capture spans do not replace OFF profiler time. Sparse spans exclude post-work export; older formats may also exclude diagnostic synchronization.',
 )
 
 
@@ -164,6 +164,12 @@ def summarize_case(context, samples):
                 if stage in interval_by_core[core]:
                     raise ValueError('Duplicate first core/stage interval')
                 interval_by_core[core][stage] = interval
+        milestones_by_core = defaultdict(dict)
+        for milestone in decoded.get('milestones', []):
+            core, point = milestone['core'], milestone['point']
+            if point in milestones_by_core[core]:
+                raise ValueError('Duplicate core milestone')
+            milestones_by_core[core][point] = milestone['tick']
         present_kernel = {core for core, rows in rows_by_core.items() if 'KERNEL' in rows}
         kernel_cores.update(present_kernel)
         kernel_counts.append(len(present_kernel))
@@ -190,6 +196,11 @@ def summarize_case(context, samples):
                                   ('KERNEL', 'entry_to_kernel_end')):
                 raw_spans[label] = _entry_span(interval_by_core[core], target)
                 spans[label] = _us(raw_spans[label], frequency)
+            if identity['schema'] == 15:
+                points = milestones_by_core[core]
+                if 'FIRST_RECV_READY' in points:
+                    spans['entry_to_first_ready'] = _us(points['FIRST_RECV_READY']-points['ENTRY'], frequency)
+                    spans['init_to_first_ready'] = _us(points['FIRST_RECV_READY']-points['INIT_DONE'], frequency)
             for label, value in spans.items():
                 if value is not None:
                     per_latency[(label, group)].append(value)
@@ -215,6 +226,11 @@ def summarize_case(context, samples):
             stage_maxima[key].append(max(values))
         for key, values in per_latency.items():
             latency_maxima[key].append(max(values))
+        if identity['schema'] == 15 and identity['operation'] == 'dispatch':
+            for group in ('S', 'R', 'all'):
+                observed_cores = [core for core in present_kernel if group == 'all' or _group(core, identity) == group]
+                for point, label in (('FIRST_SEND', 'first_send_cores'), ('FIRST_RECV_PROBE', 'first_probe_cores'), ('FIRST_RECV_READY', 'first_ready_cores')):
+                    activity_values[(group, label)].append(sum(point in milestones_by_core[core] for core in observed_cores))
         for group, core_rows in per_activity.items():
             for name, label in (('TX_PACKETS', 'tx'), ('RX_PACKETS', 'rx')):
                 values = [_counter(rows, name) for rows in core_rows]

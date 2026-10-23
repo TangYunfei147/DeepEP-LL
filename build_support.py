@@ -21,7 +21,7 @@ from setuptools.command.egg_info import egg_info
 from setuptools.command.install_lib import install_lib
 
 ROOT = Path(__file__).resolve().parent
-LL_TIMER_PROFILES = ("full", "overview", "prepare", "prefix", "send", "recv")
+LL_TIMER_PROFILES = ("sparse",)
 
 
 class BuildEggInfo(egg_info):
@@ -45,10 +45,11 @@ def enabled(name, environment=None):
 def ll_timer_profile(environment=None):
     """Validate the requested diagnostic profile; OFF shares one native cache."""
     env = os.environ if environment is None else environment
-    profile = env.get("DEEPEP_LL_TIMER_PROFILE", "full")
+    profile = env.get("DEEPEP_LL_TIMER_PROFILE", "sparse")
     if profile not in LL_TIMER_PROFILES:
-        raise ValueError("DEEPEP_LL_TIMER_PROFILE must be one of " + ", ".join(LL_TIMER_PROFILES))
-    return profile if enabled("DEEPEP_LL_STAGE_TIMER", env) else "full"
+        raise ValueError("DEEPEP_LL_TIMER_PROFILE must be sparse; legacy full/phase profiles "
+                         "are offline-analysis only. Unset the old value and rebuild.")
+    return "sparse"
 
 
 class ConfiguredBuild(build):
@@ -163,7 +164,7 @@ def build_cache_key(configuration):
     """Keep object files across source edits; isolate incompatible toolchains."""
     identity = {key: value for key, value in configuration.items() if key not in {"source_sha256", "source_version"}}
     if "ll_timer_profile" in identity and not identity.get("ll_stage_timer", False):
-        identity["ll_timer_profile"] = "full"
+        identity["ll_timer_profile"] = "sparse"
     identity["source_root"] = str(ROOT.resolve())
     return hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()[:16]
 
@@ -418,7 +419,7 @@ class CMakeBuild(build_ext):
             f"-DCMAKE_BUILD_TYPE={configuration['build_type']}",
             f"-DDEEPEP_DEVICE_JOBS={jobs}",
             f"-DDEEPEP_LL_STAGE_TIMER={'ON' if configuration.get('ll_stage_timer', False) else 'OFF'}",
-            f"-DDEEPEP_LL_TIMER_PROFILE={configuration.get('ll_timer_profile', 'full')}",
+            f"-DDEEPEP_LL_TIMER_PROFILE={configuration.get('ll_timer_profile', 'sparse')}",
             f"-DDEEPEP_LL_SEND_CORES={configuration.get('ll_send_cores', 28)}",
             f"-DDEEPEP_LL_RECV_CORES={configuration.get('ll_recv_cores', 28)}",
             f"-DPython_EXECUTABLE={sys.executable}",

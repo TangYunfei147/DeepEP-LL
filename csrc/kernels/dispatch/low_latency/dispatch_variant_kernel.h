@@ -19,7 +19,7 @@
 #define LL_VARIANT_JOIN_(a,b) a##b
 #define LL_VARIANT_JOIN(a,b) LL_VARIANT_JOIN_(a,b)
 #define LL_VARIANT_KERNEL LL_VARIANT_JOIN(dispatch_server_dedup_kernel_,DEEPEP_LL_VARIANT_NAME)
-#define LL_VARIANT_LAUNCH LL_VARIANT_JOIN(dispatch_server_dedup_launch_,DEEPEP_LL_VARIANT_NAME)
+#define LL_VARIANT_LAUNCH LL_VARIANT_JOIN(dispatch_server_dedup_launch_sparse15_,DEEPEP_LL_VARIANT_NAME)
 namespace {
 #if DEEPEP_LL_VARIANT_MODE == 0
 using LlVariantInput = uint8_t;
@@ -49,7 +49,7 @@ constexpr bool kWireFp8 = true, kE4M3 = false, kPrequantized = false;
 
 // One specialization per translation unit; unchanged algorithm and timers.
 // 调用链：ElasticBuffer._dispatch_low_latency → csrc/ops/low_latency.cpp
-// → dispatch_server_dedup_kernel_do_v2 → 本设备入口 → DispatchMemoryServerDedupKernel。
+// → dispatch_server_dedup_kernel_do_sparse15 → 本设备入口 → DispatchMemoryServerDedupKernel。
 // profiler匹配本入口任务名；下层计数/发送/接收是同一kernel内的阶段，不是独立task。
 // Host selects one pure-AIV entry; the configured S/R split is unchanged.
 extern "C" [[bisheng::core_ratio(0, 1)]] __global__ __aicore__ void LL_VARIANT_KERNEL(
@@ -58,16 +58,15 @@ extern "C" [[bisheng::core_ratio(0, 1)]] __global__ __aicore__ void LL_VARIANT_K
     GM_ADDR relayReadIndexOut, GM_ADDR sourceMaskOut, GM_ADDR expertScalesOut, GM_ADDR tilingData,
     int64_t reservedMagic, GM_ADDR inputScales, GM_ADDR stageTimer, uint32_t timerMode, GM_ADDR expertTimer)
 {
-    util_set_ffts_config(reinterpret_cast<const __gm__ DispatchDedup::CommArgs*>(commArgs)->fftsVal);
 #ifdef DEEPEP_LL_STAGE_TIMER
-    const uint64_t timerSetupBegin = stageTimer ? AscendC::GetSystemCycle() : 0U;
+    const uint64_t sparseEntry = stageTimer ? AscendC::GetSystemCycle() : 0U;
 #endif
+    util_set_ffts_config(reinterpret_cast<const __gm__ DispatchDedup::CommArgs*>(commArgs)->fftsVal);
     LlStageTimer::DeviceTimer timer;
     timer.Init(stageTimer, 1U, timerMode);
 #ifdef DEEPEP_LL_STAGE_TIMER
-    timer.End(LlStageTimer::TIMER_SETUP, timerSetupBegin);
+    timer.MarkAt<LlStageTimer::ENTRY>(sparseEntry);
 #endif
-    const uint64_t initBegin = timer.Begin(LlStageTimer::INIT);
     // Host owns validation; each core reads its configuration once before work.
     const auto* tiling = reinterpret_cast<const __gm__ DispatchDedup::EpServerDedupTilingData*>(tilingData);
     const uint32_t bs = tiling->bs;
@@ -92,12 +91,11 @@ extern "C" [[bisheng::core_ratio(0, 1)]] __global__ __aicore__ void LL_VARIANT_K
                     tokenTypeOut,destinationIndexOut,relayReadIndexOut,sourceMaskOut,expertScalesOut,bs,h,topK,
                     moeExpertNum,expertTokenNumsType,&pipe,inputScales,enableDedup,
                     timer.Enabled() ? &timer : nullptr,nullptr);
-        timer.End(LlStageTimer::INIT, initBegin);
-        const uint64_t kernelBegin = timer.Begin(LlStageTimer::KERNEL);
+        timer.Mark<LlStageTimer::INIT_DONE>();
         kernel.Process();
-        timer.End(LlStageTimer::KERNEL, kernelBegin);
+        timer.Mark<LlStageTimer::WORK_DONE>();
     }
-    if (timer.Enabled()) { AscendC::SyncAll<true>(); timer.Flush(); }
+    timer.Flush();
 }
 
 extern "C" DEEPEP_EXPORT void LL_VARIANT_LAUNCH(void* stream, const deepep::EpServerDedupKernelArgs* args)

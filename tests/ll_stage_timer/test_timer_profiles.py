@@ -17,6 +17,7 @@ def load(name, relative):
     return module
 
 
+sparse_fixture = load('profile_sparse_fixture', 'tests/ll_stage_timer/test_sparse_timer.py')
 fixture = load('profile_segments', 'tests/ll_stage_timer/test_segments.py')
 timer = load('profile_timer', 'deep_ep/utils/ll_stage_timer.py')
 
@@ -55,7 +56,7 @@ def test_schema13_does_not_accept_schema14_metrics_or_carrier():
         timer.parse_records(data, 'dispatch')
 
 
-@pytest.mark.parametrize('profile,name', list(enumerate(timer.TIMER_PROFILES)))
+@pytest.mark.parametrize('profile,name', list(enumerate(timer.TIMER_PROFILES[:6])))
 def test_profile_survives_decode_and_trace_metadata(profile, name):
     data = fixture.raw(schema=14, profile=profile)
     report = timer.parse_records(data, 'dispatch', 1e9)
@@ -91,12 +92,12 @@ def test_final_metric_is_a_duration_and_counter_ids_are_unchanged():
     assert timer.COUNTERS == frozenset((*range(51,56),69,*range(74,78),*range(103,108)))
 
 
-def fake_native(monkeypatch, profile=0, **layout_changes):
+def fake_native(monkeypatch, profile=6, **layout_changes):
     package = ModuleType('deep_ep'); package.__path__ = []
     utils = ModuleType('deep_ep.utils'); utils.__path__ = []
     monkeypatch.setitem(sys.modules, 'deep_ep', package)
     monkeypatch.setitem(sys.modules, 'deep_ep.utils', utils)
-    data = fixture.raw(schema=14, profile=profile)
+    data = sparse_fixture.raw(send=10)
 
     class Tensor:
         device = 'npu:0'
@@ -108,7 +109,8 @@ def fake_native(monkeypatch, profile=0, **layout_changes):
         def tolist(self): return data
 
     layout = dict(schema=timer.SCHEMA, slots=timer.SLOTS, fields=8, stages=list(timer.STAGES),
-                  timer_profile=timer.TIMER_PROFILES[profile], timer_profile_id=profile)
+                  timer_profile=timer.TIMER_PROFILES[profile], timer_profile_id=profile,
+                  points=list(timer.POINTS),recording='sparse-milestones')
     layout.update(layout_changes)
     native = SimpleNamespace(low_latency_stage_timer_enabled=True,
         low_latency_stage_timer_layout=lambda: copy.deepcopy(layout),
@@ -119,20 +121,20 @@ def fake_native(monkeypatch, profile=0, **layout_changes):
 
 
 def test_native_profile_and_allocation_handshake(monkeypatch):
-    module, data = fake_native(monkeypatch, profile=3)
+    module, data = fake_native(monkeypatch, profile=6)
     trace = module.StageTrace(object(), 'dispatch')
-    assert trace.tensor.shape == (56,88,8) and trace.tensor.data_ptr() % 512 == 0
-    assert (trace.timer_profile_id, trace.timer_profile) == (3, 'prefix')
+    assert trace.tensor.shape == (56,8,8) and trace.tensor.data_ptr() % 512 == 0
+    assert (trace.timer_profile_id, trace.timer_profile) == (6, 'sparse')
     trace.launches = 1
     trace.complete()
     for rows in data:
         rows[0][5] = (rows[0][5] & ~(255 << 24)) | (4 << 24)
-    with pytest.raises(RuntimeError, match='different timer profile'):
+    with pytest.raises(ValueError, match='mismatched sparse header'):
         trace.complete()
 
 
 @pytest.mark.parametrize('changes', [dict(slots=80),dict(schema=13),dict(timer_profile_id=None),
-    dict(timer_profile_id=6),dict(timer_profile='prefix'),dict(timer_profile_id=True)])
+    dict(timer_profile_id=5),dict(timer_profile='prefix'),dict(timer_profile_id=True)])
 def test_native_stale_or_invalid_profile_rejected(monkeypatch, changes):
     module, _ = fake_native(monkeypatch, **changes)
     with pytest.raises(RuntimeError, match='Python/native schema mismatch'):
@@ -170,7 +172,7 @@ def test_full_recv_profiles_still_reject_incomplete_relay(profile):
 @pytest.mark.parametrize('profile',[1,2,3,4])
 def test_sparse_profiles_reject_completion_capture_before_allocation(monkeypatch,profile):
     module,_=fake_native(monkeypatch,profile=profile)
-    with pytest.raises(ValueError,match='full or recv'):
+    with pytest.raises(ValueError,match='Invalid LL stage diagnostic configuration'):
         module.StageTrace(object(),'dispatch','relay-complete')
     with pytest.raises(ValueError,match='full or recv'):
         timer.parse_records(fixture.raw(schema=14,profile=profile,mode=3),'dispatch')

@@ -1,5 +1,14 @@
 # DeviceTimer fixed-overhead microbenchmark
 
+Current schema15 compares the previous schema14 recorder at `98c5f50` with the
+sparse recorder. The current capture records fixed first milestones, performs
+no per-boundary accumulation and has no diagnostic SyncAll. The baseline keeps
+its original boundaries and SyncAll/Flush. The scalar checksum workload is the
+same; this compares two instrumentation designs, not matching per-stage costs.
+The synthetic checksum loop does not model real packet waits or communication.
+No schema15 NPU measurement is available yet: both authorized validation hosts
+timed out on SSH on 2026-10-23. Historical results below are for schema14 only.
+
 This standalone ACL executable uses the real `DeviceTimer` implementation. It
 does not run dispatch, touch SHMEM, model traffic, or provide production latency.
 It is intended to test whether an ON binary with a runtime null timer pointer
@@ -13,7 +22,7 @@ python tests/ll_stage_timer/timer_overhead_build.py --output .logs/timer-overhea
 ```
 
 The new output directory contains immutable copies of the timer/config
-headers from `d622b45` and the current checkout, their SHA256 hashes, the compiler
+headers from `98c5f50` and the current checkout, their SHA256 hashes, the compiler
 version, all commands/logs, four objects, and one executable. The current copies
 include the profile header and uncommitted header changes. `--baseline` selects another Git revision.
 Both revisions use the same S/R configuration from the environment (default
@@ -43,24 +52,32 @@ the packet counts, overlap or instruction mix of a real B1 dispatch. All stages
 used are elapsed-time stages, and the sequence is identical across revisions.
 
 Every invocation preallocates events, results and capture buffers, performs 10
-warmups plus 100 measured launches, and checks all 56 core checksums. Capture
-additionally validates each header, core identity, capacity, and INIT/KERNEL
-metrics. Capture alone uses the same final `SyncAll<true>()` and `Flush()` as the
-production entry. OFF/capture is rejected. The timer pointer crosses the launch
+warmups plus 100 measured launches, and checks all 56 core checksums. Capture additionally validates each header, core identity and capacity,
+using legacy metrics or sparse points as appropriate. Sparse capture uses the
+same independent `Flush()` as the production entry; the baseline retains its
+original final `SyncAll<true>()` and `Flush()`. OFF/capture is rejected. The timer pointer crosses the launch
 ABI at runtime; it is not a compile-time null inside the kernel.
 
 CSV fields contain raw ticks:
 
 - `constructor_init_ticks`: first timestamp before object construction through
   `Init()`. Production INIT/KERNEL metrics exclude this interval.
-- `init_span_ticks`: the empty INIT Begin/End and surrounding timestamps.
-- `kernel_span_ticks`: KERNEL Begin/End, optional synthetic stage boundaries and
-  recurrence, plus surrounding timestamps.
-- `export_sync_ticks`: final conditional SyncAll/Flush, plus timestamps.
+- `init_span_ticks`: the INIT boundaries (legacy) or INIT_DONE point (sparse),
+  plus surrounding timestamps.
+- `kernel_span_ticks`: legacy KERNEL boundaries or sparse role milestones and
+  WORK_DONE, optional scalar recurrence, plus surrounding timestamps.
+- `export_sync_ticks`: legacy SyncAll/Flush or sparse Flush alone, plus timestamps.
 - `total_ticks`: the sum of these four sequential intervals, within one core.
 - `event_us`: full ACL event duration, including result export outside the
   measured device intervals. It is repeated on each of the 56 core rows; count
   it once per sample, never sum it over cores.
+
+For schema15 the Host checks the sparse point bitmap and same-core order, while
+the baseline checks its original INIT/KERNEL metrics. The schema15 boundary case
+uses a fixed set of role-specific points, independently of the repeat count;
+the baseline instruments the individual steps. Only the baseline capture uses
+SyncAll. The `export_sync_ticks` CSV field is retained for comparison and means
+export alone for schema15. All sources and headers are saved with the build.
 
 The checksums/output stores and timestamps add fixed measurement work. Compiler
 motion and code layout can also affect individual tick intervals, so compare

@@ -14,7 +14,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 LIMIT = 60000
-PROFILES = ('full', 'overview', 'prepare', 'prefix', 'send', 'recv')
+PROFILES = ('full', 'overview', 'prepare', 'prefix', 'send', 'recv', 'sparse')
 
 
 def _module(name):
@@ -66,12 +66,12 @@ def _select_core(samples, core):
     if core is None:
         return result
     for metadata, decoded in result:
-        available = {row.get('core') for key in ('records', 'intervals', 'cores')
+        available = {row.get('core') for key in ('records', 'intervals', 'cores', 'milestones')
                      for row in decoded.get(key, [])}
         if core not in available:
             raise ValueError(f'Core {core} is absent at rank={metadata.get("rank")}, '
                              f'iteration={metadata.get("iteration")}; narrow the selectors explicitly')
-        for key in ('records', 'intervals', 'cores'):
+        for key in ('records', 'intervals', 'cores', 'milestones'):
             if key in decoded:
                 decoded[key] = [row for row in decoded[key] if row.get('core') == core]
         # active_aiv and all other source identities remain untouched. This is

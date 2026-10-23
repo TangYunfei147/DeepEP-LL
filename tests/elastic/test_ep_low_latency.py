@@ -52,10 +52,29 @@ def validate_overlap_stage_capability(capability):
 def validate_stage_timer_capability(capability):
     if not capability["stage_timer"]:
         raise RuntimeError("All ranks must install a DEEPEP_LL_STAGE_TIMER=ON wheel")
-    if capability['stage_timer_schema'] != 14:
-        raise RuntimeError('Detailed LL diagnostics require timer schema 14; '
+    if capability['stage_timer_schema'] != 15:
+        raise RuntimeError('Sparse LL diagnostics require timer schema 15; '
                            f'got {capability["stage_timer_schema"]}; '
                            'rebuild/install the matching wheel on every rank')
+    expected = dict(timer_profile='sparse', timer_profile_id=6,
+                    stage_timer_slots=8, stage_timer_fields=8,
+                    stage_timer_recording='sparse-milestones')
+    if any(capability.get(key) != value for key, value in expected.items()):
+        raise RuntimeError('Sparse LL diagnostics require the matching sparse profile 6 / 512-byte layout; '
+                           'rebuild/install the matching wheel on every rank')
+    points = runpy.run_path(str(PROJECT_ROOT / 'deep_ep/utils/ll_stage_timer.py'))['SPARSE_POINTS']
+    if capability.get('stage_timer_points') != list(points):
+        raise RuntimeError('Sparse LL milestone names/order differ from this checkout; '
+                           'rebuild/install the matching wheel on every rank')
+
+
+def validate_sparse_timer_layout(layout):
+    """Check both OFF/ON native layouts against the current CPU decoder contract."""
+    validate_stage_timer_capability(dict(stage_timer=True,
+        stage_timer_schema=layout.get('schema'), stage_timer_slots=layout.get('slots'),
+        stage_timer_fields=layout.get('fields'), stage_timer_recording=layout.get('recording'),
+        stage_timer_points=layout.get('points'), timer_profile=layout.get('timer_profile'),
+        timer_profile_id=layout.get('timer_profile_id')))
 
 
 def installed_source_fingerprint(package):
@@ -231,7 +250,7 @@ def make_parser():
     parser.add_argument("--ll-profile-capture", action="store_true", help="Profile the actual instrumented capture kernels in a separate trace, including initialization/SyncAll/Flush")
     parser.add_argument('--ll-expert-timer', action='store_true', help='Legacy option: explicitly rejected by reference segment capture')
     parser.add_argument("--ll-timer-iters", type=int, default=5)
-    parser.add_argument("--ll-timer-mode", choices=("observe", "relay-complete", "drain"), default="observe", help="relay-complete is dispatch-only diagnostic; generic drain is rejected")
+    parser.add_argument("--ll-timer-mode", choices=("observe",), default="observe", help="Sparse milestone capture observes existing boundaries without adding synchronization")
     parser.add_argument("--ll-timer-frequency-hz", type=float, default=1_000_000_000, help="GetSystemCycle frequency; default 1GHz (ticks/1000 us)")
     parser.add_argument("--dispatch-only", action="store_true")
     parser.add_argument("--repeat-combine", type=int, default=2)
@@ -495,14 +514,11 @@ def resolve_delay_counts(args):
 
 def validate_args(args, world):
     if args.ll_expert_timer:
-        raise ValueError("Reference segment capture rejects legacy per-expert GM instrumentation")
+        raise ValueError("Sparse milestone capture rejects legacy per-expert GM instrumentation")
     if getattr(args,'ll_profile_capture',False) and not args.ll_stage_timer:
         raise ValueError('--ll-profile-capture requires --ll-stage-timer')
-    if args.ll_stage_timer and args.ll_timer_mode not in ("observe", "relay-complete"):
-        raise ValueError("LL segment capture supports observe or relay-complete, not generic drain")
-    if args.ll_timer_mode == "relay-complete" and not (
-            args.ll_stage_timer and args.dispatch_only and args.skip_perf_test):
-        raise ValueError("relay-complete requires --ll-stage-timer --dispatch-only --skip-perf-test")
+    if args.ll_timer_mode != "observe":
+        raise ValueError("Sparse milestone capture supports only observe; relay-complete/drain remain offline-analysis only")
     resolve_delay_counts(args)
     if any(isinstance(getattr(args, key), list) for key in MATRIX_FIELDS):
         capacities = []
@@ -1223,6 +1239,7 @@ def worker(local_rank, args):
         # One CLI choice drives Python and native initialization; stale shell state
         # does not change the selected branch's default in this experiment entry.
         os.environ['DEEPEP_LL_BACKEND']=backend
+        timer_layout = native.low_latency_stage_timer_layout()
         capability = {"active_aiv": core_config["active_aiv"],
                       "send_cores": core_config["send_cores"], "recv_cores": core_config["recv_cores"],
                       "dispatch_recv_cores": core_config["dispatch_recv_cores"],
@@ -1238,9 +1255,13 @@ def worker(local_rank, args):
                       "core_protocol": native.low_latency_core_protocol,
                       "stage_timer": bool(getattr(native, "low_latency_stage_timer_enabled", False)),
                       "profile_capture_requested": bool(getattr(args, "ll_profile_capture", False)),
-                      "stage_timer_schema": native.low_latency_stage_timer_layout()["schema"],
-                      "timer_profile": getattr(native,"low_latency_stage_timer_profile","full"),
-                      "timer_profile_id": getattr(native,"low_latency_stage_timer_profile_id",0),
+                      "stage_timer_schema": timer_layout["schema"],
+                      "stage_timer_slots": timer_layout.get("slots"),
+                      "stage_timer_fields": timer_layout.get("fields"),
+                      "stage_timer_points": timer_layout.get("points"),
+                      "stage_timer_recording": timer_layout.get("recording"),
+                      "timer_profile": getattr(native,"low_latency_stage_timer_profile",None),
+                      "timer_profile_id": getattr(native,"low_latency_stage_timer_profile_id",None),
                       "expert_timer_requested": bool(args.ll_expert_timer)}
         capabilities = [None] * world
         dist.all_gather_object(capabilities, capability)

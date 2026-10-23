@@ -30,7 +30,7 @@ def test_default_matrix_off_first_and_disjoint_profiles(tmp_path):
     off, *profiles = result['stages']
     assert '--ll-stage-timer' not in off['run'] and '--skip-perf-test' not in off['run']
     assert off['run'][-2:] == ['--perf-tail', '50']
-    assert off['timer'] is False and off['profile'] == 'full'
+    assert off['timer'] is False and off['profile'] == 'sparse'
     for stage in profiles:
         assert '--ll-stage-timer' in stage['run'] and '--skip-perf-test' in stage['run']
         assert '--ll-profile-capture' in stage['run']
@@ -51,10 +51,10 @@ def test_plan_cli_is_nonmutating(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(subprocess, 'run', forbid)
     monkeypatch.setattr(Path, 'mkdir', forbid)
     assert diagnose.main(['--plan', '--run-name', 'pure-plan', '--devices', DEVICES,
-                          '--profiles', 'prefix', '--bs', '1', '8', '32']) == 0
+                          '--profiles', 'sparse', '--bs', '1', '8', '32']) == 0
     result = json.loads(capsys.readouterr().out)
     assert result['matrix']['B'] == [1, 8, 32]
-    assert [s['name'] for s in result['stages']] == ['off', 'prefix']
+    assert [s['name'] for s in result['stages']] == ['off', 'sparse']
     assert result['transfer_mode'] == 'summary'
 
 
@@ -66,6 +66,27 @@ def test_archive_mode_is_rejected_before_planning(tmp_path, capsys):
     assert list(tmp_path.iterdir()) == []
 
 
+@pytest.mark.parametrize('profile', ['full', 'overview', 'prepare', 'prefix', 'send', 'recv'])
+def test_legacy_profile_capture_is_rejected_without_creating_files(tmp_path, profile, capsys):
+    with pytest.raises(SystemExit) as error:
+        plan(tmp_path, '--profiles', profile)
+    assert error.value.code == 2
+    assert 'invalid choice' in capsys.readouterr().err
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_legacy_execution_plan_rejected_before_sdk_or_device_work(tmp_path, monkeypatch):
+    result = plan(tmp_path)
+    result['stages'][1]['profile'] = result['stages'][1]['name'] = 'prefix'
+    def forbid(*args, **kwargs):
+        raise AssertionError('Legacy plan must fail before work starts')
+    monkeypatch.setattr(diagnose, '_validate_launcher_before_build', forbid)
+    monkeypatch.setattr(diagnose, '_command', forbid)
+    with pytest.raises(ValueError, match='offline-analysis only'):
+        diagnose.execute(result)
+    assert list(tmp_path.iterdir()) == []
+
+
 @pytest.mark.parametrize('arguments, message', [
     (['--run-name', '../escape'], 'directory name'),
     (['--output-root', '../outside'], 'inside this checkout'),
@@ -74,7 +95,7 @@ def test_archive_mode_is_rejected_before_planning(tmp_path, capsys):
     (['--bs', '1', '64'], '1..32'),
     (['--bs', '1', '1'], 'distinct'),
     (['--m', '16'], 'max'),
-    (['--profiles', 'prefix', 'prefix'], 'Duplicate'),
+    (['--profiles', 'sparse', 'sparse'], 'Duplicate'),
     (['--skip-build'], 'together'),
     (['--skip-check'], 'controlled'),
     (['--ll-stage-timer'], 'controlled'),
@@ -99,7 +120,7 @@ def test_launcher_topology_forwarded_and_node_storage_isolated(tmp_path):
 def test_environment_is_offline_and_profile_specific(tmp_path, monkeypatch):
     monkeypatch.setenv('SHMEM_ROOT', '/unrelated/sdk')
     monkeypatch.setenv('CATLASS_ROOT', '/unrelated/catlass')
-    result = plan(tmp_path, '--profiles', 'prefix')
+    result = plan(tmp_path, '--profiles', 'sparse')
     for stage in result['stages']:
         env = diagnose._environment(result, stage)
         assert env['PIP_NO_INDEX'] == '1'
@@ -118,18 +139,18 @@ def test_skip_build_wheel_map_requires_all_profiles(tmp_path):
     wheel.write_bytes(b'wheel')
     mapping = tmp_path/'wheels.json'
     mapping.write_text(json.dumps(dict(off='candidate.whl')))
-    result = plan(tmp_path, '--profiles', 'prefix', '--skip-build', '--wheel-map', str(mapping))
-    with pytest.raises(ValueError, match='missing prefix'):
+    result = plan(tmp_path, '--profiles', 'sparse', '--skip-build', '--wheel-map', str(mapping))
+    with pytest.raises(ValueError, match='missing sparse'):
         diagnose._wheel_map(result)
-    mapping.write_text(json.dumps(dict(off='candidate.whl', prefix='candidate.whl')))
-    assert set(diagnose._wheel_map(result)) == {'off', 'prefix'}
+    mapping.write_text(json.dumps(dict(off='candidate.whl', sparse='candidate.whl')))
+    assert set(diagnose._wheel_map(result)) == {'off', 'sparse'}
     assert 'wrong timer profile' in diagnose._verify_code(result['stages'][1], 'branch')
 
 
 @pytest.mark.parametrize('transfer_mode', [None, 'summary'])
 @pytest.mark.parametrize('node', [0, 1])
 def test_execute_build_install_verify_run_analyze_order_without_devices(tmp_path, monkeypatch, transfer_mode, node):
-    result = plan(tmp_path, '--profiles', 'prefix', '--bs', '1', '32',
+    result = plan(tmp_path, '--profiles', 'sparse', '--bs', '1', '32',
                   '--num-nodes', '2', '--node-rank', str(node))
     if transfer_mode is None:
         result.pop('transfer_mode')
@@ -165,8 +186,8 @@ def test_execute_build_install_verify_run_analyze_order_without_devices(tmp_path
     output = diagnose.execute(result, receipt=receipt)
     assert output == Path(result['suite']) / 'SEND_FIRST.txt'
     assert seen == ['venv.log', 'off-build.log', 'off-install.log', 'off-identity.log',
-                    'off-run.log', 'prefix-build.log', 'prefix-install.log',
-                    'prefix-identity.log', 'prefix-run.log'] + (['prefix-analyze.log'] if node == 0 else [])
+                    'off-run.log', 'sparse-build.log', 'sparse-install.log',
+                    'sparse-identity.log', 'sparse-run.log'] + (['sparse-analyze.log'] if node == 0 else [])
     assert output.is_file() is (node == 0)
     assert exports == ([(Path(result['suite']), transfer_mode or 'summary')] if node == 0 else [])
     assert receipt == (dict(new_count=1, issued=1, remaining=9) if node == 0 else {})
@@ -350,17 +371,25 @@ def test_performance_table_uses_full_tasks_and_matching_identity(tmp_path):
 
 
 def test_installed_wheel_source_and_native_layout_are_checked(tmp_path,monkeypatch):
-    result=plan(tmp_path,'--profiles','prefix')
+    result=plan(tmp_path,'--profiles','sparse')
     package=tmp_path/'installed/deep_ep'
     package.mkdir(parents=True)
     (package/'_build_info.json').write_text(json.dumps(dict(source_sha256='matching-source')))
+    from tests.elastic import test_ep_low_latency as st
+    points=runpy.run_path(str(diagnose.ROOT/'deep_ep/utils/ll_stage_timer.py'))['SPARSE_POINTS']
+    layout=dict(schema=15,slots=8,fields=8,recording='sparse-milestones',
+                points=list(points),timer_profile='sparse',timer_profile_id=6)
     native=SimpleNamespace(low_latency_implementation='candidate',low_latency_stage_timer_enabled=True,
-                           low_latency_stage_timer_profile='prefix',low_latency_stage_timer_profile_id=3,
-                           low_latency_stage_timer_layout=lambda:dict(timer_profile='prefix',timer_profile_id=3))
+                           low_latency_stage_timer_profile='sparse',low_latency_stage_timer_profile_id=6,
+                           low_latency_stage_timer_layout=lambda:dict(layout))
     monkeypatch.setitem(sys.modules,'deep_ep._native',SimpleNamespace(require_native=lambda _:native))
     def fake_run_path(path):
         if path=='tests/elastic/test_dispatch.py':
             return dict(_import_installed_deep_ep=lambda:SimpleNamespace(__file__=str(package/'__init__.py')))
+        if path=='tests/elastic/test_ep_low_latency.py':
+            return dict(validate_sparse_timer_layout=st.validate_sparse_timer_layout)
+        if Path(path)==st.PROJECT_ROOT/'deep_ep/utils/ll_stage_timer.py':
+            return dict(SPARSE_POINTS=points)
         if path=='build_support.py':
             return dict(source_fingerprint=lambda:'matching-source')
         raise AssertionError(path)
@@ -370,7 +399,7 @@ def test_installed_wheel_source_and_native_layout_are_checked(tmp_path,monkeypat
     native.low_latency_stage_timer_layout=lambda:dict(timer_profile='recv',timer_profile_id=5)
     with pytest.raises(RuntimeError,match='layout mismatch'):
         exec(code,{})
-    native.low_latency_stage_timer_layout=lambda:dict(timer_profile='prefix',timer_profile_id=3)
+    native.low_latency_stage_timer_layout=lambda:dict(layout)
     (package/'_build_info.json').write_text(json.dumps(dict(source_sha256='old-source')))
     with pytest.raises(RuntimeError,match='source fingerprint differs'):
         exec(code,{})
@@ -378,7 +407,7 @@ def test_installed_wheel_source_and_native_layout_are_checked(tmp_path,monkeypat
 
 def test_default_output_migrates_outside_sources_in_directory_with_spaces(tmp_path):
     root=tmp_path/'Project With Spaces'
-    result=plan(root,'--profiles','overview')
+    result=plan(root,'--profiles','sparse')
     assert Path(result['suite'])==root/'diagnostic-runs/batch1'
     assert Path(result['venv']).is_relative_to(root/'diagnostic-runs')
     assert list(tmp_path.iterdir())==[]

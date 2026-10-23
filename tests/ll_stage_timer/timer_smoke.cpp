@@ -5,19 +5,16 @@ extern "C" [[bisheng::core_ratio(0, 1)]] __global__ __aicore__ void ll_timer_smo
 {
     LlStageTimer::DeviceTimer timer;
     timer.Init(output, 1U, mode);
-    const uint64_t kernelBegin=timer.Begin(LlStageTimer::KERNEL);
+    timer.Mark<LlStageTimer::ENTRY>();
+    timer.Mark<LlStageTimer::INIT_DONE>();
     for (uint32_t i=0;i<3;++i) {
-        const uint64_t begin=timer.Begin(LlStageTimer::RECV_POLL);
+        timer.Mark<LlStageTimer::FIRST_RECV_PROBE>();
         volatile uint64_t cycle=GetSystemCycle(); (void)cycle;
-        timer.End(LlStageTimer::RECV_POLL,begin);
     }
-    timer.Count(LlStageTimer::POLL_RECV_COUNTS_ITERATIONS,3U);
-    const uint64_t drainBegin=timer.Begin(LlStageTimer::FINAL_DRAIN);
-    PipeBarrier<PIPE_ALL>();
-    timer.End(LlStageTimer::FINAL_DRAIN,drainBegin);
-    timer.End(LlStageTimer::KERNEL,kernelBegin);
-    // This primitive smoke has no configured inter-core FFTS context. Production
-    // entries perform SyncAll<true>() here; this smoke checks buffer/record logic.
+    timer.Mark<LlStageTimer::FIRST_RECV_READY>();
+    timer.Mark<LlStageTimer::RECV_DONE>();
+    timer.Mark<LlStageTimer::WORK_DONE>();
+    // Per-core independent output is consumed only after kernel completion.
     timer.Flush();
 }
 extern "C" void ll_timer_smoke_do(void* stream, uint8_t* output, uint32_t mode)

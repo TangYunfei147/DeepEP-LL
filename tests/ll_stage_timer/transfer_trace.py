@@ -7,7 +7,7 @@ rank/operation/iteration has its own clock origin and its own process track.
 import math
 
 
-_PROFILES = ('full', 'overview', 'prepare', 'prefix', 'send', 'recv')
+_PROFILES = ('full', 'overview', 'prepare', 'prefix', 'send', 'recv', 'sparse')
 _CONTEXT_FIELDS = ('world_size', 'config', 'run_id', 'seed', 'case_id', 'sampling',
                    'comparison', 'active_capture_profile')
 
@@ -31,7 +31,9 @@ def _profile(decoded):
     profile_id = decoded.get('timer_profile_id', 0)
     if (type(profile_id) is not int or not 0 <= profile_id < len(_PROFILES) or
             name != _PROFILES[profile_id] or
-            (decoded['schema'] == 13 and profile_id != 0)):
+            (decoded['schema'] == 13 and profile_id != 0) or
+            (decoded['schema'] == 14 and profile_id == 6) or
+            (decoded['schema'] == 15 and profile_id != 6)):
         raise ValueError('Invalid timer profile identity')
     return name, profile_id
 
@@ -78,8 +80,8 @@ def trace_from_decoded(samples, trace_iteration=0, frequency_hz=None):
     checked = []
     stages = set()
     for meta, decoded in selected:
-        if decoded.get('schema') not in (13, 14):
-            raise ValueError('Restored trace requires sampled-interval schema 13 or 14')
+        if decoded.get('schema') not in (13, 14, 15):
+            raise ValueError('Restored trace requires schema 13 or 14 intervals, or schema15 sparse milestones')
         if decoded.get('operation') not in ('dispatch', 'combine'):
             raise ValueError('Expected dispatch or combine operation')
         active = _integer(decoded.get('active_aiv'), 'active_aiv')
@@ -161,17 +163,25 @@ def trace_from_decoded(samples, trace_iteration=0, frequency_hz=None):
                           timer_profile_id=profile[1],
                           raw_begin_cycle=row['first_tick'], raw_end_cycle=row['last_tick'],
                           raw_duration_cycles=row['total_ticks'],
-                          interval_kind='sampled actual interval')))
+                          interval_kind=row.get('interval_kind', 'sampled actual interval'))))
+        for point in decoded.get('milestones', []):
+            core = _integer(point.get('core'), 'milestone core')
+            tick = _integer(point.get('tick'), 'milestone tick')
+            if core >= decoded['active_aiv']:
+                raise ValueError('Milestone core exceeds active_aiv')
+            events.append(dict(ph='i', s='t', name=point['point'], cat='milestone', pid=pid, tid=core*stride,
+                               ts=(tick-origin)*1e6/frequency,
+                               args=dict(rank=rank, iteration=iteration, core=core, raw_cycle=tick)))
         info.append(dict(operation=operation, rank=rank, iteration=iteration, pid=pid,
                          origin_tick=origin, frequency_hz=frequency,
                          cores=decoded.get('cores', []), timer_profile=profile[0],
                          timer_profile_id=profile[1]))
     decoded, profile = checked[0][1:3]
     return dict(traceEvents=events, displayTimeUnit='us', metadata=dict(
-        format='dc_seg sampled intervals restored from lossless text',
+        format='sparse milestones restored from lossless text' if decoded['schema']==15 else 'dc_seg sampled intervals restored from lossless text',
         schema=decoded['schema'], boundary_mode=decoded.get('boundary_mode'),
         timer_profile=profile[0], timer_profile_id=profile[1],
-        sampled_calls_per_stage=2, all_calls_in_metrics=True,
+        sampled_calls_per_stage=None if decoded['schema']==15 else 2, all_calls_in_metrics=decoded['schema']!=15,
         trace_iteration=trace_iteration, source_samples=len(samples),
         selected_samples=len(selected), cores=info,
         lane_layout='AIV/stage; parent milestones and KERNEL use separate tracks',

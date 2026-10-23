@@ -22,9 +22,13 @@ static_assert(KERNEL==0 && INIT==50 && SEND_SETUP==81 && Q_SEED_SUBMIT==82 &&
 
 // An observable scalar recurrence. It is identical in all four builds.
 static __aicore__ inline uint64_t ProbeStep(DeviceTimer& timer, Stage stage, uint64_t value) {
+#ifndef LL_TIMER_PROBE_SPARSE
     const uint64_t begin=timer.Begin(stage);
+#endif
     value=value*1664525ULL+uint32_t(stage)+1013904223ULL;
+#ifndef LL_TIMER_PROBE_SPARSE
     timer.End(stage,begin);
+#endif
     return value;
 }
 
@@ -35,13 +39,34 @@ extern "C" [[bisheng::core_ratio(0,1)]] __global__ __aicore__ void TP_SYMBOL(_ke
     // Intentionally before INIT, exactly as in the production entry.
     DeviceTimer timer;
     timer.Init(timerAddress,1U,1U);
+#ifdef LL_TIMER_PROBE_SPARSE
+    timer.MarkAt<ENTRY>(entry);
+#endif
     const uint64_t initialized=GetSystemCycle();
+#ifndef LL_TIMER_PROBE_SPARSE
     const uint64_t init=timer.Begin(INIT);
+#endif
     uint64_t checksum=uint64_t(GetBlockIdx())+1U;
+#ifndef LL_TIMER_PROBE_SPARSE
     timer.End(INIT,init);
+#else
+    timer.Mark<INIT_DONE>();
+#endif
     const uint64_t beforeKernel=GetSystemCycle();
+#ifndef LL_TIMER_PROBE_SPARSE
     const uint64_t kernel=timer.Begin(KERNEL);
+#endif
     if(pattern==1U) {
+#ifdef LL_TIMER_PROBE_SPARSE
+        timer.Mark<COUNTS_SENT>();
+        if(GetBlockIdx()<DispatchDedup::kLlSendCoreNum) {
+            timer.Mark<SEND_PREPARED>();timer.Mark<FIRST_SEND>();
+        } else {
+            timer.Mark<COUNTS_RECEIVED>();timer.Mark<PREFIX_LOCAL_DONE>();
+            timer.Mark<PREFIX_READY>();timer.Mark<RECV_PREPARED>();
+            timer.Mark<FIRST_RECV_PROBE>();timer.Mark<FIRST_RECV_READY>();
+        }
+#endif
         for(uint32_t i=0;i<repeats;++i) {
             if(GetBlockIdx()<DispatchDedup::kLlSendCoreNum) {
                 checksum=ProbeStep(timer,SEND_SETUP,checksum);
@@ -67,10 +92,23 @@ extern "C" [[bisheng::core_ratio(0,1)]] __global__ __aicore__ void TP_SYMBOL(_ke
                 checksum=ProbeStep(timer,RX_META_OUTPUT,checksum);
             }
         }
+#ifdef LL_TIMER_PROBE_SPARSE
+        if(GetBlockIdx()<DispatchDedup::kLlSendCoreNum) timer.Mark<SEND_DONE>();
+        else timer.Mark<RECV_DONE>();
+#endif
     }
+#ifndef LL_TIMER_PROBE_SPARSE
     timer.End(KERNEL,kernel);
+#else
+    timer.Mark<WORK_DONE>();
+#endif
     const uint64_t afterKernel=GetSystemCycle();
-    if(timer.Enabled()) { SyncAll<true>(); timer.Flush(); }
+    if(timer.Enabled()) {
+#ifndef LL_TIMER_PROBE_SPARSE
+        SyncAll<true>();
+#endif
+        timer.Flush();
+    }
     const uint64_t afterFlush=GetSystemCycle();
     auto* words=reinterpret_cast<__gm__ uint64_t*>(result)+GetBlockIdx()*16U;
     words[0]=entry;words[1]=initialized;words[2]=beforeKernel;words[3]=afterKernel;

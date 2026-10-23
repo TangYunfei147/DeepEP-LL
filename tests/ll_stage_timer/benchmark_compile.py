@@ -12,7 +12,7 @@ def main():
     parser.add_argument('--output',required=True)
     parser.add_argument('--jobs',type=int,default=4)
     parser.add_argument('--timer',choices=('ON','OFF'),default='ON')
-    parser.add_argument('--profile',choices=('full','overview','prepare','prefix','send','recv'),default='full')
+    parser.add_argument('--profile',choices=('sparse',),default='sparse')
     parser.add_argument('--source-headers',action='store_true',help='Compile-only with pinned SHMEM source headers; does not validate SDK linking')
     args=parser.parse_args()
     if not 1<=args.jobs<=64: parser.error('jobs must be 1..64')
@@ -23,7 +23,8 @@ def main():
            '-DCATLASS_ARCH=3510','-DUSE_SIMT','-DL2_CACHE_HINT',
            '-DDEEPEP_LL_SEND_CORES='+os.environ.get('DEEPEP_LL_SEND_CORES','28'),
            '-DDEEPEP_LL_RECV_CORES='+os.environ.get('DEEPEP_LL_RECV_CORES','28')]
-    if args.timer=='ON':flags.extend(['-DDEEPEP_LL_STAGE_TIMER=1','-DDEEPEP_LL_TIMER_PROFILE_ID='+str(('full','overview','prepare','prefix','send','recv').index(args.profile))])
+    flags.append('-DDEEPEP_LL_TIMER_PROFILE_ID=6')
+    if args.timer=='ON':flags.append('-DDEEPEP_LL_STAGE_TIMER=1')
     for path in [cann/'include',cann/'asc/include',sdk/'include',sdk/'src',sdk/'src/device',sdk/'src/device_simt']:
         flags+=['-I'+str(path)]
     sources=[ROOT/'csrc/kernels/dispatch/low_latency.cpp']
@@ -38,7 +39,7 @@ def main():
         return row
     start=time.perf_counter()
     with ThreadPoolExecutor(max_workers=args.jobs) as pool: rows=list(pool.map(compile_one,sources))
-    report=dict(timer=args.timer,profile=args.profile if args.timer=='ON' else 'full',source_headers=args.source_headers,jobs=args.jobs,seconds=time.perf_counter()-start,flags=flags,
+    report=dict(timer=args.timer,profile='sparse',source_headers=args.source_headers,jobs=args.jobs,seconds=time.perf_counter()-start,flags=flags,
         revision=subprocess.check_output(['git','-C',str(ROOT),'rev-parse','HEAD'],text=True).strip(),units=rows)
     (out/'timing.json').write_text(json.dumps(report,indent=2))
     print('COMPILE_RESULT '+json.dumps(report),flush=True)

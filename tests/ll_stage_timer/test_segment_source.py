@@ -11,7 +11,12 @@ def normalize(s):
  s=re.sub(r'/\*.*?\*/|//[^\n]*','',s,flags=re.S)
  s=re.sub(r'#include [^\n]*ll_(?:stage|expert)_timer[^\n]*','',s)
  s=re.sub(r'if \(timer.Enabled\(\)\) \{ AscendC::SyncAll<true>\(\); timer.Flush\(\); \}','',s)
+ s=re.sub(r'#ifdef DEEPEP_LL_STAGE_TIMER\s*.*?#endif','',s,flags=re.S)
+ s=re.sub(r'timer\.Mark(?:At)?<[^>]+>\([^;]*\);|timer\.Flush\(\);','',s)
+ s=s.replace('combine_server_dedup_kernel_do_sparse15','combine_server_dedup_kernel_do')
+ s=re.sub(r'\bLL_SPARSE_(?:MARK|AFTER)\([^;]*?\);','',s)
  s=re.sub(r'\bLL_SEG_(?:BEGIN|END|COUNT|SCOPE|FIRST|RELAY_COMPLETION)\([^;]*?\);','',s)
+ s=re.sub(r'\bLL_SPARSE_(?:MARK|AFTER)\([^;]*?\);','',s)
  s=re.sub(r'if \(timer_?\) timer_?->(?:Start|End)\([^;]*\);','',s)
  s=re.sub(r'(?:const uint64_t \w+ = )?timer\.(?:Start|End|Init|Finish|Begin)\([^;\n]*\);?','',s)
  s=re.sub(r'expert\.(?:Init|Finish)\([^;]*\);','',s)
@@ -53,12 +58,12 @@ def test_explicit_boundaries_are_paired_and_use_reference_ids():
 
 def test_no_gm_writes_or_new_barriers_at_measured_boundaries():
     device=(ROOT/'csrc/kernels/dispatch/low_latency/common/ll_stage_timer_device.h').read_text()
-    measured=device[device.index('uint64_t Begin('):device.index('void Flush()')]
+    measured=device[device.index('template<Point point>'):device.index('void Flush()')]
     assert not any(word in measured for word in ('GlobalTensor','DataCopy','PipeBarrier','SyncAll','FlushLine','__gm__'))
     for relative in ('csrc/kernels/dispatch/low_latency/dispatch_variant_kernel.h','csrc/kernels/combine/low_latency.cpp'):
         source=(ROOT/relative).read_text()
-        assert source.index('timer.End(LlStageTimer::KERNEL, kernelBegin)')<source.index('AscendC::SyncAll<true>()')<source.index('timer.Flush()')
-        assert 'if (timer.Enabled())' in source
+        assert source.index('timer.Mark<LlStageTimer::WORK_DONE>()')<source.index('timer.Flush()')
+        assert 'SyncAll' not in source
 
 
 def test_poll_count_and_input_quant_pack_boundaries_are_present():

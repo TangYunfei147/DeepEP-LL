@@ -25,6 +25,13 @@ def check_identity(left,right):
         item['stage_timer'] or item['stage_capture'] or item['expert_capture'] for item in (left,right)):
         raise ValueError('Incomparable diagnostic semantics: different stage schemas')
     differences=set(DIFFERENCES)
+    # When both binaries and launches have timers OFF, timer layout/profile
+    # metadata describes an unused capability, not a measured difference.
+    inactive=all(not any(item.get(key,False) for key in ('stage_timer','stage_capture','expert_capture','profile_capture','profile_capture_requested','expert_timer_requested')) for item in (left,right))
+    if inactive:
+        differences.update(('stage_timer_schema','stage_timer_slots','stage_timer_fields',
+                            'stage_timer_points','stage_timer_recording','timer_profile','timer_profile_id',
+                            'profile_capture','profile_capture_requested','expert_timer_requested'))
     if all(19001<=item['core_protocol']<=19055 for item in (left,right)):
         for item in (left,right):
             send=item.get('send_cores',0);recv=item.get('recv_cores',0)
@@ -40,12 +47,12 @@ def check_identity(left,right):
         for item in (left,right):
             shared = item['core_protocol']//1000 >= 8
             expected = 56 if shared else item['recv_cores']
-            if item.get('dispatch_recv_cores',expected)!=expected or item['stage_timer_schema'] not in {7:(5,),8:(6,),9:(7,),10:(7,9,10),14:(11,12,13,14)}[item['core_protocol']//1000]:
+            if item.get('dispatch_recv_cores',expected)!=expected or item['stage_timer_schema'] not in {7:(5,),8:(6,),9:(7,),10:(7,9,10),14:(11,12,13,14,15)}[item['core_protocol']//1000]:
                 raise ValueError('Invalid receive participation/schema identity')
         if (left['core_protocol']//1000 in (9,10,14))!=(right['core_protocol']//1000 in (9,10,14)):
             if any(item['stage_timer'] or item['stage_capture'] or item['expert_capture'] for item in (left,right)):
                 raise ValueError('Incomparable diagnostic semantics: segment and legacy timers')
-        if any(item['stage_timer_schema'] in (9,10,11,12,13,14) for item in (left,right)) and left['stage_timer_schema']!=right['stage_timer_schema'] and any(
+        if any(item['stage_timer_schema'] in (9,10,11,12,13,14,15) for item in (left,right)) and left['stage_timer_schema']!=right['stage_timer_schema'] and any(
                 item['stage_timer'] or item['stage_capture'] or item['expert_capture'] for item in (left,right)):
             raise ValueError('Incomparable diagnostic semantics: different stage schemas')
         differences.update(('send_cores','recv_cores','dispatch_recv_cores','core_protocol','stage_timer_schema'))
@@ -79,6 +86,8 @@ def compare(left,right,kind):
     if not l or not r: raise ValueError('No matching measurement data in one report')
     if not l.keys()&r.keys(): raise ValueError('No overlapping measurement keys')
     if kind!='perf':
+        if (left.get('schema')==15 or right.get('schema')==15) and left.get('schema')!=right.get('schema'):
+            raise ValueError('Incomparable diagnostic semantics: different stage schemas')
         if left.get('timer_profile','full') != right.get('timer_profile','full'):
             raise ValueError('Incomparable diagnostic semantics: different timer profiles')
         check_identity(left.get('comparison'),right.get('comparison'))

@@ -74,8 +74,23 @@ int main(int argc,char** argv) {try {
             if(pointer=="capture") {
                 auto* h=timerWords.data()+core*info[1];
                 if(h[0]!=0x4c4c5431ULL||h[1]!=info[0]||h[2]!=1||h[3]!=56||h[4]!=core||
-                   (h[5]&255)!=1||((h[5]>>8)&255)!=info[3]||h[6]<6||8+2*h[6]>info[1])
+                   (h[5]&255)!=1||((h[5]>>8)&255)!=info[3])
                     throw std::runtime_error("timer header mismatch at core "+std::to_string(core));
+                if(info[0]==15U) {
+                    const uint64_t required=(1ULL<<0)|(1ULL<<1)|(1ULL<<13);
+                    if(info[1]!=64U || ((h[5]>>24)&255)!=6U || h[7] || (h[6]&~((1ULL<<14)-1)) ||
+                       (h[6]&required)!=required || h[8]>h[9] || h[9]>h[21])
+                        throw std::runtime_error("sparse timer identity/point mismatch");
+                    const uint64_t active=pattern ? (core<info[3] ? 0x21c7ULL : 0x3e3fULL) : required;
+                    if(h[6]!=active) throw std::runtime_error("sparse timer point mask mismatch");
+                    for(uint32_t point=0;point<14U;++point) {
+                        const uint64_t tick=h[8+point];
+                        if(h[6]&(1ULL<<point)) {
+                            if(tick<h[8] || tick>h[21]) throw std::runtime_error("sparse point outside work span");
+                        } else if(tick) throw std::runtime_error("invalid point must be zero");
+                    }
+                } else {
+                if(h[6]<6 || 8+2*h[6]>info[1])throw std::runtime_error("legacy timer record bounds");
                 bool kernelFound=false,initFound=false;
                 for(uint64_t j=0;j<h[6];++j) {
                     const uint64_t tag=h[8+j*2],id=tag&0xffffffffULL;
@@ -83,6 +98,7 @@ int main(int argc,char** argv) {try {
                     if(id==0x8032ULL){if((tag>>32)!=1)throw std::runtime_error("INIT call count mismatch");initFound=true;}
                 }
                 if(!kernelFound||!initFound)throw std::runtime_error("required timer metric absent");
+                }
             }
             if(sample>=0)std::printf("%s,%s,%s,%u,%d,%u,%llu,%llu,%llu,%llu,%llu,%llu,%.6f\n",
                 selected->name,pointer.c_str(),patternName.c_str(),repeats,sample,core,

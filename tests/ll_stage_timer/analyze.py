@@ -161,7 +161,7 @@ def analyze_samples(samples):
         for row in report['records']:
             initial_role=row.get('initial_role',row['role'])
             key=(op,rank,row['core'],initial_role,row['stage'])
-            if report['schema'] in (7,9,10,11,12,13,14):
+            if report['schema'] in (7,9,10,11,12,13,14,15):
                 worker_roles.setdefault((op,rank,row['core']),set()).add(row['role'])
             duration=row['total_us'] if unit=='us' else row['total_ticks']
             groups.setdefault(key,[]).append((duration,row['calls']))
@@ -197,7 +197,14 @@ def analyze_samples(samples):
                 relay_timing=relay_timing.report(wait_samples),
                 per_rank_stage_max=[dict(operation=op,rank=rank,stage=stage,unit=unit,**stats(list(values.values())))
                                     for (op,rank,stage),values in sorted(stage_max.items())],
-                note='Per-call diagnostic stage totals; nested/parallel stages cannot be added. No cross-rank timestamp subtraction.')
+                note=('Same-core first milestone endpoint spans; overlapping spans cannot be added. No packet totals or cross-rank timestamp subtraction.' if identity[9]==15 else 'Per-call diagnostic stage totals; nested/parallel stages cannot be added. No cross-rank timestamp subtraction.'))
+    if identity[9] == 15:
+        result['communication'].update(status='not_collected_sparse_milestones', unsupported_samples=0,
+            note='Sparse capture records only first milestones. Packet counters, bandwidth, repeated waits and ready/probe ratios were not collected.')
+        result['overlap_receive'] = []
+        result['input_wait_bottleneck'].update(status='not_collected_sparse_milestones',
+            interpretation='Per-packet input waits were not collected; no input bottleneck inference is available.')
+        result['relay_timing'].update(status='not_collected_sparse_milestones', samples=[], per_core=[])
     return result
 
 
@@ -234,7 +241,7 @@ def expert_reports(paths, frequency_hz):
         if payload['experts'] != meta['config'].get('num_experts',payload['experts']):
             raise ValueError('Expert count differs from case configuration')
         header=saved['raw'][0][0]
-        if header[1] in (7,9,10,11,12,13,14): raise ValueError('Segment capture cannot contain legacy expert instrumentation')
+        if header[1] in (7,9,10,11,12,13,14,15): raise ValueError('Segment capture cannot contain legacy expert instrumentation')
         expected_send=header[5] >> 8 if header[1] in (5,6) else len(saved['raw'])//2
         if (header[1] in (5,6) and 'send_cores' not in payload) or payload.get('send_cores',expected_send)!=expected_send:
             raise ValueError('Expert/stage core split mismatch')
@@ -286,48 +293,52 @@ def process_directory(source, output, frequency_hz, trace_iteration, lane_layout
     report['expert_interpretation']='Per executing rank and expert; core durations are summed work, not latency. Packet stage counts deliveries only. Shared FIRST_HOP preparation and batch waiting are not assigned. Only samples with executed records enter stage statistics.'
     output.mkdir(parents=True, exist_ok=False)
     (output/'summary.json').write_text(json.dumps(report, indent=2))
-    comm=report['communication']
-    (output/'communication_bottleneck.md').write_text(communication_report.markdown(comm),encoding='utf-8')
-    for name,rows in (('communication_samples',comm['samples']),('communication_costs',comm['costs']),('communication_per_core',comm['per_core'])):
-        if rows:
-            with (output/(name+'.csv')).open('w',newline='',encoding='utf-8-sig') as stream:
-                writer=csv.DictWriter(stream,fieldnames=list(rows[0]));writer.writeheader();writer.writerows(rows)
-
-    overlap_rows=report['overlap_receive']
-    if overlap_rows:
-        with (output/'overlap_receive.csv').open('w',newline='',encoding='utf-8-sig') as stream:
-            writer=csv.DictWriter(stream,fieldnames=list(overlap_rows[0]));writer.writeheader();writer.writerows(overlap_rows)
-        counts={}
-        for row in overlap_rows: counts[row['status']]=counts.get(row['status'],0)+1
-        text='# Dispatch overlap receive\n\n'+ '\n'.join(f'- {key}: {value} core-rounds' for key,value in sorted(counts.items()))
-        text+='\n\nIssue boundaries are sampled; missing boundaries remain blank. Negative recv_minus_submit_ticks means receive load was submitted before the last initial send, not that DMA completed. No cross-rank subtraction. Lane counts describe reserved capacity, including empty senders. Transition waits are paired with the same core/round KERNEL. relay-complete deliberately serializes DMA and is not a throughput baseline.\n'
-        (output/'overlap_receive.md').write_text(text,encoding='utf-8')
-    relay_report=report['relay_timing']
-    (output/'relay_timing.md').write_text(relay_timing.markdown(relay_report),encoding='utf-8')
-    for filename,values in (('relay_samples.csv',relay_report['samples']),('relay_timing.csv',relay_report['per_core'])):
-        if values:
-            with (output/filename).open('w',newline='',encoding='utf-8-sig') as stream:
-                writer=csv.DictWriter(stream,fieldnames=list(values[0]))
-                writer.writeheader();writer.writerows(values)
     wait_report=report['input_wait_bottleneck']
-    (output/'input_wait_bottleneck.md').write_text(input_wait_markdown(wait_report),encoding='utf-8')
-    if wait_report['per_core']:
-        with (output/'input_wait_bottleneck.csv').open('w',newline='',encoding='utf-8-sig') as stream:
-            writer=csv.DictWriter(stream,fieldnames=list(wait_report['per_core'][0]))
-            writer.writeheader();writer.writerows(wait_report['per_core'])
+    relay_report=report['relay_timing']
+    if report['schema'] != 15:
+        comm=report['communication']
+        (output/'communication_bottleneck.md').write_text(communication_report.markdown(comm),encoding='utf-8')
+        for name,rows in (('communication_samples',comm['samples']),('communication_costs',comm['costs']),('communication_per_core',comm['per_core'])):
+            if rows:
+                with (output/(name+'.csv')).open('w',newline='',encoding='utf-8-sig') as stream:
+                    writer=csv.DictWriter(stream,fieldnames=list(rows[0]));writer.writeheader();writer.writerows(rows)
+
+        overlap_rows=report['overlap_receive']
+        if overlap_rows:
+            with (output/'overlap_receive.csv').open('w',newline='',encoding='utf-8-sig') as stream:
+                writer=csv.DictWriter(stream,fieldnames=list(overlap_rows[0]));writer.writeheader();writer.writerows(overlap_rows)
+            counts={}
+            for row in overlap_rows: counts[row['status']]=counts.get(row['status'],0)+1
+            text='# Dispatch overlap receive\n\n'+ '\n'.join(f'- {key}: {value} core-rounds' for key,value in sorted(counts.items()))
+            text+='\n\nIssue boundaries are sampled; missing boundaries remain blank. Negative recv_minus_submit_ticks means receive load was submitted before the last initial send, not that DMA completed. No cross-rank subtraction. Lane counts describe reserved capacity, including empty senders. Transition waits are paired with the same core/round KERNEL. relay-complete deliberately serializes DMA and is not a throughput baseline.\n'
+            (output/'overlap_receive.md').write_text(text,encoding='utf-8')
+        relay_report=report['relay_timing']
+        (output/'relay_timing.md').write_text(relay_timing.markdown(relay_report),encoding='utf-8')
+        for filename,values in (('relay_samples.csv',relay_report['samples']),('relay_timing.csv',relay_report['per_core'])):
+            if values:
+                with (output/filename).open('w',newline='',encoding='utf-8-sig') as stream:
+                    writer=csv.DictWriter(stream,fieldnames=list(values[0]))
+                    writer.writeheader();writer.writerows(values)
+        wait_report=report['input_wait_bottleneck']
+        (output/'input_wait_bottleneck.md').write_text(input_wait_markdown(wait_report),encoding='utf-8')
+        if wait_report['per_core']:
+            with (output/'input_wait_bottleneck.csv').open('w',newline='',encoding='utf-8-sig') as stream:
+                writer=csv.DictWriter(stream,fieldnames=list(wait_report['per_core'][0]))
+                writer.writeheader();writer.writerows(wait_report['per_core'])
     rows = report['per_rank_core_stage']
     with (output/'stages.csv').open('w', newline='') as stream:
         writer = csv.DictWriter(stream, fieldnames=list(rows[0]))
         writer.writeheader(); writer.writerows(rows)
     (output/'trace.json').write_text(json.dumps(trace))
-    segment_metrics, segment_intervals, segment_cores = [], [], []
+    segment_metrics, segment_intervals, segment_cores, milestones = [], [], [], []
     for meta,decoded in decoded_samples:
-        if decoded['schema'] not in (7,9,10,11,12,13,timer.SCHEMA): continue
+        if decoded['schema'] not in (7,9,10,11,12,13,14,timer.SCHEMA): continue
         shared=dict(operation=decoded['operation'],rank=meta['rank'],iteration=meta['iteration'])
         segment_metrics.extend(dict(**shared,**row) for row in decoded['records'])
         segment_intervals.extend(dict(**shared,**row) for row in decoded['intervals'])
         segment_cores.extend(dict(**shared,**row) for row in decoded['cores'])
-    for filename,values in (('metrics.csv',segment_metrics),('intervals.csv',segment_intervals),('cores.csv',segment_cores)):
+        milestones.extend(dict(**shared,**row) for row in decoded.get('milestones',[]))
+    for filename,values in (('metrics.csv',segment_metrics),('intervals.csv',segment_intervals),('cores.csv',segment_cores),('milestones.csv',milestones)):
         if values:
             with (output/filename).open('w',newline='') as stream:
                 writer=csv.DictWriter(stream,fieldnames=list(values[0]));writer.writeheader();writer.writerows(values)
@@ -337,7 +348,7 @@ def process_directory(source, output, frequency_hz, trace_iteration, lane_layout
                 writer=csv.DictWriter(stream,fieldnames=list(values[0]))
                 writer.writeheader();writer.writerows(values)
     transfer_report.export_bundle(output,report,decoded_samples,limit=transfer_limit)
-    print(f'Sendable report: {output / "transfer" / "00_overview.md"}')
+    print('Case archives remain local; send only the suite SEND_FIRST.txt when requested.')
     print(f'{source} -> {output} (all samples summarized; trace iteration {trace_iteration})')
     print(f"Dispatch input wait: {wait_report['status']} (heuristic; see input_wait_bottleneck.md)")
     print(f"Relay timing mode: {relay_report['mode'] or 'no dispatch'} (see relay_timing.md; issue/completion/pre-drain are distinct)")

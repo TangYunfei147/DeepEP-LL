@@ -1,4 +1,4 @@
-"""Run the small-B OFF baseline and separately built timer profiles.
+"""Serially run the small-B OFF baseline and one sparse milestone capture.
 
 Load the target's Python/CANN environment first (for example, source
 /home/tyf/0env.sh), then invoke this file with explicit --devices and launcher
@@ -15,7 +15,7 @@ import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parents[2]
-PROFILES = ('overview', 'prepare', 'prefix', 'send', 'recv')
+PROFILES = ('sparse',)
 LIMIT = 60000
 CONTROLLED = {'--output-dir', '--output', '--run-name', '--num-tokens',
               '--num-max-tokens-per-rank', '--hidden', '--num-topk', '--num-experts',
@@ -36,7 +36,8 @@ def parser():
     p.add_argument('--experts', type=int, default=384)
     p.add_argument('--dtype', choices=('fp8', 'bf16', 'fp16'), default='fp8')
     p.add_argument('--cpu-sync', type=int, choices=(0, 1), default=0)
-    p.add_argument('--profiles', choices=PROFILES + ('full',), nargs='+', default=list(PROFILES))
+    p.add_argument('--profiles', choices=PROFILES, nargs='+', default=list(PROFILES),
+                   help='Only sparse is supported for new captures; legacy profiles remain readable offline')
     p.add_argument('--warmup', type=int, default=10)
     p.add_argument('--num-iters', type=int, default=100)
     p.add_argument('--perf-tail', type=int, default=50)
@@ -118,6 +119,8 @@ def make_plan(args, forwarded, root=ROOT, python=sys.executable):
         raise ValueError('Require 0 <= perf-tail <= num-iters')
     if len(set(args.profiles)) != len(args.profiles):
         raise ValueError('Duplicate profiles')
+    if args.profiles != ['sparse']:
+        raise ValueError('New captures require --profiles sparse; legacy full/phase captures are offline-analysis only')
     if args.skip_build != bool(args.wheel_map):
         raise ValueError('--skip-build and --wheel-map must be supplied together')
     suite = _within_project(Path(args.output_root) / args.run_name, root)
@@ -142,7 +145,7 @@ def make_plan(args, forwarded, root=ROOT, python=sys.executable):
                     '--skip-perf-test']
         else:
             run += ['--perf-tail', str(args.perf_tail)]
-        stages.append(dict(name=profile, timer=timer, profile=profile if timer else 'full',
+        stages.append(dict(name=profile, timer=timer, profile='sparse',
                            wheel_dir=str(wheel_dir), results=str(results),
                            build=[str(executable), '-m', 'build', '--wheel', '--no-isolation',
                                   '--outdir', str(wheel_dir)],
@@ -157,7 +160,9 @@ def make_plan(args, forwarded, root=ROOT, python=sys.executable):
                                                        E=args.experts, dtype=args.dtype, cpu_sync=args.cpu_sync),
                 stages=stages, skip_build=args.skip_build, wheel_map=str(args.wheel_map) if args.wheel_map else None,
                 defer_analysis=args.defer_analysis, transfer_mode=args.transfer_mode,
-                note='Run the same profiles/matrix in the same order on all hosts. ON profiles are separate captures and cannot be summed or merged into one timeline.')
+                note='Run OFF then sparse sequentially in the same matrix order on all hosts; device runs never overlap. '
+                     'The same sparse capture supports initialization/count/prefix/send/receive analysis together. '
+                     'Use full profiler task durations for ON/OFF perturbation; internal milestones are not OFF costs.')
 
 
 def _environment(plan, stage=None):
@@ -214,7 +219,9 @@ def _wheel_map(plan):
 
 def _verify_code(stage, implementation):
     # The installed-wheel helper prevents checkout PYTHONPATH shadowing.
-    profile_id = ('full', *PROFILES).index(stage['profile'])
+    if stage['profile'] != 'sparse':
+        raise ValueError('New captures require sparse milestone wheels; legacy profiles are offline-analysis only')
+    profile_id = 6
     return f"""import json
 import runpy
 from pathlib import Path
@@ -230,6 +237,7 @@ require(native.low_latency_stage_timer_profile == {stage['profile']!r}, 'wrong t
 require(native.low_latency_stage_timer_profile_id == {profile_id!r}, 'wrong timer profile id')
 layout = native.low_latency_stage_timer_layout()
 require(layout.get('timer_profile') == {stage['profile']!r} and layout.get('timer_profile_id') == {profile_id!r}, 'native profile layout mismatch')
+runpy.run_path('tests/elastic/test_ep_low_latency.py')['validate_sparse_timer_layout'](layout)
 info_path = Path(package.__file__).resolve().parent / '_build_info.json'
 info = json.loads(info_path.read_text(encoding='utf-8'))
 fingerprint = runpy.run_path('build_support.py')['source_fingerprint']()
@@ -360,6 +368,11 @@ def execute(plan, *, receipt=None):
     # Older archive plans must fail before any build, device work or directory
     # creation. analyze_existing still defaults their saved results to summary.
     _validate_transfer_mode(plan.get('transfer_mode', 'summary'))
+    stages = plan.get('stages', [])
+    if ([stage.get('name') for stage in stages] != ['off', 'sparse']
+            or any(stage.get('profile') != 'sparse' for stage in stages)
+            or [stage.get('timer') for stage in stages] != [False, True]):
+        raise ValueError('New execution requires OFF then sparse; legacy profile plans are offline-analysis only')
     root = Path(plan['root'])
     suite, node = Path(plan['suite']), Path(plan['node_dir'])
     if node.exists() or (suite.exists() and plan['nodes'] == 1):

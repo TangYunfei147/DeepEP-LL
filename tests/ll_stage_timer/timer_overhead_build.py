@@ -17,7 +17,7 @@ HEADERS = ("ll_stage_timer_device.h", "ll_stage_timer_layout.h", "ll_core_config
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", required=True, help="New directory, relative to checkout")
-    parser.add_argument("--baseline", default="d622b45")
+    parser.add_argument("--baseline", default="98c5f50")
     args = parser.parse_args()
     output = Path(args.output)
     if not output.is_absolute():
@@ -34,7 +34,7 @@ def main():
     for source in ("baseline", "current"):
         dest = output / source
         dest.mkdir()
-        for name in (*HEADERS, *(("ll_stage_timer_profile.h",) if source == "current" else ())):
+        for name in (*HEADERS, "ll_stage_timer_profile.h"):
             relative = COMMON / name
             data = (subprocess.check_output(["git", "-C", str(ROOT), "show",
                     args.baseline + ":" + relative.as_posix()]) if source == "baseline"
@@ -70,6 +70,8 @@ def main():
                 "-DDEEPEP_LL_RECV_CORES=" + str(recv)]
             if mode == "on":
                 command.append("-DDEEPEP_LL_STAGE_TIMER=1")
+            if source == "current":
+                command += ["-DLL_TIMER_PROBE_SPARSE=1", "-DDEEPEP_LL_TIMER_PROFILE_ID=6"]
             command += ["-c", str(HERE / "timer_overhead_probe.cpp"), "-o", str(obj)]
             run(command, label)
             objects.append(str(obj))

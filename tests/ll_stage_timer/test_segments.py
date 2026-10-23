@@ -105,7 +105,7 @@ def test_full_capture_is_deferred_and_saves_extended_json(monkeypatch,tmp_path):
     monkeypatch.setitem(sys.modules,'deep_ep',package);monkeypatch.setitem(sys.modules,'deep_ep.utils',utils)
     copies=[]
     class Tensor:
-        def __init__(self):self.ptr=256;self.device='npu:0';self.raw=raw(schema=timer.SCHEMA)
+        def __init__(self):self.ptr=256;self.device='npu:0';self.raw=load('deferred_sparse_fixture','tests/ll_stage_timer/test_sparse_timer.py').raw(send=10)
         def data_ptr(self):return self.ptr
         def narrow(self,dim,offset,count):self.ptr+=offset*8;return self
         def view(self,*shape):self.shape=shape;return self
@@ -113,7 +113,7 @@ def test_full_capture_is_deferred_and_saves_extended_json(monkeypatch,tmp_path):
         def tolist(self):return self.raw
     native=SimpleNamespace(low_latency_stage_timer_enabled=True,
         low_latency_stage_timer_layout=lambda:dict(schema=timer.SCHEMA,slots=timer.SLOTS,fields=8,stages=list(timer.STAGES),
-                                                  timer_profile='full',timer_profile_id=0),
+                                                  timer_profile='sparse',timer_profile_id=6,points=list(timer.POINTS),recording='sparse-milestones'),
         low_latency_core_config=lambda:dict(active_aiv=56,send_cores=10,device=0,runtime_device_queried=True))
     monkeypatch.setitem(sys.modules,'torch',SimpleNamespace(int64=0,zeros=lambda *a,**k:Tensor()))
     monkeypatch.setitem(sys.modules,'deep_ep._native',SimpleNamespace(require_native=lambda _:native))

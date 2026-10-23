@@ -57,3 +57,14 @@ PREFIX_COMPLETE本地专家计数提取仍Scalar；没有改变wire/epoch或发�
 当前schema13通信诊断：108metrics/192采样事件/每核5120B。SEND_SETUP与首包前区间分开。
 First区间从KERNEL起点到第一次DataCopy/Probe之前，空任务不补零；保留无新排空的observe语义。
 新报告tests/ll_stage_timer/communication_report.py，参考COMMUNICATION_DIAGNOSTICS.md。
+
+## 当前稀疏诊断（2026-10-23，覆盖旧schema13/14采集说明）
+
+schema15/profile sparse6，每核512B槽、14个首次时间点，结束时仅发布192B；旧逐包/逐轮询累计和trace数组已删除。
+不恢复动态ProfileIndex或旧诊断SyncAll；OFF所有探针为空，业务同步和通信19000+S保持。
+SEND_DONE须在已有MTE3_S或最终PIPE_ALL之后，不能把MTE3_V指令发出当作Scalar确认完成。
+R0的PREFIX_LOCAL_DONE仅为原前缀阶段下发边界；小B并行路径有原V_S，不为统一测量而增加屏障。
+一键diagnose默认OFF+sparse串行跑多个B，同份数据分析多项疑点；新旧schema只允许分别离线分析，不拼接阶段或时间线。
+首轮只发SEND_FIRST，摘要及必要定点补充累计最多10次，重复内容不重发。包数/轮询比例未采集，不补零。
+schema15须全rank完整重编；内部sparse15链接符号与Host/device布局检查拒绝旧库混装，SDK不因此重建。
+26/27本次SSH均超时；本地CPU/Zig通过不代表Bisheng编译、设备正确性或目标性能已验证。详见PHASED_DIAGNOSIS.md及BUILD_DISPATCH_SPLIT.md。

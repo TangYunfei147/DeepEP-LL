@@ -477,3 +477,61 @@ synthetic report is 47662 bytes including CRLF, still one file. An earlier local
 run used Windows GBK and collected mocks during editing; the final run above
 used completed sources and UTF-8. Native/runtime/build sources are unchanged;
 no CANN compilation or device sampling was performed for this offline change.
+
+## 2026-10-23 sparse milestone recorder (schema15)
+
+The target's schema14 report showed active capture at 1.76–2.01 times OFF even
+for overview, and up to 18.8 times for recv. Adjacent nested WAIT_RECV_COUNTS and
+POLL_RECV_COUNTS scopes on one B1 core differed by 6.436us, strongly implicating
+recorder work inside the parent interval. This evidence does not assign the
+separate approximately21us OFF regression to instrumentation.
+
+The current recorder stores at most14 first milestones per core, with constant
+template indices and a valid bitmap. No old stage accumulator, runtime profile
+scan, packet counter or repeated interval array remains. Each core has a512B
+aligned independent GM slot; it writes192B at exit with three cache-clean calls.
+The old diagnostic-only final SyncAll is removed. ENTRY is sampled before timer
+construction; WORK_DONE precedes export. Existing business barriers and DMA
+order are unchanged. SEND_DONE is only recorded after existing MTE3_S or final
+PIPE_ALL, not after an MTE3_V instruction alone. The R0 PREFIX_LOCAL_DONE point
+is an issue-side boundary, not a newly synchronized VF completion.
+
+Wire protocol19000+S, S/R ownership, all seven dispatch variants, combine
+algorithms, input formats, O2 and target architecture remain unchanged. Internal
+launch symbols now carry sparse15, and Host/device schema/profile checks plus
+the Python512B layout check reject old mixed libraries. Install a complete
+matching wheel on all ranks. SDK rebuild is not required for this change.
+
+One diagnosis command now builds/runs OFF and sparse sequentially for all seven
+small B values. The same milestones support independent initialization, count,
+prefix, sender and receiver analysis. Full active-capture profiler tasks still
+measure the residual observer cost. The first output is one bounded summary;
+the persistent ten-send allowance also covers any selected exact follow-ups.
+
+Validation:
+
+- Full local CPU suite:674passed/44environment skips in37.35s
+  (`tests/ll_stage_timer`, elastic ST contract, runtime profile-build tests).
+- Existing portable Zig compiler, isolated project-local caches:34passed,
+  2CANN-only checks skipped, in5.39s. Actual recorder OFF/ON, first-hit behavior,
+  delayed export, guard bytes, null reuse, compiler qualifier preprocessing,
+  Host selector and unsupported mode rejection compiled/executed.
+- Two Host diagnostic programs compiled with local ACL declaration stubs;
+  syntax/type checking only, not real ACL linkage or device verification.
+- Four changed count/send/receive business files match b63c1ef after stripping
+  added probes. Existing dedup/protocol/combine and seven-TU guards also pass.
+- Schema15 raw buffer -> parser -> exact transfer/restore -> trace -> one-file
+  summary and moved-checkout tests pass. Seven-B synthetic summary is<20KB;
+  no packet totals or ready ratios are fabricated from first milestones.
+- Authorized27 and26 each had one SSH connection timeout before remote work.
+  Therefore no new Bisheng ON/OFF cold timings, full wheel linkage or NPU run
+  were obtained. Prior schema14 compilation/micro timings do not validate this
+  schema15 candidate. No measured latency improvement or baseline recovery is
+  claimed; target CANN build/correctness and OFF/ON profiling remain required.
+
+Local evidence: `.tmp/sparse-all-final.log`, `.tmp/sparse-zig-final.log`,
+`.tmp/sparse-host-stub/`. Current commands and limitations are documented in
+`tests/ll_stage_timer/PHASED_DIAGNOSIS.md`. The standalone overhead probe compares
+the original98c5f50 recorder and the new sparse one with identical scalar
+checksums, retaining their different recording semantics; it is not an LL
+communication benchmark.

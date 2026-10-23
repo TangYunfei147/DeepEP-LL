@@ -1,7 +1,7 @@
-"""Reference-style sampled segments and full metrics; legacy formats are read-only.
+"""Sparse first-occurrence milestones; prior segment formats remain read-only.
 
-Semantics follow graph_dc_debug_seg@e58ece1. Native LL uses a separately validated
-512B-aligned per-core carrier; only original schema7 exports dc_seg format-5.
+Native schema15 uses a 512B-aligned per-core carrier and post-work export.
+Only original schema7 can export dc_seg format-5.
 """
 from contextlib import contextmanager
 import importlib.util
@@ -12,11 +12,11 @@ import struct
 import threading
 
 MAGIC = 0x4C4C5431
-SCHEMA, SLOTS, FIELDS = 14, 88, 8
+SCHEMA, SLOTS, FIELDS = 15, 8, 8
 TRACE_RECORDS, METRICS, RECORDS = 192, 136, 328
 SCHEMA_SLOTS = {7:72,9:72,10:72,11:72,12:72,13:80,14:88}
 SCHEMA_METRICS = {7:64,9:66,10:70,11:78,12:81,13:108,14:136}
-TIMER_PROFILES = ('full','overview','prepare','prefix','send','recv')
+TIMER_PROFILES = ('full','overview','prepare','prefix','send','recv','sparse')
 DEFAULT_FREQUENCY_HZ = 1_000_000_000
 STAGES = ('KERNEL', 'SEND_TOKENS', 'CAL_CUMSUM', 'PREPARE_INPUT', 'SEND_COUNTS', 'INIT_COUNT_BUFFERS', 'WAIT_RECV_COUNTS', 'CLEAR_RECV_STATUS', 'GATHER_RECV_COUNTS', 'GET_CUMSUM', 'BUILD_RECV_CUMSUM', 'WAIT_CUMSUM', 'LOCAL_WINDOW_COPY', 'FORMAT_OUTPUT', 'BUILD_EXPERT_TASKS', 'CLEAR_LOCAL_FLAGS', 'TOKEN_INPUT', 'TOKEN_QUANT', 'TOKEN_METADATA', 'TOKEN_BUFFER_WAIT', 'TOKEN_PACK', 'TOKEN_SEND_ISSUE', 'COUNT_COMPUTE', 'COUNT_SEND_ISSUE', 'POLL_CORE_SUMS', 'REDUCE_CORE_PREFIX', 'CLEAR_CORE_SUMS', 'BROADCAST_PREFIX', 'PUBLISH_PREFIX_FLAGS', 'RECV_POLL', 'RECV_COPY', 'SEND_DRAIN', 'COMBINE_SEND', 'COMBINE_INIT_RECV', 'COMBINE_RECV', 'COMBINE_INPUT', 'COMBINE_PACK_QUANT', 'COMBINE_SEND_ISSUE', 'COMBINE_SEND_FINISH', 'COMBINE_RECV_POLL', 'COMBINE_DEQUANT_REDUCE', 'COMBINE_PROCESS_TOKEN', 'COMBINE_TOKEN_INIT', 'COMBINE_CLEAR_FLAGS', 'COMBINE_SHARED_EXPERT', 'COMBINE_SPECIAL_EXPERT', 'COMBINE_RMSNORM', 'FINAL_DRAIN', 'POLL_RECV_COUNTS', 'WRITE_COUNTS_OUTPUT', 'INIT', 'POLL_CORE_SUMS_ITERATIONS', 'POLL_RECV_COUNTS_ITERATIONS', 'WAIT_CUMSUM_ITERATIONS', 'RECV_READY_TOKENS', 'COMBINE_READY_SLOTS', 'COMBINE_QUANT', 'COMBINE_BUFFER_WAIT', 'COMBINE_COPY_PACK', 'RECV_BUFFER_WAIT', 'RECV_INPUT', 'RECV_OUTPUT', 'CAL_TOKEN', 'COMBINE_INDEX_INPUT', 'TOKEN_INPUT_WAIT', 'TOKEN_QUANT_WAIT', 'RELAY_ISSUE', 'RELAY_PRE_DRAIN', 'RELAY_COMPLETE', 'RELAY_PACKETS','SEND_COMPLETE_WAIT','TRANSITION_DRAIN','RECV_PREPARE','SEND_SUBMIT_END','OVERLAP_PATH','SERIAL_FALLBACK','SEND_LANES','RECV_LANES','PREFIX_COMPLETE','PREFIX_LOAD','RECV_COMPLETE_WAIT','SEND_SETUP','Q_SEED_SUBMIT','Q_SEED_WAIT','Q_LOCAL_UPDATE','ROUTE_CLASSIFY','DIRECT_PLAN','SEND_RETIRE_WAIT','RX_FLAG_ISSUE','RX_FLAG_WAIT','RX_FLAG_REDUCE','RX_FLAG_DECODE','RX_LANE_REUSE_WAIT','RX_PAYLOAD_READY_WAIT','RX_METADATA','RX_PAYLOAD_OUTPUT','RX_META_OUTPUT','TX_PACK_READY_WAIT','TX_METADATA_PUBLISH','BEFORE_FIRST_SEND','BEFORE_FIRST_RECV_POLL','PREFIX_PUBLISH_WAIT','RX_PENDING_UPDATE','TX_PACKETS','RX_PROBED','RX_READY','RX_EMPTY_POLLS','RX_PACKETS','COUNT_SNAPSHOT_ISSUE','COUNT_SNAPSHOT_WAIT','COUNT_READY_CHECK','COUNT_VALUE_EXTRACT','PREFIX_LOCAL_SCAN','PREFIX_TOTAL_PUBLISH','PREFIX_TOTAL_WAIT','PREFIX_TOTAL_PROBE','PREFIX_TOTAL_DECODE','PREFIX_OFFSET_SUM','PREFIX_OFFSET_APPLY','PREFIX_DATA_PUBLISH','PREFIX_READY_WAIT','PREFIX_READY_PROBE','PREFIX_READY_DECODE','PREFIX_GENERATION_LOAD','INIT_LAYOUT','INIT_MAGIC','INIT_COUNTS','INIT_SENDER','INIT_RECEIVER','COUNT_SETUP','SENDER_INPUT_INIT','SENDER_SCRATCH_ALLOC','SENDER_METADATA_LOAD','SENDER_FLAG_INIT','PREFIX_CONTROL_INIT','TIMER_SETUP')
 COUNTERS = frozenset((*range(51,56),69,*range(74,78),*range(103,108)))
@@ -27,13 +27,21 @@ legacy=importlib.util.module_from_spec(_legacy_spec);_legacy_spec.loader.exec_mo
 LEGACY_STAGES=legacy.LEGACY_STAGES
 ACTIVE=legacy.ACTIVE
 NOISY_SEND_ENVELOPES=legacy.NOISY_SEND_ENVELOPES
+_sparse_spec=importlib.util.spec_from_file_location('_ll_stage_sparse',Path(__file__).with_name('ll_stage_timer_sparse.py'))
+sparse=importlib.util.module_from_spec(_sparse_spec);_sparse_spec.loader.exec_module(sparse)
+POINTS=sparse.POINTS
+SPARSE_POINTS=POINTS
+SEGMENT_SCHEMAS=(7,9,10,11,12,13,14)
+CURRENT_SCHEMAS=(*SEGMENT_SCHEMAS,SCHEMA)
 
 
 def parse_records(raw, operation, frequency_hz=None):
     if not raw or not raw[0] or len(raw[0][0])!=8:
         raise ValueError('Missing timer header')
     schema=raw[0][0][1]
-    if schema not in (7,9,10,11,12,13,SCHEMA):
+    if schema == SCHEMA:
+        return sparse.parse_records(raw, operation, frequency_hz)
+    if schema not in SEGMENT_SCHEMAS:
         return legacy.parse_records(raw,operation,frequency_hz)
     metrics_limit=SCHEMA_METRICS[schema]
     slots=SCHEMA_SLOTS[schema]
@@ -51,7 +59,7 @@ def parse_records(raw, operation, frequency_hz=None):
         words=[v & ((1<<64)-1) for v in words]
         h=words[:8];mode=h[5]&255;send=(h[5]>>8)&255;role=(h[5]>>16)&255
         profile=(h[5]>>24)&255 if schema>=14 else 0
-        if profile>=len(TIMER_PROFILES): raise ValueError('Unknown timer profile')
+        if profile>=6: raise ValueError('Unknown timer profile')
         if h[5]>>(32 if schema>=14 else 24): raise ValueError('Unexpected segment header bits')
         profile_name=TIMER_PROFILES[profile]
         if schema >= 14 and mode == 3 and profile_name not in ('full', 'recv'):
@@ -134,19 +142,25 @@ def parse_records(raw, operation, frequency_hz=None):
 def chrome_trace(saved_records, frequency_hz=None, lane_layout='core', show_repeated=False):
     saved_records=list(saved_records)
     if not saved_records: raise ValueError('No LL stage records')
-    if all(s['raw'][0][0][1] not in (7,9,10,11,12,13,SCHEMA) for s in saved_records):
+    if all(s['raw'][0][0][1] not in CURRENT_SCHEMAS for s in saved_records):
         return legacy.chrome_trace(saved_records,frequency_hz,lane_layout,show_repeated)
-    if any(s['raw'][0][0][1] not in (7,9,10,11,12,13,SCHEMA) for s in saved_records): raise ValueError('Mixed segment and legacy traces')
+    if any(s['raw'][0][0][1] not in CURRENT_SCHEMAS for s in saved_records): raise ValueError('Mixed segment and legacy traces')
     if len({s['raw'][0][0][1] for s in saved_records})!=1: raise ValueError('Mixed segment schemas')
     if len({s['raw'][0][0][5]&255 for s in saved_records})!=1: raise ValueError('Mixed relay diagnostic modes')
     profile_ids={(s['raw'][0][0][5]>>24)&255 if s['raw'][0][0][1]>=14 else 0 for s in saved_records}
     if len(profile_ids)!=1: raise ValueError('Mixed timer profiles')
     if lane_layout not in ('core','stage'): raise ValueError('Expected core or stage lane layout')
-    events=[];identities=set();info=[]
+    events=[];identities=set();info=[];sparse_identity=None
     for pid,saved in enumerate(saved_records,1):
         frequency=frequency_hz if frequency_hz is not None else saved.get('frequency_hz')
         if frequency is None: raise ValueError('Chrome trace requires explicit frequency_hz')
         report=parse_records(saved['raw'],saved['operation'],frequency);meta=saved.get('metadata',{})
+        if report['schema']==15:
+            identity_fields={key:meta.get(key) for key in ('world_size','config','run_id','seed','case_id','sampling','comparison','active_capture_profile')}
+            common=(report['send_cores'],report['frequency_hz'],json.dumps(identity_fields,sort_keys=True))
+            if sparse_identity is not None and common!=sparse_identity:
+                raise ValueError('Mixed sparse capture identities')
+            sparse_identity=common
         rank,iteration=meta.get('rank','unknown'),meta.get('iteration',pid-1)
         identity=(meta.get('run_id'),meta.get('case_id'),report['operation'],rank,iteration)
         if identity in identities: raise ValueError('Duplicate rank/operation/sample trace')
@@ -154,19 +168,28 @@ def chrome_trace(saved_records, frequency_hz=None, lane_layout='core', show_repe
         origin=min(row['first_tick'] for row in report['intervals'])
         lanes=set()
         for row in sorted(report['intervals'],key=lambda row:(row['core'],row['first_tick'],-row['last_tick'])):
-            tid=row['core'] if lane_layout=='core' else row['core']*METRICS+STAGES.index(row['stage'])
+            stage_names = [p[0] for p in sparse.PAIRS] if report['schema']==15 else STAGES
+            tid=row['core'] if lane_layout=='core' else row['core']*METRICS+stage_names.index(row['stage'])
             if tid not in lanes:
                 events.append(dict(ph='M',name='thread_name',pid=pid,tid=tid,args=dict(name=f"AIV {row['core']:02d} {row['role']}"+(f" / {row['stage']}" if lane_layout=='stage' else ''))))
                 lanes.add(tid)
             events.append(dict(ph='X',name=row['stage'],cat=report['operation'],pid=pid,tid=tid,
                                ts=(row['first_tick']-origin)*1e6/frequency,dur=row['total_ticks']*1e6/frequency,
                                args=dict(rank=rank,iteration=iteration,sample=row['sample'],raw_begin_cycle=row['first_tick'],
-                                         raw_end_cycle=row['last_tick'],interval_kind='sampled actual interval')))
+                                         raw_end_cycle=row['last_tick'],interval_kind=row.get('interval_kind','sampled actual interval'))))
+        for point in report.get('milestones',[]):
+            tid=point['core'] if lane_layout=='core' else point['core']*METRICS+METRICS-1
+            if tid not in lanes:
+                events.append(dict(ph='M',name='thread_name',pid=pid,tid=tid,args=dict(name=f"AIV {point['core']:02d} / milestones")))
+                lanes.add(tid)
+            events.append(dict(ph='i',s='t',name=point['point'],cat='milestone',pid=pid,tid=tid,
+                               ts=(point['tick']-origin)*1e6/frequency,
+                               args=dict(rank=rank,iteration=iteration,raw_cycle=point['tick'])))
         info.append(dict(operation=report['operation'],rank=rank,iteration=iteration,cores=report['cores'],
                          timer_profile=report['timer_profile'],timer_profile_id=report['timer_profile_id']))
-    return dict(traceEvents=events,metadata=dict(format='dc_seg sampled intervals',sampled_calls_per_stage=2,
+    return dict(traceEvents=events,metadata=dict(format='sparse milestones' if report['schema']==15 else 'dc_seg sampled intervals',sampled_calls_per_stage=None if report['schema']==15 else 2,
                 timer_profile=report['timer_profile'],timer_profile_id=report['timer_profile_id'],
-                all_calls_in_metrics=True,cores=info,clock='Rank-local origins; no cross-rank alignment'))
+                all_calls_in_metrics=report['schema']!=15,cores=info,clock='Rank-local origins; no cross-rank alignment'))
 
 
 def reference_binary(raw,operation):
@@ -185,7 +208,7 @@ def reference_binary(raw,operation):
 class StageTrace:
     def __init__(self, buffer, operation, mode='observe', frequency_hz=DEFAULT_FREQUENCY_HZ,
                  expert_config=None):
-        if operation not in ('dispatch', 'combine') or mode not in ('observe','relay-complete') or (mode=='relay-complete' and operation!='dispatch'):
+        if operation not in ('dispatch', 'combine') or mode != 'observe':
             raise ValueError('Invalid LL stage diagnostic configuration')
         if frequency_hz is not None and (not math.isfinite(frequency_hz) or frequency_hz <= 0):
             raise ValueError('Counter frequency must be finite and positive')
@@ -197,10 +220,11 @@ class StageTrace:
         if not getattr(native, 'low_latency_stage_timer_enabled', False):
             raise RuntimeError('Rebuild the full wheel with DEEPEP_LL_STAGE_TIMER=ON')
         schema = native.low_latency_stage_timer_layout()
-        expected=dict(schema=SCHEMA, slots=SLOTS, fields=FIELDS, stages=list(STAGES))
+        expected=dict(schema=SCHEMA, slots=SLOTS, fields=FIELDS, stages=list(STAGES),
+                      points=list(POINTS), recording='sparse-milestones')
         profile_id=schema.get('timer_profile_id')
         if (any(schema.get(key)!=value for key,value in expected.items()) or
-                type(profile_id) is not int or not 0<=profile_id<len(TIMER_PROFILES) or
+                type(profile_id) is not int or profile_id!=6 or
                 schema.get('timer_profile')!=TIMER_PROFILES[profile_id]):
             raise RuntimeError('LL timer Python/native schema mismatch')
         self.timer_profile_id=profile_id

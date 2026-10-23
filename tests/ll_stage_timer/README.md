@@ -1,3 +1,50 @@
+# LL稀疏诊断：当前入口
+
+当前分支是`kernel/ll-g4-small-b-prefix`，实现`g4-small-b-parallel-prefix`，**schema15 / sparse**。
+保持原收发逻辑、通信协议和已有业务同步顺序；删除仅诊断用的末尾SyncAll，计时器改为每核最多14个首次时间戳，512B独占槽，实际发布192B。
+当前新采集只支持sparse；旧schema7～14及其full/phase数据仍可离线读取。下方折叠内容是历史说明，不作为当前构建或新手命令。
+
+## 一个命令跑多个B
+
+在目标工程根目录加载已有Python/CANN环境，保持本轮S30/R26；SDK和构建依赖需已准备好：
+
+```bash
+source /home/tyf/0env.sh
+export DEEPEP_LL_SEND_CORES=30
+export DEEPEP_LL_RECV_CORES=26
+python tests/ll_stage_timer/diagnose.py \
+  --run-name small_b_sparse_001 \
+  --bs 1 2 4 8 16 24 32 --m 32 \
+  --hidden 3584 --topk 8 --experts 384 --dtype fp8 --cpu-sync 0 \
+  --devices 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 \
+  --num-nodes "$NNODES" --node-rank "$NODE_RANK" \
+  --master-addr "$MASTER_ADDR" --master-port "$MASTER_PORT" \
+  --shmem-port "$SHMEM_PORT"
+```
+
+拓扑和端口变量沿用实际作业；单机EP16为NNODES=1、NODE_RANK=0。设备列表只用于获分配的目标设备，不扩大验证机授权。追加`--plan`只检查CPU计划。
+命令顺序构建并运行OFF与sparse两组，OFF采用10预热/100采集/尾50，sparse稳定100轮后采5轮并测active-capture完整profiler开销。
+**全rank必须使用完整重编的schema15 wheel和新的run-name**，入口负责工程内隔离安装；不强制重建已校验的SDK，不联网下载依赖、不改共享Python。
+详细配置、多机汇集、轮次和验证边界以[PHASED_DIAGNOSIS.md](PHASED_DIAGNOSIS.md)为准。
+
+## 发送内容与解读
+
+第一轮只发运行目录的 **SEND_FIRST.txt**，≤60000字符及UTF-8字节（含CRLF）。同一suite摘要与后续必要补充累计最多10次；重复内容不重发，不发送归档、CSV、manifest、索引或ledger。
+后续仅在明确疑点需要时按B/rank/iteration/core提取；默认每次最多3块且受剩余额度限制。格式见[COMPRESSED_TRANSFER.md](COMPRESSED_TRANSFER.md)。
+已有结果的纯离线分析入口：
+
+```bash
+python tests/ll_stage_timer/diagnose.py --analyze-existing diagnostic-runs/small_b_sparse_001
+```
+
+同一份sparse数据可以并行检查初始化、count、prefix、首次发送准备及接收Probe/ready；设备OFF A/B仍应独立串行。
+ENTRY包含timer初始化；SEND_DONE是原发送资源退休，可能与接收重叠，不能当成纯网络时间。
+包数、逐包均衡、轮询次数和ready/probe比例未采集；稀疏跨度可能重叠，不能相加。先核实完整ON/OFF扰动，再解释阶段耗时。
+本地CPU验证不等于设备验收。本次26/27各一次SSH连接超时，尚无schema15 CANN编译或NPU性能结论；完整记录见[BUILD_DISPATCH_SPLIT.md](../../docs/BUILD_DISPATCH_SPLIT.md)。
+
+<details>
+<summary>历史分支、schema与命令存档（不用于当前新采集）</summary>
+
 同一suite只发送必要内容，**摘要及后续补充累计最多10次**。第一轮只发送一个 **SEND_FIRST.txt（≤60000字符/UTF-8字节，含CRLF）**。
 它汇总全部捕获样本用于定位；只有分析明确需要时，才按B/profile/rank/轮次提取补充，core可选。每次默认最多3块，同时受累计剩余额度约束。
 额度持久保存；相同内容不重复要求发送，换输出目录不重置。已有旧摘要首次保守计入额度。只发摘要及明确列出的新part，不发送ledger、manifest、索引或单独性能CSV。
@@ -179,3 +226,5 @@ python tests/ll_stage_timer/analyze.py <run目录> --op combine --trace-iteratio
 ```
 
 `--operation`是`--op`的同义写法；不传则保留全部算子。筛选覆盖summary、CSV、trace及本分支附加报告，所选算子的全部rank/轮次仍必须完整。默认分别输出stage-analysis-dispatch、stage-analysis-combine；可用--output-dir指定新目录，已有输出不覆盖。仅离线脚本更新，无需重编wheel或重新采样。
+
+</details>
