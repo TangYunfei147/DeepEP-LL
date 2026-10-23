@@ -86,8 +86,12 @@ Each round tests all four revisions. Odd rounds use the manifest order; even
 rounds reverse it. The original ST retains correctness gates,10warmups,
 100samples and each rank's last50. Shape is B=M256/H3584/K8/E384/FP8; combine
 uses BF16 input/output. The metric is pooled summary.csv mean_kernel_us.
-No earlier performance result is overwritten. Use a new prefix after a failed
-device run. Add --plan to inspect the exact commands without building/running.
+No earlier performance result is overwritten. After an interrupted run, keep
+the same prefix/path and add `--resume-results` to the command above. Complete
+validated candidate/round pairs are reused; incomplete items run in fresh
+attempt directories. A new session comparison is printed at completion, leaving
+old summaries intact. See [continuation details](README.md#continue-an-interrupted-performance-run).
+Add --plan to inspect the exact commands without building/running.
 
 Node0 comparison.csv is under results/ll-control-opt/b256-rx868-001/.
 reference_delta_us/pct and baseline_delta_us/pct compare each candidate with

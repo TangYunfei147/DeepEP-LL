@@ -231,14 +231,84 @@ is permitted without changing that worktree. No `git reset`, `git clean`, or
 overwrite of old wheels occurs.
 
 `--resume` reuses a finished wheel only after checking its revision, split,
-timer/group, wheel hash and SDK hashes. An incomplete attempt is retained and a
-new attempt subdirectory is created. It does **not** skip, merge, or overwrite
-old performance results. After a failed device run, use a fresh `--run-prefix`.
+timer/group, wheel hash and SDK hashes. An incomplete build attempt is retained
+and a new build-attempt subdirectory is created. Performance-result continuation
+is selected separately with `--resume-results`, described below.
 For the former CATLASS preparation failure, update the scripts and repeat the
 original command with `--resume`; no performance run had started, so the same
 run prefix and the existing unfinished build worktree can be retained.
-Locks prevent concurrent suite/cache mutation; if a process was killed, inspect
-the recorded PID before manually removing its stale `.lock` file.
+Locks prevent concurrent suite/cache mutation. `--resume-results` can recover a
+suite lock only when its recorded local process is confirmed dead; an active,
+unverifiable, malformed or foreign-host lock is retained and rejected. It never
+terminates a process. The adjacent `.guard` file is a persistent operating-system
+lock target; do not delete it to bypass an active owner. Build locks retain
+their explicit recovery policy.
+
+## Continue an interrupted performance run
+
+This continuation feature is for a single machine (`--num-nodes 1 --node-rank 0`).
+Update the scripts, then repeat the interrupted command with
+**the same `--output-dir` and `--run-prefix`**, adding
+`--resume-results`. Existing candidate wheels do not need rebuilding for this
+Python-only change. For the independent receive experiment:
+
+```bash
+python tests/ll_control_opt/suite.py \
+  --run-only --resume-results --send-cores 30 \
+  --rounds 4 --order alternating \
+  --devices "$ASCEND_RT_VISIBLE_DEVICES" \
+  --num-nodes 1 --node-rank 0 \
+  --master-addr "$MASTER_ADDR" --master-port "$MASTER_PORT" \
+  --shmem-port "$SHMEM_PORT" \
+  --output-dir "$PWD/results/ll-control-opt" \
+  --run-prefix b256-rx868-001
+```
+
+Use your interrupted run's actual prefix/path if different. Keep its commit
+manifest, shape, sampling, S/R split, host count and execution order. Round count
+can stay the same or increase; it cannot shrink. Network endpoint ports may be
+changed. New saved plans also check the selected devices. Legacy plans
+did not save device visibility: continuation validates the available identity
+and records that the legacy device mapping is unavailable.
+
+Node0 validates each `(candidate, round)` independently using both `summary.json`
+and `summary.csv`: correctness must pass, dispatch and combine must both be
+complete, all ranks must provide100valid raw samples, and the last50pooled mean
+must match. A missing `.done.json` does not discard a complete valid summary;
+the old process may have been killed after saving it. A `.done.json` alone is
+never enough. No partial iteration samples are appended to a new measurement.
+
+Completed items are skipped. A missing, partial or invalid item is rerun in full under a
+fresh `round-NNN.attempt-<id>` directory. Original directories, logs and summaries
+remain untouched. Multiple valid completed attempts for one item are rejected
+as ambiguous, rather than selecting whichever happens to be faster or newer.
+Only needed candidates require wheel verification/installation and idle-device
+checks. If every requested item is complete, continuation performs no build,
+installation, binary preflight or NPU occupancy check.
+
+Each continuation writes a separate session under:
+
+```text
+<output-dir>/<run-prefix>/sessions/<session-id>/
+  suite-plan.node-0.json
+  comparison.csv
+  comparison.json
+```
+
+The script prints the new comparison path. Existing top-level comparison files
+are preserved. The new comparison includes reused and newly measured items,
+with `result_status` and `source_directory` on each row. Only complete rounds
+are compared; references still come from the same numbered round. A resumed
+round can span separate measurement sessions, so its ordering and timing gaps
+must be considered when interpreting small differences. Original per-run raw
+data remain the source of every reported mean.
+
+If a complete attempt survives but its creation-session plan is unreadable, its
+data still undergo full summary validation. The report marks its session as
+`unknown`, device mapping unavailable, and cross-session comparison unknown.
+The damaged plan remains on disk and is listed in `ignored_session_plans`.
+An unreadable original plan prevents continuation because experiment identity
+cannot be established. New plans and comparison files are published atomically.
 
 ## Results and interpretation
 
@@ -311,3 +381,13 @@ and readiness handshake/error propagation. The Windows sandbox blocked local Git
 IPC; those tests ran outside it in a short project-local temporary directory.
 This update has no new Linux/CANN or NPU validation; historical cumulative wheel
 results do not validate the independent kernels.
+
+Single-machine continuation validation:127local regression checks passed across
+the suite, dependency cache, result continuation and lock recovery. After the
+final provenance fix, all49result-continuation checks passed (these batches
+overlap). Coverage includes actual local Git/filesystem writes, a child exiting
+without cleanup, competing lock owners, old summaries without done markers,
+interrupted partial rounds, repeated continuation, round extension, all-results
+reuse with no package/device operations, corrupt summaries and preserved original
+artifacts. Device/build effects in continuation tests are explicit recording
+fakes. No SSH, CANN compilation or NPU sampling was performed for this script update.

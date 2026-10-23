@@ -3,6 +3,7 @@ import argparse
 import csv
 import hashlib
 import importlib.util
+import io
 import json
 import math
 import os
@@ -13,6 +14,7 @@ import statistics
 import subprocess
 import sys
 import time
+import uuid
 
 _spec = importlib.util.spec_from_file_location('ll_control_build', Path(__file__).with_name('build.py'))
 build = importlib.util.module_from_spec(_spec)
@@ -107,8 +109,10 @@ def validate_summary(directory, revision, send_cores, num_nodes):
     directory = Path(directory)
     report = json.loads((directory / 'summary.json').read_text(encoding='utf-8'))
     world = 16 * num_nodes
-    if report.get('status') != 'completed' or report.get('world_size') != world or report.get('case_count') != 1 or report.get('result_count') != 1:
+    if not isinstance(report, dict) or report.get('status') != 'completed' or report.get('world_size') != world or report.get('case_count') != 1 or report.get('result_count') != 1:
         raise ValueError(f'Incomplete or mixed ST run: {directory}')
+    if not isinstance(report.get('results'), list) or len(report['results']) != 1 or not isinstance(report['results'][0], dict) or not isinstance(report.get('config'), dict):
+        raise ValueError(f'Malformed ST report structure: {directory}')
     config = report['config']
     for key, value in dict(warmup=10, num_iters=100, perf_tail=50, route='normal', seed=0,
                            skip_check=False, skip_perf_test=False, dispatch_only=False, ll_stage_timer=False).items():
@@ -151,6 +155,206 @@ def validate_summary(directory, revision, send_cores, num_nodes):
             raise ValueError('JSON/CSV performance mismatch')
         values[operation] = value
     return values
+
+
+def _run_key(item):
+    return item['label'], item['round']
+
+
+def _command_identity(command):
+    """Retain ST semantics while allowing a new process port/output location."""
+    starts = [index for index, value in enumerate(command) if Path(value).name == 'test_ep_low_latency.py']
+    if len(starts) != 1:
+        raise ValueError('Previous plan does not identify the standard LL ST entry')
+    options = command[starts[0]+1:]
+    ignored = {'--master-port', '--shmem-port', '--output-dir', '--run-name'}
+    result = []
+    index = 0
+    while index < len(options):
+        if options[index] in ignored:
+            if index+1 >= len(options):
+                raise ValueError('Incomplete command in previous plan')
+            index += 2
+        else:
+            result.append(options[index])
+            index += 1
+    return result
+
+
+def validate_previous_plan(previous, current, node_rank):
+    """Accept an old saved plan, but never change the experiment on resume."""
+    saved_entries = previous.get('commits', [])
+    normalized = []
+    for index, entry in enumerate(saved_entries):
+        entry = dict(entry)
+        if not any(field in entry for field in ('comparison_base', 'comparison_label', 'comparison_kind')):
+            reference = saved_entries[max(0, index-1)]
+            entry.update(comparison_base=reference['revision'], comparison_label=reference['label'],
+                         comparison_kind='cumulative_parent' if index else 'baseline')
+        normalized.append(entry)
+    if normalized != current['commits']:
+        raise ValueError('Resume plan mismatch: commits/references')
+    if previous.get('order', 'manifest') != current['order']:
+        raise ValueError('Resume plan mismatch: order (legacy plans used --order manifest)')
+    for field in ('metric', 'sampling', 'send_cores', 'recv_cores', 'timer'):
+        if previous.get(field) != current.get(field):
+            raise ValueError(f'Resume plan mismatch: {field}')
+    old_runs = previous.get('phases', {}).get('run', [])
+    new_runs = {_run_key(item): item for item in current['phases']['run']}
+    old_rounds = previous.get('rounds', max((item['round'] for item in old_runs), default=0))
+    if not isinstance(old_rounds, int) or old_rounds < 1 or old_rounds > current['rounds']:
+        raise ValueError('Resume may increase rounds, but cannot decrease previously planned rounds')
+    expected = {(entry['label'], round_id) for entry in current['commits'] for round_id in range(1, old_rounds+1)}
+    if len(old_runs) != len(expected) or {_run_key(item) for item in old_runs} != expected:
+        raise ValueError('Previous plan has missing or duplicate round/candidate entries')
+    positions = {}
+    for item in old_runs:
+        target = new_runs[_run_key(item)]
+        positions[item['round']] = positions.get(item['round'], 0)+1
+        if item['revision'] != target['revision'] or item.get('execution_position', positions[item['round']]) != target['execution_position']:
+            raise ValueError(f'Resume plan mismatch: revision/execution_position for {_run_key(item)}')
+        if _command_identity(item['command']) != _command_identity(target['command']):
+            raise ValueError(f'Resume ST shape/topology/argument mismatch for {_run_key(item)}')
+        command = item['command']
+        if int(command[command.index('--node-rank')+1]) != node_rank:
+            raise ValueError('Previous plan belongs to a different node rank')
+    identity = previous.get('run_identity')
+    if identity is not None and identity != current.get('run_identity'):
+        raise ValueError('Resume device/host/topology identity mismatch')
+    return dict(previous_rounds=old_rounds, legacy_devices_unavailable=identity is None)
+
+
+def previous_plans(base, node_rank):
+    base = Path(base)
+    paths = [base / f'suite-plan.node-{node_rank}.json']
+    paths += sorted((base / 'sessions').glob(f'*/suite-plan.node-{node_rank}.json'))
+    result, ignored = [], []
+    for path in paths:
+        if path.is_file():
+            try:
+                saved = json.loads(path.read_text(encoding='utf-8'))
+                if not isinstance(saved, dict):
+                    raise ValueError('Saved suite plan must be a JSON object')
+            except (OSError, ValueError) as error:
+                if path == paths[0]:
+                    raise ValueError(f'Original suite plan is unreadable: {path}') from error
+                ignored.append(dict(path=str(path), reason=str(error)[:1024]))
+            else:
+                result.append(dict(path=str(path), plan=saved))
+    if not result:
+        raise ValueError(f'No previous suite plan for node{node_rank}: cannot establish result identity')
+    if ignored:
+        result[0]['ignored_session_plans'] = ignored
+    return result
+
+
+def _write_new_file(path, content):
+    """Publish a complete new file atomically without replacing an older file."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(path.name+'.tmp-'+uuid.uuid4().hex)
+    try:
+        with temporary.open('x', encoding='utf-8', newline='') as stream:
+            stream.write(content)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.link(temporary, path)  # Fails if path already exists; same-directory hard link.
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def write_new_json(path, value):
+    _write_new_file(path, json.dumps(value, indent=2, sort_keys=True)+'\n')
+
+
+def _attempt_directories(canonical):
+    canonical = Path(canonical)
+    pattern = re.compile(re.escape(canonical.name)+r'(?:\.attempt-[A-Za-z0-9_-]+)?$')
+    paths = [canonical] + sorted(canonical.parent.glob(canonical.name+'.attempt-*'))
+    result = []
+    for path in paths:
+        if not pattern.fullmatch(path.name) or not path.exists():
+            continue
+        if path.is_symlink():
+            raise ValueError(f'Result directory must not be a symlink: {path}')
+        result.append(path)
+    return result
+
+
+def _source_session(directory, history):
+    for record in history:
+        saved = record['plan']
+        for item in saved.get('result_schedule', {}).get('items', []):
+            if item.get('action') == 'run' and Path(item['directory']) == Path(directory):
+                return saved.get('session_id', 'unknown')
+    return 'unknown' if '.attempt-' in Path(directory).name else 'legacy'
+
+
+def result_schedule(plan, args, root=ROOT):
+    """Validate saved single-node results and choose complete items for reuse."""
+    if args.num_nodes != 1 or args.node_rank != 0:
+        raise ValueError('Result reuse supports only a single-node run at node rank0')
+    resume = bool(getattr(args, 'resume_results', False))
+    base = build.resolve(root, args.output_dir) / args.run_prefix
+    history = previous_plans(base, 0) if resume else []
+    compatibility = [dict(path=record['path'], **validate_previous_plan(record['plan'], plan, 0)) for record in history]
+    session_id = uuid.uuid4().hex
+    items = []
+    for planned in plan['phases']['run']:
+        canonical = Path(planned['directory'])
+        complete, rejected = [], []
+        for directory in _attempt_directories(canonical) if resume else []:
+            try:
+                values = validate_summary(directory, planned['revision'], args.send_cores, args.num_nodes)
+            except (OSError, ValueError, KeyError, TypeError, AttributeError, IndexError, csv.Error, OverflowError) as error:
+                rejected.append(dict(directory=str(directory), reason=str(error)[:2048]))
+            else:
+                complete.append((directory, values))
+        if len(complete) > 1:
+            raise ValueError(f'Ambiguous complete attempts for {_run_key(planned)}: '+', '.join(str(path) for path, _ in complete))
+        choice = dict(label=planned['label'], revision=planned['revision'], round=planned['round'],
+                      execution_position=planned['execution_position'], rejected_attempts=rejected)
+        if complete:
+            directory, values = complete[0]
+            choice.update(action='reuse', directory=str(directory), source_directory=str(directory),
+                          values=values, source_session_id=_source_session(directory, history))
+        else:
+            directory = canonical.with_name(canonical.name+'.attempt-'+session_id) if resume else canonical
+            choice.update(action='run', directory=str(directory), source_directory=str(directory),
+                          source_session_id=session_id)
+        items.append(choice)
+    return dict(session_id=session_id, resume_results=resume, items=items, compatibility=compatibility,
+                ignored_session_plans=[ignored for record in history for ignored in record.get('ignored_session_plans', [])],
+                legacy_devices_unavailable=any(record['legacy_devices_unavailable'] for record in compatibility) or
+                    any(item['action']=='reuse' and item['source_session_id']=='unknown' for item in items))
+
+
+def apply_result_schedule(plan, schedule):
+    """Apply recovered attempt names without changing the planned ST arguments."""
+    local = {_run_key(item): item for item in plan['phases']['run']}
+    if len(schedule['items']) != len(local) or {_run_key(item) for item in schedule['items']} != set(local):
+        raise ValueError('Coordinator result schedule has missing or duplicate entries')
+    result = []
+    for choice in schedule['items']:
+        original = local[_run_key(choice)]
+        if any(choice.get(field) != original.get(field) for field in ('revision', 'execution_position')):
+            raise ValueError('Coordinator selected a different revision/order')
+        if choice['action'] not in ('run', 'reuse'):
+            raise ValueError('Unknown result action')
+        selected = Path(choice['directory']).name
+        canonical = Path(original['directory'])
+        if not re.fullmatch(re.escape(canonical.name)+r'(?:\.attempt-[A-Za-z0-9_-]+)?', selected):
+            raise ValueError('Unsafe result attempt name')
+        directory = canonical.with_name(selected)
+        item = dict(original, **choice)
+        item['directory'] = str(directory)
+        item['command'] = list(original['command'])
+        for option, value in (('--output-dir', str(directory.parent)), ('--run-name', directory.name)):
+            item['command'][item['command'].index(option)+1] = value
+        result.append(item)
+    if [_run_key(item) for item in result] != [_run_key(item) for item in plan['phases']['run']]:
+        raise ValueError('Coordinator changed execution order')
+    return result
 
 
 def comparisons(entries, measured, order='alternating'):
@@ -349,6 +553,8 @@ def parser():
     modes.add_argument('--build-only', action='store_true')
     modes.add_argument('--run-only', action='store_true')
     result.add_argument('--resume', action='store_true', help='Reuse verified wheels; never skip or overwrite old performance runs')
+    result.add_argument('--resume-results', action='store_true',
+                        help='Single-node only: validate/reuse complete results at the same run prefix; retry incomplete items in new attempt directories')
     result.add_argument('--build-workspace', type=Path)
     result.add_argument('--offline-deps', type=Path)
     result.add_argument('--plan', action='store_true')
@@ -359,6 +565,9 @@ def make_plan(args, root=ROOT):
     if not 1 <= args.send_cores <= 55 or args.rounds < 1 or not math.isfinite(args.ready_timeout) or args.ready_timeout <= 0:
         raise ValueError('send-cores must be 1..55, rounds must be positive')
     entries = commits(build.resolve(root, args.commits), root)
+    resume_results = bool(getattr(args, 'resume_results', False))
+    if resume_results and (args.build_only or args.num_nodes != 1 or args.node_rank != 0):
+        raise ValueError('--resume-results requires a single-node run (--num-nodes 1 --node-rank 0); it cannot be combined with --build-only')
     if not args.build_only:
         device_ids(args.devices)
         safe_name(args.run_prefix or '')
@@ -376,7 +585,7 @@ def make_plan(args, root=ROOT):
         if not args.run_only:
             command = [sys.executable, str(root / 'tests/ll_control_opt/build.py'), '--revision', entry['revision'],
                        '--send-cores', str(args.send_cores)]
-            if args.resume:
+            if args.resume or resume_results:
                 command.append('--resume')
             if args.build_workspace:
                 command += ['--build-workspace', str(build.resolve(root, args.build_workspace))]
@@ -401,6 +610,9 @@ def make_plan(args, root=ROOT):
                 sampling=dict(warmup=10, num_iters=100, perf_tail=50), send_cores=args.send_cores,
                 recv_cores=56-args.send_cores, timer='OFF',
                 order=args.order, rounds=args.rounds, comparison_schema=2,
+                resume_results=resume_results,
+                run_identity=None if args.build_only else dict(shape=SHAPE, num_nodes=args.num_nodes, node_rank=args.node_rank,
+                    devices=device_ids(args.devices), local_processes=16, master_addr=args.master_addr, hostname=socket.gethostname()),
                 control_protocol='ll-control-ready-v1',
                 control_port=control_port(args) if not args.build_only and args.num_nodes>1 else None)
 
@@ -409,45 +621,86 @@ def main():
     cli = parser()
     args = cli.parse_args()
     try:
-        plan = make_plan(args)
+        plan = make_plan(args, root=ROOT)
     except (ValueError, OSError, KeyError, subprocess.CalledProcessError) as error:
         cli.exit(2, str(error) + '\n')
     if args.plan:
+        if args.resume_results:
+            schedule = result_schedule(plan, args, root=ROOT)
+            items = apply_result_schedule(plan, schedule)
+            needed = {item['revision'] for item in items if item['action'] == 'run'}
+            plan['result_schedule'] = schedule
+            plan['phases']['build'] = [command for command in plan['phases']['build'] if command[command.index('--revision')+1] in needed]
+            plan['phases']['install'] = [install for entry, install in zip(plan['commits'], plan['phases']['install']) if entry['revision'] in needed]
+            plan['phases']['run'] = items
         print(json.dumps(plan, indent=2))
         return
-    release = build.acquire_lock(ROOT / build.STATE / 'suite.lock')
+    release = build.acquire_lock(ROOT / build.STATE / 'suite.lock', recover_dead=args.resume_results)
     try:
-        # Fail before any launch if any previous output would be reused.
-        for item in plan['phases']['run']:
-            if (args.node_rank == 0 and Path(item['directory']).exists()) or any(Path(item['directory'] + f'.node-{args.node_rank}' + suffix).exists() for suffix in ('.done.json', '.log', '.idle.txt')):
-                raise RuntimeError('Previous performance output exists; choose a fresh --run-prefix. --resume only reuses wheels.')
-        for command in plan['phases']['build']:
-            subprocess.run(command, cwd=ROOT, check=True)
         if args.build_only:
+            for command in plan['phases']['build']:
+                subprocess.run(command, cwd=ROOT, check=True)
             print('All wheels are built. No NPU devices were used.', flush=True)
             return
+        base = build.resolve(ROOT, args.output_dir) / args.run_prefix
+        if args.resume_results:
+            schedule = result_schedule(plan, args, root=ROOT)
+            items = apply_result_schedule(plan, schedule)
+            output = base / 'sessions' / schedule['session_id']
+            output.mkdir(parents=True, exist_ok=False)
+        else:
+            # Fresh runs retain the existing behavior; resume never overwrites them.
+            for item in plan['phases']['run']:
+                if (args.node_rank == 0 and Path(item['directory']).exists()) or any(Path(item['directory'] + f'.node-{args.node_rank}' + suffix).exists() for suffix in ('.done.json', '.log', '.idle.txt')):
+                    raise RuntimeError('Previous performance output exists; use --resume-results for a single-node continuation or a fresh --run-prefix.')
+            if (base / f'suite-plan.node-{args.node_rank}.json').exists() or (args.node_rank == 0 and any((base / name).exists() for name in ('comparison.csv', 'comparison.json'))):
+                raise RuntimeError('Previous suite output exists; use --resume-results or a fresh --run-prefix')
+            session_id = uuid.uuid4().hex
+            items = [dict(item, action='run', source_directory=item['directory'], source_session_id=session_id,
+                          rejected_attempts=[]) for item in plan['phases']['run']]
+            schedule = dict(session_id=session_id, resume_results=False, items=items, compatibility=[],
+                            legacy_devices_unavailable=False, ignored_session_plans=[])
+            output = base
+            output.mkdir(parents=True, exist_ok=True)
+        saved_plan = dict(plan, session_id=schedule['session_id'], result_schedule=schedule)
+        write_new_json(output / f'suite-plan.node-{args.node_rank}.json', saved_plan)
+        needed = {item['label'] for item in items if item['action'] == 'run'}
+        needed_revisions = {entry['revision'] for entry in plan['commits'] if entry['label'] in needed}
+        # Complete prior results require neither an installed wheel nor a working SDK.
+        for command in plan['phases']['build']:
+            if command[command.index('--revision')+1] in needed_revisions:
+                subprocess.run(command, cwd=ROOT, check=True)
         manifests = {}
         for entry, install in zip(plan['commits'], plan['phases']['install']):
+            if entry['label'] not in needed:
+                continue
             path = Path(install['manifest'])
-            info = build.verify_manifest(path, entry['revision'], args.send_cores)
+            info = build.verify_manifest(path, entry['revision'], args.send_cores, root=ROOT)
             manifests[entry['label']] = info
             venv = Path(install['environment'])
             if not venv.exists():
                 subprocess.run([sys.executable, '-m', 'venv', '--system-site-packages', str(venv)], check=True)
             if not (venv / 'pyvenv.cfg').is_file() or not Path(install['python']).is_file():
                 raise RuntimeError(f'Incomplete local virtual environment: {venv}; preserve it and choose a fresh checkout')
-            env = run_environment(args, entry, info)
+            env = run_environment(args, entry, info, root=ROOT)
             wheel = build.resolve(path.parent, info['wheel'])
             subprocess.run([install['python'], '-I', '-m', 'pip', 'install', '--no-index', '--no-deps', '--force-reinstall', str(wheel)], cwd=venv, env=env, check=True)
             subprocess.run([install['python'], '-I', '-c', preflight_code(info, args.send_cores)], cwd=venv, env=env, check=True)
-        base = build.resolve(ROOT, args.output_dir) / args.run_prefix
-        base.mkdir(parents=True, exist_ok=True)
-        build.write_json(base / f'suite-plan.node-{args.node_rank}.json', plan)
         measured = {}
-        for item in plan['phases']['run']:
+        executed = 0
+        for item in items:
+            if item['action'] == 'reuse':
+                measured.setdefault(item['round'], {})[item['label']] = item['values']
+                item['invocation_execution_position'] = None
+                print(f'Reusing complete {item["label"]}, round{item["round"]}: {item["source_directory"]}', flush=True)
+                continue
+            executed += 1
+            item['invocation_execution_position'] = executed
             directory = Path(item['directory'])
             directory.parent.mkdir(parents=True, exist_ok=True)
-            env = run_environment(args, item, manifests[item['label']])
+            if (args.node_rank == 0 and directory.exists()) or any(Path(str(directory)+f'.node-{args.node_rank}'+suffix).exists() for suffix in ('.done.json', '.log', '.idle.txt')):
+                raise RuntimeError(f'Result attempt already exists and will not be overwritten: {directory}')
+            env = run_environment(args, item, manifests[item['label']], root=ROOT)
             identity = dict(protocol=plan['control_protocol'], commits=plan['commits'], run_prefix=args.run_prefix,
                             label=item['label'], revision=item['revision'], round=item['round'], rounds=args.rounds,
                             order=plan['order'], execution_position=item['execution_position'],
@@ -462,7 +715,8 @@ def main():
             ready_barrier(args, dict(identity, phase='idle'), error=idle_error)
             print(f'Run {item["label"]}, round{item["round"]}, node{args.node_rank}; stdout remains visible.', flush=True)
             run_logged(item['command'], str(directory)+f'.node-{args.node_rank}.log', env)
-            build.write_json(Path(str(directory) + f'.node-{args.node_rank}.done.json'), dict(revision=item['revision'], exit_code=0))
+            write_new_json(Path(str(directory) + f'.node-{args.node_rank}.done.json'),
+                           dict(revision=item['revision'], exit_code=0, session_id=schedule['session_id']))
             if args.node_rank == 0:
                 values = validate_summary(directory, item['revision'], args.send_cores, args.num_nodes)
                 measured.setdefault(item['round'], {})[item['label']] = values
@@ -470,13 +724,26 @@ def main():
             print('All ST commands completed. Aggregated summary is written by node0.', flush=True)
             return
         rows = comparisons(plan['commits'], measured, plan['order'])
-        with (base / 'comparison.csv').open('x', newline='', encoding='utf-8') as stream:
-            writer = csv.DictWriter(stream, fieldnames=list(rows[0]))
-            writer.writeheader()
-            writer.writerows(rows)
-        build.write_json(base / 'comparison.json', dict(comparison_schema=2, metric=plan['metric'], order=plan['order'], rows=rows,
-                         note='Negative delta is faster. References come from the manifest, never execution order. parent_delta is populated only for legacy cumulative manifests; previous_manifest_delta is descriptive, not a causal attribution. FP8 configuration uses BF16 combine. Alternating order reduces position imbalance but does not eliminate temporal drift.'))
-        print(base / 'comparison.csv', flush=True)
+        sources = {_run_key(item): item for item in items}
+        for row in rows:
+            source = sources[(row['label'], row['round'])]
+            reference = sources[(row['reference_label'], row['round'])]
+            row.update(result_status='reused' if source['action']=='reuse' else 'new',
+                       source_directory=source['source_directory'], source_session_id=source['source_session_id'],
+                       invocation_session_id=schedule['session_id'], invocation_execution_position=source['invocation_execution_position'],
+                       reference_crosses_sessions=None if 'unknown' in (source['source_session_id'], reference['source_session_id']) else
+                           source['source_session_id'] != reference['source_session_id'])
+        stream = io.StringIO(newline='')
+        writer = csv.DictWriter(stream, fieldnames=list(rows[0]))
+        writer.writeheader()
+        writer.writerows(rows)
+        _write_new_file(output / 'comparison.csv', stream.getvalue())
+        write_new_json(output / 'comparison.json', dict(comparison_schema=2, metric=plan['metric'], order=plan['order'], rows=rows,
+                       session_id=schedule['session_id'], resume_results=args.resume_results,
+                       legacy_devices_unavailable=schedule['legacy_devices_unavailable'],
+                       ignored_session_plans=schedule['ignored_session_plans'],
+                       note='Negative delta is faster. References come from the manifest, never execution order. parent_delta is populated only for legacy cumulative manifests; previous_manifest_delta is descriptive, not a causal attribution. Resumed measurements can span separate sampling sessions; inspect source_session_id/reference_crosses_sessions before interpreting small deltas. Legacy device mappings were not recorded and cannot be retroactively verified. FP8 configuration uses BF16 combine. Alternating order does not eliminate temporal drift.'))
+        print(output / 'comparison.csv', flush=True)
     finally:
         release()
 

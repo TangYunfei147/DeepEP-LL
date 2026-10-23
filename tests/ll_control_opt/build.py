@@ -7,6 +7,8 @@ import os
 from pathlib import Path
 import re
 import shutil
+import socket
+import stat
 import subprocess
 import sys
 import time
@@ -80,13 +82,173 @@ def links(source):
     return result
 
 
-def acquire_lock(path):
-    """A stale lock is explicit evidence to inspect, never silently removed."""
+def _process_identity(pid):
+    """Return alive/dead/unknown plus a best-effort process birth identity.
+
+    Never use os.kill(pid, 0) on Windows: unlike POSIX, that API can terminate
+    the target. A reused, currently live PID is conservatively kept locked.
+    """
+    if os.name == 'nt':
+        import ctypes
+        from ctypes import wintypes
+        kernel = ctypes.WinDLL('kernel32', use_last_error=True)
+        kernel.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+        kernel.OpenProcess.restype = wintypes.HANDLE
+        kernel.GetExitCodeProcess.argtypes = (wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD))
+        kernel.GetProcessTimes.argtypes = (wintypes.HANDLE, *([ctypes.POINTER(wintypes.FILETIME)] * 4))
+        kernel.CloseHandle.argtypes = (wintypes.HANDLE,)
+        handle = kernel.OpenProcess(0x1000, False, pid)  # QUERY_LIMITED_INFORMATION only.
+        if not handle:
+            return ('dead', None) if ctypes.get_last_error() == 87 else ('unknown', None)
+        try:
+            code = wintypes.DWORD()
+            if not kernel.GetExitCodeProcess(handle, ctypes.byref(code)):
+                return 'unknown', None
+            if code.value != 259:  # STILL_ACTIVE
+                return 'dead', None
+            times = [wintypes.FILETIME() for _ in range(4)]
+            if kernel.GetProcessTimes(handle, *(ctypes.byref(value) for value in times)):
+                return 'alive', f'windows:{times[0].dwHighDateTime:08x}{times[0].dwLowDateTime:08x}'
+            return 'alive', None
+        finally:
+            kernel.CloseHandle(handle)
+    try:
+        os.kill(pid, 0)  # POSIX existence query; no signal is delivered.
+    except ProcessLookupError:
+        return 'dead', None
+    except (OSError, OverflowError):
+        return 'unknown', None
+    try:
+        # comm may contain spaces and parentheses; starttime is field 22.
+        process = Path(f'/proc/{pid}/stat').read_text().rsplit(')', 1)[1].split()
+        started = process[19]
+        boot = Path('/proc/sys/kernel/random/boot_id').read_text().strip()
+        return 'alive', f'linux:{boot}:{started}'
+    except (OSError, ValueError, IndexError):
+        return 'alive', None
+
+
+def _lock_snapshot(path):
+    if path.is_symlink():
+        raise RuntimeError(f'Refuse a symlink lock: {path}')
+    entry = path.lstat()
+    if not stat.S_ISREG(entry.st_mode) or entry.st_size > 4096:
+        raise RuntimeError(f'Invalid lock file: {path}')
+    with path.open('rb') as stream:
+        before = os.fstat(stream.fileno())
+        if not stat.S_ISREG(before.st_mode) or before.st_size > 4096:
+            raise RuntimeError(f'Invalid lock file: {path}')
+        contents = stream.read(4097)
+        after = os.fstat(stream.fileno())
+    identity = lambda value: (value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns)
+    if identity(before) != identity(after):
+        raise RuntimeError(f'Lock changed during inspection: {path}')
+    return identity(after), contents
+
+
+def _same_lock(path, snapshot):
+    try:
+        return _lock_snapshot(path) == snapshot
+    except (OSError, RuntimeError):
+        return False
+
+
+def _dead_lock_owner(contents, path):
+    try:
+        text = contents.decode('utf-8').strip()
+        legacy = re.fullmatch(r'pid=([1-9][0-9]*)', text)
+        if legacy:
+            pid = int(legacy.group(1))
+        else:
+            owner = json.loads(text)
+            if (not isinstance(owner, dict) or set(owner) != {'schema', 'pid', 'host', 'start', 'token'} or
+                    type(owner['schema']) is not int or owner['schema'] != 1 or
+                    not isinstance(owner['host'], str) or not owner['host'] or
+                    not isinstance(owner['token'], str) or not re.fullmatch('[0-9a-f]{32}', owner['token']) or
+                    (owner['start'] is not None and not isinstance(owner['start'], str))):
+                raise ValueError('invalid owner identity')
+            if owner['host'] != socket.gethostname():
+                raise RuntimeError(f'Lock belongs to another host; preserved: {path}')
+            pid = owner['pid']
+        if isinstance(pid, bool) or not isinstance(pid, int) or not 1 <= pid <= 0x7fffffff:
+            raise ValueError('invalid PID')
+    except (UnicodeError, ValueError, TypeError, KeyError) as error:
+        raise RuntimeError(f'Cannot recover malformed lock; preserved: {path}') from error
+    state, _ = _process_identity(pid)
+    if state != 'dead':
+        reason = f'PID {pid} is alive' if state == 'alive' else f'cannot confirm PID {pid} is dead'
+        raise RuntimeError(f'Cannot recover lock: {reason}; preserved: {path}')
+    return pid
+
+
+def _acquire_os_guard(path):
+    """Keep the guard inode forever: unlinking it would permit dual owners."""
+    if path.is_symlink():
+        raise RuntimeError(f'Refuse a symlink lock guard: {path}')
+    descriptor = os.open(path, os.O_RDWR | os.O_CREAT | getattr(os, 'O_NOFOLLOW', 0), 0o600)
+    stream = os.fdopen(descriptor, 'r+b', buffering=0)
+    try:
+        if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
+            raise OSError('Lock guard must be a regular file')
+        if os.name == 'nt':
+            import msvcrt
+            if os.fstat(stream.fileno()).st_size == 0:
+                stream.write(b'\0')
+            stream.seek(0)
+            msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError as error:
+        stream.close()
+        raise FileExistsError(f'Lock guard is held or inaccessible; no recovery attempted: {path}') from error
+    return stream
+
+
+def acquire_lock(path, *, recover_dead=False):
+    """Recover a proven dead owner only on explicit suite result resumption.
+
+    The default build behavior still refuses any existing marker. The OS guard
+    serializes recovery and stays held for the entire ownership lifetime; a
+    crashed process releases it automatically. Legacy pid-only markers are
+    recoverable only when that local PID is definitively absent.
+    """
+    path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open('x', encoding='utf-8') as stream:
-        stream.write(f'pid={os.getpid()}\n')
+    guard = _acquire_os_guard(path.with_name(path.name + '.guard'))
+    try:
+        if path.exists() or path.is_symlink():
+            if not recover_dead:
+                raise FileExistsError(f'Lock already exists; preserved: {path}')
+            old = _lock_snapshot(path)
+            pid = _dead_lock_owner(old[1], path)
+            if not _same_lock(path, old):
+                raise RuntimeError(f'Lock changed before recovery; preserved: {path}')
+            path.unlink()
+            print(f'Recovering lock of confirmed exited PID {pid}: {path}', flush=True)
+        owner = dict(schema=1, pid=os.getpid(), host=socket.gethostname(),
+                     start=_process_identity(os.getpid())[1], token=uuid.uuid4().hex)
+        with path.open('x', encoding='utf-8') as stream:
+            stream.write(json.dumps(owner, sort_keys=True) + '\n')
+            stream.flush()
+            os.fsync(stream.fileno())
+        snapshot = _lock_snapshot(path)
+    except BaseException:
+        guard.close()
+        raise
+    released = False
     def release():
-        path.unlink(missing_ok=True)
+        nonlocal released
+        if released:
+            return
+        released = True
+        try:
+            # A delayed atexit callback must not remove a replacement owner.
+            if _same_lock(path, snapshot):
+                path.unlink()
+        finally:
+            guard.close()
+            atexit.unregister(release)
     atexit.register(release)
     return release
 

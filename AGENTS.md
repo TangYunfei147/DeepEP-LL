@@ -99,3 +99,19 @@ The user explicitly deferred27connection and requested local checks only.
 CPU checks do not constitute new CANN/NPU validation. Do not reuse historical
 d00e87f build results as evidence for these commits. S+R56/G4/O2/protocol19000+S
 and the original ST10/100/last50 protocol remain unchanged.
+
+## Single-machine result continuation (2026-10-23)
+
+User requested reuse after an interrupted suite and explicitly excluded new
+multi-machine resume work. `--resume-results` is limited to NNODES1/node-rank0.
+Keep the original output-dir/run-prefix and validate saved experiment identity.
+Reuse each complete candidate/round only after checking both summaries, actual
+all-rank raw100 samples and the tail50 mean; a done marker alone is insufficient.
+Missing done markers do not invalidate complete summaries. Preserve partial
+directories and rerun the whole item in a new attempt, never append samples.
+
+New session plans/comparisons are separate from old files and record reused/new
+provenance. No wheel/device preparation is needed if every item is reusable.
+Explicit continuation may recover only a confirmed dead local suite-lock owner;
+never kill processes or delete an active/unknown lock or its persistent OS guard.
+Kernel/SDK sources and the ST sampling protocol remain unchanged.
