@@ -203,6 +203,110 @@ def test_sparse_raw_trace_rejects_mixed_shape_identity():
     with pytest.raises(ValueError,match='Mixed sparse capture identities'):timer.chrome_trace(samples)
 
 
+def st_profile_metadata(rank=0, iteration=0, iterations=3):
+    """Use the real ST configuration/comparison contract plus its sample fields."""
+    st=load('sparse_profile_st','tests/elastic/test_ep_low_latency.py')
+    args=st.parse_args(['--num-processes','16','--num-tokens','1',
+                       '--num-max-tokens-per-rank','32','--hidden','3584',
+                       '--num-topk','8','--num-experts','384','--dtype','fp8',
+                       '--ll-stage-timer','--ll-profile-capture','--ll-timer-iters',str(iterations)])
+    args.runtime_identity=dict(implementation='g4-small-b-parallel-prefix',transport='mte',
+        active_aiv=56,send_cores=30,recv_cores=26,logical_group=4,core_protocol=19030,
+        source_sha256='a'*64,stage_timer=True,stage_timer_schema=15,timer_profile='sparse',
+        timer_profile_id=6,stage_timer_slots=8,stage_timer_fields=8,
+        stage_timer_points=list(timer.POINTS),stage_timer_recording='sparse-milestones',
+        profile_capture_requested=True,rdma_compiled=False)
+    return dict(rank=rank,world_size=16,iteration=iteration,correctness='passed',
+        comparison=st.comparison_metadata(args,16,32),run_id='sparse_profile',seed=args.seed,case_id=0,
+        config={**st.case_config(args,32),'logical_group_size':4},
+        sampling=dict(after_perf=True,warmup=args.warmup,settle_iters=args.num_iters,
+                      diagnostic_iters=iterations,delay_rows=args.delay_rows,delay_cols=args.delay_cols,
+                      group_backend=args.group_backend,expert_timer=False),
+        active_capture_profile=dict(status='available',all_ranks_status='available',
+            measurement='instrumented_full_device_kernel_task_us',
+            kernel_us=38.5+rank*.01+iteration*.1,reason=None))
+
+
+def test_st_multi_rank_multi_iteration_profiler_observations_are_not_trace_identity():
+    base=st_profile_metadata()
+    data=raw()
+    samples=[]
+    for rank in range(16):
+        for iteration in range(3):
+            meta=copy.deepcopy(base)
+            meta.update(rank=rank,iteration=iteration)
+            meta['active_capture_profile']['kernel_us']=38.5+rank*.01+iteration*.1
+            samples.append(dict(raw=data,operation='dispatch',frequency_hz=1e9,metadata=meta))
+    before=copy.deepcopy(samples)
+    trace=timer.chrome_trace(samples)
+    assert len(trace['metadata']['cores'])==48
+    assert {(r['rank'],r['iteration']) for r in trace['metadata']['cores']}=={
+        (rank,iteration) for rank in range(16) for iteration in range(3)}
+    assert samples==before  # Retain every measured result in the source metadata.
+
+
+def test_missing_active_profiler_result_does_not_discard_valid_sparse_milestones():
+    a=st_profile_metadata();b=copy.deepcopy(a);b['rank']=1
+    b['active_capture_profile'].update(status='unavailable',all_ranks_status='unavailable',
+        kernel_us=None,reason='No exported kernel_details.csv for this rank')
+    samples=[dict(raw=raw(),operation='dispatch',frequency_hz=1e9,metadata=m) for m in (a,b)]
+    assert len(timer.chrome_trace(samples)['metadata']['cores'])==2
+    assert b['active_capture_profile']['status']=='unavailable'
+
+
+@pytest.mark.parametrize('field,value',[
+    ('config.B',2),('comparison.source_sha256','b'*64),('comparison.source_revision','different'),
+    ('comparison.send_cores',29),('comparison.core_protocol',19029),
+    ('comparison.timer_profile','full'),('comparison.timer_profile_id',0),
+    ('comparison.stage_timer_schema',14),('comparison.profile_capture',False),
+    ('sampling.diagnostic_iters',4),('active_capture_profile.measurement','different_measurement'),
+])
+def test_st_trace_keeps_real_config_build_profile_guards_and_names_mismatch(field,value):
+    a=st_profile_metadata();b=copy.deepcopy(a);b['rank']=1
+    parent,key=field.split('.')
+    b[parent][key]=value
+    samples=[dict(raw=raw(),operation='dispatch',frequency_hz=1e9,metadata=m) for m in (a,b)]
+    with pytest.raises(ValueError) as failure:
+        timer.chrome_trace(samples)
+    assert str(failure.value)==f'Mixed sparse capture identities: {field} (rank=1, iteration=0)'
+    assert 'kernel_us' not in str(failure.value)
+
+
+def test_st_trace_rejects_raw_split_and_frequency_mismatch():
+    a=st_profile_metadata();b=copy.deepcopy(a);b['rank']=1
+    samples=[dict(raw=raw(),operation='dispatch',frequency_hz=1e9,metadata=a),
+             dict(raw=raw(send=29),operation='dispatch',frequency_hz=1e9,metadata=b)]
+    with pytest.raises(ValueError,match='Mixed sparse capture identities: send_cores'):
+        timer.chrome_trace(samples)
+    samples[1]['raw']=raw();samples[1]['frequency_hz']=5e8
+    with pytest.raises(ValueError,match='Mixed sparse capture identities: frequency_hz'):
+        timer.chrome_trace(samples)
+    samples[1]['frequency_hz']=1_000_000_000  # Same frequency may be serialized as an integer.
+    assert len(timer.chrome_trace(samples)['metadata']['cores'])==2
+
+
+def test_st_multi_rank_profiled_directory_analysis_retains_per_sample_results(tmp_path):
+    analyzer=load('sparse_profile_directory','tests/ll_stage_timer/analyze.py')
+    source=tmp_path/'source';source.mkdir()
+    base=st_profile_metadata(iterations=2)
+    for rank in range(16):
+        for iteration in range(2):
+            meta=copy.deepcopy(base);meta.update(rank=rank,iteration=iteration)
+            meta['active_capture_profile']['kernel_us']=40+rank*.1+iteration*.01
+            path=source/f'rank_{rank:03d}'/f'sample_{iteration:04d}.json'
+            path.parent.mkdir(exist_ok=True)
+            path.write_text(json.dumps(dict(raw=raw(),operation='dispatch',frequency_hz=1e9,metadata=meta)))
+    output=tmp_path/'analysis'
+    analyzer.process_directory(source,output,1e9,0)
+    trace=json.loads((output/'trace.json').read_text())
+    assert len(trace['metadata']['cores'])==16
+    transfer=load('sparse_profile_restore','tests/ll_stage_timer/transfer_report.py')
+    _,samples=transfer.restore_samples(output/'transfer')
+    assert len(samples)==32
+    assert {m['active_capture_profile']['kernel_us'] for m,_ in samples}=={
+        40+rank*.1+iteration*.01 for rank in range(16) for iteration in range(2)}
+
+
 def test_off_comparison_allows_unused_layout_change_but_diagnostics_reject_it():
     parity=load('sparse_compare_parity','tests/ll_stage_timer/test_parity.py')
     baseline=parity.identity()

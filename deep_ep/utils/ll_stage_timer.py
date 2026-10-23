@@ -139,6 +139,35 @@ def parse_records(raw, operation, frequency_hz=None):
                 interpretation='First two calls sampled per stage; all calls accumulated. Nested stages cannot be summed. GM export follows KERNEL and all-core synchronization.')
 
 
+def _sparse_capture_identity(report, metadata):
+    """Keep run invariants separate from each rank/iteration's observations."""
+    identity = {key: metadata.get(key) for key in
+                ('world_size', 'config', 'run_id', 'seed', 'case_id', 'sampling', 'comparison')}
+    profile = metadata.get('active_capture_profile')
+    if profile is not None and not isinstance(profile, dict):
+        raise ValueError('Invalid active_capture_profile metadata')
+    # ST records kernel_us, status and reason separately for every sample. They
+    # describe profiler results, not a different build/configuration or timer.
+    identity['active_capture_profile'] = (
+        {'measurement': profile.get('measurement')} if profile is not None else None)
+    identity.update(send_cores=report['send_cores'], frequency_hz=float(report['frequency_hz']))
+    return identity
+
+
+def _identity_differences(left, right, prefix=''):
+    """Report field paths, never potentially large metadata values."""
+    if isinstance(left, dict) and isinstance(right, dict):
+        fields = []
+        for key in sorted(left.keys() | right.keys()):
+            path = f'{prefix}.{key}' if prefix else key
+            if key not in left or key not in right:
+                fields.append(path)
+            else:
+                fields.extend(_identity_differences(left[key], right[key], path))
+        return fields
+    return [] if json.dumps(left, sort_keys=True) == json.dumps(right, sort_keys=True) else [prefix]
+
+
 def chrome_trace(saved_records, frequency_hz=None, lane_layout='core', show_repeated=False):
     saved_records=list(saved_records)
     if not saved_records: raise ValueError('No LL stage records')
@@ -156,10 +185,12 @@ def chrome_trace(saved_records, frequency_hz=None, lane_layout='core', show_repe
         if frequency is None: raise ValueError('Chrome trace requires explicit frequency_hz')
         report=parse_records(saved['raw'],saved['operation'],frequency);meta=saved.get('metadata',{})
         if report['schema']==15:
-            identity_fields={key:meta.get(key) for key in ('world_size','config','run_id','seed','case_id','sampling','comparison','active_capture_profile')}
-            common=(report['send_cores'],report['frequency_hz'],json.dumps(identity_fields,sort_keys=True))
-            if sparse_identity is not None and common!=sparse_identity:
-                raise ValueError('Mixed sparse capture identities')
+            common = _sparse_capture_identity(report, meta)
+            differences = _identity_differences(sparse_identity, common) if sparse_identity is not None else []
+            if differences:
+                fields = ', '.join(differences[:8]) + (', ...' if len(differences) > 8 else '')
+                raise ValueError(f'Mixed sparse capture identities: {fields} '
+                                 f'(rank={meta.get("rank", "unknown")}, iteration={meta.get("iteration", "unknown")})')
             sparse_identity=common
         rank,iteration=meta.get('rank','unknown'),meta.get('iteration',pid-1)
         identity=(meta.get('run_id'),meta.get('case_id'),report['operation'],rank,iteration)

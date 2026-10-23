@@ -9,7 +9,16 @@ import math
 
 _PROFILES = ('full', 'overview', 'prepare', 'prefix', 'send', 'recv', 'sparse')
 _CONTEXT_FIELDS = ('world_size', 'config', 'run_id', 'seed', 'case_id', 'sampling',
-                   'comparison', 'active_capture_profile')
+                   'comparison')
+
+
+def _capture_measurement(meta):
+    # Per-rank/per-iteration profiler observations are not capture identities.
+    # Only the measurement definition must agree across selected samples.
+    capture = meta.get('active_capture_profile')
+    if capture is not None and not isinstance(capture, dict):
+        raise ValueError('Invalid active_capture_profile metadata')
+    return capture.get('measurement') if capture else None
 
 
 def _frequency(value):
@@ -96,7 +105,7 @@ def trace_from_decoded(samples, trace_iteration=0, frequency_hz=None):
         profile = _profile(decoded)
         frequency = _frequency(frequency_hz if frequency_hz is not None
                                else decoded.get('frequency_hz'))
-        common = (tuple(meta.get(key) for key in _CONTEXT_FIELDS),
+        common = (tuple(meta.get(key) for key in _CONTEXT_FIELDS), _capture_measurement(meta),
                   decoded['schema'], decoded.get('boundary_mode'), profile,
                   active, decoded.get('send_cores'), decoded.get('recv_cores'),
                   decoded.get('dispatch_recv_cores'), frequency)

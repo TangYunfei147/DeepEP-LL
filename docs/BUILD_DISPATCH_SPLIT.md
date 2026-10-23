@@ -535,3 +535,19 @@ Local evidence: `.tmp/sparse-all-final.log`, `.tmp/sparse-zig-final.log`,
 the original98c5f50 recorder and the new sparse one with identical scalar
 checksums, retaining their different recording semantics; it is not an LL
 communication benchmark.
+
+## 2026-10-23 sparse trace identity correction (offline only)
+
+The real ST writer records active_capture_profile.kernel_us per rank and
+iteration. The sparse trace generator incorrectly required that entire object
+to match, rejecting normal differences after raw decoding/aggregation passed.
+It now compares only the profiler measurement definition, while shape, source,
+build, split, schema, profile and clock checks remain. Rank-local durations,
+availability and failure reasons are preserved as observations. The restored
+decoded-trace generator received the same correction. Errors report differing
+field paths rather than dumping metadata values.
+
+Regression includes the actual ST metadata structure for16ranks/multiple
+iterations, whole-directory analysis and exact export/restore. This Python-only
+fix requires neither kernel rebuild nor new sampling; rerun offline analysis
+on the existing raw files. No device performance or compilation claim is added.

@@ -137,6 +137,27 @@ def test_configuration_and_duplicate_identity_rejected():
         trace.trace_from_decoded([left,copy.deepcopy(left)])
 
 
+@pytest.mark.parametrize('schema', [13, 14, 15])
+def test_rank_local_capture_observations_are_not_transfer_identities(schema):
+    if schema == 15:
+        sparse_fixture = load('transfer_sparse_observations', 'tests/ll_stage_timer/test_sparse_timer.py')
+        samples = [(dict(sparse_fixture.metadata(rank=rank), world_size=2),
+                    timer.parse_records(sparse_fixture.raw(), 'dispatch', 1e9)) for rank in range(2)]
+    else:
+        samples = [sample(schema=schema, rank=rank)[1] for rank in range(2)]
+    for rank, (meta, _) in enumerate(samples):
+        meta['active_capture_profile'] = dict(measurement='active-capture full profiler kernel task',
+            status='available' if rank == 0 else 'unavailable', all_ranks_status='unavailable',
+            kernel_us=40.125 if rank == 0 else None, reason=None if rank == 0 else 'missing task')
+    before = copy.deepcopy(samples)
+    result = trace.trace_from_decoded(samples)
+    assert {event['args']['rank'] for event in intervals(result)} == {0, 1}
+    assert samples == before
+    samples[1][0]['active_capture_profile']['measurement'] = 'event time'
+    with pytest.raises(ValueError, match='Mixed configurations'):
+        trace.trace_from_decoded(samples)
+
+
 @pytest.mark.parametrize('frequency', [None,0,-1,float('nan'),float('inf'),True])
 def test_explicit_frequency_is_required(frequency):
     data = sample()[1]

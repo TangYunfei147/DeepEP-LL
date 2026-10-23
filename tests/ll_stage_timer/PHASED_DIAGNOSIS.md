@@ -51,6 +51,9 @@ python tests/ll_stage_timer/diagnose.py --analyze-existing diagnostic-runs/small
 
 这一步纯离线，不重建或启动设备。旧schema7～14数据也可离线解析，但旧数据不会变成新稀疏测量，不能用旧ON时序代替新采集。
 
+若ca7bd2f版本在生成trace时报`Mixed sparse capture identities`，原因可能是旧解析器把每rank/轮次不同的`active_capture_profile.kernel_us`误当成共同身份。
+更新修复后对原suite执行上面的`--analyze-existing`即可复用原始采样，无需重编wheel或重跑设备。修复仅比较测量口径，保留shape、构建、S/R、schema及profile检查；真正不一致时错误会列出字段名。
+
 ## 每核只保留少数首次时间戳
 
 每核独占一个512B、512B对齐的诊断槽；实际只发布前192B，56核每次分配28KiB、发布10.5KiB。
