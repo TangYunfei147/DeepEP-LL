@@ -111,7 +111,6 @@ public:
         // LoadAlign may read past the masked tail, including inactive rows.
         Duplicate(flagsBuf_.Get<float>(), 0.0f, flagsBytes / 4U);
         ServerDedupReceiveSync<HardEvent::V_MTE2>();
-        pipe_->InitBuffer(probeIdxBuf_, kProbeBatch * 4U);
         const uint32_t tablesBytes = 2U * uint32_t(DispatchDedupAlign(uint64_t(tasks_.Count()) * 4U, 32U));
         const uint32_t fixed = prefixBytes + tablesBytes + flagsBytes + workBytes + kProbeBatch * 36U;
         // 剩余 UB 作为最多 8 路预取 lane；每路包括完整 packet 和 64B 输出元数据。
@@ -119,13 +118,26 @@ public:
         laneStride_ = uint32_t(data_.tokenStride) + 64U;
         const uint32_t available = (kEpServerDedupCountUbBytes - fixed) / laneStride_;
         lanes_ = overlap_.enabled ? overlap_.recvLanes : (available < 8U ? available : 8U);  // Safe inputs guarantee at least one lane.
+        probePrefetch_ = overlap_.enabled ? overlap_.recvProbePrefetch :
+            LlReceiveProbePrefetchFits(uint64_t(fixed) + uint64_t(lanes_) * laneStride_,
+                                      kEpServerDedupCountUbBytes);
+        pipe_->InitBuffer(probeIdxBuf_, kProbeBatch * 4U + (probePrefetch_ ? kLlReceiveProbeExtraBytes : 0U));
         pipe_->InitBuffer(lanesBuf_, lanes_ * laneStride_);
         if (!overlap_.enabled) for (uint32_t lane = 0; lane < lanes_; ++lane) SetFlag<HardEvent::MTE3_MTE2>(lane);
 
     }
 
-    // At most one 16-slot snapshot; no ready packet means return to local TX.
+    // At most two adjacent 16-slot snapshots; every queued probe is joined
+    // before returning, including when neither snapshot has a ready packet.
     __aicore__ inline bool TryBatch() {
+        if (!probePrefetch_) return TrySerialBatch();
+        LL_SEG_SCOPE(LOCAL_WINDOW_COPY);
+        LL_SEG_SCOPE(FORMAT_OUTPUT);
+        ProbePipelineOps ops{this};
+        return LlRunReceiveProbePair(ops,tasks_.PendingCount(),scan_);
+    }
+    // Exact baseline path when the optional second ID snapshot does not fit.
+    __aicore__ inline bool TrySerialBatch() {
         if (!tasks_.PendingCount()) return false;
         LL_SEG_SCOPE(LOCAL_WINDOW_COPY);
         LL_SEG_SCOPE(FORMAT_OUTPUT);
@@ -194,12 +206,124 @@ public:
     }
 
 private:
-    static constexpr uint32_t kProbeBatch = 16U;
+    static constexpr uint32_t kProbeBatch = kLlReceiveProbeBatch;
     static_assert(kProbeBatch<=16U,"priority order uses four-bit snapshot positions");
     struct ProbeResult {
         uint32_t readyMask = 0U;
         uint32_t keepFlagsMask = 0U;
     };
+    struct ReadyBatch {
+        LlReceivePriority order;
+        uint32_t snapshotOffset=0U, keepFlagsMask=0U, nextLoad=0U;
+    };
+    struct ProbePipelineOps {
+        ServerDedupReceiver* receiver;
+        __aicore__ inline void StartProbe(uint32_t start,uint32_t count,uint32_t offset) {
+            receiver->StartProbe(start,count,offset);
+        }
+        __aicore__ inline LlReceiveProbeResult FinishProbe(uint32_t count) {
+            return receiver->FinishProbe(count);
+        }
+        __aicore__ inline ReadyBatch PrimeReady(uint32_t offset,uint32_t count,LlReceiveProbeResult probe) {
+            return receiver->PrimeReady(offset,count,probe);
+        }
+        __aicore__ inline void ConsumeReady(ReadyBatch& batch) { receiver->ConsumeReady(batch); }
+        __aicore__ inline void RemoveProbe(uint32_t start,uint32_t count,uint32_t ready) {
+            receiver->RemoveProbe(start,count,ready);
+        }
+    };
+
+    __aicore__ inline void FillReadyLanes(ReadyBatch& batch) {
+        auto snapshot=probeIdxBuf_.Get<uint32_t>();
+        while (issued_-consumed_<lanes_ && batch.nextLoad<batch.order.count) {
+            const uint32_t index=batch.order.At(batch.nextLoad++);
+            IssueLoad(snapshot.GetValue(batch.snapshotOffset+index),issued_%lanes_,
+                      (batch.keepFlagsMask&(uint32_t(1)<<index))!=0U,
+                      !overlap_.enabled || issued_>=lanes_);
+            ++issued_;
+        }
+    }
+    __aicore__ inline ReadyBatch PrimeReady(uint32_t offset,uint32_t count,LlReceiveProbeResult probe) {
+        ReadyBatch batch;
+        batch.order=LlMakeReceivePriority(count,probe.readyMask,enableDedup_ ? probe.keepFlagsMask:0U);
+        batch.snapshotOffset=offset;
+        batch.keepFlagsMask=probe.keepFlagsMask;
+        FillReadyLanes(batch);
+        return batch;
+    }
+    __aicore__ inline void ConsumeReady(ReadyBatch& batch) {
+        auto snapshot=probeIdxBuf_.Get<uint32_t>();
+        for (uint32_t current=0U;current<batch.order.count;++current) {
+            FillReadyLanes(batch);
+            const uint32_t index=batch.order.At(current);
+            ConsumeLoaded(snapshot.GetValue(batch.snapshotOffset+index),consumed_%lanes_,
+                          (batch.keepFlagsMask&(uint32_t(1)<<index))!=0U);
+            ++consumed_;
+        }
+    }
+    __aicore__ inline void RemoveProbe(uint32_t start,uint32_t count,uint32_t ready) {
+        if (!ready) return;
+        LL_SEG_SCOPE(RX_PENDING_UPDATE);
+        if (tasks_.DropReadySuffix(start,count,ready)) return;
+        for (uint32_t n=count;n>0U;--n)
+            if (ready&(uint32_t(1)<<(n-1U))) tasks_.RemovePending(start+n-1U);
+    }
+
+    // Only this path owns event 6 for MTE2_V and V_S. Immediate receive
+    // dependencies keep event 7; payload events are different HardEvent domains.
+    // A is decoded before reusing flags/sums/work for B. No in-flight probe
+    // survives TryBatch, so cooperative sender/count callbacks cannot collide.
+    __aicore__ inline void StartProbe(uint32_t start,uint32_t count,uint32_t offset) {
+        LL_SEG_FIRST(BEFORE_FIRST_RECV_POLL);
+        LL_SEG_SCOPE(RECV_POLL);
+        LL_SEG_COUNT(RX_PROBED,count);
+        auto indices=probeIdxBuf_.Get<uint32_t>();
+        auto flags=flagsBuf_.Get<float>();
+        auto sums=sumBuf_.Get<float>();
+        const uint32_t blocks=uint32_t(data_.blockCount);
+        { LL_SEG_SCOPE(RX_FLAG_ISSUE);
+          for (uint32_t i=0U;i<count;++i) {
+              const uint32_t j=tasks_.PendingIndex(start+i);
+              indices.SetValue(offset+i,j);
+              ReadServerDedupFlags(Slot(j),blocks,flags[i*blocks*8U]);
+          }
+        }
+        { LL_SEG_SCOPE(RX_FLAG_WAIT);
+          SetFlag<HardEvent::MTE2_V>(6U);
+          WaitFlag<HardEvent::MTE2_V>(6U);
+        }
+        { LL_SEG_SCOPE(RX_FLAG_REDUCE);
+          if (blocks==8U)
+              BuildReceiveFlagMasks(reinterpret_cast<__ubuf__ float*>(flags.GetPhyAddr()),
+                  reinterpret_cast<__ubuf__ uint32_t*>(sums.GetPhyAddr()),count,blocks);
+          else
+              Sum<float>(sums,flags,workBuf_.Get<uint8_t>(),SumParams{count,blocks*8U,blocks*8U});
+          SetFlag<HardEvent::V_S>(6U);
+        }
+    }
+    __aicore__ inline LlReceiveProbeResult FinishProbe(uint32_t count) {
+        LL_SEG_SCOPE(RECV_POLL);
+        // This is the residual scalar join, not an interval spanning A's
+        // payload work. REDUCE/POLL calls now count submit/join fragments.
+        { LL_SEG_SCOPE(RX_FLAG_REDUCE); WaitFlag<HardEvent::V_S>(6U); }
+        LL_SEG_SCOPE(RX_FLAG_DECODE);
+        LlReceiveProbeResult result;
+        if (data_.blockCount==8U) {
+            auto masks=sumBuf_.Get<uint32_t>();
+            result.readyMask=masks.GetValue(0U);
+            result.keepFlagsMask=masks.GetValue(1U);
+        } else {
+            auto sums=sumBuf_.Get<float>();
+            for (uint32_t i=0U;i<count;++i) {
+                const auto layout=PacketReceiveLayout::Decode(sums.GetValue(i),uint32_t(data_.blockCount));
+                if (layout!=PacketReceiveLayout::State::Pending) result.readyMask|=uint32_t(1)<<i;
+                if (layout==PacketReceiveLayout::State::KeepFlags) result.keepFlagsMask|=uint32_t(1)<<i;
+            }
+        }
+        LL_SEG_COUNT(RX_READY,uint32_t(__builtin_popcount(result.readyMask)));
+        if (!result.readyMask) { LL_SEG_COUNT(RX_EMPTY_POLLS,1U); }
+        return result;
+    }
     // 摘要：将稳定任务编号 j 映射为本轮通信窗口中的实际 packet 槽地址。
     __aicore__ inline __gm__ uint8_t* Slot(uint32_t j)
     {
@@ -422,6 +546,7 @@ private:
     LlOverlapLayout overlap_{};
     LocalTensor<int32_t> sharedPrefix_;
     bool enableDedup_ = false;
+    bool probePrefetch_ = false;
     uint64_t windowOffset_ = 0;
     uint32_t recvCoreNum_ = 0, coreNum_ = 0;
     uint32_t bs_ = 0U, k_ = 0U, experts_ = 0U, localExperts_ = 0U, receiver_ = 0U;
