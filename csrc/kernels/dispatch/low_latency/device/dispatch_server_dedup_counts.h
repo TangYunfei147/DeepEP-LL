@@ -235,11 +235,11 @@ __aicore__ inline void ServerDedupCounts::SendCnt()
     DataCopyPad(validExpertIdsTensor_, expertIdsGMTensor_, idsCopy, pad);
     SyncFunc<HardEvent::MTE2_V>();
     if (pairedRoutes_) {
-        // Every rank publishes outbound before any rank waits for inbound.
-        // Only core0 owns the route/commit/ACK QP; its scratch is retired before
-        // count computation or payload sending reuses it.
+        // Core0 stages and posts outbound before computing this source's local
+        // counts. HNS retires Put's UB scratch on return; body transfer from
+        // registered GM overlaps the following count work and MTE publication.
         SyncFunc<HardEvent::MTE2_S>();
-        routeExchange_.Publish(validExpertIdsTensor_, workBuf_.Get<uint8_t>());
+        routeExchange_.PostBody(validExpertIdsTensor_, workBuf_.Get<uint8_t>());
     }
 
     // 4. 规模足够时先向量筛选本核专家区间再做直方图；小输入逐专家统计。
@@ -257,6 +257,10 @@ __aicore__ inline void ServerDedupCounts::SendCnt()
     SyncFunc<HardEvent::S_MTE3>();
     if (count) SendExpertCntRange(start, end);
     if (pairedRoutes_) {
+        // All gateways publish their outbound commit before waiting for the
+        // paired source. Body completion is required; commit completion joins
+        // the ACK quiet in Complete, after every local route reader retires.
+        routeExchange_.PublishCommit(workBuf_.Get<uint8_t>());
         // Status records are reused for the paired source. Retire the local
         // source's MTE body/commit reads before overwriting their UB.
         SyncFunc<HardEvent::MTE3_S>();

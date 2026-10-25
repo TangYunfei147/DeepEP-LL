@@ -46,7 +46,7 @@ public:
         epoch_=previous+1U;Write(counter,epoch_);
     }
     __aicore__ inline uint32_t Peer() const { return uint32_t(args_->rank)^16U; }
-    __aicore__ inline void Publish(AscendC::LocalTensor<int32_t> routes, AscendC::LocalTensor<uint8_t> scratch) {
+    __aicore__ inline void PostBody(AscendC::LocalTensor<int32_t> routes, AscendC::LocalTensor<uint8_t> scratch) {
         if (AscendC::GetBlockIdx()!=0U) return;
         const uint32_t previous=Read(bank_+kRouteLastSent);
         if (previous) Wait(bank_+kRouteAck,previous);
@@ -57,11 +57,19 @@ public:
         Write(bank_+kRouteSequence,epoch_);
         LlTransport::Put(args_,Peer(),LlTransport::Address(args_,Peer(),bank_+kRouteRx),
                          Local(bank_+kRouteTx),bytes_,scratch);
+        // Ordinary HNS Put submits immediately and retires its UB workspace
+        // before returning. Only the registered GM source remains live: count
+        // computation may reuse scratch while the body progresses on the NIC.
+    }
+    __aicore__ inline void PublishCommit(AscendC::LocalTensor<uint8_t> scratch) {
+        if (AscendC::GetBlockIdx()!=0U) return;
+        // Never expose a route commit before successful body completion.
         LlTransport::Quiet(Peer(),scratch);
         LlTransport::Put(args_,Peer(),LlTransport::Address(args_,Peer(),bank_+kRouteCommit),
                          Local(bank_+kRouteSequence),sizeof(uint32_t),scratch);
-        LlTransport::Quiet(Peer(),scratch);
         Write(bank_+kRouteLastSent,epoch_);
+        // Commit progresses without quiet. Complete's final quiet retires both
+        // commit and ACK before this core can reuse the sequence source or QP.
     }
     __aicore__ inline void ReadPeer(AscendC::LocalTensor<int32_t> routes) {
         Wait(bank_+kRouteCommit,epoch_);
@@ -79,6 +87,7 @@ public:
             Wait(bank_+kRouteReadDone+uint64_t(core)*512U,epoch_);
         LlTransport::Put(args_,Peer(),LlTransport::Address(args_,Peer(),bank_+kRouteAck),
                          Local(bank_+kRouteSequence),sizeof(uint32_t),scratch);
+        // Same peer/QP as the commit: one completion wait covers both puts.
         LlTransport::Quiet(Peer(),scratch);
     }
 };
