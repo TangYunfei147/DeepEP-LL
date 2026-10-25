@@ -58,6 +58,35 @@ def test_identity_mismatch_fails_both_nodes_including_json_type_difference(other
                 future.result(timeout=3)
 
 
+def test_mismatch_reports_exact_field_and_both_values_to_both_nodes():
+    port = free_port()
+    first_identity = {"project_root": "/home/a/DeepEP-LL", "sdk_build": {"hns_1825_pi_on_chip": 0}}
+    other_identity = {"project_root": "/home/b/DeepEP-LL", "sdk_build": {"hns_1825_pi_on_chip": 1}}
+    with ThreadPoolExecutor(max_workers=2) as workers:
+        first = workers.submit(ready.synchronize, 0, "127.0.0.1", port, "run", first_identity, 2)
+        second = workers.submit(ready.synchronize, 1, "127.0.0.1", port, "run", other_identity, 2)
+        for future in (first, second):
+            with pytest.raises(ready.TargetReadyError) as caught:
+                future.result(timeout=3)
+            message = str(caught.value)
+            assert 'project_root: node0="/home/a/DeepEP-LL", node1="/home/b/DeepEP-LL"' in message
+            assert 'sdk_build.hns_1825_pi_on_chip: node0=0, node1=1' in message
+
+
+def test_argument_difference_includes_option_name_and_keeps_type_distinction():
+    assert ready.identity_differences({"arguments": ["--devices", "0,1"]},
+                                      {"arguments": ["--devices", "2,3"]}) == [
+        'arguments[1] (--devices): node0="0,1", node1="2,3"']
+    assert ready.identity_differences({"a": 1}, {"a": True}) == ['a: node0=1, node1=true']
+    assert ready.identity_differences({"a": 1}, {"b": 1}) == ['a: missing on node 1', 'b: missing on node 0']
+
+
+def test_mismatch_diagnostic_stays_inside_existing_frame_error_limit():
+    first = {str(n): "a" * 300 for n in range(40)}
+    second = {str(n): "b" * 300 for n in range(40)}
+    assert len(ready.mismatch_message(first, second)) <= 1024
+
+
 def test_wrong_run_id_fails_both_nodes():
     port = free_port()
     with ThreadPoolExecutor(max_workers=2) as workers:

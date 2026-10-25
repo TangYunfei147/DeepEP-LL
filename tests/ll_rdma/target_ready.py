@@ -51,6 +51,45 @@ def _validate_identity(value):
         raise TargetReadyError("Preparation identity must contain JSON values only")
 
 
+def identity_differences(node0, node1, path=""):
+    """Readable strict differences; array positions retain their argument context."""
+    if type(node0) is dict and type(node1) is dict:
+        result = []
+        for key in sorted(node0.keys() | node1.keys()):
+            child = f"{path}.{key}" if path else key
+            if key not in node0 or key not in node1:
+                result.append(f"{child}: missing on node {0 if key not in node0 else 1}")
+            else:
+                result.extend(identity_differences(node0[key], node1[key], child))
+        return result
+    if type(node0) is list and type(node1) is list and len(node0) == len(node1):
+        result = []
+        for index, (left, right) in enumerate(zip(node0, node1)):
+            label = f"{path}[{index}]"
+            if index and isinstance(node0[index - 1], str) and node0[index - 1].startswith("--"):
+                label += f" ({node0[index - 1]})"
+            result.extend(identity_differences(left, right, label))
+        return result
+    if _json_bytes(node0) == _json_bytes(node1):
+        return []
+
+    def preview(value):
+        text = json.dumps(value, ensure_ascii=True, sort_keys=True, allow_nan=False)
+        return text if len(text) <= 120 else text[:117] + "..."
+
+    return [f"{path or '<identity>'}: node0={preview(node0)}, node1={preview(node1)}"]
+
+
+def mismatch_message(node0, node1):
+    differences = identity_differences(node0, node1)
+    details = "; ".join(differences)
+    prefix = "Preparation identity mismatch: "
+    # Both peers accept the existing protocol's <=1024-character error field.
+    if len(details) > 990:
+        details = details[:930] + "; ... compare the two saved identity.json files"
+    return prefix + details
+
+
 def _frame(value):
     payload = _json_bytes(value)
     if not 0 < len(payload) <= MAX_FRAME_BYTES:
@@ -218,7 +257,7 @@ def synchronize(node_rank, master_addr, port, run_id, identity, timeout_seconds=
                 if peer.get("run_id") != run_id:
                     raise TargetReadyError("Preparation run_id mismatch")
                 if type(peer.get("identity")) is not dict or _json_bytes(peer["identity"]) != identity_bytes:
-                    raise TargetReadyError("Preparation identity mismatch")
+                    raise TargetReadyError(mismatch_message(snapshot, peer.get("identity")))
                 _send(connection, success, deadline)
             except TargetReadyError as exc:
                 failure = {"protocol": PROTOCOL, "type": "result", "run_id": run_id,
