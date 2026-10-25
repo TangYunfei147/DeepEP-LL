@@ -134,6 +134,7 @@ public:
         // lane 数由当前 shape 决定；输入容量校验需保证至少能容纳一个。
         const uint32_t available = (kEpServerDedupCountUbBytes - usedBytes_) / uint32_t(data_.tokenStride);
         lanes_ = overlap_.enabled ? overlap_.sendLanes : (available < 8U ? available : 8U);
+        LL_MTE3_SEND_LANES(lanes_,overlap_.enabled);
         Allocate(outBuf_, lanes_ * uint32_t(data_.tokenStride));
         routeIds_ = idsBuf_.Get<int32_t>();
         if (count_ != 0U) routeWeights_ = weightInBuf_.Get<float>();
@@ -217,6 +218,8 @@ public:
             DataCopyPad(weightOut_[uint64_t(start_) * k_], enableDedup_ ? sourceWeights_ : routeWeights_,
                         {1U, count_ * k_ * 4U, 0U, 0U, 0U});
         LL_SEG_END(metaPublish,TX_METADATA_PUBLISH);
+        LL_SPARSE_MARK(SOURCE_SUBMIT_DONE);
+        LL_MTE3_DRAIN(TX_END_MTE3,4U,pipe_);
         { LL_SEG_SCOPE(SEND_SUBMIT_END); }
         if (!overlap_.Async()) { LL_SEG_SCOPE(SEND_COMPLETE_WAIT);
         Sync<HardEvent::MTE3_S>();
@@ -267,6 +270,7 @@ public:
         }
         const uint32_t available=(kEpServerDedupCountUbBytes-usedBytes_)/uint32_t(data_.tokenStride);
         lanes_=overlap_.enabled ? overlap_.sendLanes : (available<8U ? available : 8U);
+        LL_MTE3_SEND_LANES(lanes_,overlap_.enabled);
         Allocate(outBuf_,lanes_*uint32_t(data_.tokenStride));
         uint64_t flagMask[2]={0xffU,0U};
         for (uint32_t lane=0;lane<lanes_;++lane) {
@@ -293,7 +297,7 @@ public:
             EndInputPrefetch(input);
             }
             begin=end;
-            if (begin==tasks) { LL_SEG_SCOPE(SEND_SUBMIT_END); }
+            if (begin==tasks) { LL_SEG_SCOPE(SEND_SUBMIT_END); LL_SPARSE_MARK(SOURCE_SUBMIT_DONE); }
             cooperate();
         }
         if (!overlap_.Async()) {
@@ -592,13 +596,17 @@ private:
                 QuantMxfp8<fp8_e5m2_t>(payload, x);
             input.template FreeTensor<XType>(x);
             LL_SEG_BEGIN(quantWaitBegin, TOKEN_QUANT_WAIT);
+            LL_MTE3_WAIT_BEGIN(txQuantWait);
             Sync<HardEvent::V_S>();
+            LL_MTE3_WAIT_END(txQuantWait,TX_INPUT_READY);
             LL_SEG_END(quantWaitBegin, TOKEN_QUANT_WAIT);
         } else {
             LL_SEG_BEGIN(inputWaitBegin, TOKEN_INPUT_WAIT);
             // This marker precedes the NEXT input's DMA. A fresh SetFlag here
             // would instead wait for both inputs and destroy the overlap.
+            LL_MTE3_WAIT_BEGIN(txInputWait);
             WaitFlag<HardEvent::MTE2_S>(inputReady_[pendingReady_]);
+            LL_MTE3_WAIT_END(txInputWait,TX_INPUT_READY);
             LL_SEG_END(inputWaitBegin, TOKEN_INPUT_WAIT);
             payload = x.template ReinterpretCast<uint8_t>();
         }
@@ -608,6 +616,7 @@ private:
         Sync<HardEvent::S_V>();
         const uint32_t lane = packets_ % lanes_;
         LL_SEG_BEGIN(segBegin6, TOKEN_BUFFER_WAIT);
+        LL_MTE3_DRAIN_WHEN(packets_>=lanes_,TX_REUSE_MTE3,4U,pipe_);
         WaitFlag<HardEvent::MTE3_V>(lane);
         LL_SEG_END(segBegin6, TOKEN_BUFFER_WAIT);
         LL_SEG_BEGIN(packBegin, TOKEN_PACK);

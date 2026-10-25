@@ -82,7 +82,7 @@ def test_capture_save_auto_export(tmp_path, frequency):
 def test_offline_moved_checkout_filters_and_no_overwrite(tmp_path):
     moved=tmp_path/'project with spaces'
     for relative in ('deep_ep/utils/ll_stage_timer.py','deep_ep/utils/ll_stage_timer_legacy.py',
-                     'deep_ep/utils/ll_stage_timer_sparse.py','tests/ll_stage_timer/export_trace.py'):
+                     'deep_ep/utils/ll_stage_timer_sparse.py','deep_ep/utils/ll_stage_timer_mte3.py','tests/ll_stage_timer/export_trace.py'):
         target=moved/relative; target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(ROOT/relative, target)
     data=moved/'data'; data.mkdir()

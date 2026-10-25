@@ -107,15 +107,15 @@ def test_full_capture_is_deferred_and_saves_extended_json(monkeypatch,tmp_path):
     monkeypatch.setitem(sys.modules,'deep_ep',package);monkeypatch.setitem(sys.modules,'deep_ep.utils',utils)
     copies=[]
     class Tensor:
-        def __init__(self):self.ptr=256;self.device='npu:0';self.raw=raw(schema=timer.SCHEMA)
+        def __init__(self):self.ptr=256;self.device='npu:0';self.raw=raw(schema=15)
         def data_ptr(self):return self.ptr
         def narrow(self,dim,offset,count):self.ptr+=offset*8;return self
         def view(self,*shape):self.shape=shape;return self
         def cpu(self):copies.append(self.shape);return self
         def tolist(self):return self.raw
     native=SimpleNamespace(low_latency_stage_timer_enabled=True,
-        low_latency_stage_timer_layout=lambda:dict(schema=timer.SCHEMA,slots=timer.SLOTS,fields=8,stages=list(timer.STAGES),
-            points=list(timer.POINTS),recording='sparse-milestones',timer_profile='sparse',timer_profile_id=6),
+        low_latency_stage_timer_layout=lambda:dict(schema=15,slots=timer.SLOTS,fields=8,stages=list(timer.STAGES),
+            points=list(timer.SPARSE_POINTS),recording='sparse-milestones',timer_profile='sparse',timer_profile_id=6),
         low_latency_core_config=lambda:dict(active_aiv=56,send_cores=10,device=0,runtime_device_queried=True))
     monkeypatch.setitem(sys.modules,'torch',SimpleNamespace(int64=0,zeros=lambda *a,**k:Tensor()))
     monkeypatch.setitem(sys.modules,'deep_ep._native',SimpleNamespace(require_native=lambda _:native))
@@ -127,7 +127,7 @@ def test_full_capture_is_deferred_and_saves_extended_json(monkeypatch,tmp_path):
     trace.complete();trace.save(tmp_path/'sample_0.json',dict(rank=0,iteration=0))
     assert copies==[(56,timer.SLOTS,8)]
     assert not (tmp_path/'dispatch_prof_rank0_sample_0.bin').exists()
-    assert json.loads((tmp_path/'sample_0.json').read_text())['schema']==timer.SCHEMA
+    assert json.loads((tmp_path/'sample_0.json').read_text())['schema']==15
     with pytest.raises(FileExistsError):trace.save(tmp_path/'sample_0.json')
     with pytest.raises(ValueError):module.StageTrace(object(),'dispatch',mode='drain')
 

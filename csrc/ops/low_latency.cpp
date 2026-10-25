@@ -59,14 +59,14 @@ uint8_t* tensor(py::handle value, const Shape& shape, const char* dtype)
     }
     return reinterpret_cast<uint8_t*>(obj.attr("data_ptr")().cast<uintptr_t>());
 }
-uint8_t* stage_timer(py::dict tensors, uint32_t cores, uint32_t& mode)
+uint8_t* stage_timer(py::dict tensors, uint32_t cores, uint32_t& mode, uint32_t operation)
 {
     mode = 1U;
     if (!tensors.contains("ll_stage_timer") || tensors["ll_stage_timer"].is_none()) return nullptr;
     if (!deepep_ll_stage_timer_enabled()) throw std::invalid_argument("Rebuild with DEEPEP_LL_STAGE_TIMER=ON");
     if (tensors.contains("ll_stage_timer_mode")) mode = tensors["ll_stage_timer_mode"].cast<uint32_t>();
-    if (mode != 1U)
-        throw std::invalid_argument("Sparse LL timer supports observe only; relay-complete/drain are unsupported");
+    if ((mode != 1U && mode != 4U && mode != 5U) || (operation != 1U && mode != 1U))
+        throw std::invalid_argument("MTE3 timer supports observe, mte3-tx and mte3-rx for dispatch; combine supports observe only");
     auto timer = py::reinterpret_borrow<py::object>(tensors["ll_stage_timer"]);
     auto device = timer.attr("device");
     if (device.attr("type").cast<std::string>() != "npu" ||
@@ -153,10 +153,16 @@ void bind_low_latency(py::module_& module)
     module.def("low_latency_stage_timer_layout", []() {
         py::dict result;
         result["schema"] = LlStageTimer::kSchema;
-        result["recording"] = "sparse-milestones";
+        result["recording"] = "mte3-backpressure";
         std::vector<std::string> points;
         for(const auto* point : LlStageTimer::kPointNames) points.emplace_back(point);
         result["points"] = points;
+        std::vector<std::string> waitMetrics;
+        for(const auto* name : LlStageTimer::kWaitMetricNames) waitMetrics.emplace_back(name);
+        result["wait_metrics"] = waitMetrics;
+        result["wait_metric_fields"] = std::vector<std::string>{"sum_ticks", "max_ticks", "calls", "empty_control_ticks"};
+        result["wait_metric_word_offset"] = LlStageTimer::kWaitMetricWordOffset;
+        result["export_words"] = LlStageTimer::kExportWords;
         result["timer_profile"] = LlStageTimer::kProfileName;
         result["timer_profile_id"] = LlStageTimer::kProfileId;
         result["slots"] = LlStageTimer::kSlots;
@@ -276,7 +282,7 @@ void bind_low_latency(py::module_& module)
         auto get = [&](const char* name, Shape shape, const char* type) { return tensor(tensors[name], shape, type); };
         deepep::EpServerDedupKernelArgs args{};
         args.coreNum = pin_session_cores(session);
-        args.stageTimer = stage_timer(tensors, args.coreNum, args.timerMode);
+        args.stageTimer = stage_timer(tensors, args.coreNum, args.timerMode, 1U);
         args.expertTimer = expert_timer(tensors, args.coreNum, e, args.stageTimer);
         args.commArgs = get("comm_args", {sizeof(DispatchDedup::CommArgs)}, "uint8");
         args.x = get("input", {b, h}, dtype.c_str());
@@ -308,7 +314,7 @@ void bind_low_latency(py::module_& module)
                                                                     format.expandXOutDtype,format.inputMode);
         py::gil_scoped_release release;
         session.invalidate_dispatch_controls();
-        dispatch_server_dedup_kernel_do_sparse15(reinterpret_cast<void*>(stream_address), &args, variant);
+        dispatch_server_dedup_kernel_do_mte3_16(reinterpret_cast<void*>(stream_address), &args, variant);
     });
     module.def("combine_low_latency", [](Session& session, py::dict tensors, int b, int h, int k, int e,
                                          const std::string& dtype, uintptr_t stream_address) {
@@ -323,7 +329,7 @@ void bind_low_latency(py::module_& module)
         auto get = [&](const char* name, Shape shape, const char* type) { return tensor(tensors[name], shape, type); };
         deepep::EpServerDedupCombineKernelArgs args{};
         args.coreNum = pin_session_cores(session);
-        args.stageTimer = stage_timer(tensors, args.coreNum, args.timerMode);
+        args.stageTimer = stage_timer(tensors, args.coreNum, args.timerMode, 2U);
         args.commArgs = get("comm_args", {sizeof(DispatchDedup::CommArgs)}, "uint8");
         // Python validates rows against the dispatch handle. The device selects
         // rows below the actual receive count; C_B sizes metadata, not expert storage.
@@ -343,7 +349,7 @@ void bind_low_latency(py::module_& module)
         session.workspace();
         py::gil_scoped_release release;
         session.invalidate_dispatch_controls();
-        combine_server_dedup_kernel_do_sparse15(reinterpret_cast<void*>(stream_address), &args);
+        combine_server_dedup_kernel_do_mte3_16(reinterpret_cast<void*>(stream_address), &args);
     });
 }
 }  // namespace deepep

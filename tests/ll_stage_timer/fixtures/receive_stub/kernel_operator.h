@@ -6,6 +6,7 @@
 #include <memory>
 #include <vector>
 #define __aicore__
+using GM_ADDR=uint8_t*;
 namespace AscendC {
 enum class HardEvent { V_S };
 inline unsigned scalarStores=0,vectorCalls=0,waits=0;

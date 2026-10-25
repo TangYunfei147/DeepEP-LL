@@ -384,7 +384,9 @@ __aicore__ inline void ServerDedupCounts::CompleteCumsum()
     SetCtrlSpr<60,60>(0);
     tpipe_->InitBuffer(readyBuf_,32U);
     tpipe_->InitBuffer(prefixBuf_,Ceil(rscvStatusNum_*4U,32U)*32U);
+    LL_SPARSE_MARK(PREFIX_WAIT_ENTER);
     WaitCumSumFlag();
+    LL_SPARSE_MARK(PREFIX_WAIT_EXIT);
     LocalTensor<int32_t> prefix = prefixBuf_.Get<int32_t>();
     GlobalTensor<int32_t> workspace;
     workspace.SetGlobalBuffer(reinterpret_cast<__gm__ int32_t*>(recvCntWorkspaceGM_));

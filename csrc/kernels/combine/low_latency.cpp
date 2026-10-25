@@ -15,7 +15,7 @@
 #include "low_latency/launch.hpp"
 
 // 中文审计：ElasticBuffer._combine_low_latency → csrc/ops/low_latency.cpp
-// → combine_server_dedup_kernel_do_sparse15 → 本入口。输入依赖匹配dispatch handle的路由/计数/权重。
+// → combine_server_dedup_kernel_do_mte3_16 → 本入口。输入依赖匹配dispatch handle的路由/计数/权重。
 // profiler中的combine_server_dedup_kernel包含下层准备、控制通知、回传与最终归约。
 extern "C" [[bisheng::core_ratio(0, 1)]] __global__ __aicore__ void combine_server_dedup_kernel(
     GM_ADDR commArgs, GM_ADDR expertOut, GM_ADDR destinationIndex, GM_ADDR sendCounts, GM_ADDR expertScales,
@@ -49,7 +49,7 @@ extern "C" [[bisheng::core_ratio(0, 1)]] __global__ __aicore__ void combine_serv
     timer.Mark<LlStageTimer::WORK_DONE>();
     timer.Flush();
 }
-extern "C" DEEPEP_EXPORT void combine_server_dedup_kernel_do_sparse15(void* stream,
+extern "C" DEEPEP_EXPORT void combine_server_dedup_kernel_do_mte3_16(void* stream,
                                                              const deepep::EpServerDedupCombineKernelArgs* args)
 {
     const auto& a = *args;

@@ -48,20 +48,32 @@ def validate_overlap_stage_capability(capability):
         raise RuntimeError(f'Rebuild/install overlap A/B stage {expected} from this checkout on every rank')
 
 
-def validate_stage_timer_capability(capability):
+def validate_stage_timer_capability(capability, mode='observe'):
     if not capability["stage_timer"]:
         raise RuntimeError("All ranks must install a DEEPEP_LL_STAGE_TIMER=ON wheel")
-    if capability['stage_timer_schema'] != 15:
-        raise RuntimeError('Sparse LL diagnostics require timer schema 15; '
+    schema=capability['stage_timer_schema']
+    if schema not in (15,16):
+        raise RuntimeError('LL diagnostics require timer schema 15 or 16; '
                            f'got {capability["stage_timer_schema"]}; '
                            'rebuild/install the matching wheel on every rank')
-    expected = dict(timer_profile='sparse',timer_profile_id=6,stage_timer_slots=8,
-                    stage_timer_fields=8,stage_timer_recording='sparse-milestones')
+    if mode not in ('observe','mte3-tx','mte3-rx') or (schema==15 and mode!='observe'):
+        raise RuntimeError('MTE3 interventions require matching schema16/profile7')
+    expected = dict(timer_profile='sparse' if schema==15 else 'mte3',
+                    timer_profile_id=6 if schema==15 else 7,stage_timer_slots=8,
+                    stage_timer_fields=8,
+                    stage_timer_recording='sparse-milestones' if schema==15 else 'mte3-backpressure')
     if any(capability.get(key)!=value for key,value in expected.items()):
-        raise RuntimeError('Sparse LL diagnostics require the matching sparse profile 6 / 512-byte layout')
-    points=runpy.run_path(str(PROJECT_ROOT/'deep_ep/utils/ll_stage_timer.py'))['SPARSE_POINTS']
+        raise RuntimeError('LL diagnostics require a matching schema/profile and 512-byte layout')
+    layout=runpy.run_path(str(PROJECT_ROOT/'deep_ep/utils/ll_stage_timer.py'))
+    points=layout['SPARSE_POINTS' if schema==15 else 'POINTS']
     if capability.get('stage_timer_points')!=list(points):
         raise RuntimeError('Sparse LL milestone names/order differ from this checkout')
+    if schema==16:
+        for field,value in dict(stage_timer_wait_metrics=list(layout['mte3'].METRICS),
+                stage_timer_wait_metric_fields=['sum_ticks','max_ticks','calls','empty_control_ticks'],
+                stage_timer_wait_metric_word_offset=32).items():
+            if capability.get(field)!=value:
+                raise RuntimeError('MTE3 wait statistic layout differs from this checkout')
 
 
 def installed_source_fingerprint(package):
@@ -237,7 +249,7 @@ def make_parser():
     parser.add_argument('--ll-profile-capture', action='store_true', help='Profile the actual attached timer capture kernels separately, including INIT/export; never the OFF baseline')
     parser.add_argument('--ll-expert-timer', action='store_true', help='Legacy option: explicitly rejected by reference segment capture')
     parser.add_argument("--ll-timer-iters", type=int, default=5)
-    parser.add_argument("--ll-timer-mode", choices=("observe",), default="observe", help="Schema15 sparse capture; historical relay/drain formats are offline-only")
+    parser.add_argument("--ll-timer-mode", choices=("observe","mte3-tx","mte3-rx"), default="observe", help="observe or schema16 dispatch-only MTE3 interventions; added waits are diagnostic, not performance optimizations")
     parser.add_argument("--ll-timer-frequency-hz", type=float, default=1_000_000_000, help="GetSystemCycle frequency; default 1GHz (ticks/1000 us)")
     parser.add_argument("--dispatch-only", action="store_true")
     parser.add_argument("--repeat-combine", type=int, default=2)
@@ -502,8 +514,11 @@ def resolve_delay_counts(args):
 def validate_args(args, world):
     if args.ll_expert_timer:
         raise ValueError("Reference segment capture rejects legacy per-expert GM instrumentation")
-    if args.ll_stage_timer and args.ll_timer_mode != 'observe':
-        raise ValueError('Sparse LL capture supports only observe; old modes are offline-only')
+    if args.ll_timer_mode not in ('observe','mte3-tx','mte3-rx'):
+        raise ValueError('Unsupported LL diagnostic mode; historical drain modes are offline-only')
+    if args.ll_timer_mode!='observe':
+        if not args.ll_stage_timer or not args.dispatch_only or not args.skip_perf_test or not getattr(args,'ll_profile_capture',False):
+            raise ValueError('MTE3 interventions require --ll-stage-timer --dispatch-only --skip-perf-test --ll-profile-capture')
     if getattr(args,'ll_profile_capture',False) and not args.ll_stage_timer:
         raise ValueError('--ll-profile-capture requires --ll-stage-timer')
     resolve_delay_counts(args)
@@ -1266,6 +1281,9 @@ def worker(local_rank, args):
                       "stage_timer_fields": timer_layout.get('fields'),
                       "stage_timer_points": timer_layout.get('points'),
                       "stage_timer_recording": timer_layout.get('recording'),
+                      "stage_timer_wait_metrics": timer_layout.get('wait_metrics'),
+                      "stage_timer_wait_metric_fields": timer_layout.get('wait_metric_fields'),
+                      "stage_timer_wait_metric_word_offset": timer_layout.get('wait_metric_word_offset'),
                       "timer_profile": timer_layout.get('timer_profile'),
                       "timer_profile_id": timer_layout.get('timer_profile_id'),
                       "profile_capture_requested": bool(getattr(args,'ll_profile_capture',False)),
@@ -1288,6 +1306,8 @@ def worker(local_rank, args):
             raise RuntimeError('Requested RDMA is not compiled in this wheel; no MTE fallback')
         if args.ll_stage_timer:
             validate_stage_timer_capability(capability)
+            if args.ll_timer_mode!='observe':
+                validate_stage_timer_capability(capability,args.ll_timer_mode)
         if args.ll_expert_timer and not 8001 <= capability['core_protocol'] <= 8055:
             raise RuntimeError('Expert diagnostics require a matching configured-split wheel on every rank')
         args.ll_stage_timer_capabilities = capabilities

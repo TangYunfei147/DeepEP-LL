@@ -89,7 +89,7 @@ public:
         // 2. 按前缀定义的接收输出行均分任务，建立稳定槽位表和可压缩的 pending 表。
         // j 始终标识固定输出行/槽位；pending 下标只表示尚未消费的任务位置。
         { LL_SEG_SCOPE(BUILD_EXPERT_TASKS);
-        tasks_.Build(prefix, uint32_t(args_->rank), uint32_t(args_->rankSize), experts_, bs_, receiver_, pipe_, recvCoreNum_);
+        tasks_.Build(prefix, uint32_t(args_->rank), uint32_t(args_->rankSize), experts_, bs_, receiver_, pipe_, recvCoreNum_, timer_);
         }
 
 
@@ -119,6 +119,7 @@ public:
         laneStride_ = uint32_t(data_.tokenStride) + 64U;
         const uint32_t available = (kEpServerDedupCountUbBytes - fixed) / laneStride_;
         lanes_ = overlap_.enabled ? overlap_.recvLanes : (available < 8U ? available : 8U);  // Safe inputs guarantee at least one lane.
+        LL_MTE3_RECV_LANES(lanes_,overlap_.enabled);
         probePrefetch_ = overlap_.enabled ? overlap_.recvProbePrefetch :
             LlReceiveProbePrefetchFits(uint64_t(fixed) + uint64_t(lanes_) * laneStride_,
                                       kEpServerDedupCountUbBytes);
@@ -191,7 +192,9 @@ public:
     }
     __aicore__ inline void Run() {
         while (tasks_.PendingCount()) TryBatch();
+        LL_SPARSE_MARK(RECV_PENDING_EMPTY);
         if (!tasks_.Count()) return;
+        LL_MTE3_DRAIN(RX_END_MTE3,5U,pipe_);
         // 5. pending 清空后，等待各 lane 在途写入，随后统一清除本核所有槽位的块标记。
         // 清理使用稳定任务表，不能使用已压缩为空的 pending 表；payload 本身不清零。
 
@@ -203,7 +206,9 @@ public:
 
         // 最终流水屏障确保输出、relay 和标记清理完成。
         { LL_SEG_SCOPE(RECV_COMPLETE_WAIT);
+        LL_MTE3_WAIT_BEGIN(rxFinalWait);
         PipeBarrier<PIPE_ALL>();
+        LL_MTE3_WAIT_END(rxFinalWait,RX_FINAL_ALL);
         }
         LL_SPARSE_MARK(RECV_DONE);
     }
@@ -387,7 +392,9 @@ private:
     __aicore__ inline void IssueLoad(uint32_t j, uint32_t lane, bool keepFlags, bool reuse)
     {
         LL_SEG_BEGIN(segBegin1, RECV_BUFFER_WAIT);
-        if (reuse) { LL_SEG_SCOPE(RX_LANE_REUSE_WAIT); WaitFlag<HardEvent::MTE3_MTE2>(lane); }
+        if (reuse) { LL_SEG_SCOPE(RX_LANE_REUSE_WAIT);
+            LL_MTE3_DRAIN(RX_REUSE_MTE3,5U,pipe_);
+            WaitFlag<HardEvent::MTE3_MTE2>(lane); }
         LL_SEG_END(segBegin1, RECV_BUFFER_WAIT);
         LL_SEG_BEGIN(segBegin2, RECV_INPUT);
         auto wire = lanesBuf_.Get<uint8_t>()[lane * laneStride_];
@@ -413,7 +420,10 @@ private:
         LL_SEG_COUNT(RECV_READY_TOKENS, 1U);
         LL_SEG_COUNT(RX_PACKETS,1U);
         LL_SEG_BEGIN(segBegin3, RECV_INPUT);
-        { LL_SEG_SCOPE(RX_PAYLOAD_READY_WAIT); WaitFlag<HardEvent::MTE2_S>(lane); }
+        { LL_SEG_SCOPE(RX_PAYLOAD_READY_WAIT);
+          LL_MTE3_WAIT_BEGIN(rxPayloadWait);
+          WaitFlag<HardEvent::MTE2_S>(lane);
+          LL_MTE3_WAIT_END(rxPayloadWait,RX_PAYLOAD_MTE2S); }
         LL_SEG_END(segBegin3, RECV_INPUT);
         LL_SEG_SCOPE(RECV_OUTPUT);
         uint32_t expert = 0;

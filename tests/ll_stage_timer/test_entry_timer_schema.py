@@ -20,13 +20,16 @@ timer = load('schema_timer', 'deep_ep/utils/ll_stage_timer.py')
 
 def test_current_timer_schema_passes_st_preflight():
     entry.validate_stage_timer_capability(dict(stage_timer=True, stage_timer_schema=timer.SCHEMA,
-        timer_profile='sparse',timer_profile_id=6,stage_timer_slots=8,stage_timer_fields=8,
-        stage_timer_points=list(timer.POINTS),stage_timer_recording='sparse-milestones'))
+        timer_profile='mte3',timer_profile_id=7,stage_timer_slots=8,stage_timer_fields=8,
+        stage_timer_points=list(timer.POINTS),stage_timer_recording='mte3-backpressure',
+        stage_timer_wait_metrics=list(timer.mte3.METRICS),
+        stage_timer_wait_metric_fields=['sum_ticks','max_ticks','calls','empty_control_ticks'],
+        stage_timer_wait_metric_word_offset=32))
 
 
 @pytest.mark.parametrize('schema', [7, 9, 10, 11, 12, 13, 14, None])
 def test_stale_or_unknown_schema_is_rejected(schema):
-    with pytest.raises(RuntimeError, match=f'timer schema 15; got {schema}'):
+    with pytest.raises(RuntimeError, match=f'timer schema 15 or 16; got {schema}'):
         entry.validate_stage_timer_capability(dict(stage_timer=True, stage_timer_schema=schema))
 
 
@@ -42,10 +45,10 @@ def test_worker_uses_tested_preflight():
 
 @pytest.mark.parametrize('field,value',[('timer_profile','full'),('timer_profile_id',0),
     ('stage_timer_slots',80),('stage_timer_fields',7),('stage_timer_recording','segments'),
-    ('stage_timer_points',list(reversed(timer.POINTS)))])
+    ('stage_timer_points',list(reversed(timer.SPARSE_POINTS)))])
 def test_sparse_contract_rejects_mismatched_layout(field,value):
     capability=dict(stage_timer=True,stage_timer_schema=15,timer_profile='sparse',timer_profile_id=6,
-        stage_timer_slots=8,stage_timer_fields=8,stage_timer_points=list(timer.POINTS),
+        stage_timer_slots=8,stage_timer_fields=8,stage_timer_points=list(timer.SPARSE_POINTS),
         stage_timer_recording='sparse-milestones')
     capability[field]=value
     with pytest.raises(RuntimeError):entry.validate_stage_timer_capability(capability)

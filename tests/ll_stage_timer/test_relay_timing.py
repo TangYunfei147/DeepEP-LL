@@ -128,14 +128,14 @@ def test_mixed_modes_and_missing_completion_rejected():
                             dict(raw=raw(3),operation='dispatch',frequency_hz=1e9)])
 
 
-def test_new_st_capture_only_accepts_observe_while_old_relay_is_readable():
+def test_new_st_rejects_old_relay_capture_while_old_relay_is_readable():
     with pytest.raises(ValueError):timer.StageTrace(None,'combine','relay-complete')
     st=load('relay_st','tests/elastic/test_ep_low_latency.py')
     for mode in ('relay-complete','drain'):
         with pytest.raises(SystemExit):st.make_parser().parse_args(['--ll-timer-mode',mode])
         args=st.make_parser().parse_args(['--ll-stage-timer','--dispatch-only','--skip-perf-test'])
         args.ll_timer_mode=mode
-        with pytest.raises(ValueError,match='only observe'):st.validate_args(args,16)
+        with pytest.raises(ValueError,match='historical drain modes are offline-only'):st.validate_args(args,16)
     assert timer.parse_records(raw(3),'dispatch')['boundary_mode']=='relay-complete'
 
 

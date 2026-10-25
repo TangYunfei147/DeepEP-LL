@@ -16,7 +16,7 @@ def normalize(s):
  s=re.sub(r'#ifdef DEEPEP_LL_STAGE_TIMER\s*(?:const uint64_t sparseEntry =[^;]+;|timer\.MarkAt<LlStageTimer::ENTRY>\(sparseEntry\);)\s*#endif','',s)
  s=re.sub(r'timer\.(?:Mark<LlStageTimer::\w+>\(\)|Flush\(\));','',s)
  s=s.replace('timer.Enabled() ? &timer : nullptr','&timer')
- s=s.replace('combine_server_dedup_kernel_do_sparse15','combine_server_dedup_kernel_do')
+ s=s.replace('combine_server_dedup_kernel_do_mte3_16','combine_server_dedup_kernel_do')
  s=re.sub(r'if \(timer_?\) timer_?->(?:Start|End)\([^;]*\);','',s)
  s=re.sub(r'(?:const uint64_t \w+ = )?timer\.(?:Start|End|Init|Finish|Begin)\([^;\n]*\);?','',s)
  s=re.sub(r'expert\.(?:Init|Finish)\([^;]*\);','',s)

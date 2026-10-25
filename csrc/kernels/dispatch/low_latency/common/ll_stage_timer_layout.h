@@ -5,7 +5,7 @@
 #pragma once
 #include <cstdint>
 namespace LlStageTimer {
-constexpr uint32_t kSchema = 15U;
+constexpr uint32_t kSchema = 16U;
 constexpr uint64_t kMagic = 0x4c4c5431ULL;
 constexpr uint32_t kTraceRecords = 192U, kMetrics = 108U;
 constexpr uint32_t kRecords = kTraceRecords + kMetrics;
@@ -16,16 +16,29 @@ constexpr uint32_t kRecordWordOffset = 8U;
 enum Point : uint32_t {
     ENTRY=0, INIT_DONE, COUNTS_SENT, COUNTS_RECEIVED, PREFIX_LOCAL_DONE,
     PREFIX_READY, SEND_PREPARED, FIRST_SEND, SEND_DONE, RECV_PREPARED,
-    FIRST_RECV_PROBE, FIRST_RECV_READY, RECV_DONE, WORK_DONE, PointCount
+    FIRST_RECV_PROBE, FIRST_RECV_READY, RECV_DONE, WORK_DONE,
+    SOURCE_SUBMIT_DONE, PREFIX_WAIT_ENTER, PREFIX_WAIT_EXIT, RECV_PENDING_EMPTY, PointCount
 };
 constexpr uint32_t kPointCount=uint32_t(PointCount);
 constexpr const char* kPointNames[] = {
     "ENTRY", "INIT_DONE", "COUNTS_SENT", "COUNTS_RECEIVED", "PREFIX_LOCAL_DONE",
     "PREFIX_READY", "SEND_PREPARED", "FIRST_SEND", "SEND_DONE", "RECV_PREPARED",
-    "FIRST_RECV_PROBE", "FIRST_RECV_READY", "RECV_DONE", "WORK_DONE"
+    "FIRST_RECV_PROBE", "FIRST_RECV_READY", "RECV_DONE", "WORK_DONE",
+    "SOURCE_SUBMIT_DONE", "PREFIX_WAIT_ENTER", "PREFIX_WAIT_EXIT", "RECV_PENDING_EMPTY"
 };
-// Export the header and timestamps, padded to three 64B cache lines only.
-constexpr uint32_t kExportWords=((kRecordWordOffset+kPointCount+7U)/8U)*8U;
+// Header/timestamps occupy words0..25; words26..31 are reserved and zero.
+enum WaitMetric : uint32_t {
+    TX_INPUT_READY=0, RX_PREPARE_VS, RX_PAYLOAD_MTE2S, RX_FINAL_ALL,
+    TX_REUSE_MTE3, TX_END_MTE3, RX_REUSE_MTE3, RX_END_MTE3, WaitMetricCount
+};
+constexpr uint32_t kWaitMetricCount=uint32_t(WaitMetricCount);
+constexpr uint32_t kWaitMetricWordOffset=32U, kWaitMetricFields=4U;
+constexpr const char* kWaitMetricNames[]={
+    "TX_INPUT_READY", "RX_PREPARE_VS", "RX_PAYLOAD_MTE2S", "RX_FINAL_ALL",
+    "TX_REUSE_MTE3", "TX_END_MTE3", "RX_REUSE_MTE3", "RX_END_MTE3"
+};
+// Per metric: sum_ticks, max_ticks, calls, empty_control_ticks (no subtraction).
+constexpr uint32_t kExportWords=kWordsPerCore;
 enum Stage : uint32_t {
     KERNEL = 0,
     SEND_TOKENS = 1,
@@ -250,7 +263,8 @@ constexpr const char* kNames[] = {
 
 
 };
-static_assert(kExportWords <= kWordsPerCore, "sparse capacity");
+static_assert(kRecordWordOffset+kPointCount<=kWaitMetricWordOffset, "point/wait layout overlap");
+static_assert(kWaitMetricWordOffset+kWaitMetricCount*kWaitMetricFields==kWordsPerCore, "wait capacity");
 static_assert(kPointCount < 64U, "point validity bitmap");
 static_assert(kWordsPerCore * sizeof(uint64_t) % 512U == 0U, "core alignment");
 }

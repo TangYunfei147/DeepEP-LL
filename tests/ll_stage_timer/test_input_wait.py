@@ -85,7 +85,9 @@ def test_analysis_writes_wait_report_and_old_samples_are_insufficient(tmp_path):
 
 def test_input_and_quant_wait_boundaries_are_preserved():
     source=(ROOT/'csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_send.h').read_text()
-    assert 'LL_SEG_BEGIN(quantWaitBegin, TOKEN_QUANT_WAIT);\n            Sync<HardEvent::V_S>();\n            LL_SEG_END' in source
+    interval=source.split('LL_SEG_BEGIN(quantWaitBegin, TOKEN_QUANT_WAIT);')[1].split('LL_SEG_END')[0]
+    assert interval.count('Sync<HardEvent::V_S>();')==1
+    assert interval.index('LL_MTE3_WAIT_BEGIN')<interval.index('Sync<HardEvent::V_S>();')<interval.index('LL_MTE3_WAIT_END')
     interval=source.split('LL_SEG_BEGIN(inputWaitBegin, TOKEN_INPUT_WAIT);')[1].split('LL_SEG_END')[0]
     assert 'WaitFlag<HardEvent::MTE2_S>(inputReady_[pendingReady_]);' in interval
     assert 'SetFlag<' not in interval  # Must not wait for the next input's DMA.

@@ -35,7 +35,7 @@ def raw(send=30, operation='dispatch', minimal=False):
         words[:8] = [timer.MAGIC,15,1 if operation == 'dispatch' else 2,56,core,
                      1|(send<<8)|(role<<16)|(6<<24),0,0]
         for point, tick in points.items():
-            i = timer.POINTS.index(point); words[6] |= 1<<i; words[8+i] = tick
+            i = timer.SPARSE_POINTS.index(point); words[6] |= 1<<i; words[8+i] = tick
         result.append([words[i:i+8] for i in range(0,64,8)])
     return result
 
@@ -82,9 +82,9 @@ def test_invalid_header_and_timestamp_words_rejected(offset,value):
 
 
 def test_missing_bit_nonzero_and_dependency_reversal_rejected():
-    data=raw();data[0][0][6] &= ~(1<<timer.POINTS.index('SEND_PREPARED'))
+    data=raw();data[0][0][6] &= ~(1<<timer.SPARSE_POINTS.index('SEND_PREPARED'))
     with pytest.raises(ValueError,match='without valid'):timer.parse_records(data,'dispatch')
-    data=raw();setword(data,0,8+timer.POINTS.index('FIRST_SEND'),350)
+    data=raw();setword(data,0,8+timer.SPARSE_POINTS.index('FIRST_SEND'),350)
     with pytest.raises(ValueError,match='dependency'):timer.parse_records(data,'dispatch')
     data=raw();data[0][0][6] &= ~1;setword(data,0,8,0)
     with pytest.raises(ValueError,match='required'):timer.parse_records(data,'dispatch')
@@ -95,7 +95,7 @@ def test_interleaved_send_receive_and_unwritten_padding_are_legal():
     # A sending core later joins reception: prefix is later than first send.
     for point,tick in [('PREFIX_READY',2100),('RECV_PREPARED',2200),('FIRST_RECV_PROBE',2300),
                        ('FIRST_RECV_READY',2400),('RECV_DONE',2500)]:
-        idx=timer.POINTS.index(point);data[0][0][6] |= 1<<idx;setword(data,0,8+idx,tick)
+        idx=timer.SPARSE_POINTS.index(point);data[0][0][6] |= 1<<idx;setword(data,0,8+idx,tick)
     setword(data,0,63,123)  # Native only publishes first 24 words.
     decoded=timer.parse_records(data,'dispatch')
     assert any(r['core']==0 and r['point']=='PREFIX_READY' and r['tick']==2100 for r in decoded['milestones'])
@@ -134,7 +134,7 @@ def st_profile_metadata(rank=0, iteration=0, iterations=3):
         active_aiv=56,send_cores=30,recv_cores=26,logical_group=4,core_protocol=19030,
         source_sha256='a'*64,stage_timer=True,stage_timer_schema=15,timer_profile='sparse',
         timer_profile_id=6,stage_timer_slots=8,stage_timer_fields=8,
-        stage_timer_points=list(timer.POINTS),stage_timer_recording='sparse-milestones',
+        stage_timer_points=list(timer.SPARSE_POINTS),stage_timer_recording='sparse-milestones',
         profile_capture_requested=True,rdma_compiled=False)
     return dict(rank=rank,world_size=16,iteration=iteration,correctness='passed',
         comparison=st.comparison_metadata(args,16,32),run_id='sparse_profile',seed=args.seed,case_id=0,

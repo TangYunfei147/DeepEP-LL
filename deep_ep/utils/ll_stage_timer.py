@@ -1,7 +1,7 @@
-"""Sparse first-occurrence milestones; schema7..13 segments remain read-only.
+"""Schema16 targeted MTE3 diagnostics; earlier recordings remain readable.
 
-Schema15 is adapted from small-b-prefix@39eadb0 without its algorithm or
-schema14 stage expansion. The active carrier is 512B/core; schema13 stays offline.
+The 512B carrier holds first-hit milestones and selected real Scalar waits.
+Explicit MTE3 interventions change scheduling and are never performance baselines.
 """
 from contextlib import contextmanager
 import importlib.util
@@ -12,11 +12,11 @@ import struct
 import threading
 
 MAGIC = 0x4C4C5431
-SCHEMA, SLOTS, FIELDS = 15, 8, 8
+SCHEMA, SLOTS, FIELDS = 16, 8, 8
 TRACE_RECORDS, METRICS, RECORDS = 192, 108, 300
 SCHEMA_SLOTS = {7:72,9:72,10:72,11:72,12:72,13:80}
 SCHEMA_METRICS = {7:64,9:66,10:70,11:78,12:81,13:108}
-TIMER_PROFILES = ('full','overview','prepare','prefix','send','recv','sparse')
+TIMER_PROFILES = ('full','overview','prepare','prefix','send','recv','sparse','mte3')
 DEFAULT_FREQUENCY_HZ = 1_000_000_000
 STAGES = ('KERNEL', 'SEND_TOKENS', 'CAL_CUMSUM', 'PREPARE_INPUT', 'SEND_COUNTS', 'INIT_COUNT_BUFFERS', 'WAIT_RECV_COUNTS', 'CLEAR_RECV_STATUS', 'GATHER_RECV_COUNTS', 'GET_CUMSUM', 'BUILD_RECV_CUMSUM', 'WAIT_CUMSUM', 'LOCAL_WINDOW_COPY', 'FORMAT_OUTPUT', 'BUILD_EXPERT_TASKS', 'CLEAR_LOCAL_FLAGS', 'TOKEN_INPUT', 'TOKEN_QUANT', 'TOKEN_METADATA', 'TOKEN_BUFFER_WAIT', 'TOKEN_PACK', 'TOKEN_SEND_ISSUE', 'COUNT_COMPUTE', 'COUNT_SEND_ISSUE', 'POLL_CORE_SUMS', 'REDUCE_CORE_PREFIX', 'CLEAR_CORE_SUMS', 'BROADCAST_PREFIX', 'PUBLISH_PREFIX_FLAGS', 'RECV_POLL', 'RECV_COPY', 'SEND_DRAIN', 'COMBINE_SEND', 'COMBINE_INIT_RECV', 'COMBINE_RECV', 'COMBINE_INPUT', 'COMBINE_PACK_QUANT', 'COMBINE_SEND_ISSUE', 'COMBINE_SEND_FINISH', 'COMBINE_RECV_POLL', 'COMBINE_DEQUANT_REDUCE', 'COMBINE_PROCESS_TOKEN', 'COMBINE_TOKEN_INIT', 'COMBINE_CLEAR_FLAGS', 'COMBINE_SHARED_EXPERT', 'COMBINE_SPECIAL_EXPERT', 'COMBINE_RMSNORM', 'FINAL_DRAIN', 'POLL_RECV_COUNTS', 'WRITE_COUNTS_OUTPUT', 'INIT', 'POLL_CORE_SUMS_ITERATIONS', 'POLL_RECV_COUNTS_ITERATIONS', 'WAIT_CUMSUM_ITERATIONS', 'RECV_READY_TOKENS', 'COMBINE_READY_SLOTS', 'COMBINE_QUANT', 'COMBINE_BUFFER_WAIT', 'COMBINE_COPY_PACK', 'RECV_BUFFER_WAIT', 'RECV_INPUT', 'RECV_OUTPUT', 'CAL_TOKEN', 'COMBINE_INDEX_INPUT', 'TOKEN_INPUT_WAIT', 'TOKEN_QUANT_WAIT', 'RELAY_ISSUE', 'RELAY_PRE_DRAIN', 'RELAY_COMPLETE', 'RELAY_PACKETS','SEND_COMPLETE_WAIT','TRANSITION_DRAIN','RECV_PREPARE','SEND_SUBMIT_END','OVERLAP_PATH','SERIAL_FALLBACK','SEND_LANES','RECV_LANES','PREFIX_COMPLETE','PREFIX_LOAD','RECV_COMPLETE_WAIT','SEND_SETUP','Q_SEED_SUBMIT','Q_SEED_WAIT','Q_LOCAL_UPDATE','ROUTE_CLASSIFY','DIRECT_PLAN','SEND_RETIRE_WAIT','RX_FLAG_ISSUE','RX_FLAG_WAIT','RX_FLAG_REDUCE','RX_FLAG_DECODE','RX_LANE_REUSE_WAIT','RX_PAYLOAD_READY_WAIT','RX_METADATA','RX_PAYLOAD_OUTPUT','RX_META_OUTPUT','TX_PACK_READY_WAIT','TX_METADATA_PUBLISH','BEFORE_FIRST_SEND','BEFORE_FIRST_RECV_POLL','PREFIX_PUBLISH_WAIT','RX_PENDING_UPDATE','TX_PACKETS','RX_PROBED','RX_READY','RX_EMPTY_POLLS','RX_PACKETS')
 COUNTERS = frozenset((*range(51,56),69,*range(74,78),*range(103,108)))
@@ -29,17 +29,22 @@ ACTIVE=legacy.ACTIVE
 NOISY_SEND_ENVELOPES=legacy.NOISY_SEND_ENVELOPES
 _sparse_spec=importlib.util.spec_from_file_location('_ll_stage_sparse',Path(__file__).with_name('ll_stage_timer_sparse.py'))
 sparse=importlib.util.module_from_spec(_sparse_spec);_sparse_spec.loader.exec_module(sparse)
-POINTS=sparse.POINTS
-SPARSE_POINTS=POINTS
+_mte3_spec=importlib.util.spec_from_file_location('_ll_stage_mte3',Path(__file__).with_name('ll_stage_timer_mte3.py'))
+mte3=importlib.util.module_from_spec(_mte3_spec);_mte3_spec.loader.exec_module(mte3)
+SPARSE_POINTS=sparse.POINTS
+POINTS=mte3.POINTS
+DIAGNOSTIC_MODES={'observe':1,'mte3-tx':4,'mte3-rx':5}
 SEGMENT_SCHEMAS=tuple(SCHEMA_SLOTS)
-CURRENT_SCHEMAS=(*SEGMENT_SCHEMAS,SCHEMA)
+CURRENT_SCHEMAS=(*SEGMENT_SCHEMAS,15,SCHEMA)
 
 
 def parse_records(raw, operation, frequency_hz=None):
     if not raw or not raw[0] or len(raw[0][0])!=8:
         raise ValueError('Missing timer header')
     schema=raw[0][0][1]
-    if schema==SCHEMA:
+    if schema==16:
+        return mte3.parse_records(raw,operation,frequency_hz)
+    if schema==15:
         return sparse.parse_records(raw,operation,frequency_hz)
     if schema not in SEGMENT_SCHEMAS:
         return legacy.parse_records(raw,operation,frequency_hz)
@@ -172,7 +177,7 @@ def chrome_trace(saved_records, frequency_hz=None, lane_layout='core', show_repe
         frequency=frequency_hz if frequency_hz is not None else saved.get('frequency_hz')
         if frequency is None: raise ValueError('Chrome trace requires explicit frequency_hz')
         report=parse_records(saved['raw'],saved['operation'],frequency);meta=saved.get('metadata',{})
-        if report['schema']==15:
+        if report['schema'] in (15,16):
             common = _sparse_capture_identity(report, meta)
             differences = _identity_differences(sparse_identity, common) if sparse_identity is not None else []
             if differences:
@@ -187,7 +192,7 @@ def chrome_trace(saved_records, frequency_hz=None, lane_layout='core', show_repe
         origin=min(row['first_tick'] for row in report['intervals'])
         lanes=set()
         for row in sorted(report['intervals'],key=lambda row:(row['core'],row['first_tick'],-row['last_tick'])):
-            stage_names = [p[0] for p in sparse.PAIRS] if report['schema']==15 else STAGES
+            stage_names = [p[0] for p in (mte3.PAIRS if report['schema']==16 else sparse.PAIRS)] if report['schema'] in (15,16) else STAGES
             tid=row['core'] if lane_layout=='core' else row['core']*METRICS+stage_names.index(row['stage'])
             if tid not in lanes:
                 events.append(dict(ph='M',name='thread_name',pid=pid,tid=tid,args=dict(name=f"AIV {row['core']:02d} {row['role']}"+(f" / {row['stage']}" if lane_layout=='stage' else ''))))
@@ -206,9 +211,9 @@ def chrome_trace(saved_records, frequency_hz=None, lane_layout='core', show_repe
                                args=dict(rank=rank,iteration=iteration,raw_cycle=point['tick'])))
         info.append(dict(operation=report['operation'],rank=rank,iteration=iteration,cores=report['cores'],
                          timer_profile=report['timer_profile'],timer_profile_id=report['timer_profile_id']))
-    return dict(traceEvents=events,metadata=dict(format='sparse milestones' if report['schema']==15 else 'dc_seg sampled intervals',sampled_calls_per_stage=None if report['schema']==15 else 2,
+    return dict(traceEvents=events,metadata=dict(format=report.get('recording','dc_seg sampled intervals') if report['schema'] in (15,16) else 'dc_seg sampled intervals',sampled_calls_per_stage=None if report['schema'] in (15,16) else 2,
                 timer_profile=report['timer_profile'],timer_profile_id=report['timer_profile_id'],
-                all_calls_in_metrics=report['schema']!=15,cores=info,clock='Rank-local origins; no cross-rank alignment'))
+                all_calls_in_metrics=report['schema'] not in (15,16),cores=info,clock='Rank-local origins; no cross-rank alignment'))
 
 
 def reference_binary(raw,operation):
@@ -227,7 +232,8 @@ def reference_binary(raw,operation):
 class StageTrace:
     def __init__(self, buffer, operation, mode='observe', frequency_hz=DEFAULT_FREQUENCY_HZ,
                  expert_config=None):
-        if operation not in ('dispatch', 'combine') or mode != 'observe':
+        if (operation not in ('dispatch', 'combine') or mode not in DIAGNOSTIC_MODES or
+                (operation=='combine' and mode!='observe')):
             raise ValueError('Invalid LL stage diagnostic configuration')
         if frequency_hz is not None and (not math.isfinite(frequency_hz) or frequency_hz <= 0):
             raise ValueError('Counter frequency must be finite and positive')
@@ -239,14 +245,23 @@ class StageTrace:
         if not getattr(native, 'low_latency_stage_timer_enabled', False):
             raise RuntimeError('Rebuild the full wheel with DEEPEP_LL_STAGE_TIMER=ON')
         schema = native.low_latency_stage_timer_layout()
-        expected=dict(schema=SCHEMA, slots=SLOTS, fields=FIELDS, stages=list(STAGES),
-                      points=list(POINTS), recording='sparse-milestones')
+        schema_number=schema.get('schema')
+        if schema_number not in (15,16) or (schema_number==15 and mode!='observe'):
+            raise RuntimeError('LL timer Python/native schema mismatch')
+        expected=dict(schema=schema_number, slots=SLOTS, fields=FIELDS, stages=list(STAGES),
+                      points=list(SPARSE_POINTS if schema_number==15 else POINTS),
+                      recording='sparse-milestones' if schema_number==15 else 'mte3-backpressure')
+        if schema_number==16:
+            expected.update(wait_metrics=list(mte3.METRICS),
+                            wait_metric_fields=['sum_ticks','max_ticks','calls','empty_control_ticks'],
+                            wait_metric_word_offset=32)
         profile_id=schema.get('timer_profile_id')
         if (any(schema.get(key)!=value for key,value in expected.items()) or
-                type(profile_id) is not int or profile_id!=6 or
+                type(profile_id) is not int or profile_id!=(6 if schema_number==15 else 7) or
                 schema.get('timer_profile')!=TIMER_PROFILES[profile_id]):
             raise RuntimeError('LL timer Python/native schema mismatch')
         self.timer_profile_id=profile_id
+        self.timer_schema=schema_number
         self.timer_profile=TIMER_PROFILES[profile_id]
         cfg = native.low_latency_core_config()
         if not cfg['runtime_device_queried']:
@@ -270,7 +285,7 @@ class StageTrace:
         self.report = parse_records(self.raw, self.operation, self.frequency_hz)
         if self.report['boundary_mode']!=self.mode:
             raise RuntimeError('Capture returned a different diagnostic mode')
-        if self.report['schema'] != SCHEMA:
+        if self.report['schema'] != self.timer_schema:
             raise RuntimeError('Capture returned a stale timer format; rebuild the complete wheel')
         if (self.report['timer_profile_id']!=self.timer_profile_id or
                 self.report['timer_profile']!=self.timer_profile):
@@ -344,4 +359,4 @@ def attach(buffer, tensors, operation):
     if getattr(trace, 'expert_tensor', None) is not None:
         tensors['ll_expert_timer'] = trace.expert_tensor
     # The native binding derives mode from this CPU scalar, not an NPU read.
-    tensors['ll_stage_timer_mode'] = {'observe':1,'relay-complete':3}[trace.mode]
+    tensors['ll_stage_timer_mode'] = DIAGNOSTIC_MODES[trace.mode]
