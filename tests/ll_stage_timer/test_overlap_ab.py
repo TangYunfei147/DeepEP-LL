@@ -29,7 +29,12 @@ def test_common_timing_boundaries():
     assert 'LL_SEG_SCOPE(PREFIX_COMPLETE)' in counts and 'LL_SEG_SCOPE(PREFIX_LOAD)' in counts
     start=sender.index('void Process(')
     body=sender[start:sender.index('struct NoCooperate',start)]
-    assert body.index('LL_SEG_END(segBegin1, PREPARE_INPUT)')<body.index('LL_SEG_SCOPE(SEND_TOKENS)')
+    assert body.index('LL_SEG_END(segBegin1, PREPARE_INPUT)')<body.index('timer_->Begin(LlStageTimer::SEND_TOKENS)')
+    assert body.index('EndInputPrefetch(input);')<body.index('timer_->End(LlStageTimer::SEND_TOKENS,sendBegin)')
+    # Early receive closes the sending fragment before the callback and starts
+    # the next fragment afterward; no receive work is attributed to TX.
+    direct=sender[sender.index('LlSubmittedDirectCadence cadence;'):sender.index('// 摘要：非去重发送流程')]
+    assert direct.index('timer_->End(LlStageTimer::SEND_TOKENS,sendBegin)')<direct.index('progress();')<direct.index('timer_->Begin(LlStageTimer::SEND_TOKENS)')
     assert 'overlap_.Cooperative() ? 8U:tasks' in sender
     assert 'if (overlap_.Async())' in sender and 'if (!overlap_.Async())' in sender
 

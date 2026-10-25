@@ -64,7 +64,8 @@ public:
         Prepare(timer);
         Run();
     }
-    __aicore__ inline void Prepare(LlStageTimer::DeviceTimer* timer = nullptr)
+    __aicore__ inline void Prepare(LlStageTimer::DeviceTimer* timer = nullptr,
+                                  bool senderActive=false,TEventID vectorScalar=TEventID(0))
     {
         timer_ = timer;
         LL_SEG_SCOPE(FORMAT_OUTPUT);
@@ -110,7 +111,12 @@ public:
         pipe_->InitBuffer(workBuf_, workBytes);
         // LoadAlign may read past the masked tail, including inactive rows.
         Duplicate(flagsBuf_.Get<float>(), 0.0f, flagsBytes / 4U);
-        ServerDedupReceiveSync<HardEvent::V_MTE2>();
+        if (senderActive) {
+            // Input queue events are still leased by the sender. Complete the
+            // local zeroing with our separately leased V_S event instead.
+            SetFlag<HardEvent::V_S>(vectorScalar);
+            WaitFlag<HardEvent::V_S>(vectorScalar);
+        } else ServerDedupReceiveSync<HardEvent::V_MTE2>();
         const uint32_t tablesBytes = 2U * uint32_t(DispatchDedupAlign(uint64_t(tasks_.Count()) * 4U, 32U));
         const uint32_t fixed = prefixBytes + tablesBytes + flagsBytes + workBytes + kProbeBatch * 36U;
         // 剩余 UB 作为最多 8 路预取 lane；每路包括完整 packet 和 64B 输出元数据。
@@ -123,8 +129,25 @@ public:
                                       kEpServerDedupCountUbBytes);
         pipe_->InitBuffer(probeIdxBuf_, kProbeBatch * 4U + (probePrefetch_ ? kLlReceiveProbeExtraBytes : 0U));
         pipe_->InitBuffer(lanesBuf_, lanes_ * laneStride_);
+        if (overlap_.earlyReceive) pipe_->InitBuffer(stagedIdsBuf_,LlEarlyReceiveIdBytes(lanes_));
         if (!overlap_.enabled) for (uint32_t lane = 0; lane < lanes_; ++lane) SetFlag<HardEvent::MTE3_MTE2>(lane);
 
+    }
+
+    __aicore__ inline bool CanEarlyReceive() const {
+        if (!overlap_.earlyReceive || !tasks_.PendingCount()) return false;
+        if constexpr (kLlEarlyReceivePolicy==LlEarlyReceivePolicy::Buffered) return stagedCount_<lanes_;
+        return true;
+    }
+    __aicore__ inline uint32_t TryEarlyReceive(TEventID mte2Vector,TEventID vectorScalar) {
+        if (!CanEarlyReceive()) return 0U;
+        uint32_t limit=kLlEarlyReceiveQuantum;
+        if constexpr (kLlEarlyReceivePolicy==LlEarlyReceivePolicy::Buffered) {
+            const uint32_t free=lanes_-stagedCount_;
+            if (limit>free) limit=free;
+        }
+        EarlyProbeOps ops{this,mte2Vector,vectorScalar};
+        return LlTryEarlyFirstHopWindow(ops,tasks_.PendingCount(),earlyScan_,limit);
     }
 
     // At most two adjacent 16-slot snapshots; every queued probe is joined
@@ -188,6 +211,13 @@ public:
         return true;
     }
     __aicore__ inline void Run() {
+        // Pending excludes staged tasks. FIFO consumption completes each task
+        // exactly once, after initial sends/metadata have all been submitted.
+        for (uint32_t i=0U;i<stagedCount_;++i) {
+            ConsumeLoaded(stagedIdsBuf_.Get<uint32_t>().GetValue(i),consumed_%lanes_,true);
+            ++consumed_;
+        }
+        stagedCount_=0U;
         while (tasks_.PendingCount()) TryBatch();
         if (!tasks_.Count()) return;
         // 5. pending 清空后，等待各 lane 在途写入，随后统一清除本核所有槽位的块标记。
@@ -216,6 +246,38 @@ private:
         LlReceivePriority order;
         uint32_t snapshotOffset=0U, keepFlagsMask=0U, nextLoad=0U;
     };
+    struct EarlyProbeOps {
+        ServerDedupReceiver* receiver;
+        TEventID mte2Vector,vectorScalar;
+        __aicore__ inline LlReceiveProbeResult Probe(uint32_t start,uint32_t count) {
+            receiver->StartProbeWithEvents(start,count,0U,mte2Vector,vectorScalar);
+            return receiver->FinishProbeWithEvent(count,vectorScalar);
+        }
+        __aicore__ inline void Accept(uint32_t count,uint32_t selected) {
+            receiver->AcceptEarly(count,selected);
+        }
+        __aicore__ inline void Remove(uint32_t start,uint32_t count,uint32_t selected) {
+            receiver->RemoveProbe(start,count,selected);
+        }
+    };
+    __aicore__ inline void AcceptEarly(uint32_t count,uint32_t selected) {
+        if constexpr (kLlEarlyReceivePolicy==LlEarlyReceivePolicy::Buffered) {
+            auto snapshot=probeIdxBuf_.Get<uint32_t>();
+            auto staged=stagedIdsBuf_.Get<uint32_t>();
+            const auto order=LlMakeReceivePriority(count,selected,selected);
+            for (uint32_t i=0U;i<order.count;++i) {
+                const uint32_t j=snapshot.GetValue(order.At(i));
+                // No receive lane has yet been consumed or recycled. Keep its
+                // MTE2_S/MTE2_MTE3 tokens live until FIFO drain in Run.
+                IssueLoad(j,issued_%lanes_,true,false);
+                staged.SetValue(stagedCount_++,j);
+                ++issued_;
+            }
+        } else {
+            auto batch=PrimeReady(0U,count,LlReceiveProbeResult{selected,selected});
+            ConsumeReady(batch);
+        }
+    }
     struct ProbePipelineOps {
         ServerDedupReceiver* receiver;
         __aicore__ inline void StartProbe(uint32_t start,uint32_t count,uint32_t offset) {
@@ -274,6 +336,10 @@ private:
     // A is decoded before reusing flags/sums/work for B. No in-flight probe
     // survives TryBatch, so cooperative sender/count callbacks cannot collide.
     __aicore__ inline void StartProbe(uint32_t start,uint32_t count,uint32_t offset) {
+        StartProbeWithEvents(start,count,offset,TEventID(6),TEventID(6));
+    }
+    __aicore__ inline void StartProbeWithEvents(uint32_t start,uint32_t count,uint32_t offset,
+                                               TEventID mte2Vector,TEventID vectorScalar) {
         LL_SEG_FIRST(BEFORE_FIRST_RECV_POLL);
         LL_SEG_SCOPE(RECV_POLL);
         LL_SEG_COUNT(RX_PROBED,count);
@@ -289,8 +355,8 @@ private:
           }
         }
         { LL_SEG_SCOPE(RX_FLAG_WAIT);
-          SetFlag<HardEvent::MTE2_V>(6U);
-          WaitFlag<HardEvent::MTE2_V>(6U);
+          SetFlag<HardEvent::MTE2_V>(mte2Vector);
+          WaitFlag<HardEvent::MTE2_V>(mte2Vector);
         }
         { LL_SEG_SCOPE(RX_FLAG_REDUCE);
           if (blocks==8U)
@@ -298,14 +364,17 @@ private:
                   reinterpret_cast<__ubuf__ uint32_t*>(sums.GetPhyAddr()),count,blocks);
           else
               Sum<float>(sums,flags,workBuf_.Get<uint8_t>(),SumParams{count,blocks*8U,blocks*8U});
-          SetFlag<HardEvent::V_S>(6U);
+          SetFlag<HardEvent::V_S>(vectorScalar);
         }
     }
     __aicore__ inline LlReceiveProbeResult FinishProbe(uint32_t count) {
+        return FinishProbeWithEvent(count,TEventID(6));
+    }
+    __aicore__ inline LlReceiveProbeResult FinishProbeWithEvent(uint32_t count,TEventID vectorScalar) {
         LL_SEG_SCOPE(RECV_POLL);
         // This is the residual scalar join, not an interval spanning A's
         // payload work. REDUCE/POLL calls now count submit/join fragments.
-        { LL_SEG_SCOPE(RX_FLAG_REDUCE); WaitFlag<HardEvent::V_S>(6U); }
+        { LL_SEG_SCOPE(RX_FLAG_REDUCE); WaitFlag<HardEvent::V_S>(vectorScalar); }
         LL_SEG_SCOPE(RX_FLAG_DECODE);
         LlReceiveProbeResult result;
         if (data_.blockCount==8U) {
@@ -551,10 +620,11 @@ private:
     uint32_t recvCoreNum_ = 0, coreNum_ = 0;
     uint32_t bs_ = 0U, k_ = 0U, experts_ = 0U, localExperts_ = 0U, receiver_ = 0U;
     uint32_t scan_=0U, issued_=0U, consumed_=0U;
+    uint32_t earlyScan_=0U, stagedCount_=0U;
     uint32_t hiddenBytes_ = 0U, laneStride_ = 0U, lanes_ = 0U;
     EpServerDedupDataLayout data_{};
     ServerDedupReceiveTasks tasks_;
-    TBuf<> prefixBuf_, flagsBuf_, sumBuf_, workBuf_, probeIdxBuf_, lanesBuf_;
+    TBuf<> prefixBuf_, flagsBuf_, sumBuf_, workBuf_, probeIdxBuf_, lanesBuf_, stagedIdsBuf_;
     GlobalTensor<uint8_t> expandX_, dynamicScales_;
     GlobalTensor<uint32_t> tokenType_, destinationIndex_, relayReadIndex_;
 };

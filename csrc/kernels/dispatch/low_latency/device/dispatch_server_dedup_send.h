@@ -72,8 +72,9 @@ public:
     }
     __aicore__ inline void ConfigureOverlap(LlOverlapLayout plan) { overlap_=plan; }
     // 摘要：执行本核发送主流程：准备 UB、优先发送去重首跳、再发送 DIRECT，最后写回源端元数据。
+    template<class Progress>
     __aicore__ inline void Process(TBufPool<TPosition::VECCALC, 16>& scratch, uint32_t reservedBytes,
-                                   LlStageTimer::DeviceTimer* timer = nullptr)
+                                   LlStageTimer::DeviceTimer* timer, Progress& progress)
     {
         // 1. 无 token 分片的发送核直接返回；有任务的核复用 SendCnt 释放出的 scratch。
         // reservedBytes 对应仍可能被计数发送读取的 UB，不能当作可用空间覆盖。
@@ -193,13 +194,15 @@ public:
 
         LL_SEG_END(segBegin1, PREPARE_INPUT);
         LL_SEG_END(setupBegin, SEND_SETUP);
-        { LL_SEG_SCOPE(SEND_TOKENS);
+        {
+        uint64_t sendBegin=timer_ ? timer_->Begin(LlStageTimer::SEND_TOKENS):0U;
         BeginInputPrefetch();
         if (enableDedup_)
-            SendWithDedup(input);
+            SendWithDedup(input,progress,sendBegin);
         else
             SendWithoutDedup(input);
         EndInputPrefetch(input);
+        if (timer_) timer_->End(LlStageTimer::SEND_TOKENS,sendBegin);
         }
 
         // Keep metadata sources alive through receive. Only the serial fallback
@@ -310,7 +313,9 @@ public:
     }
 
     // 摘要：去重发送主流程：先发同 server 合并的 FIRST_HOP，再按 server 顺序发缓存的 DIRECT。
-    __aicore__ inline void SendWithDedup(TQue<QuePosition::VECIN, 1>& input)
+    template<class Progress>
+    __aicore__ inline void SendWithDedup(TQue<QuePosition::VECIN, 1>& input,
+                                         Progress& progress,uint64_t& sendBegin)
     {
         // 4. 第一遍处理本核 token：同一远端 server 的多条路由合并为一份 FIRST_HOP。
         // 以组内最小 k 对应专家作为首跳目标，把其他成员的路由信息放入包尾，
@@ -358,6 +363,12 @@ public:
             }
         }
 
+        // packets_ counts only DataCopy+SetFlag submissions. The one deferred
+        // descriptor, if any, is still a FIRST_HOP; do not count it as DIRECT.
+        LlSubmittedDirectCadence cadence;
+        cadence.Reset(packets_,inputPrefetch_.HasPending());
+        bool early=progress.Enabled();
+
         // 5. Rotate the existing DIRECT group order by source card and send core.
         // Stable scans within each group retain q, token/k ordering and ownership.
         // 首跳和 DIRECT 共用 packets_ 序号及 lane 环；阶段之间不额外等待全部包发完。
@@ -379,6 +390,14 @@ public:
                 const uint32_t k = directTasks_.GetValue(task * 4U + 1U);
                 const uint32_t q = directTasks_.GetValue(task * 4U + 3U);
                 SendPacket(input, start_ + token, k, expert, q, 0U);
+                if (early && cadence.Visit(packets_)) {
+                    // Push has already dequeued the next input. Its tensor and
+                    // readiness event stay owned; do not Flush/Reset lookahead.
+                    if (timer_) timer_->End(LlStageTimer::SEND_TOKENS,sendBegin);
+                    progress();
+                    sendBegin=timer_ ? timer_->Begin(LlStageTimer::SEND_TOKENS):0U;
+                    early=progress.Enabled();
+                }
                 // Mask/weights were emitted once before remote task scheduling.
             }
         }

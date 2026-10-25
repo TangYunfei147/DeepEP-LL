@@ -1,5 +1,10 @@
 # 泛化分支生产LL路径
 
+Buffered FIRST_HOP候选：common/ll_early_receive.h控制单一编译策略与真实DIRECT提交节奏；
+sender保持一包输入前瞻，counts单次epoch读取，recv暂存原lane并在最后Run中FIFO消费。
+控制事件在input队列初始化后独占申请、每次回调配平、发送返回后释放；不使用输入MTE2_S6/7。
+指南../ll_stage_timer/BUFFERED_RECEIVE.md。默认Buffered，Immediate仅为独立对照策略入口。
+
 该分支保留MTE传输和DEEPEP_LL_RANKS_PER_GROUP静态可配置分组，默认4。
 不要复制NDR的Session、ll_transport或tiling-key策略来替代这里的实现。
 
