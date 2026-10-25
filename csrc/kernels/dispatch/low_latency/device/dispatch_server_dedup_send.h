@@ -15,6 +15,7 @@
 #include "../common/ep_memory_server_dedup_data_layout.h"
 #include "../common/ep_memory_server_dedup_protocol.h"
 #include "../common/ll_send_order.h"
+#include "../common/ll_fullmesh_first_hop.h"
 #include "../../../common/ep_packet_receive_layout.h"
 
 namespace DispatchDedup {
@@ -41,6 +42,7 @@ public:
         sendCores_ = (coreNum == 0U ? GetBlockNum() : coreNum) / 2U;
         pipe_ = pipe;
         enableDedup_ = enableDedup;
+        fullMeshFirstHop_ = Group == 16U && args->rankSize == 32 && LlTransport::Rdma(args);
         bs_ = bs;
         h_ = h;
         k_ = k;
@@ -177,23 +179,27 @@ public:
     __aicore__ inline void SendWithDedup(TQue<QuePosition::VECIN, 1>& input)
     {
         // 4. 第一遍处理本核 token：同一远端 server 的多条路由合并为一份 FIRST_HOP。
-        // 以组内最小 k 对应专家作为首跳目标，把其他成员的路由信息放入包尾，
+        // EP32 RDMA优先从目标最多的4-rank fullmesh小组选真实专家；其他路径仍取最小k。
+        // 其他成员的路由信息放入包尾，
         // 由目标接收端继续转发。所有首跳优先发出，尽早启动远端 relay。
 
         const uint32_t rankInGroup = uint32_t(args_->rank) % Group;
         const uint32_t sendCore = GetBlockIdx();
         for (uint32_t token = 0; token < count_; ++token) {
-            uint32_t directMask = 0, firstHopCount = 0;
+            uint32_t directMask = 0, firstHopCount = 0, meshFirstK = 0;
             if (timer_) timer_->Start(LlStageTimer::SendClassify);
-            Classify(token, directMask, firstHopCount);
+            Classify(token, directMask, firstHopCount, meshFirstK);
             if (timer_) timer_->End(LlStageTimer::SendClassify);
             sourceMasks_.SetValue(token, 0U);
             for (uint32_t group = 0; group < firstHopCount; ++group) {
                 const uint32_t scheduled = LlFirstHopOrder(firstHopCount, rankInGroup, sendCore,
                                                           start_ + token, group);
                 const uint32_t mask = firstHopMasks_.GetValue(scheduled);
-                uint32_t firstK = 0;
-                while ((mask & (uint32_t(1) << firstK)) == 0U) ++firstK;
+                uint32_t firstK = meshFirstK;
+                if (!fullMeshFirstHop_) {
+                    firstK = 0U;
+                    while ((mask & (uint32_t(1) << firstK)) == 0U) ++firstK;
+                }
                 const uint32_t index = (start_ + token) * k_ + firstK;
                 const uint32_t expert = uint32_t(routeIds_.GetValue(index));
                 SendPacket(input, start_ + token, firstK, expert, CalTokenSendExpertCnt(expert, index), mask);
@@ -291,12 +297,15 @@ private:
         usedBytes_ += bytes;
     }
     // 摘要：按目标 server 对当前 token 的路由分类：同 server 多条远端路由合并为 FIRST_HOP，其余为 DIRECT。
-    __aicore__ inline void Classify(uint32_t token, uint32_t& directMask, uint32_t& groups)
+    __aicore__ inline void Classify(uint32_t token, uint32_t& directMask, uint32_t& groups, uint32_t& meshFirstK)
     {
         uint32_t seen = 0, grouped = 0;
+        LlFullMeshFirstHop mesh;
         for (uint32_t k = 0; k < k_; ++k) {
             const uint32_t expert = uint32_t(routeIds_.GetValue((start_ + token) * k_ + k));
-            const uint32_t server = expert / localExperts_ / Group;
+            const uint32_t destination = expert / localExperts_;
+            const uint32_t server = destination / Group;
+            if (fullMeshFirstHop_ && server != uint32_t(args_->rank) / Group) mesh.Add(destination, k);
             const uint32_t bit = uint32_t(1) << k, serverBit = uint32_t(1) << server;
             if (server == uint32_t(args_->rank) / Group) {
                 directMask |= bit;
@@ -315,6 +324,7 @@ private:
                 firstHopMasks_.SetValue(index, firstHopMasks_.GetValue(index) | bit);
             }
         }
+        meshFirstK = fullMeshFirstHop_ && groups != 0U ? mesh.FirstK() : 0U;
     }
     // 摘要：统计原始展平路由中 index 之前指向该专家的条数，作为槽内序号 q；首 token 按当前约定返回 0。
     __aicore__ inline uint32_t CalTokenSendExpertCnt(uint32_t expert, uint32_t index)
@@ -372,8 +382,9 @@ private:
         token -= start_;
         weights.SetValue(1U, routeWeights_.GetValue(token * k_ + firstK));
         uint32_t entries = 0U;
-        for (uint32_t k = firstK + 1U; mask != 0U && k < k_; ++k)
-            if (mask & (uint32_t(1) << k)) {
+        const uint32_t members = LlRelayMemberMask(mask, firstK);
+        for (uint32_t k = 0U; members != 0U && k < k_; ++k)
+            if (members & (uint32_t(1) << k)) {
                 const uint32_t routeIndex = (start_ + token) * k_ + k;
                 const uint32_t expert = uint32_t(routeIds_.GetValue(routeIndex));
                 const uint32_t q = CalTokenSendExpertCnt(expert, routeIndex);
@@ -477,7 +488,7 @@ private:
     TPipe* pipe_ = nullptr;
     LlStageTimer::DeviceTimer* timer_ = nullptr;
     LlTransport::DispatchRdmaBatch rdmaBatch_;
-    bool enableDedup_ = false;
+    bool enableDedup_ = false, fullMeshFirstHop_ = false;
     TBufPool<TPosition::VECCALC, 16>* scratch_ = nullptr;
     uint32_t sendCores_ = 0;
     uint32_t bs_ = 0, h_ = 0, k_ = 0, localExperts_ = 0, start_ = 0, count_ = 0;

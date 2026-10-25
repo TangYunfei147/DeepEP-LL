@@ -19,8 +19,8 @@ LL_SEND_ORDER_INLINE uint32_t LlSendStaggerOrdinal(uint32_t count, uint32_t phas
     return index < count ? index : index - count;
 }
 
-// FIRST_HOP keeps its original minimum-k expert; only its position among the
-// current token's first-hop tasks changes. Token rotation avoids a fixed bias.
+// Only rotate the current token's first-hop tasks. Expert selection is owned
+// by the sender's topology policy; this function never changes that selection.
 LL_SEND_ORDER_INLINE uint32_t LlFirstHopOrder(uint32_t count, uint32_t rankInGroup,
                                            uint32_t core, uint32_t token, uint32_t ordinal)
 {

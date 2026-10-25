@@ -2,6 +2,8 @@
 
 2026-10-25：SHMEM更新到官方master固定提交8e3fc610，必须重建匹配SDK和wheel，
 具体兼容与部署见 [SHMEM_MASTER_UPDATE.md](SHMEM_MASTER_UPDATE.md)。
+每卡3 fullmesh + 4 Clos + 1跨机网口的消息合并、首跳策略及A/B方法见
+[EIGHT_PORT_OPTIMIZATION.md](EIGHT_PORT_OPTIMIZATION.md)。
 
 维护分支：`kernel/ll-ndr-hns1825`。原泛化/打点分支 `kernel/ll-configurable-groups` 不包含此改动。
 
