@@ -1,0 +1,10 @@
+{
+  "schema": 2,
+  "comparison_base": "ed1c5531dbb22d4d2a6b5571a2d1bce17a3683b5",
+  "baseline_note": "LL-only MTE runtime, HT excluded from suite builds; same official SHMEM 8e3fc610 for all entries. Independent scheduling candidates. Use a fresh run prefix; old mixed MTE+UDMA session measurements are not reusable here.",
+  "commits": [
+    {"label": "baseline", "revision": "ed1c5531dbb22d4d2a6b5571a2d1bce17a3683b5"},
+    {"label": "buffered-c2", "revision": "4d37eb6471526a0cda4c38d702a271d3cb51ff74"},
+    {"label": "immediate-c2", "revision": "c7d70a4caf6f668845d269dcd51b59f381ebb68a"}
+  ]
+}

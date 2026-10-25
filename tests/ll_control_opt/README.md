@@ -1,6 +1,12 @@
 # Control-path candidates: commit-by-commit A/B
 
-The current topology/SDK experiment is documented in
+> Current run: follow [LL_ONLY_FIX.md](LL_ONLY_FIX.md). Use
+> `commits-topology-mte.json`, `DEEPEP_BUILD_HT=OFF` and the new prefix
+> `b256-topology-mte-001`: three new-SDK candidates,18 ST calls.
+> The earlier mixed-session/four-item experiment below is retained for provenance;
+> do not reuse its samples as the corrected LL-only session results.
+
+The earlier topology/SDK experiment is documented in
 [TOPOLOGY_EXPERIMENTS.md](TOPOLOGY_EXPERIMENTS.md): a new-SDK baseline with the
 measured `c1e4faa` kernel, an explicit old-SDK comparison, and two independent
 receive-scheduling candidates. Select `commits-topology.json` explicitly.

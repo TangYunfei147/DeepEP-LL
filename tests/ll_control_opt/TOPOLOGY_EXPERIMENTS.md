@@ -1,5 +1,10 @@
 # G4 拓扑、SDK 与接收调度实验
 
+> 当前性能测试改用[纯LL初始化修复指南](LL_ONLY_FIX.md)：
+> `commits-topology-mte.json`仅3项新SDK候选，关闭HT构建，使用新前缀
+> `b256-topology-mte-001`，共18次ST。本文原4项SDK对照保留为历史，
+> 不将旧混合MTE/UDMA初始化样本复用为本轮结果。
+
 本轮以已测的 `c1e4faa` kernel 为基础，分别比较 SHMEM 更新与接收调度。
 新清单是 `tests/ll_control_opt/commits-topology.json`；原 `commits.json` 和
 `commits-cumulative.json` 保留，已有实验续跑继续使用原清单。
