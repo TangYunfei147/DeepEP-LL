@@ -27,14 +27,8 @@ find_path(DEVICE_RT_INCLUDE rt.h HINTS
     "${ASCEND_HOME_PATH}/${CMAKE_SYSTEM_PROCESSOR}-linux/pkg_inc/runtime"
     "${ASCEND_HOME_PATH}/${CMAKE_SYSTEM_PROCESSOR}-linux/runtime/include"
     NO_DEFAULT_PATH)
-# Share HT objects and retain both LL diagnostic variants. Only the selected
-# variant is built, so repeated timer switches reuse dependency-tracked objects.
-add_library(deepep_kernel_common OBJECT
-    "${DEEPEP_SOURCE_DIR}/csrc/kernels/notify/notify.cpp"
-    "${DEEPEP_SOURCE_DIR}/csrc/kernels/dispatch/dispatch.cpp"
-    "${DEEPEP_SOURCE_DIR}/csrc/kernels/combine/combine.cpp"
-    "${DEEPEP_SOURCE_DIR}/csrc/kernels/combine/reuse.cpp"
-    "${DEEPEP_SOURCE_DIR}/csrc/kernels/combine/combine_ep8_mte.cpp")
+# This NDR performance branch builds LL only. Retain both LL diagnostic
+# variants so timer switches reuse dependency-tracked objects.
 set(_ll_sources
     "${DEEPEP_SOURCE_DIR}/csrc/kernels/dispatch/low_latency.cpp"
     "${DEEPEP_SOURCE_DIR}/csrc/kernels/combine/low_latency.cpp")
@@ -55,8 +49,7 @@ if(DEEPEP_LL_STAGE_TIMER)
 else()
     set(_ll_variant deepep_kernel_ll_plain)
 endif()
-add_library(deepep_kernels SHARED
-    $<TARGET_OBJECTS:deepep_kernel_common> $<TARGET_OBJECTS:${_ll_variant}>)
+add_library(deepep_kernels SHARED $<TARGET_OBJECTS:${_ll_variant}>)
 
 add_library(deepep_kernel_options INTERFACE)
 target_compile_options(deepep_kernel_options INTERFACE "$<$<NOT:$<CONFIG:Debug>>:-O2>" -xasc --npu-arch=dav-3510
@@ -80,7 +73,7 @@ if(DEVICE_RT_INCLUDE)
 else()
     message(STATUS "No standalone rt.h found; using the selected CANN -xasc toolchain headers")
 endif()
-foreach(_objects deepep_kernel_common deepep_kernel_ll_plain deepep_kernel_ll_timer)
+foreach(_objects deepep_kernel_ll_plain deepep_kernel_ll_timer)
     target_link_libraries(${_objects} PRIVATE deepep_kernel_options)
 endforeach()
 

@@ -323,11 +323,15 @@ def build_configuration(environment=None):
     result["compiler_path"] = compiler
     result["megamoe"] = {"enabled": beta == "ON", "timer": timer == "ON"}
     if beta == "ON":
-        catlass = Path(env.get("CATLASS_ROOT", str(ROOT / "third-party/catlass")))
+        if not env.get("CATLASS_ROOT"):
+            raise RuntimeError("MegaMoE requires explicit CATLASS_ROOT; CATLASS is no longer a submodule")
+        catlass = Path(env["CATLASS_ROOT"])
+        if not catlass.is_absolute():
+            catlass = ROOT / catlass
         if not (catlass / "include/catlass/gemm/tile/copy_l1_to_l0a.hpp").is_file():
             raise RuntimeError(
-                "MegaMoE requires CATLASS: run git submodule update --init --recursive, "
-                "or set CATLASS_ROOT; see experiments/megamoe/README.md"
+                "MegaMoE requires a separate pinned CATLASS checkout at CATLASS_ROOT; "
+                "see experiments/megamoe/README.md"
             )
         revision = subprocess.check_output(["git", "-C", str(catlass), "rev-parse", "HEAD"], text=True).strip()
         if revision != lock["megamoe"]["catlass_revision"]:

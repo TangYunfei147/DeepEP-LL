@@ -6,6 +6,8 @@
 
 默认 EP32，每机设备0..15，B8/M256/H3584/K8/E384，BF16和预量化FP8两组，
 dispatch+combine，正确性检查保留。FP8配置的combine仍是BF16。
+此NDR性能分支仅编译LL，跳过与当前SHMEM内部UDMA接口不匹配的HT路径；
+不会初始化CATLASS子模块。HT调用明确拒绝。
 
 ## 使用
 

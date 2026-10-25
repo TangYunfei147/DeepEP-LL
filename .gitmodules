@@ -5,6 +5,3 @@
 	path = third-party/shmem
 	url = https://gitcode.com/cann/shmem.git
 	branch = master
-[submodule "third-party/catlass"]
-	path = third-party/catlass
-	url = https://gitcode.com/cann/catlass.git

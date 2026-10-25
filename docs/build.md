@@ -56,7 +56,7 @@ source "$SHMEM_ROOT/set_env.sh"
 export LD_LIBRARY_PATH="$SHMEM_ROOT/lib:${LD_LIBRARY_PATH:-}"
 # 外部 SDK 必须已由匹配构建流程生成完整身份；只验证，不补写或改写 manifest。
 python scripts/record_shmem_sdk.py --sdk "$SHMEM_ROOT" --check
-# 启用 MegaMoE 且不用仓内子模块时，再设置 CATLASS_ROOT=/path/to/pinned/catlass。
+# 启用 MegaMoE 时显式设置 CATLASS_ROOT=/path/to/pinned/catlass；CATLASS已移出子模块。
 ```
 
 sdist 不携带子模块，解包后构建需显式设置 SHMEM_ROOT，以及启用 MegaMoE 时所需的 CATLASS_ROOT；EpGmmFused 的外部源码路径按其构建说明设置。

@@ -1,5 +1,8 @@
 # HNS_1825 混合 MTE / NDR LL（核心协议8）
 
+当前分支用于LL性能穿刺，只构建LL Host/Device，HT notify/dispatch/combine不编译；
+误调用HT入口会明确报错。CATLASS已移出子模块，普通LL构建不需要它。
+
 两机各一条命令的构建/测试/本机解析入口见 [ONE_CLICK.md](ONE_CLICK.md)：
 `bash tests/ll_rdma/one_click.sh NODE_RANK MASTER_IP RUN_NAME`，默认ON诊断，`--mode perf`为OFF性能。
 

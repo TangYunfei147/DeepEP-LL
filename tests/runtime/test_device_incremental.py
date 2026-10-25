@@ -128,6 +128,28 @@ def test_stage_timer_definition_is_scoped_to_ll_sources():
     assert "target_compile_definitions(deepep_kernels PRIVATE DEEPEP_LL_STAGE_TIMER" not in text
 
 
+def test_ndr_build_excludes_ht_bindings_and_declares_ll_only():
+    import json
+    parent = (ROOT / "CMakeLists.txt").read_text()
+    sources = parent.split("pybind11_add_module(_C ", 1)[1].split(")", 1)[0].split()
+    assert sources == ["csrc/bindings/module.cpp", "csrc/runtime/session.cpp", "csrc/ops/low_latency.cpp"]
+    device = (ROOT / "cmake/device/CMakeLists.txt").read_text()
+    assert "deepep_kernel_common" not in device
+    capabilities = json.loads(parent.split('capabilities.json" CONTENT [=[', 1)[1].split(']=]', 1)[0])
+    assert "ll-only" in capabilities["capabilities"]
+    assert "runtime-urma" not in capabilities["capabilities"]
+    assert not any(name.startswith(("elastic-notify", "elastic-dispatch-expanded", "elastic-combine-expanded"))
+                   for name in capabilities["capabilities"])
+    bindings = (ROOT / "csrc/bindings/module.cpp").read_text()
+    assert 'module.attr("high_throughput_enabled") = false' in bindings
+    assert 'for (const char* operation : {"notify", "dispatch", "combine"})' in bindings
+    assert 'module.def(operation, [](py::args, py::kwargs)' in bindings
+    assert 'throw std::runtime_error("HT operations are unavailable in this LL-only NDR build")' in bindings
+    assert "deepep::bind_low_latency(module)" in bindings
+    for name in ("notify", "dispatch", "combine"):
+        assert f"deepep::bind_{name}(module)" not in bindings
+
+
 def test_real_device_rules_recompile_only_ll_when_timer_changes(tmp_path):
     """Use the actual device CMake file and an output-producing fake GNU tool.
 
@@ -139,9 +161,7 @@ def test_real_device_rules_recompile_only_ll_when_timer_changes(tmp_path):
     child.mkdir(parents=True)
     shutil.copyfile(ROOT / "cmake/device/CMakeLists.txt", child / "CMakeLists.txt")
     shutil.copyfile(ROOT / "cmake/Dependencies.cmake", source / "cmake/Dependencies.cmake")
-    units = ["notify/notify.cpp", "dispatch/dispatch.cpp", "combine/combine.cpp",
-             "combine/reuse.cpp", "combine/combine_ep8_mte.cpp",
-             "dispatch/low_latency.cpp", "combine/low_latency.cpp", *DISPATCH_VARIANTS]
+    units = ["dispatch/low_latency.cpp", "combine/low_latency.cpp", *DISPATCH_VARIANTS]
     for unit in units:
         path = source / "csrc/kernels" / unit
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -205,7 +225,7 @@ if "-o" in args:
         return [json.loads(line) for line in commands.read_text().splitlines()[len(before):]]
 
     initial = run("OFF")
-    assert len(initial) == 22  # Five HT and sixteen LL objects plus the shared library.
+    assert len(initial) == 17  # Sixteen LL objects plus the shared library; no HT sources.
     changed = run("ON")
     assert len(changed) == 17
     expected_ll = {"dispatch/low_latency.cpp", "combine/low_latency.cpp", *DISPATCH_VARIANTS}
@@ -253,7 +273,7 @@ if "-o" in args:
     identity["build"]["hns_1825_pi_on_chip"] = 1
     identity_path.write_text(json.dumps(identity))
     previous_commands = len((tmp_path / "command_args.jsonl").read_text().splitlines())
-    assert len(run("ON")) == 22
+    assert len(run("ON")) == 17
     for line in (tmp_path / "command_args.jsonl").read_text().splitlines()[previous_commands:]:
         args = json.loads(line)
         if "-c" in args:
