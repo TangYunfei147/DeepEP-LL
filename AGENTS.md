@@ -1,5 +1,11 @@
 # LL 编译维护约束
 
+## 最新工作方式（2026-10-25，优先于下方历史要求）
+
+- 后续不再使用27（177.22.27.1）验证编译，不为此连接27、准备SDK、构建OFF/ON wheel或执行相关Host导入检查。此前隔离编译授权已结束，历史记录不授权后续操作。
+- 完成修改及必要本地检查后，直接提交、推送，并提供对应提交和可执行的测试命令，由用户在目标机编译和测试；远端编译不作为推送前置条件。
+- 如实标注未执行的CANN编译、设备正确性和性能验证；不擅自改用其他远端主机，也不反复询问27编译授权，除非用户明确更新本规则。
+
 修改 LL kernel、模板、打点或构建配置前，先阅读：
 
 - `tests/ll_probe/KERNEL_MAP.md`
@@ -17,10 +23,10 @@
 ## 验证与记录
 
 - 运行 `python -m pytest tests/ll_stage_timer/test_dispatch_variants.py tests/ll_stage_timer/test_segment_source.py tests/elastic/test_ll_st_contract.py -q`。
-- 影响模板展开、打点规模或构建图的变更，须在获授权编译环境测量 ON/OFF 的独立空对象目录，并验证完整 ON wheel 的链接。只改文档或 CPU 检查不必重复设备编译。
+- 影响模板展开、打点规模或构建图的变更，交付用户目标机的 ON/OFF 独立空对象目录测量与完整 ON wheel 链接验证命令；助手不再使用27执行，也不等待远端编译才推送。只改文档或 CPU 检查不必重复设备编译。
 - 对照必须固定工具链、SDK、模式集合、优化级别、核数和并行度；分开记录冷编译、暖构建、SDK准备和打包时间。失败、跳过、审批未执行均须如实记录。
 - 修改缓存逻辑时另查无改动重建与头文件修改后的依赖重编；不得只凭源码摘要跳过真实构建系统的依赖检查。
-- 交付前更新 `docs/BUILD_DISPATCH_SPLIT.md` 的实测证据。向其他分支移植时检查其入口是否已拆分，不得因 NDR 分支已有修复而假定其他分支也已修复。
+- 交付前更新 `docs/BUILD_DISPATCH_SPLIT.md` 的已完成检查和未执行验收项，不将本地检查写成设备验证。向其他分支移植时检查其入口是否已拆分，不得因 NDR 分支已有修复而假定其他分支也已修复。
 
 ## 当前 A/B 分支
 四版策略、统一schema12口径和切换方式见docs/OVERLAP_AB.md。
@@ -154,9 +160,9 @@ cross-core barrier. Source metadata remains at the original send tail.
 Only local CPU work is authorized while27is unavailable. New CANN compilation,
 NPU correctness and performance remain target-machine acceptance work.
 
-## LL-only initialization fix and isolated27build (2026-10-25)
+## Historical LL-only initialization fix and isolated27build (2026-10-25)
 
-Latest user instruction supersedes the preceding local-only restriction for
+The completed one-time authorization (now closed for future work) covered
 177.22.27.1, limited to the isolated directory
 /home/tyf/Q4_remote_test/DeepEP-LL-g4-small-b-prefix/.tmp/topology-mainline-20261025.
 Source, dependencies, SDK/wheel builds, logs and caches stay inside it; preserve
