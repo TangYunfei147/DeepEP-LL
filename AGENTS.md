@@ -5,6 +5,7 @@
 - 用户要求后续不再使用27（177.22.27.1）验证编译；27隔离编译授权已结束，不再为此连接、构建SDK/wheel或执行Host导入，也不擅自换其他远端主机。
 - 完成必要的本地检查后直接提交、推送，提供对应提交的目标机编译和测试命令；CANN编译、设备正确性与性能由用户执行。
 - 远端编译不再作为推送前置条件，不重复询问27授权；未执行的验证须如实注明。下方已有27验证记录仅是历史证据。
+- 用户可粘贴的构建/执行命令不得退出当前交互shell；使用函数返回和外层条件判断，失败保留终端与日志。
 
 修改 LL kernel、模板、打点或构建配置前，先阅读：
 
@@ -93,3 +94,5 @@ P26/6/1实验固定S30/R26、新SDK、采样参数及均匀随机top-k种子配�
 用户要求固定P1，把ready检查和计数提取合并成单个VF，单独提交以便A/B，并继续27隔离目录完整OFF/ON编译、不运行NPU。基线578d32b；仅EP16小direct且有效P1启用P1CountReadyAndExtract，其他P/域/dedup保持原路径，P全局默认不改。保留MTE2_V及单次V_S；ready精确float1位模式，count保留uint32，失败轮私有scratch不得用于清理/发布。复用已有UB，不改清理顺序、前缀发布、wire、SDK、lane或combine。A/B两边固定S30R26/P1，使用各自源码匹配的wheel，先全部构建后串行采样；指南tests/ll_stage_timer/P1_COUNT_VF.md。
 
 该候选已通过27独立VF预编译、七mode+selector冷编译OFF38.185s/ON40.251s、完整OFF/ON wheel及Host/实际SDK路径哈希核验。Linux相关142pass；初轮CPU测试漏<iterator>已修正并重跑，生产kernel无编译错误。SDK8e3fc61校验复用未重建，原部署及隔离目录其他任务未跟踪文件保留。最终源码指纹3cf59518dc900d23883db9eea6b768fbaa6fb22ac6aefdad18ec7a1c29489e0a；没有NPU正确性/性能结论。证据见docs/BUILD_DISPATCH_SPLIT.md。
+
+用户目标SDK同官方8e3fc61但来自HNS分支，合法build字段hns_1825_pi_on_chip=1被旧MTE白名单误拒。当前SDK兼容修复接纳严格int0/1且须HNS_1825，MTE复用仍精确核对共同构建输入和完整哈希；不删除字段或重写旧manifest绕过。用户另确认旧manifest仅include34/src0/lib1，需目标机显式重建生成完整清单。新版A/B基线e19aa4d（578d32b+同SDK修复）与当前候选共用该修复，kernel差异仍只P1单VF。SDK/完整性修复仅本地CPU验证，不再27编译。命令见P1_COUNT_VF.md。

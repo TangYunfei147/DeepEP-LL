@@ -763,3 +763,40 @@ Target correctness and OFF latency still require the user's16-card machine.
 Use `tests/ll_stage_timer/P1_COUNT_VF.md` for matched baseline/candidate builds
 and sequential runs; send only the two initial summaries. No latency benefit
 is claimed from compilation or CPU models.
+
+## 2026-10-25 target SDK identity admission correction
+
+The target failed while building the baseline wheel, before invoking CANN.
+Its SDK records the correct official revision8e3fc61, CANN9.2.0, Ascend950,
+no source patches, HNS_1825 and `hns_1825_pi_on_chip=1`. The MTE branch's old
+identity whitelist omitted that legitimate new HNS field. Identity admission
+now accepts the optional field only as an exact integer0/1 with HNS_1825;
+MTE reuse validates it before excluding HNS-only capabilities from the exact
+shared-input comparison. Unknown keys, wrong types, source/CANN/target/revision
+changes and file-checksum failures still reject reuse. No SDK binary, vendor
+source or kernel was changed by this fix.
+
+The user separately confirmed the old manifest contains34include entries,
+zero src entries and one lib entry. Accepting the HNS field does not make that
+manifest complete: the existing all-installed-input coverage check is retained.
+This target needs explicit SDK rebuilding to produce a complete manifest;
+no script deletes capability metadata or appends freshly computed hashes to
+an unverifiable old record. Stop users of the project SDK before that rebuild.
+
+The compatibility commit was applied to original baseline578d32b, producing
+new baseline `e19aa4d3d91d8bc44e141dff25449c9fdb7cbf63`, then merged into the VF
+candidate. Both A/B revisions therefore use identical SDK admission/reuse code.
+Their production kernel difference is still only the single P1 count VF.
+
+Local CPU evidence: baseline identity/reuse/record/upgrade tests87passed;
+broader build tests69passed with8existing Windows/POSIX-incompatible compiler
+tests excluded. The merged candidate's combined SDK/diagnosis/P-config/report
+regression passed224tests with the same8 exclusions in2.33s, logged at
+`.tmp/hns-sdk-candidate-001.log`. Earlier unfiltered baseline build tests hit
+the existing Windows symlink/compiler-fixture restrictions; those tests were
+not modified to hide the environment limitation.
+
+No27 connection, CANN rebuild or NPU test was performed for this correction,
+per the current user workflow. The prior CANN evidence above remains evidence
+for the unchanged native kernel code, not a new target build qualification.
+Use the SDK recovery and new A/B commands in `tests/ll_stage_timer/P1_COUNT_VF.md`.

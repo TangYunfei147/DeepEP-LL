@@ -1,6 +1,10 @@
 # P1 count ready/extraction VF candidate
 
-This is one independent change against `578d32b37330fd579b2c7376d651b7ffadeff9e8`.
+The VF is the independent change originally committed as `807025f` against
+`578d32b`. For current A/B use baseline
+`e19aa4d3d91d8bc44e141dff25449c9fdb7cbf63` and the current branch candidate:
+both now contain the same SDK identity compatibility correction. Their
+production kernel difference remains the P1 VF change.
 Keep S30/R26 and `DEEPEP_LL_SMALL_B_PREFIX_CORES=1` in both builds and runs.
 The global P default remains unchanged; this experiment sets P explicitly.
 
@@ -31,6 +35,34 @@ This is not a command to run NPU work on the compile-only validation host.
 The mainline SDK from the preceding P experiment is unchanged and can be reused
 after validation. Do not rebuild it merely for this VF change.
 
+The reported SDK with HNS1825 and `hns_1825_pi_on_chip=1` uses the correct
+upstream revision. Both current A/B revisions accept this known capability
+metadata (strict integer0/1, HNS only). However, its old manifest records only
+34 interface headers and libshmem.so: zero implementation files and no auxiliary
+libraries. That separate incomplete-coverage issue still requires explicit SDK
+rebuilding; hashes are not fabricated or silently appended to old manifests.
+
+For that specific old manifest, first stop jobs using this project SDK, then
+run the following once in the existing target Python/CANN environment. It
+prepares the SDK for this MTE test branch and does not change SHMEM sources:
+
+```bash
+prepare_count_sdk() {
+  source /home/tyf/0env.sh || return $?
+  git fetch origin || return $?
+  git switch --detach e19aa4d || return $?
+  git submodule update --init --recursive --depth 1 || return $?
+  unset SHMEM_ROOT CATLASS_ROOT
+  export DEEPEP_NPU_ARCH=Ascend950
+  python scripts/build_shmem.py --rebuild
+}
+if prepare_count_sdk; then
+  echo 'SDK rebuilt with a complete identity; continue below.'
+else
+  echo 'SDK preparation failed; keep its output and do not start the wheel builds.'
+fi
+```
+
 Run from the project root with a clean checkout. Preserve existing results and
 use a fresh suffix if any of the following build/run directories already exist.
 The reported `1b44449` target revision was not available locally when preparing
@@ -45,7 +77,7 @@ git switch kernel/ll-g4-small-b-prefix || return $?
 git merge --ff-only origin/kernel/ll-g4-small-b-prefix || return $?
 git diff --quiet && git diff --cached --quiet || { echo 'Preserve/commit tracked changes first'; return 1; }
 
-BASELINE_REV=578d32b37330fd579b2c7376d651b7ffadeff9e8
+BASELINE_REV=e19aa4d3d91d8bc44e141dff25449c9fdb7cbf63
 CANDIDATE_REV=$(git rev-parse HEAD)
 export DEEPEP_LL_SEND_CORES=30 DEEPEP_LL_RECV_CORES=26
 export DEEPEP_LL_SMALL_B_PREFIX_CORES=1
@@ -55,10 +87,10 @@ export LD_LIBRARY_PATH="$PWD/third-party/shmem/install/shmem/lib:${LD_LIBRARY_PA
 # Build and Host-verify all four wheels before any device sampling.
 git switch --detach "$BASELINE_REV" || return $?
 python tests/ll_stage_timer/diagnose.py --build-only \
-  --run-name count_vf_base_build_001 || return $?
+  --run-name count_vf_base_build_003 || return $?
 git switch --detach "$CANDIDATE_REV" || return $?
 python tests/ll_stage_timer/diagnose.py --build-only \
-  --run-name count_vf_candidate_build_001 || return $?
+  --run-name count_vf_candidate_build_003 || return $?
 }
 if build_count_ab; then
   echo 'Both builds passed; proceed to the run block below.'
@@ -80,8 +112,8 @@ run_count_ab() {
   revision=$2
   git switch --detach "$revision" || return $?
   python tests/ll_stage_timer/diagnose.py --skip-build \
-    --wheel-map "diagnostic-runs/count_vf_${label}_build_001/node_000/wheel-map.json" \
-    --run-name "count_vf_${label}_run_001" \
+    --wheel-map "diagnostic-runs/count_vf_${label}_build_003/node_000/wheel-map.json" \
+    --run-name "count_vf_${label}_run_003" \
     --bs 1 2 4 8 16 24 32 --m 32 \
     --hidden 3584 --topk 8 --experts 384 --dtype fp8 --cpu-sync 0 \
     --devices 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 \
@@ -96,11 +128,9 @@ else
 fi
 ```
 
-Do not paste `command || exit $?` directly into an interactive terminal: a
-failed child command would also close that shell/SSH session. The functions
-above return failures to the guarded caller. This does not hide or fix a native
-core dump. Before retrying one, inspect the existing
-`diagnostic-runs/count_vf_{base,candidate}_build_001/node_000/logs/` files:
+Do not terminate the interactive shell on a failed child command. The functions
+above return failures to the guarded caller. Preserve any earlier logs under
+`diagnostic-runs/count_vf_{base,candidate}_build_001/node_000/logs/` or `_002`:
 `venv.log`, `off-build.log`, `sparse-build.log`, and the install/identity logs.
 Build subprocess output is redirected there; `Command failed (-11/-6)` can
 identify a child signal, while a direct terminal crash may precede log creation.
@@ -112,8 +142,8 @@ Both cases keep the same uniform-random route seeds and profiler protocol:
 10 warmups/100 captures/last50 OFF tasks, followed by sparse diagnostic capture.
 First send only these two files:
 
-- `diagnostic-runs/count_vf_base_run_001/SEND_FIRST.txt`
-- `diagnostic-runs/count_vf_candidate_run_001/SEND_FIRST.txt`
+- `diagnostic-runs/count_vf_base_run_003/SEND_FIRST.txt`
+- `diagnostic-runs/count_vf_candidate_run_003/SEND_FIRST.txt`
 
 Use full OFF task time as the result. ENTRY→PREFIX_READY, first receive probe
 and active ON/OFF perturbation explain changes, but diagnostic spans cannot be
