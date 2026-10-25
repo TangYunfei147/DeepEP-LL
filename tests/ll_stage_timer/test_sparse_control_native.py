@@ -31,12 +31,37 @@ def business_tokens(source):
     source=re.sub(r'extern "C" uint32_t deepep_ll_stage_timer_(?:schema|profile_id)\(\);','',source)
     return re.findall(r'[A-Za-z_]\w*|0[xX][0-9a-fA-F]+|\d+|[^\s]',source)
 
-def test_business_sources_match_ed1_after_probe_removal():
+def test_unchanged_business_sources_match_ed1_after_probe_removal():
     baseline=json.loads(Path(__file__).with_name('sparse_control_business_baseline.json').read_text(encoding='utf-8'))
     assert baseline['baseline'].startswith('ed1c553')
     for relative,expected in baseline['files'].items():
+        # The explicit prequantized S-sender candidate intentionally changes
+        # input/tail dependencies. Its unchanged algorithms are checked below,
+        # and its new tail/schedule is exercised by the vector-tail CPU tests.
+        if relative=='csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_send.h':
+            continue
         current=business_tokens((ROOT/relative).read_text(encoding='utf-8'))
         assert hashlib.sha256(' '.join(current).encode()).hexdigest()==expected,relative
+
+
+def test_vector_tail_candidate_preserves_sender_route_and_fallback_algorithms():
+    relative='csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_send.h'
+    baseline=subprocess.check_output(['git','-C',str(ROOT),'show',
+        '9027275b31a28608296b1b71c93fa6e2bb456db5:'+relative],text=True,encoding='utf-8')
+    candidate=(ROOT/relative).read_text(encoding='utf-8')
+    def body(source,name):
+        match=re.search(r'__aicore__ inline (?:void|uint32_t) '+name+r'\(',source)
+        assert match is not None,name
+        start=match.start()
+        begin=source.index('{',start);depth=1;end=begin+1
+        while depth:
+            depth+=(source[end]=='{')-(source[end]=='}');end+=1
+        return business_tokens(source[begin:end])
+    # Packet ordering, q, route selection, online quantization, local sender,
+    # scalar fallback tail and source metadata publication are not candidates.
+    for name in ('Process','ProcessGroupLocal','SendWithDedup','SendWithoutDedup',
+                 'Classify','CalTokenSendExpertCnt','QuantMxfp8','FillTail','Retire'):
+        assert body(candidate,name)==body(baseline,name),name
 
 def test_mte3_recorder_limits_dependency_operations_to_explicit_intervention():
     source=(COMMON/'ll_stage_timer_device.h').read_text(encoding='utf-8')
