@@ -99,6 +99,23 @@ python tests/ll_control_opt/suite.py \
 初次完整运行的`comparison.csv/json`位于同run prefix根目录。
 检查`reference_delta`、SDK hashes、会话/页参数和跨session标记后再解释小幅性能差异。
 
+## 发回一个紧凑报告
+
+回传限制为总数不超过10个文件，每个文件按UTF-8实际字节数不超过65535控制。
+本轮完成后，只需导出并发送一个文件：
+
+```bash
+python tests/ll_control_opt/export_report.py \
+  results/ll-control-opt/b256-topology-mte-001
+```
+
+发送命令打印的 `analysis-report.txt` 即可。它保留全部比较行、seed/轮次、
+提交、算子、平均耗时、reference差值和会话/SDK身份提示；不修改原始结果。
+用于先判断整体收益及多seed/多轮稳定性，不包含逐rank原始样本或物理端口利用率。
+脚本在写入前核对实际字节数，超限直接拒绝，不截断数据；现有输出也不覆盖。
+续跑后，将参数改为套件打印的最新 `comparison.csv` 所在 `sessions/<id>` 目录。
+无需同时发送comparison.json、全部summary或profiler目录。
+
 ## 验证状态
 
 当前本地Python/构建相关CPU检查为146项通过、14项因缺Torch跳过；

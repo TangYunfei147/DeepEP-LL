@@ -1,5 +1,10 @@
 # Control-path candidates: commit-by-commit A/B
 
+Result handoff is limited to10files, each at most65535UTF-8 bytes. For the first
+analysis, run `python tests/ll_control_opt/export_report.py <comparison-directory>`
+and send its single `analysis-report.txt`. It retains every comparison row and
+checks the byte limit before writing; original results remain local.
+
 > Current run: follow [LL_ONLY_FIX.md](LL_ONLY_FIX.md). Use
 > `commits-topology-mte.json`, `DEEPEP_BUILD_HT=OFF` and the new prefix
 > `b256-topology-mte-001`: three new-SDK candidates,18 ST calls.
