@@ -38,11 +38,12 @@ this candidate; use the known parent below for an attributable code A/B rather
 than assuming old target wheels match it.
 
 ```bash
-source /home/tyf/0env.sh
-git fetch origin
-git switch kernel/ll-g4-small-b-prefix
-git merge --ff-only origin/kernel/ll-g4-small-b-prefix
-test -z "$(git status --porcelain)" || { echo 'Preserve/commit local changes first'; exit 1; }
+build_count_ab() {
+source /home/tyf/0env.sh || return $?
+git fetch origin || return $?
+git switch kernel/ll-g4-small-b-prefix || return $?
+git merge --ff-only origin/kernel/ll-g4-small-b-prefix || return $?
+git diff --quiet && git diff --cached --quiet || { echo 'Preserve/commit tracked changes first'; return 1; }
 
 BASELINE_REV=578d32b37330fd579b2c7376d651b7ffadeff9e8
 CANDIDATE_REV=$(git rev-parse HEAD)
@@ -52,12 +53,18 @@ unset SHMEM_ROOT CATLASS_ROOT
 export LD_LIBRARY_PATH="$PWD/third-party/shmem/install/shmem/lib:${LD_LIBRARY_PATH:-}"
 
 # Build and Host-verify all four wheels before any device sampling.
-git switch --detach "$BASELINE_REV"
+git switch --detach "$BASELINE_REV" || return $?
 python tests/ll_stage_timer/diagnose.py --build-only \
-  --run-name count_vf_base_build_001 || exit $?
-git switch --detach "$CANDIDATE_REV"
+  --run-name count_vf_base_build_001 || return $?
+git switch --detach "$CANDIDATE_REV" || return $?
 python tests/ll_stage_timer/diagnose.py --build-only \
-  --run-name count_vf_candidate_build_001 || exit $?
+  --run-name count_vf_candidate_build_001 || return $?
+}
+if build_count_ab; then
+  echo 'Both builds passed; proceed to the run block below.'
+else
+  echo 'Build stopped. Keep the logs; the current terminal remains open.'
+fi
 ```
 
 Set MASTER_ADDR, MASTER_PORT and SHMEM_PORT to the actual addresses/ports
@@ -82,10 +89,22 @@ run_count_ab() {
     --master-addr "$MASTER_ADDR" --master-port "$MASTER_PORT" \
     --shmem-port "$SHMEM_PORT"
 }
-run_count_ab base "$BASELINE_REV" || exit $?
-run_count_ab candidate "$CANDIDATE_REV" || exit $?
-git switch kernel/ll-g4-small-b-prefix
+if run_count_ab base "$BASELINE_REV" && run_count_ab candidate "$CANDIDATE_REV"; then
+  git switch kernel/ll-g4-small-b-prefix
+else
+  echo 'Run stopped. Keep the logs; the current terminal remains open.'
+fi
 ```
+
+Do not paste `command || exit $?` directly into an interactive terminal: a
+failed child command would also close that shell/SSH session. The functions
+above return failures to the guarded caller. This does not hide or fix a native
+core dump. Before retrying one, inspect the existing
+`diagnostic-runs/count_vf_{base,candidate}_build_001/node_000/logs/` files:
+`venv.log`, `off-build.log`, `sparse-build.log`, and the install/identity logs.
+Build subprocess output is redirected there; `Command failed (-11/-6)` can
+identify a child signal, while a direct terminal crash may precede log creation.
+Use fresh output names for a later retry and preserve the failed artifacts.
 
 Each source checkout must match its wheel: `--skip-build` intentionally rejects
 an old wheel under candidate source. Do not remove this check to reuse a wheel.
