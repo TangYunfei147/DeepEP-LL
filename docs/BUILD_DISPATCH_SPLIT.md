@@ -1,5 +1,28 @@
 # LL dispatch compile partition
 
+## Buffered receive candidate (2026-10-25, local validation only)
+
+The candidate based on c1e4faa retains the seven mode translation units and one
+selected early-receive policy per wheel. It does not instantiate all Buffered
+and Immediate policy combinations. Source FIRST_HOP/DIRECT scheduling gains a
+bounded callback with an explicitly device-qualified functor. Packet generation,
+wire layout and payload consumer bodies are preserved. See
+tests/ll_stage_timer/BUFFERED_RECEIVE.md for the event lease and UB lifetime audit.
+
+Final combined CPU checks:69 passed, including native helper/pending/state
+models and layout checks for S1/55,28/28,30/26,55/1, required entry/timer/ST
+regressions and existing flag/pending checks. These are CPU C++ tests, not
+Bisheng/CANN compilation. Two initial source assertions assumed one unbroken
+SEND_TOKENS scope; the TX-only fragment boundaries now have explicit guards.
+No SSH, SDK build, NPU launch, ON/OFF CANN compile timing or
+wheel linkage was performed by this candidate task; those target checks remain
+required before deployment. Parent SDK compatibility work is separate.
+The final combined run after removing unnecessary early CTRL writes passed69
+tests in9.45s (`.tmp/buffered-final004.log`). The CPU scheduler model exercises
+both Buffered and Immediate semantics; source checks bind Immediate to the
+existing PrimeReady/ConsumeReady/ConsumeLoaded path. Actual AscendC consumption
+and event execution are not CPU-tested.
+
 The previous low_latency.cpp instantiated seven input/quantization modes inside
 one global function. With schema11 timer ON, one Bisheng process handled the
 expanded algorithm and all timers for every mode. This change compiles each mode

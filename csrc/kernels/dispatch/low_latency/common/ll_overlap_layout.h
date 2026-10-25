@@ -3,6 +3,7 @@
 #include "ll_overlap_stage.h"
 #include "ep_memory_server_dedup_count_layout.h"
 #include "ll_receive_probe_pipeline.h"
+#include "ll_early_receive.h"
 namespace DispatchDedup {
 #if defined(__CCE__) && defined(__CCE_IS_AICORE__)
 #define LL_OVERLAP_INLINE __aicore__ inline
@@ -14,6 +15,7 @@ struct LlOverlapLayout {
     uint64_t totalBytes=0;
     bool enabled=false;
     bool recvProbePrefetch=false;
+    bool earlyReceive=false;
     LL_OVERLAP_INLINE bool Async() const { return enabled && kLlOverlapExperimentStage>=3U; }
     LL_OVERLAP_INLINE bool Cooperative() const { return enabled && kLlOverlapExperimentStage>=4U; }
 };
@@ -61,6 +63,13 @@ LL_OVERLAP_INLINE LlOverlapLayout LlMakeOverlapLayout(const EpServerDedupDataLay
     if (LlReceiveProbePrefetchFits(p.totalBytes,kEpServerDedupCountUbBytes)) {
         p.recvProbePrefetch=true;
         p.totalBytes+=kLlReceiveProbeExtraBytes;
+    }
+    // Only S participates. Retain the already selected TX/RX lanes and use a
+    // separate tiny ID FIFO; payloads occupy the original receive lanes.
+    if (enableDedup && core<kLlSendCoreNum && p.Async() &&
+        LlEarlyReceiveFits(p.totalBytes,kEpServerDedupCountUbBytes,p.recvLanes)) {
+        p.earlyReceive=true;
+        p.totalBytes+=LlEarlyReceiveIdBytes(p.recvLanes);
     }
     return p;
 }

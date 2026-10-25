@@ -16,6 +16,7 @@ struct LlSendPacketTask {
 class LlOnePacketInput {
 public:
     LL_INPUT_INLINE void Reset() { pending_=false; }
+    LL_INPUT_INLINE bool HasPending() const { return pending_; }
     template<class Ops>
     LL_INPUT_INLINE void Push(Ops& ops,const LlSendPacketTask& next) {
         ops.Issue(next);
