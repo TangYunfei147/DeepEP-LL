@@ -178,12 +178,25 @@ def installed_identity(a):
     revision = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT,
                                        env=git_environment(os.environ), text=True).strip()
     # Local library hashes may differ between independent builds. Each SDK has
-    # been validated locally; peers agree on source, ABI and actual firmware mode.
+    # been validated locally. Keep the local firmware mode in the saved identity.
     shared_args = test_arguments(a)
     shared_args[shared_args.index("--node-rank") + 1] = "<node>"
     return {"schema": 1, "project_root": str(ROOT.resolve()), "git_revision": revision,
             "source_sha256": fingerprint, "sdk_revision": lock["revision"], "sdk_build": sdk["build"],
             "core_protocol": 8, "timer_schema": 3, "mode": a.mode, "arguments": shared_args}
+
+
+def peer_identity(identity):
+    """Compare protocol/source facts, not the local NIC's doorbell mechanism."""
+    shared = json.loads(json.dumps(identity))
+    build = shared["sdk_build"]
+    mode = build.pop("hns_1825_pi_on_chip", None)
+    if type(mode) is not int or mode not in (0, 1):
+        raise RuntimeError("Missing validated local HNS doorbell mode")
+    # SDK master uses this macro only in the local SQ doorbell update. It does
+    # not change the WQE or wire layout. installed_identity still requires this
+    # node's SDK and wheel to agree; identity.json retains the selected value.
+    return shared
 
 
 def main(argv=None):
@@ -241,7 +254,7 @@ def main(argv=None):
     from target_ready import synchronize
     print(f"Waiting for both prepared hosts at {a.master_addr}:{a.ready_port} (up to {a.ready_timeout}s)", flush=True)
     agreed = synchronize(a.node_rank, a.master_addr, a.ready_port, run_id(a),
-                         json.loads(identity_path.read_text()), a.ready_timeout)
+                         peer_identity(json.loads(identity_path.read_text())), a.ready_timeout)
     (logs / "agreement.json").write_text(json.dumps(agreed, indent=2) + "\n", encoding="utf-8")
     run_logged([python, *test_command], env, logs / "30-test.log")
     if a.mode == "timer":

@@ -47,6 +47,12 @@ bash tests/ll_rdma/one_click.sh 1 192.0.2.10 ndr-b8-001 --rebuild-shmem
 5. 两机核对工程路径、Git版本、源码、SDK与完整测试参数，一致后进入原HCCL入口。
 6. 运行测试；timer模式成功后自动分析各自本机16rank，不要求复制另一机样本。
 
+`hns_1825_pi_on_chip`仅控制本机NIC的doorbell方式，不改变跨机wire格式。
+它保留在各机identity.json并要求本机SDK/wheel一致，不要求两机取值相同；
+实际模式仍须匹配本机固件，SDK探测fallback不能当作硬件验收。
+其他源码/协议/参数差异仍拒绝，错误会列出具体字段及两机值。
+`source_sha256`涵盖构建脚本、测试与源码；相同Git提交但本地文件不同也会不一致。
+
 默认timer模式：ON wheel，10次预热、100次稳定调用、5轮独立observe采样。
 每轮保持Exp+scalar all_reduce；默认Exp约13.53GiB/卡。此模式不运行正式profiler。
 

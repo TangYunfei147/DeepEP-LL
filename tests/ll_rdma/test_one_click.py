@@ -127,7 +127,7 @@ def test_failed_workflow_never_launches_following_stages(tmp_path, monkeypatch, 
         if "--identity-output" in command:
             if failure == "identity":
                 raise RuntimeError("wrong wheel")
-            Path(command[-1]).write_text('{"schema":1}')
+            Path(command[-1]).write_text('{"schema":1,"sdk_build":{"hns_1825_pi_on_chip":0}}')
         if failure == "test" and "tests/ll_stage_timer/run.py" in command and "--plan" not in command:
             raise RuntimeError("test failed")
 
@@ -189,3 +189,19 @@ def test_installed_check_rejects_stale_or_mixed_builds(tmp_path, monkeypatch, mo
         assert identity["project_root"] == str(root)
         assert identity["sdk_build"] == sdk["build"]
         assert identity["arguments"][identity["arguments"].index("--node-rank") + 1] == "<node>"
+
+
+def test_peer_comparison_allows_local_doorbell_modes_but_not_source_drift():
+    first = {"source_sha256": "same", "sdk_build": {"rdma_backend": "HNS_1825", "hns_1825_pi_on_chip": 0}}
+    second = {"source_sha256": "same", "sdk_build": {"rdma_backend": "HNS_1825", "hns_1825_pi_on_chip": 1}}
+    assert launch.peer_identity(first) == launch.peer_identity(second)
+    assert first["sdk_build"]["hns_1825_pi_on_chip"] == 0
+    assert second["sdk_build"]["hns_1825_pi_on_chip"] == 1
+    second["source_sha256"] = "different"
+    assert launch.peer_identity(first) != launch.peer_identity(second)
+
+
+@pytest.mark.parametrize("mode", [None, True, "0", 2])
+def test_peer_comparison_requires_a_validated_local_doorbell_mode(mode):
+    with pytest.raises(RuntimeError):
+        launch.peer_identity({"sdk_build": {"hns_1825_pi_on_chip": mode}})
