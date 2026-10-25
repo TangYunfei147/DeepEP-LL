@@ -1,5 +1,37 @@
 # LL dispatch compile partition
 
+## Prequantized sender Vector tail candidate (2026-10-25)
+
+The sender candidate moves metadata-tail stores onto the Vector pipeline only
+for asynchronous deduplicated S-core prequantized FP8 sending. It removes that
+path's explicit input MTE2_S and packet S_V while retaining TQue dependencies,
+two input buffers, output lanes and all Copy/publication ordering. One small
+portable tail emitter is instantiated with device-callable adapters; there is
+no new launch mode or translation-unit dimension. Seven dispatch modes, O2,
+Ascend950, Host budgets, communication protocol and SDK remain unchanged.
+
+The explicit PIPE_V between Vector tail generation and packing is part of the
+candidate, not a diagnostic full-pipeline drain. Extra Vector instruction issue
+can offset the removed Scalar waits; no performance gain is assumed.
+
+Local regression: 514 passed, 2 skipped (historical schema13 source guard and
+Windows/POSIX path semantics), including the required selector/source/ST checks.
+The actual tail helper covered 104,544 valid-field/padding cases and 243 delayed
+stream schedules. A negative control detected corruption from removing MTE2_S
+while retaining Scalar tail writes. No packet UB or event IDs were added.
+The unchanged business files retain their ed1 token checks; the sender is an
+intentional dependency change and is checked separately for preserved routing,
+q, ordering, source metadata publication, R-local and quantization algorithms.
+The pinned A/B plan and existing suite/export checks passed 69 cases. The actual
+CPU plan resolves two OFF builds and 12 complete ST invocations with identical
+SDK dependency identity; a 24-row synthetic comparison exports one 4,597-byte
+file. This validates the workflow, not measured candidate performance.
+
+No CANN compilation or target device validation was performed. Use the pinned
+OFF A/B in [SENDER_PREFETCH.md](../tests/ll_control_opt/SENDER_PREFETCH.md), which
+also provides separate cold ON/OFF object and complete ON wheel checks. CPU
+stream models are dependency tests, not timing or Bisheng code-generation proof.
+
 ## MTE3 dependency diagnostics (2026-10-25)
 
 Current control-opt diagnostics use schema16/profile7 (`mte3`), with 18 first-hit

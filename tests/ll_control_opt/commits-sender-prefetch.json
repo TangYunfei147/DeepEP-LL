@@ -1,0 +1,9 @@
+{
+  "schema": 2,
+  "comparison_base": "9027275b31a28608296b1b71c93fa6e2bb456db5",
+  "baseline_note": "Uninstrumented schema16/profile7 baseline and S-core prequantized FP8 vector-tail candidate. Both use overlap stage3, LL-only MTE, HT OFF and the same official SHMEM dependency. This compares complete dispatch/combine tasks, not MTE3 wait attribution.",
+  "commits": [
+    {"label": "baseline", "revision": "9027275b31a28608296b1b71c93fa6e2bb456db5"},
+    {"label": "prequant-vector-tail", "revision": "0a8e5b786763365da7541e3fd033b267d086aa5e"}
+  ]
+}

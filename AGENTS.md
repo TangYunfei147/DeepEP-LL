@@ -1,5 +1,13 @@
 # LL 编译维护约束
 
+## 当前发送优化候选（2026-10-25）
+
+- 用户要求继续沿输入预取/输出复用方向优化。候选仅在Prequantized、去重、Async且core<S时启用Vector tail；R本组发送、小M非去重、串行fallback、普通/在线量化和combine保持原路径。
+- 不能直接删MTE2_S再保留Scalar FillTail：它还间接保护上一次input读取完成。当前候选用32B对齐/单word mask的Duplicate<uint32_t>在V流水构造完整有效tail，保留权重原始bits；PIPE_V后由原Copy打包，TQue MTE2_V/V_MTE2与输出lane事件保持。
+- 不增加UB/输入深度/lane/事件，不改wire、19000+S、stage3或7个编译单元。候选关闭其输入MTE2_S的分配/Set/Wait/释放及packet S_V，所有旧路径继续使用原同步。
+- 性能验收使用commits-sender-prefetch.json的固定源码OFF A/B，3seed、2轮交替、完整dispatch+combine和单文件报告。旧MTE3诊断保持固定1b9ff6b；候选不执行的TX_INPUT_READY不是零DMA耗时，不能用其calls作本候选包数或据此宣称收益。
+- 原ed1业务token guard继续覆盖未改业务文件；sender有意变化，另核对稳定路由/q/顺序/本组/量化函数及新tail异步复用。CPU字节/时序模型不代表CANN或设备验收。指南tests/ll_control_opt/SENDER_PREFETCH.md。
+
 ## MTE3反压专项验证（2026-10-25，当前诊断）
 
 - 用户要求通过增加流水等待验证MTE3是否为主瓶颈，完成后提交推送、给目标测试命令。沿用不连接27和单文件≤65535字节/最多10文件约定。

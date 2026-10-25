@@ -1,6 +1,11 @@
 # Control-path candidates: commit-by-commit A/B
 
-For the next targeted MTE3 backpressure experiment, use
+For the current sender optimization A/B, use
+[SENDER_PREFETCH.md](SENDER_PREFETCH.md) and `commits-sender-prefetch.json`:
+baseline versus `prequant-vector-tail`, two complete timer-OFF wheels, three seeds,
+two alternating rounds, dispatch+combine and one bounded return file.
+
+For the preceding targeted MTE3 backpressure experiment, use
 [MTE3_BACKPRESSURE.md](MTE3_BACKPRESSURE.md): same-source OFF/ON builds,
 observe/TX/RX actual captures, original Scalar wait migration and one compact
 report. The added waits are diagnostic interventions, not optimizations.
@@ -14,7 +19,7 @@ analysis, run `python tests/ll_control_opt/export_report.py <comparison-director
 and send its single `analysis-report.txt`. It retains every comparison row and
 checks the byte limit before writing; original results remain local.
 
-> Current run: follow [LL_ONLY_FIX.md](LL_ONLY_FIX.md). Use
+> Historical LL-only receive-scheduling run: [LL_ONLY_FIX.md](LL_ONLY_FIX.md). Use
 > `commits-topology-mte.json`, `DEEPEP_BUILD_HT=OFF` and the new prefix
 > `b256-topology-mte-001`: three new-SDK candidates,18 ST calls.
 > The earlier mixed-session/four-item experiment below is retained for provenance;
