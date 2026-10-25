@@ -21,8 +21,10 @@ include(cmake/Dependencies.cmake)
 option(DEEPEP_LL_STAGE_TIMER "Compile optional LL device stage tracing" OFF)
 option(DEEPEP_BUILD_MEGAMOE "Build the optional MegaMoE Beta" OFF)
 option(DEEPEP_MEGAMOE_TIMER "Compile MegaMoE device tracing" OFF)
+include(cmake/OperatorSources.cmake)
 include(cmake/Device.cmake)
-pybind11_add_module(_C csrc/bindings/module.cpp csrc/runtime/session.cpp csrc/ops/notify.cpp csrc/ops/dispatch.cpp csrc/ops/combine.cpp csrc/ops/low_latency.cpp)
+pybind11_add_module(_C ${DEEPEP_CORE_HOST_SOURCES})
+target_compile_definitions(_C PRIVATE DEEPEP_BUILD_HT=$<BOOL:${DEEPEP_BUILD_HT}>)
 find_path(DEEPEP_PLATFORM_INCLUDE tiling/platform/platform_ascendc.h
     HINTS "${ASCEND_HOME_PATH}/asc/include" "${ASCEND_HOME_PATH}/include/op_common"
           "${ASCEND_HOME_PATH}/${CMAKE_SYSTEM_PROCESSOR}-linux/asc/include" NO_DEFAULT_PATH REQUIRED)
@@ -52,9 +54,6 @@ endif()
 
 # Capability declarations live alongside the targets actually built above.
 # Packaging consumes this file instead of maintaining another operator list.
-file(GENERATE OUTPUT "${CMAKE_BINARY_DIR}/capabilities.json" CONTENT [=[
-{
-  "capabilities": ["runtime-mte", "runtime-urma", "runtime-mpi-bootstrap", "runtime-shmem-huge1g-v1", "event", "elastic-notify-metadata-v7", "elastic-notify-profile-v1", "elastic-dispatch-expanded-v1", "elastic-combine-expanded-v3", "elastic-combine-rank-return-v1", "elastic-combine-return-slots-v2", "elastic-combine-chunk-tuning-v1", "elastic-combine-profile-v4", "elastic-combine-peers-v1", "elastic-combine-chunks-v2", "runtime-combine-sparse-qp-v1"],
-  "communication_operations": ["ElasticBuffer.dispatch", "ElasticBuffer.combine"]
-}
-]=])
+list(JOIN DEEPEP_CORE_CAPABILITIES "\", \"" _core_capabilities_json)
+file(GENERATE OUTPUT "${CMAKE_BINARY_DIR}/capabilities.json" CONTENT
+"{\n  \"capabilities\": [\"${_core_capabilities_json}\"],\n  \"communication_operations\": [\"ElasticBuffer.dispatch\", \"ElasticBuffer.combine\"]\n}\n")

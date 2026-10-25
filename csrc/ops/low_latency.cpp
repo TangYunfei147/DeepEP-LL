@@ -198,7 +198,7 @@ void bind_low_latency(py::module_& module)
         }
     });
     module.def("low_latency_comm_args", [](Session& session) {
-        if (session.combine_only()) throw std::invalid_argument("LL requires a dense-channel Session");
+        if (session.combine_only()) throw std::invalid_argument("LL requires a full dispatch/combine Session");
         if (session.capacity() != DispatchDedup::kEpServerDedupPeerBytes ||
             session.world() > DispatchDedup::DISPATCH_DEDUP_MAX_RANK_SIZE ||
             session.world() < 16 || session.world() % DispatchDedup::kLlRanksPerGroup != 0) {
@@ -253,7 +253,7 @@ void bind_low_latency(py::module_& module)
                });
     module.def("dispatch_low_latency", [](Session& session, py::dict tensors, int b, int h, int k, int e, int rows,
                                           const std::string& dtype, uintptr_t stream_address) {
-        if (session.combine_only()) throw std::invalid_argument("LL requires a dense-channel Session");
+        if (session.combine_only()) throw std::invalid_argument("LL requires a full dispatch/combine Session");
         dtype_code(dtype);
         const bool fp8 = dtype == "float8_e4m3fn";
         const auto plan = layout(session.world(), b, h, k, e, fp8);
@@ -300,7 +300,7 @@ void bind_low_latency(py::module_& module)
     });
     module.def("combine_low_latency", [](Session& session, py::dict tensors, int b, int h, int k, int e,
                                          const std::string& dtype, uintptr_t stream_address) {
-        if (session.combine_only()) throw std::invalid_argument("LL requires a dense-channel Session");
+        if (session.combine_only()) throw std::invalid_argument("LL requires a full dispatch/combine Session");
         CombineDedup::Layout plan{};
         if (!stream_address || session.capacity() != DispatchDedup::kEpServerDedupPeerBytes ||
             (dtype != "bfloat16" && dtype != "float16") ||

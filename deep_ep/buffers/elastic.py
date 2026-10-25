@@ -189,8 +189,14 @@ class ElasticBuffer:
         combine_only: bool = False,
         use_1g_huge_pages: bool = True,
         debug_collectives: bool = False,
+        low_latency_backend: Optional[str] = None,
     ):
-        """Initialize MTE+URMA using a group or explicit rank/world_size.
+        """Initialize an explicit resource session using a group or rank/world_size.
+
+        low_latency_backend='mte' selects an LL-only MTE session before SHMEM
+        initialization, with no UDMA/QP setup and no HT dispatch/combine fallback.
+        None retains the general MTE+UDMA session and automatic operator selection.
+        Page size is independent of this choice; explicit huge pages are retained.
 
         Explicit identities bootstrap SHMEM directly and only validate locally.
         bootstrap="mpi" uses MPI_COMM_WORLD under MPICH instead of Config Store.
@@ -204,7 +210,13 @@ class ElasticBuffer:
         The workspace uses 1 GiB pages by default; allocation failure does not fall back to smaller pages.
         Dispatch validates exactly 8 GiB when selecting LL; no extra allocation.
         """
-        require_native("ElasticBuffer.__init__")
+        native = require_native("ElasticBuffer.__init__")
+        if low_latency_backend is None and getattr(native, "high_throughput_enabled", True) is False:
+            low_latency_backend = "mte"
+        if low_latency_backend not in (None, "mte"):
+            raise ValueError("low_latency_backend must be None or 'mte'")
+        if low_latency_backend == "mte" and (bootstrap != "default" or combine_only or num_allocated_qps != 0):
+            raise ValueError("LL MTE requires default bootstrap, combine_only=False and num_allocated_qps=0")
         if (
             num_cpu_bytes != 0
             or deterministic is not False
@@ -240,13 +252,14 @@ class ElasticBuffer:
             group,
             num_bytes,
             num_cpu_timeout_secs,
-            udma=True,
+            udma=low_latency_backend is None,
             rank=rank,
             world_size=world_size,
             bootstrap=bootstrap,
             combine_only=combine_only,
             use_1g_huge_pages=use_1g_huge_pages,
             debug_collectives=debug_collectives,
+            low_latency_backend=low_latency_backend,
         )
 
     def __del__(self):
@@ -728,6 +741,8 @@ class ElasticBuffer:
                     return self._dispatch_low_latency(
                         x, topk_idx, topk_weights, num_experts, capacity, do_handle_copy, do_cpu_sync, plan
                     )
+        if getattr(runtime, "low_latency_backend", None) is not None:
+            raise ValueError("This LL-only session does not support these dispatch arguments; HT fallback is disabled")
         with runtime.notify_lock:
             error, signature = None, []
             try:
@@ -1029,6 +1044,8 @@ class ElasticBuffer:
         runtime = runtime_of(self)
         runtime.ensure_alive()
         native, npu = require_native("ElasticBuffer.combine"), npu_api()
+        if getattr(runtime, "low_latency_backend", None) is not None:
+            raise ValueError("This LL-only session requires an LL handle for combine")
         with runtime.notify_lock:
             error, signature, retained = None, [], ()
             try:
@@ -1292,6 +1309,8 @@ class ElasticBuffer:
         runtime.ensure_alive()
         native = require_native("ElasticBuffer.dispatch")
         npu = npu_api()
+        if getattr(runtime, "low_latency_backend", None) is not None:
+            raise ValueError("This LL-only session cannot use HT notify")
         with runtime.notify_lock:
             signature = []
             error = None

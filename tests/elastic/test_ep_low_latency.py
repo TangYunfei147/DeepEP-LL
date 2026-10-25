@@ -667,6 +667,20 @@ def control_device(args, torch):
     return "npu" if args.group_backend == "hccl" else "cpu"
 
 
+def ll_buffer_options(args, backend, m, *, explicit_mte=True):
+    """Keep LL transport and page policy explicit before constructing SHMEM."""
+    options = dict(num_bytes=args.num_bytes, num_max_tokens_per_rank=m, hidden=0,
+                   num_topk=0, explicitly_destroy=True,
+                   num_cpu_timeout_secs=args.num_cpu_timeout_secs,
+                   use_1g_huge_pages=(backend != "rdma" if args.use_1g_huge_pages is None
+                                     else bool(args.use_1g_huge_pages)))
+    if explicit_mte:
+        if backend != "mte":
+            raise ValueError("This LL-only wheel supports MTE transport")
+        options['low_latency_backend'] = 'mte'
+    return options
+
+
 def trace_call(args, label, action, *values, **kwargs):
     """Log Host boundaries without introducing device synchronization."""
     enabled = getattr(args, "trace_ops", False)
@@ -1120,6 +1134,7 @@ def worker(local_rank, args):
         core_config = native.low_latency_core_config()
         implementation=getattr(native,'low_latency_implementation','unknown')
         backend=args.backend or ('rdma' if implementation=='ndr-hns1825' else 'mte')
+        explicit_mte = callable(getattr(native, 'create_low_latency_runtime', None))
         # One CLI choice drives Python and native initialization; stale shell state
         # does not change the selected branch's default in this experiment entry.
         os.environ['DEEPEP_LL_BACKEND']=backend
@@ -1129,6 +1144,8 @@ def worker(local_rank, args):
                       "dispatch_recv_cores": core_config["dispatch_recv_cores"],
                       "nondedup_dispatch_recv_cores": core_config["recv_cores"],
                       "transport": backend,
+                      "runtime_session": 'll-mte' if explicit_mte else 'legacy-mte-udma',
+                      "high_throughput_enabled": bool(getattr(native, 'high_throughput_enabled', True)),
                       "rdma_compiled": bool(getattr(native, "low_latency_rdma_enabled", False)),
                       "logical_group": compiled_group(native,world),
                       "implementation": implementation,
@@ -1192,19 +1209,16 @@ def worker(local_rank, args):
         )
 
         def create_buffer(case):
-            return trace_call(
+            created = trace_call(
                 case,
                 "buffer.create",
                 deep_ep.ElasticBuffer,
                 **identity_args,
-                num_bytes=args.num_bytes,
-                num_max_tokens_per_rank=m,
-                hidden=0,
-                num_topk=0,
-                explicitly_destroy=True,
-                num_cpu_timeout_secs=args.num_cpu_timeout_secs,
-                use_1g_huge_pages=(capability["transport"] != "rdma" if args.use_1g_huge_pages is None else bool(args.use_1g_huge_pages)),
+                **ll_buffer_options(args, capability['transport'], m, explicit_mte=explicit_mte),
             )
+            if explicit_mte and not created._runtime.native.low_latency_only:
+                raise RuntimeError("LL ST requires an actual MTE-only native session")
+            return created
 
         if not args.fresh_buffer_per_case:
             buffer = create_buffer(args)

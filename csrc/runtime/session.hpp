@@ -19,7 +19,8 @@ namespace deepep {
 class Session {
 public:
     Session(int rank, int size, uint64_t bytes, const std::string& endpoint, unsigned timeout, bool udma = false,
-            bool megamoe = false, bool mpi = false, bool combine_only = false, bool use_1g_huge_pages = false);
+            bool megamoe = false, bool mpi = false, bool combine_only = false, bool use_1g_huge_pages = false,
+            bool low_latency_only = false);
     Session(const Session&) = delete;
     Session& operator=(const Session&) = delete;
     ~Session() = default;  // Never start collectives from Python GC/interpreter exit.
@@ -36,6 +37,10 @@ public:
     bool use_1g_huge_pages() const
     {
         return use_1g_huge_pages_;
+    }
+    bool low_latency_only() const
+    {
+        return low_latency_only_;
     }
     uint64_t workspace_allocation_bytes() const
     {
@@ -124,6 +129,7 @@ private:
     uint64_t huge_page_bytes_ = 0;
     bool huge_page_mapped_ = false;
     bool use_1g_huge_pages_ = false;
+    bool low_latency_only_ = false;
     uint64_t bytes_ = 0;
     uint64_t allocation_bytes_ = 0;
     bool closed_ = true;

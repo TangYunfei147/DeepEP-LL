@@ -33,7 +33,9 @@ def test_variant_inventory_and_timer_lifetimes():
     base=ROOT/'csrc/kernels/dispatch/low_latency'
     assert {p.stem for p in (base/'variants').glob('*.cpp')}==set(MODES)
     cmake=(ROOT/'cmake/device/CMakeLists.txt').read_text()
-    for mode in MODES: assert f'variants/{mode}.cpp' in cmake
+    inventory=(ROOT/'cmake/OperatorSources.cmake').read_text()
+    assert 'OperatorSources.cmake' in cmake and '${DEEPEP_CORE_DEVICE_SOURCES}' in cmake
+    for mode in MODES: assert f'variants/{mode}.cpp' in inventory
     entry=(base/'dispatch_variant_kernel.h').read_text()
     ordered=['kernel.Init(','timer.End(LlStageTimer::INIT','timer.Begin(LlStageTimer::KERNEL',
              'kernel.Process();','timer.End(LlStageTimer::KERNEL','AscendC::SyncAll<true>()','timer.Flush()']

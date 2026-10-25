@@ -13,7 +13,7 @@ namespace {
 int initialized = 0, allocations = 0, frees = 0, finalized = 0, barriers = 0, memsets = 0;
 int init_status = 0, memset_status = 0, finalize_status = 0;
 bool allocation_failure = false;
-int qp_count = 0;
+int qp_count = 0, qp_calls = 0, aligned_allocations = 0;
 int expected_world = 2;
 uint64_t expected_bytes = 2 << 20;
 int storage = 0, context_token = 0, another_context = 0;
@@ -122,9 +122,9 @@ int aclshmemx_init_attr_with_buffers(int mode, aclshmemx_init_attr_t* attr, cons
 {
     assert(mode == ACLSHMEMX_INIT_WITH_DEFAULT || mode == ACLSHMEMX_INIT_WITH_MPI);
     assert(attr->n_pes == expected_world && attr->local_mem_size == 0 && count == 1);
-    assert(attr->option_attr.data_op_engine_type == (ACLSHMEM_DATA_OP_MTE | ACLSHMEM_DATA_OP_UDMA));
+    assert(attr->option_attr.data_op_engine_type == (ACLSHMEM_DATA_OP_MTE | (qp_count ? ACLSHMEM_DATA_OP_UDMA : 0)));
     assert(attr->option_attr.version == ACLSHMEM_INIT_ATTR_VERSION);
-    assert(attr->runtime_config.udma_shared_jetty == ACLSHMEM_CONFIG_ENABLED);
+    assert(attr->runtime_config.udma_shared_jetty == (qp_count ? ACLSHMEM_CONFIG_ENABLED : ACLSHMEM_CONFIG_DEFAULT));
     for (auto value : attr->runtime_config.reserved) assert(value == 0);
     assert(descriptors->addr == source_address && descriptors->size == physical_bytes);
     assert(descriptors->optional_attr->mem_handle == &physical_token);
@@ -163,6 +163,7 @@ int aclshmemx_init_attr(int, aclshmemx_init_attr_t* attr)
 int aclshmemx_set_qp_num(data_op_engine_type_t engine, uint32_t count)
 {
     assert(engine == ACLSHMEM_DATA_OP_UDMA && count == 32 && initialized == 0);
+    ++qp_calls;
     qp_count = count;
     return 0;
 }
@@ -182,8 +183,10 @@ void* aclshmem_malloc(size_t bytes)
     return allocation_failure ? nullptr : &storage;
 }
 // Match the aligned allocation API used by Session; reuse the existing fault-injection stub.
-void* aclshmem_align(size_t, size_t bytes)
+void* aclshmem_align(size_t alignment, size_t bytes)
 {
+    assert(alignment == 512U);
+    ++aligned_allocations;
     return aclshmem_malloc(bytes);
 }
 void aclshmem_free(void* value)
@@ -203,6 +206,48 @@ int main(int argc, char** argv)
     setenv("DEEPEP_SHMEM_DENSE_QPS", "1", 1);
     const std::string mode = argv[1];
     auto create = []() { return deepep::Session(0, 2, 2 << 20, "tcp://127.0.0.1:19091", 30); };
+    if (mode == "ll-only-invalid") {
+        for (unsigned option = 0; option < 4; ++option) {
+            fails([&]() {
+                deepep::Session session(0, 16, 8ULL << 30, "tcp://127.0.0.1:19091", 30,
+                                        option == 0, option == 1, option == 2, option == 3, false, true);
+            });
+        }
+        // The generic MTE constructor keeps its existing huge-page boundary.
+        fails([]() { deepep::Session session(0, 16, 8ULL << 30, "tcp://127.0.0.1:19091", 30,
+                                              false, false, false, false, true); });
+        assert(!deepep::Session::busy() && !initialized && !allocations && !qp_calls && !memsets);
+        return 0;
+    }
+    if (mode == "ll-only-missing-masks" || mode == "ll-only-huge-missing-masks") {
+        setenv("DEEPEP_SHMEM_DENSE_QPS", "0", 1);
+        expected_world = 16;
+        expected_bytes = (8ULL << 30) + (2ULL << 20);
+        const bool huge = mode == "ll-only-huge-missing-masks";
+        // Same absent legacy symbol: HT still rejects before touching SHMEM.
+        fails([]() { deepep::Session ht(0, 16, 8ULL << 30, "tcp://127.0.0.1:19091", 30, true); });
+        assert(!deepep::Session::busy() && !initialized && !qp_calls);
+        deepep::Session session(15, 16, 8ULL << 30, "tcp://127.0.0.1:19091", 30,
+                                false, false, false, false, huge, true);
+        assert(session.low_latency_only() && !session.udma() && !session.peer_table() && !session.sparse_qp_enabled());
+        assert(session.use_1g_huge_pages() == huge && session.capacity() == (8ULL << 30));
+        assert(!qp_calls && !qp_count && memsets == 1 && initialized == 2);
+        assert(session.workspace() == (huge ? symmetric_address : &storage));
+        assert(session.workspace_allocation_bytes() == (huge ? physical_bytes : expected_bytes));
+        assert(allocations == (huge ? 0 : 1) && aligned_allocations == (huge ? 0 : 1));
+        session.barrier();
+        assert(barriers == 1);
+        session.close();
+        session.close();
+        assert(finalized == 1 && barriers == 2 && !deepep::Session::busy());
+        assert(frees == (huge ? 0 : 1) && !qp_calls);
+        if (huge) {
+            const std::vector<std::string> expected{"allocate", "reserve", "map", "access", "register", "translate",
+                                                    "finalize", "unmap", "release-address", "free-physical"};
+            assert(physical_calls == expected);
+        }
+        return 0;
+    }
     if (mode == "sparse-missing") {
         setenv("DEEPEP_SHMEM_DENSE_QPS", "0", 1);
         fails([]() { deepep::Session s(0, 2, 2 << 20, "tcp://127.0.0.1:19091", 30, true); });

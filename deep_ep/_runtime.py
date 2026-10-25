@@ -81,9 +81,19 @@ class Runtime:
         combine_only=False,
         use_1g_huge_pages=False,
         debug_collectives=False,
+        low_latency_backend=None,
     ):
         global _OWNER
         native = require_native("Runtime.__init__")
+        if low_latency_backend not in (None, "mte"):
+            raise ValueError("low_latency_backend must be None or 'mte'")
+        ll_mte = low_latency_backend == "mte"
+        if ll_mte and (udma or self._megamoe or bootstrap != "default" or combine_only):
+            raise ValueError("LL MTE requires default bootstrap, udma=False and combine_only=False")
+        ll_factory = getattr(native, "create_low_latency_runtime", None) if ll_mte else None
+        if ll_mte and not callable(ll_factory):
+            raise RuntimeError("Rebuild/install the matching wheel with explicit LL MTE runtime support")
+        self.low_latency_backend = low_latency_backend
         integer("capacity", capacity, 2 << 20, (1 << 30) if self._megamoe else (1 << 63) - 1)
         if capacity % (2 << 20):
             raise ValueError("capacity must be aligned to 2 MiB")
@@ -105,8 +115,8 @@ class Runtime:
         if type(combine_only) is not bool or (combine_only and not udma):
             raise ValueError("combine_only requires a UDMA runtime and a bool value")
         self.combine_only = combine_only
-        if type(use_1g_huge_pages) is not bool or (use_1g_huge_pages and (not udma or self._megamoe)):
-            raise ValueError("use_1g_huge_pages requires an Elastic UDMA runtime and a bool value")
+        if type(use_1g_huge_pages) is not bool or (use_1g_huge_pages and (not (udma or ll_mte) or self._megamoe)):
+            raise ValueError("use_1g_huge_pages requires an Elastic UDMA or explicit LL MTE runtime and a bool value")
         self.use_1g_huge_pages = use_1g_huge_pages
         if type(debug_collectives) is not bool:
             raise TypeError("debug_collectives must be bool")
@@ -176,6 +186,7 @@ class Runtime:
                     + 4 * int(dense_qps)
                     + 8 * int(use_1g_huge_pages)
                     + 16 * int(debug_collectives)
+                    + 32 * int(ll_mte)
                 )
                 if store_group:
                     values = group.all_gather(local_values, "runtime configuration")
@@ -193,7 +204,7 @@ class Runtime:
                     raise ValueError("Ranks disagree on workspace capacity, timeout or bootstrap endpoint")
                 if any(value[-1] != values[0][-1] for value in values):
                     raise ValueError(
-                        "Ranks disagree on MTE/URMA runtime engines, QP configuration, page size or debug_collectives"
+                        "Ranks disagree on MTE/URMA runtime engines, LL-only mode, QP configuration, page size or debug_collectives"
                     )
                 if self._megamoe:
                     invalid_hosts = [i for i, value in enumerate(values) if value[4] == 0]
@@ -223,7 +234,9 @@ class Runtime:
             self.notify_inflight = None
             self.stream = npu.Stream(device=self.device)
             self.native = (
-                native.create_combine_runtime(
+                ll_factory(rank, size, capacity, address, timeout, use_1g_huge_pages)
+                if ll_mte
+                else native.create_combine_runtime(
                     rank, size, capacity, address, timeout, bootstrap == "mpi", use_1g_huge_pages
                 )
                 if combine_only

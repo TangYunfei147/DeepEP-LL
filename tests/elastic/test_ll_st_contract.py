@@ -49,6 +49,35 @@ def test_ll_capacity_boundary_and_defaults():
     assert st.validate_args(st.make_parser().parse_args([]), 16) == 16
 
 
+@pytest.mark.parametrize('page_option,expected', [(None, True), (0, False), (1, True)])
+def test_ll_st_passes_explicit_mte_and_preserves_page_policy(monkeypatch, page_option, expected):
+    args = st.parse_args(['--num-tokens', '256', '--num-max-tokens-per-rank', '256'])
+    args.use_1g_huge_pages = page_option
+    monkeypatch.setenv('DEEPEP_LL_BACKEND', 'udma')
+    options = st.ll_buffer_options(args, 'mte', 256)
+    assert options['low_latency_backend'] == 'mte'
+    assert options['use_1g_huge_pages'] is expected
+    assert options['num_bytes'] == 8 << 30
+    assert options['num_max_tokens_per_rank'] == 256
+    assert options['hidden'] == options['num_topk'] == 0
+    assert options['explicitly_destroy'] is True
+
+
+def test_explicit_ll_st_does_not_downgrade_unsupported_transport():
+    args = st.parse_args([])
+    with pytest.raises(ValueError, match='MTE'):
+        st.ll_buffer_options(args, 'rdma', 16)
+
+
+@pytest.mark.parametrize('page_option', [0, 1])
+def test_legacy_st_constructor_keeps_old_wheel_contract_explicitly(page_option):
+    args = st.parse_args([])
+    args.use_1g_huge_pages = page_option
+    legacy = st.ll_buffer_options(args, 'mte', 16, explicit_mte=False)
+    assert 'low_latency_backend' not in legacy
+    assert legacy['use_1g_huge_pages'] is bool(page_option)
+
+
 def test_unique_routes_and_expanded_counts():
     routes = st.make_routes(16, 8, 8, 128, 42)
     assert all(len(set(row)) == 8 for rows in routes for row in rows)

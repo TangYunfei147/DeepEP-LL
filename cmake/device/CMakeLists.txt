@@ -25,20 +25,9 @@ find_path(DEVICE_RT_INCLUDE rt.h HINTS
     "${ASCEND_HOME_PATH}/${CMAKE_SYSTEM_PROCESSOR}-linux/pkg_inc/runtime"
     "${ASCEND_HOME_PATH}/${CMAKE_SYSTEM_PROCESSOR}-linux/runtime/include"
     NO_DEFAULT_PATH)
-add_library(deepep_kernels SHARED "${DEEPEP_SOURCE_DIR}/csrc/kernels/notify/notify.cpp"
-    "${DEEPEP_SOURCE_DIR}/csrc/kernels/dispatch/dispatch.cpp"
-    "${DEEPEP_SOURCE_DIR}/csrc/kernels/combine/combine.cpp"
-    "${DEEPEP_SOURCE_DIR}/csrc/kernels/combine/reuse.cpp"
-    "${DEEPEP_SOURCE_DIR}/csrc/kernels/combine/combine_ep8_mte.cpp"
-    "${DEEPEP_SOURCE_DIR}/csrc/kernels/dispatch/low_latency.cpp"
-    "${DEEPEP_SOURCE_DIR}/csrc/kernels/dispatch/low_latency/variants/prequant_e4m3.cpp"
-    "${DEEPEP_SOURCE_DIR}/csrc/kernels/dispatch/low_latency/variants/fp16.cpp"
-    "${DEEPEP_SOURCE_DIR}/csrc/kernels/dispatch/low_latency/variants/fp16_e4m3.cpp"
-    "${DEEPEP_SOURCE_DIR}/csrc/kernels/dispatch/low_latency/variants/fp16_e5m2.cpp"
-    "${DEEPEP_SOURCE_DIR}/csrc/kernels/dispatch/low_latency/variants/bf16.cpp"
-    "${DEEPEP_SOURCE_DIR}/csrc/kernels/dispatch/low_latency/variants/bf16_e4m3.cpp"
-    "${DEEPEP_SOURCE_DIR}/csrc/kernels/dispatch/low_latency/variants/bf16_e5m2.cpp"
-    "${DEEPEP_SOURCE_DIR}/csrc/kernels/combine/low_latency.cpp")
+include("${CMAKE_CURRENT_LIST_DIR}/../OperatorSources.cmake")
+list(TRANSFORM DEEPEP_CORE_DEVICE_SOURCES PREPEND "${DEEPEP_SOURCE_DIR}/")
+add_library(deepep_kernels SHARED ${DEEPEP_CORE_DEVICE_SOURCES})
 target_compile_options(deepep_kernels PRIVATE "$<$<NOT:$<CONFIG:Debug>>:-O2>" -xasc --npu-arch=dav-3510
     --cce-auto-infer-kernel-type=false
     "-ffile-prefix-map=${DEEPEP_SOURCE_DIR}=."

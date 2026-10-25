@@ -35,12 +35,15 @@ bool Session::busy()
 }
 
 Session::Session(int rank, int size, uint64_t bytes, const std::string& endpoint, unsigned timeout, bool udma,
-                 bool megamoe, bool mpi, bool combine_only, bool use_1g_huge_pages)
+                 bool megamoe, bool mpi, bool combine_only, bool use_1g_huge_pages, bool low_latency_only)
 {
+    if (low_latency_only && (udma || megamoe || mpi || combine_only))
+        throw std::invalid_argument("LL-only requires the MTE runtime with default bootstrap and full LL dispatch/combine");
     if (combine_only && (!udma || megamoe)) throw std::invalid_argument("Combine-only requires UDMA");
-    if (use_1g_huge_pages && (!udma || megamoe))
-        throw std::invalid_argument("1 GiB huge pages require the Elastic UDMA runtime");
+    if (use_1g_huge_pages && ((!udma && !low_latency_only) || megamoe))
+        throw std::invalid_argument("1 GiB huge pages require an Elastic UDMA or explicit LL-only MTE runtime");
     use_1g_huge_pages_ = use_1g_huge_pages;
+    low_latency_only_ = low_latency_only;
     const char* dense_env = std::getenv("DEEPEP_SHMEM_DENSE_QPS");
     const std::string dense = dense_env == nullptr ? "0" : dense_env;
     if (dense != "0" && dense != "1") throw std::invalid_argument("DEEPEP_SHMEM_DENSE_QPS must be 0 or 1");
@@ -146,8 +149,10 @@ Session::Session(int rank, int size, uint64_t bytes, const std::string& endpoint
             init_attempted = true;
             check(aclshmemx_init_attr(mode, &attr), "aclshmemx_init_attr");
             runtime_started = true;
-            // Peer-table aggregate packets require physical 512B boundaries.
-            workspace_ = udma ? aclshmem_align(512U, allocation_bytes) : aclshmem_malloc(allocation_bytes);
+            // Explicit LL keeps its packet alignment while using the same
+            // symmetric allocator and per-peer MTE mappings, without UDMA QPs.
+            workspace_ = (udma || low_latency_only) ? aclshmem_align(512U, allocation_bytes)
+                                                   : aclshmem_malloc(allocation_bytes);
         }
         if (workspace_ == nullptr) {
             throw std::runtime_error("SHMEM workspace allocation or translation failed");

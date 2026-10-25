@@ -9,15 +9,21 @@
 #include <pybind11/stl.h>
 #endif
 
+#ifndef DEEPEP_BUILD_HT
+#define DEEPEP_BUILD_HT 1
+#endif
+#if DEEPEP_BUILD_HT
 #include "ops/notify.hpp"
 #include "ops/dispatch.hpp"
 #include "ops/combine.hpp"
+#endif
 #include "ops/low_latency.hpp"
 
 namespace py = pybind11;
 PYBIND11_MODULE(_C, module)
 {
     module.attr("runtime_protocol") = 1;
+    module.attr("high_throughput_enabled") = bool(DEEPEP_BUILD_HT);
     module.def("shmem_library_path", []() {
         Dl_info info{};
         if (dladdr(reinterpret_cast<void*>(&aclshmemx_init_attr), &info) == 0 || info.dli_fname == nullptr) {
@@ -26,6 +32,15 @@ PYBIND11_MODULE(_C, module)
         return std::string(info.dli_fname);
     });
     module.def("runtime_busy", &deepep::Session::busy, py::call_guard<py::gil_scoped_release>());
+    module.def(
+        "create_low_latency_runtime",
+        [](int rank, int size, uint64_t bytes, const std::string& endpoint, unsigned timeout, bool use_1g_huge_pages) {
+            return std::make_unique<deepep::Session>(rank, size, bytes, endpoint, timeout, false, false, false, false,
+                                                     use_1g_huge_pages, true);
+        },
+        py::arg("rank"), py::arg("size"), py::arg("bytes"), py::arg("endpoint"), py::arg("timeout"),
+        py::arg("use_1g_huge_pages") = false, py::call_guard<py::gil_scoped_release>());
+#if DEEPEP_BUILD_HT
     module.def(
         "create_mpi_runtime",
         [](int rank, int size, uint64_t bytes, unsigned timeout, bool use_1g_huge_pages) {
@@ -43,6 +58,7 @@ PYBIND11_MODULE(_C, module)
         },
         py::arg("rank"), py::arg("size"), py::arg("bytes"), py::arg("endpoint"), py::arg("timeout"), py::arg("mpi"),
         py::arg("use_1g_huge_pages") = false, py::call_guard<py::gil_scoped_release>());
+#endif
     py::class_<deepep::Session>(module, "Runtime")
         .def(py::init([](int rank, int size, uint64_t bytes, const std::string& endpoint, unsigned timeout, bool udma,
                          bool use_1g_huge_pages) {
@@ -56,6 +72,7 @@ PYBIND11_MODULE(_C, module)
         .def_property_readonly("closed", &deepep::Session::closed)
         .def_property_readonly("capacity", &deepep::Session::capacity)
         .def_property_readonly("use_1g_huge_pages", &deepep::Session::use_1g_huge_pages)
+        .def_property_readonly("low_latency_only", &deepep::Session::low_latency_only)
         .def_property_readonly("workspace_allocation_bytes", &deepep::Session::workspace_allocation_bytes)
         .def_property_readonly("sparse_qp_enabled", &deepep::Session::sparse_qp_enabled)
         .def_property_readonly("peer_table", &deepep::Session::peer_table);
@@ -78,8 +95,10 @@ PYBIND11_MODULE(_C, module)
                py::call_guard<py::gil_scoped_release>());
 #endif
 
+#if DEEPEP_BUILD_HT
     deepep::bind_notify(module);
     deepep::bind_dispatch(module);
     deepep::bind_combine(module);
+#endif
     deepep::bind_low_latency(module);
 }

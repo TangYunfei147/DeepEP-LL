@@ -149,6 +149,10 @@ def test_sdk_identity_is_required_for_core_builds(build, monkeypatch, tmp_path, 
     )
     assert result["shmem"]["revision"] == ("unknown" if fault in ("missing", "json", "list") else identity["revision"])
     assert manifest.exists() == (fault != "missing")
+    assert result["build_ht"] is True
+    off = build.build_configuration({**env, "DEEPEP_BUILD_HT": "OFF"})
+    assert off["build_ht"] is False
+    assert build.build_cache_key(off) != build.build_cache_key(result)
     before = build.build_cache_key(result)
     result["shmem"]["sha256"]["lib/libshmem.so"] = "0" * 64
     assert build.build_cache_key(result) != before
@@ -217,6 +221,8 @@ def test_lock_declares_operators_without_claiming_device_qualification():
         "elastic-notify-metadata-v7",
         "elastic-dispatch-expanded-v1",
         "elastic-combine-expanded-v3",
+        "elastic-dispatch-low-latency-v1",
+        "elastic-combine-low-latency-v1",
     ],
 )
 def test_elastic_wheel_requires_device_library(tmp_path, capability):
@@ -307,8 +313,8 @@ def test_cache_survives_source_edits_but_not_toolchain_changes(build):
         assert build.build_cache_key({**configuration, name: value}) != key
 
 
-@pytest.mark.parametrize("beta,timer", [(False, False), (True, False), (True, True)])
-def test_packaging_uses_cmake_capabilities_and_removes_old_library(build, monkeypatch, tmp_path, beta, timer):
+@pytest.mark.parametrize("beta,timer,build_ht", [(False, False, True), (False, False, False), (True, False, True), (True, True, True)])
+def test_packaging_uses_cmake_capabilities_and_removes_old_library(build, monkeypatch, tmp_path, beta, timer, build_ht):
     from setuptools import Distribution, Extension
 
     # This CPU-only test mocks the build tools, including their discovery paths.
@@ -321,6 +327,7 @@ def test_packaging_uses_cmake_capabilities_and_removes_old_library(build, monkey
         "megamoe": {"enabled": beta, "timer": timer},
         "CATLASS_ROOT": "/private/catlass" if beta else "",
         "source_sha256": "current",
+        "build_ht": build_ht,
         "source_version": "1",
         "cmake_path": "/tools/cmake",
         "compiler_path": "/tools/c++",
@@ -361,6 +368,7 @@ def test_packaging_uses_cmake_capabilities_and_removes_old_library(build, monkey
     command.build_extension(ext)
     assert "-DCMAKE_BUILD_TYPE=RelWithDebInfo" in calls[0]
     assert "-DDEEPEP_DEVICE_JOBS=6" in calls[0]
+    assert f"-DDEEPEP_BUILD_HT={'ON' if build_ht else 'OFF'}" in calls[0]
     assert f"-DDEEPEP_BUILD_MEGAMOE={'ON' if beta else 'OFF'}" in calls[0]
     assert f"-DDEEPEP_MEGAMOE_TIMER={'ON' if timer else 'OFF'}" in calls[0]
     assert f"-Dpybind11_DIR={pybind11_cmake_dir}" in calls[0]
@@ -370,6 +378,7 @@ def test_packaging_uses_cmake_capabilities_and_removes_old_library(build, monkey
     info = json.loads((destination / "_build_info.json").read_text())
     assert info["capabilities"] == capabilities["capabilities"]
     assert info["source_sha256"] == "current"
+    assert info["build_ht"] == build_ht
     assert info["megamoe"] == {"enabled": beta, "timer": timer}
     assert "CATLASS_ROOT" not in info
     assert not {"cmake_path", "compiler_path", "python_executable", "build_environment"}.intersection(info)

@@ -32,9 +32,9 @@ class BuildEggInfo(egg_info):
         super().finalize_options()
 
 
-def enabled(name, environment=None):
+def enabled(name, environment=None, default="OFF"):
     env = os.environ if environment is None else environment
-    value = env.get(name, "OFF").upper()
+    value = env.get(name, default).upper()
     if value not in {"ON", "OFF", "1", "0", "TRUE", "FALSE"}:
         raise ValueError(f"{name} must be ON or OFF, got {value!r}")
     return value in {"ON", "1", "TRUE"}
@@ -199,6 +199,7 @@ def build_configuration(environment=None):
         raise ValueError("DEEPEP_LL_SEND_CORES and DEEPEP_LL_RECV_CORES must be positive and sum to 56")
     result["ll_send_cores"], result["ll_recv_cores"] = send, recv
     result["ll_stage_timer"] = enabled("DEEPEP_LL_STAGE_TIMER", env)
+    result["build_ht"] = enabled("DEEPEP_BUILD_HT", env, default="ON")
     result["build_type"] = env.get("DEEPEP_BUILD_TYPE", "RelWithDebInfo" if lineinfo else "Release")
     if result["build_type"] not in {"Release", "RelWithDebInfo", "Debug"}:
         raise RuntimeError("DEEPEP_BUILD_TYPE must be Release, RelWithDebInfo or Debug")
@@ -379,6 +380,7 @@ class CMakeBuild(build_ext):
             f"-DCMAKE_BUILD_TYPE={configuration['build_type']}",
             f"-DDEEPEP_DEVICE_JOBS={jobs}",
             f"-DDEEPEP_LL_STAGE_TIMER={'ON' if configuration.get('ll_stage_timer', False) else 'OFF'}",
+            f"-DDEEPEP_BUILD_HT={'ON' if configuration.get('build_ht', True) else 'OFF'}",
             f"-DDEEPEP_LL_SEND_CORES={configuration.get('ll_send_cores', 28)}",
             f"-DDEEPEP_LL_RECV_CORES={configuration.get('ll_recv_cores', 28)}",
             f"-DPython_EXECUTABLE={sys.executable}",

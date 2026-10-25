@@ -287,7 +287,7 @@ def environment(source, send_cores):
                DEEPEP_LL_SEND_CORES=str(send_cores), DEEPEP_LL_RECV_CORES=str(56 - send_cores),
                DEEPEP_LL_RANKS_PER_GROUP='4', PIP_NO_INDEX='1', GIT_ALLOW_PROTOCOL='file',
                DEEPEP_BUILD_TYPE='Release', DEEPEP_BUILD_MEGAMOE='OFF', DEEPEP_MEGAMOE_TIMER='OFF',
-               DEEPEP_BUILD_EP_GMM_FUSED='OFF', DEEPEP_LINEINFO='OFF',
+               DEEPEP_BUILD_EP_GMM_FUSED='OFF', DEEPEP_BUILD_HT='OFF', DEEPEP_LINEINFO='OFF',
                PYTHONDONTWRITEBYTECODE='1')
     for key in ('SHMEM_ROOT', 'CATLASS_ROOT'):
         env.pop(key, None)

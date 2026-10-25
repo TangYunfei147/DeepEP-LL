@@ -153,3 +153,28 @@ cross-core barrier. Source metadata remains at the original send tail.
 
 Only local CPU work is authorized while27is unavailable. New CANN compilation,
 NPU correctness and performance remain target-machine acceptance work.
+
+## LL-only initialization fix and isolated27build (2026-10-25)
+
+Latest user instruction supersedes the preceding local-only restriction for
+177.22.27.1, limited to the isolated directory
+/home/tyf/Q4_remote_test/DeepEP-LL-g4-small-b-prefix/.tmp/topology-mainline-20261025.
+Source, dependencies, SDK/wheel builds, logs and caches stay inside it; preserve
+the original deployment. All four device visibility variables stay0,1. Only
+Host import/checks are allowed: no NPU initialization/test/benchmark. Report
+compiler errors promptly. Inspect existing files/Git/tasks before writing.
+
+User explicitly requested excluding HT from this performance experiment rather
+than expanding HT compatibility. The suite sets DEEPEP_BUILD_HT=OFF; only the
+LL Host and nine LL device translation units are built. Keep all seven dispatch
+modes, combine, O2 and timer OFF/ON support. Build identity includes build_ht.
+The LL-only native capability selects MTE initialization explicitly before
+SHMEM; do not enable dense QPs to bypass the removed sparse API. Page selection,
+SHMEM symmetric mapping and the8GiB+internal2MiB layout remain unchanged.
+The old Elastic constructor always enabledUDMA even for LL, which caused the
+reported missing-mask failure. New LL-only sessions reject HT fallback.
+
+New commits-topology-mte.json uses a new run prefix and three same-SDK LL-only
+versions. Historical four-entry manifests/results remain separate; an old
+mixed-runtime result is not a new MTE-only measurement. No SDK source patch or
+forced SDK rebuild is needed when the installed new SDK passes identity checks.
