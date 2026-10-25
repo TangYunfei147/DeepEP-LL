@@ -79,3 +79,5 @@ active_capture_profile的kernel_us/status/reason属于逐rank/轮次观察值，
 用户授权SHMEM升级官方最新主线：锁定master8e3fc610f91ae9e5e8cf13748cfb74826b272c2a，不改vendor源码。runtime_config替代旧sharedjetty setter，旧peerMask和可配置UDMA超时已移除，显式UDMA dense须用户配置。LL ST显式MTE；旧HT普通peer输出缺注册证明，Host/Notify前明确拒绝。新SDK与完整wheel都需重建，不能以旧SDK复用。SDK完整include/src/lib身份和源码revision均严格检查。
 
 P26/6/1实验固定S30/R26、新SDK、采样参数及均匀随机top-k种子配对。先完成全部六个OFF/sparse wheel及Host检查，再串行采样；首次只发三个SEND_FIRST，整个实验含补充累计<=10次。实际设备与CANN验收状态以docs/BUILD_DISPATCH_SPLIT.md为准，不以CPU或历史schema编译代替。
+
+同日用户明确授权27在`/home/tyf/Q4_remote_test/DeepEP-LL-g4-small-b-prefix/.tmp/topology-mainline-20261025`编译新SDK及完整OFF/ON wheel，不运行NPU，编译报错及时告知。已完成dda407e源码验证：官方SDK8e3fc61无补丁；P6/S30R26七mode+selector冷编译OFF37.682s/ON39.696s；P26/6/1六份完整wheel全部编译、链接、Host身份和实际新SDK路径/哈希核验通过。Linux Host/C++回归162pass；无编译/链接错误，仅上游宏重定义警告。原部署、SDK和共享Python未改；四可见性变量0,1。无NPU正确性/性能结论。日志及wheel-map在该隔离根目录，细节见docs/BUILD_DISPATCH_SPLIT.md。

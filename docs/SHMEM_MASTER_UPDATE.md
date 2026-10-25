@@ -68,8 +68,9 @@ an old-SDK versus new-SDK comparison is a separate experiment.
 
 ## Validation boundary
 
-CPU tests cover the production Session against mainline declarations, address
-translation with distinct mappings, fail-fast HT guards, SDK identity and
-rebuild/cache behavior. They do not replace CANN compilation or communication
-correctness. Current evidence and the remote-validation blocker are recorded
-in [BUILD_DISPATCH_SPLIT.md](BUILD_DISPATCH_SPLIT.md).
+The official SDK and six complete P26/P6/P1 OFF/ON wheels compiled and linked
+on27 with CANN9.3.0. All six pass Host identity and actual loaded-SDK path/hash
+checks; the production SDK source remains clean. Linux Host/C++ follow-up has
+162 passing tests. No NPU was run, so communication correctness and performance
+remain untested. Full evidence, cold compile times and artifact locations are
+recorded in [BUILD_DISPATCH_SPLIT.md](BUILD_DISPATCH_SPLIT.md).

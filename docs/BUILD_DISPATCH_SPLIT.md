@@ -621,21 +621,70 @@ Validation in the local Windows workspace:
   the checkout/map to paths with spaces. Git Bash validates compile_off.sh
   syntax; this does not execute Bisheng.
 
-Remote validation is **not complete**. On27, an isolated clone was prepared at
-`/home/tyf/Q4_remote_test/DeepEP-LL-g4-small-b-prefix/.tmp/topology-mainline-20261025`
-from the SDK commit and official submodule bundles. The original checkout and
-installed SDK were preserved. The fresh SDK needs its offline JSON build
-dependency. A subsequent SSH environment/dependency check was rejected by
-automatic approval review because the active local-maintenance restriction
-was not recognized as overridden. No workaround or further SSH attempt was
-made after that rejection. There are no new CANN ON/OFF cold times, full wheel
-link results, NPU correctness or performance results for this configuration.
+An initial SSH check was rejected by automatic approval review. The user then
+explicitly authorized27 compile-only validation in the isolated directory;
+the following work was performed after that authorization. Source
+`dda407eb0d137fee8f20cfa13114c265fbe96503` now passes CANN compilation, full wheel
+linking and Host import. **No NPU execution was performed.**
 
-After explicit remote authorization or on the user's allocated target: prepare
-the new SDK, measure separate empty OFF/ON compile directories with
-`benchmark_compile.py`, compile combine with `compile_off.sh`, then build and
-Host-verify all P26/6/1 OFF/sparse wheels using `diagnose.py --build-only` before
-any target run. Full ON wheel linking also compiles the changed HT paths.
-Complete commands are in `tests/ll_stage_timer/PARALLEL_PREFIX.md`.
-No latency recovery, port bandwidth or hardware bottleneck conclusion follows
-from these CPU tests or the earlier old-SDK compilation records.
+Remote artifact root:
+
+```text
+/home/tyf/Q4_remote_test/DeepEP-LL-g4-small-b-prefix/.tmp/topology-mainline-20261025
+```
+
+The original checkout and SDK were preserved. Official JSON v3.11.3 was
+preloaded offline; its single-header SHA256 is
+`9bea4c8066ef4a1c206b2be5a36302f8926f7fdc6087af5d20b417d0cf103ea6`.
+Official SHMEM master compiled successfully and remained clean. Its installed
+manifest records revision8e3fc61; lib/libshmem.so SHA256 is
+`0f8b5ff28b6c8c2419aba8c4447225c0974ad06434eb1b2c05b0409c97f7dd3a`.
+
+Environment: CANN9.3.0, Ascend950/dav-3510, O2, jobs4, Python3.11,
+build1.2.2.post1/setuptools79.0.1/wheel0.47.0/pybind113.0.4/CMake3.31.6.
+Build tools were copied from existing project caches into this isolated root;
+shared Python and system dependencies were not modified. All four visibility
+variables remained0,1, and no device launcher was invoked.
+
+Separate empty object directories, P6/S30/R26, selector plus all seven
+dispatch modes:
+
+| Timer | Cold compilation wall time | Result |
+|---|---:|---|
+| OFF | 37.682s | all8 units exit0 |
+| sparse ON | 39.696s | all8 units exit0 |
+
+These are compilation times, excluding SDK preparation and wheel packaging;
+they are not operator latency or a cross-revision speedup measurement.
+
+`diagnose.py --build-only` then built and Host-verified **all six complete
+wheels**: P26/P6/P1 × OFF/sparse ON. Each complete core build includes HT
+dispatch/combine/reuse/notify, LL dispatch/combine and Host bindings/Session.
+No modes, O2, architecture or probes were removed. There were no compilation
+or link errors; upstream SHMEM headers emitted macro-redefinition warnings.
+
+Each wheel was separately installed into its private validation venv and
+checked again: actual loaded SHMEM path equals this isolated SDK, its library
+hash equals the wheel manifest, and native P/timer settings match the requested
+variant. All six recorded source fingerprint
+`107c05365a4d930bd13dffbfcbaebb7185555c327d7c10a22c3949abbf043e22`.
+The follow-up documentation changes do not change that source fingerprint.
+
+Linux/G++ follow-up: **162 passed in12.60s**, with no skips. It covers production
+Host lifecycle fault injection, actual mainline public-header contract,
+UDMA address mocks, prefix/VF protocol/UB models, CMake prefix/profile flags and
+the build tests previously unavailable on Windows. These tests do not exercise
+NPU communication or establish HT runtime compatibility.
+
+Evidence paths relative to the remote artifact root:
+
+- `.logs/sdk-master-001.log` and `third-party/shmem/install/shmem/deepep-sdk.json`
+- `.tmp/p6-cold-off-001/timing.json`, `.tmp/p6-cold-on-001/timing.json`
+- `diagnostic-runs/prefix_p{26,6,1}_build_001/node_000/wheel-map.json`
+- Each node's `logs/{off,sparse}-{build,install,identity}.log` and `wheels/`
+- `.logs/loaded-sdk-verification.json` records six wheel hashes and loaded SDK
+- `.logs/native-cann-final-001.log`
+
+Complete target A/B commands are in `tests/ll_stage_timer/PARALLEL_PREFIX.md`.
+NPU correctness, port utilization and target OFF/ON performance remain untested;
+neither CPU models nor compilation establish latency recovery.

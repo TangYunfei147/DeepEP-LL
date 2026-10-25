@@ -51,7 +51,7 @@ python tests/ll_stage_timer/diagnose.py --analyze-existing diagnostic-runs/small
 同一份sparse数据可以并行检查初始化、count、prefix、首次发送准备及接收Probe/ready；设备OFF A/B仍应独立串行。
 ENTRY包含timer初始化；SEND_DONE是原发送资源退休，可能与接收重叠，不能当成纯网络时间。
 包数、逐包均衡、轮询次数和ready/probe比例未采集；稀疏跨度可能重叠，不能相加。先核实完整ON/OFF扰动，再解释阶段耗时。
-本地CPU验证不等于设备验收。当前新SDK/P配置尚无CANN编译或NPU性能结论；远端验证状态和完整记录见[BUILD_DISPATCH_SPLIT.md](../../docs/BUILD_DISPATCH_SPLIT.md)。
+新SDK及P26/6/1的六份完整OFF/ON wheel已在27通过CANN编译、链接、Host身份和实际SDK路径/哈希核验；全程未运行NPU，尚无设备正确性或性能结论。完整记录见[BUILD_DISPATCH_SPLIT.md](../../docs/BUILD_DISPATCH_SPLIT.md)。
 
 <details>
 <summary>历史分支、schema与命令存档（不用于当前新采集）</summary>

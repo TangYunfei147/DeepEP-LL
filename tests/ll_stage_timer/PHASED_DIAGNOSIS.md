@@ -2,6 +2,7 @@
 
 当前分支 `kernel/ll-g4-small-b-prefix`，实现 `g4-small-b-parallel-prefix`，使用 **schema15 / sparse**。
 2026-10-25当前新增EP16小B的可配置前缀生产核数P，并升级官方SHMEM master。新SDK必须显式重建，见[升级说明](../../docs/SHMEM_MASTER_UPDATE.md)；P26/6/1的完整“全部编译后运行”流程见[PARALLEL_PREFIX.md](PARALLEL_PREFIX.md)。P默认0表示R，身份和结果均保存实际配置。下文诊断器用法仍适用；旧版本“无需SDK重建”只适用于其当时已匹配的SDK。
+当日已在获授权的27隔离目录完成新SDK及六份P26/6/1 OFF/ON完整wheel的CANN编译和Host核验，实际加载SDK的路径与哈希也通过；没有运行NPU。后文2026-10-23连接超时是历史状态，当前证据见[BUILD_DISPATCH_SPLIT.md](../../docs/BUILD_DISPATCH_SPLIT.md)。
 本次仅改变诊断记录与解析，保持收发逻辑、原有业务同步顺序和通信协议不变；删除了仅用于旧计时器导出的末尾SyncAll。不宣称已恢复目标机17–23 µs性能，也不把CPU验证作为设备验收。
 
 ## 一个命令跑多个 B
