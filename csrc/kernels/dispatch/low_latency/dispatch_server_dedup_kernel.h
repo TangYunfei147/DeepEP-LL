@@ -67,6 +67,50 @@ public:
         receiver_.TryBatch();
     }
 
+    // Construct before Process but lease only from the first callback: the
+    // sender's TQue is initialized by then. AllocEventID excludes its implicit
+    // events; holding the lease also excludes later FetchEventID users.
+    struct EarlyProgress {
+        DispatchMemoryServerDedupKernel* kernel;
+        TEventID mte2Vector=TEventID(0),vectorScalar=TEventID(0);
+        bool leased=false;
+        __aicore__ inline bool Enabled() const {
+            return kernel->enableDedup_ && kernel->overlap_.earlyReceive &&
+                   (!kernel->receiverPrepared_ || kernel->receiver_.CanEarlyReceive());
+        }
+        __aicore__ inline void operator()() {
+            if (!Enabled()) return;
+            if (!leased) {
+                mte2Vector=kernel->pipe_->template AllocEventID<HardEvent::MTE2_V>();
+                vectorScalar=kernel->pipe_->template AllocEventID<HardEvent::V_S>();
+                leased=true;
+            }
+            kernel->AdvanceEarly(mte2Vector,vectorScalar);
+        }
+        __aicore__ inline void Finish() {
+            if (!leased) return;
+            // Every prefix/probe/zeroing join is closed before a callback
+            // returns. Staged payload tokens are different HardEvent domains.
+            kernel->pipe_->template ReleaseEventID<HardEvent::MTE2_V>(mte2Vector);
+            kernel->pipe_->template ReleaseEventID<HardEvent::V_S>(vectorScalar);
+            leased=false;
+        }
+    };
+    __aicore__ inline void AdvanceEarly(TEventID mte2Vector,TEventID vectorScalar) {
+        if (!receiverPrepared_) {
+            if (!counts_.TryLoadPrefixOnce(mte2Vector,vectorScalar)) return;
+            receiver_.SetPrefix(counts_.Prefix());
+            receiver_.Prepare(timer_,true,vectorScalar);
+            receiverPrepared_=true;
+        }
+        receiver_.TryEarlyReceive(mte2Vector,vectorScalar);
+    }
+    __aicore__ inline void SendRemote() {
+        EarlyProgress progress{this};
+        sender_.Process(counts_.ScratchPool(),counts_.ReservedBytes(),timer_,progress);
+        progress.Finish();
+    }
+
     // S remote submission overlaps receive; R cooperatively advances local TX/counts/RX.
     // Sender可与接收核的计数前缀准备重叠，不能把提取阶段耗时直接相加当作完整时延。
     __aicore__ inline void Process()
@@ -80,7 +124,7 @@ public:
 
         if (!enableDedup_) {
             if (core_<sendCores_) {
-                sender_.Process(counts_.ScratchPool(),counts_.ReservedBytes(),timer_);
+                SendRemote();
                 sender_.Retire();
                 counts_.Finish();
                 return; // S owns all source routes and never waits for receive prefix.
@@ -104,7 +148,7 @@ public:
             receiver_.Run();
         } else {
             if (core_<sendCores_) {
-                sender_.Process(counts_.ScratchPool(),counts_.ReservedBytes(),timer_);
+                SendRemote();
             } else {
                 // Stage3 publishes prefix before local TX. Stage1/2 retain
                 // the original local-send -> count/prefix order.
@@ -114,10 +158,14 @@ public:
                     counts_.LocalRouteIndices(),counts_.LocalExpertQ(),tasks,timer_);
                 if (!overlap_.Async()) { counts_.RecvCnt(); counts_.CalcCumsum(); }
             }
-            counts_.CompleteCumsum();
-            if (!overlap_.Async()) { LL_SEG_SCOPE(TRANSITION_DRAIN); PipeBarrier<PIPE_ALL>(); }
-            if (overlap_.enabled) receiver_.SetPrefix(counts_.Prefix());
-            receiver_.Process(timer_);
+            if (!receiverPrepared_) {
+                counts_.CompleteCumsum();
+                if (!overlap_.Async()) { LL_SEG_SCOPE(TRANSITION_DRAIN); PipeBarrier<PIPE_ALL>(); }
+                if (overlap_.enabled) receiver_.SetPrefix(counts_.Prefix());
+                receiver_.Prepare(timer_);
+                receiverPrepared_=true;
+            }
+            receiver_.Run();
         }
         { LL_SEG_SCOPE(FINAL_DRAIN);
         sender_.Retire();
@@ -137,6 +185,7 @@ private:
     LlOverlapLayout overlap_{};
     uint32_t core_ = 0, sendCores_ = 0;
     bool enableDedup_=true;
+    bool receiverPrepared_=false;
 };
 }  // namespace DispatchDedup
 #endif
