@@ -1,6 +1,12 @@
 # Control-path candidates: commit-by-commit A/B
 
-`commits.json` is the default source manifest for independent candidates based on
+The current topology/SDK experiment is documented in
+[TOPOLOGY_EXPERIMENTS.md](TOPOLOGY_EXPERIMENTS.md): a new-SDK baseline with the
+measured `c1e4faa` kernel, an explicit old-SDK comparison, and two independent
+receive-scheduling candidates. Select `commits-topology.json` explicitly.
+The delivery branch's production kernel no longer defaults to `868ddf8`.
+
+`commits.json` remains the historical default manifest for independent candidates based on
 `868ddf8`: revert source-mask accumulation, reduce the flag batch from16 to8,
 and prefetch flags across batches. Each candidate is compared with the declared
 reference, not with the preceding candidate. The actual revisions and labels are
@@ -15,10 +21,10 @@ run starts. Dispatch and combine are both tested.
 | flag-batch8 | `1c29599` | Probe8packets, retain16-packet storage and the original lane budget |
 | flag-prefetch16 | `c1e4faa` | Pair two16-packet snapshots; overlap the second flag probe with first-batch consumption |
 
-Every candidate has868ddf8 as its direct Git parent. The delivery branch retains
-these sibling commits as merge parents while its default production kernel tree
-stays identical to868ddf8. The suite builds the exact manifest revision, not the
-delivery branch's HEAD. Details, validation limits and target commands are in
+Every candidate in this historical manifest has868ddf8 as its direct Git parent.
+The delivery branch retains these commits so previous runs can be resumed with
+the same manifest. The suite builds the exact manifest revision, not the
+delivery branch's HEAD. Historical details and validation limits are in
 [RECEIVE_CANDIDATES.md](RECEIVE_CANDIDATES.md).
 
 The earlier cumulative experiment remains available through
@@ -70,6 +76,58 @@ max-rank mean, host elapsed time, or the receiver replay timer. The underlying
 `tests/elastic/test_ep_low_latency.py` keeps its defaults:10 warmups,100 measured
 iterations, last50 per rank, Exp + scalar all_reduce, correctness enabled. FP8 is
 the dispatch configuration; its combine input/output remains BF16.
+
+## Multiple uniform-routing seeds and SDK comparisons
+
+For the complete Git/SDK preparation, topology assumptions, CPU accounting and
+current experiment commands, start with [TOPOLOGY_EXPERIMENTS.md](TOPOLOGY_EXPERIMENTS.md).
+
+The old default `commits.json` and historical `commits-cumulative.json` remain
+unchanged so their saved runs remain resumable. Use the separate topology/SDK
+manifest explicitly:
+
+```bash
+python3 tests/ll_control_opt/suite.py \
+  --commits tests/ll_control_opt/commits-topology.json \
+  --resume --send-cores 30 --seeds 0 17 101 --rounds 2 --order alternating \
+  --run-prefix b256-topology-001
+```
+
+This manifest compares the old SDK with the new SDK using the same `c1e4faa`
+kernel, and compares the new kernel candidates with their explicit new-SDK
+reference. Follow its recorded `comparison_base`; adjacent manifest rows need
+not be parent/child changes. Every result row records `dependency_id`,
+`shmem_revision`, SDK manifest/library hashes and the corresponding reference
+fields. An old-SDK row minus a new-SDK reference is an old-minus-new difference,
+not a new-minus-old speedup.
+
+`--seeds` defaults to `0`. Routing remains the ST's uniform `normal` route; each
+requested seed is passed explicitly through `--seed`. The original three
+correctness routes are preserved, so performance uses the last routing table:
+**requested seed + 2**. The example therefore measures routing seeds2,19,103.
+`seed`/`requested_seed` and `measured_route_seed` are both saved. Warmup10,
+collection100, per-rank tail50, FP8 dispatch and BF16 combine remain unchanged.
+
+For every `(round, seed)` the suite runs all candidates and compares only with
+the same-seed reference from that round. Odd rounds use manifest order; even
+rounds reverse the candidate order within each seed. Wheels are still built and
+installed only once per commit, regardless of the number of seeds. There is no
+automatic pooling or subtraction across seeds.
+
+The single default seed0 retains `<label>/round-NNN`. Other seed selections use
+`<label>/seed-S/round-NNN`. Single-node `--resume-results` includes seed in each
+result key; old plans without a seed field or explicit `--seed` are seed0.
+Keep the same ordered seed list when resuming; a different seed selection needs
+a new run prefix. Increasing rounds remains supported.
+
+Each new ST invocation records a new `*.node-N.build.json` sidecar atomically
+before launch. It binds the tested source/dependency revision to the validated
+native/kernel/SDK hashes. Resume reads this saved metadata and does not require
+the old wheel or SDK binaries to remain installed. Historical complete results
+without the sidecar retain `sdk_identity_source=legacy-unavailable` and null
+actual SDK hashes; the current SDK is never used to fill in missing historical
+provenance. A result for one source revision cannot be reused for the SDK-update
+revision, even when the kernel code is identical.
 
 ## One command on each participating machine
 
@@ -161,8 +219,12 @@ python3 tests/ll_control_opt/suite.py \
   --run-only --send-cores 30 --rounds 4 --order alternating --run-prefix b256-independent-001
 ```
 
-All Python environments use project-local venvs with `--system-site-packages` and
-the existing environment's Torch/CANN dependencies. Wheel installation uses
+Candidate environments are project-local venvs with `--system-site-packages`.
+This exposes the selected Python's base installation, not packages installed
+only in an already activated outer venv. Use a verified base/Conda Python that
+provides the matching Torch/CANN dependencies, or explicitly install the matching
+Torch/torch_npu packages into the candidate environments before running them.
+Wheel installation uses
 `--no-index --no-deps`. No packages are fetched from pip. Installed native,
 actually loaded `libdeepep_kernels.so` (from `/proc/self/maps`), and loaded SDK
 library hashes must match each machine's local wheel manifest before the NPU
@@ -171,7 +233,12 @@ binary hashes are not assumed reproducible across toolchain installations.
 
 ## Native/SDK cache and offline dependencies
 
-The default build workspace is `.tmp/ll-control-opt/source-s30`. It switches
+Default build workspaces are
+`.tmp/ll-control-opt/source-s30-deps-<dependency-id>`, where the ID hashes the
+selected commit's dependency lock and Git pins. Old/new SDK identities use
+separate source and SDK directories. The former `.tmp/ll-control-opt/source-s30`
+is reused only when its committed dependency identity matches; otherwise it is
+preserved. A matching workspace switches
 between the selected commits, including siblings or an earlier baseline, using
 detached Git checkouts. All commits use the
 same build/SDK directories, letting CMake depfiles reuse unchanged Host/HT/device
@@ -381,6 +448,14 @@ and readiness handshake/error propagation. The Windows sandbox blocked local Git
 IPC; those tests ran outside it in a short project-local temporary directory.
 This update has no new Linux/CANN or NPU validation; historical cumulative wheel
 results do not validate the independent kernels.
+
+For a new SDK, first prepare/upload its pinned source and prepare that SDK in a
+project-local checkout with the standard `python scripts/build_shmem.py` workflow.
+If that checkout already contains an old SDK, the standard preparer refuses a
+silent replacement. Use a fresh checkout/install area, or explicitly choose
+`--rebuild` only after stopping users of that particular SDK. The suite never
+adds `--rebuild` itself. It preserves old suite SDK caches, including `source-s30`,
+and never copies a known other-revision SDK into a new dependency cache.
 
 Single-machine continuation validation:127local regression checks passed across
 the suite, dependency cache, result continuation and lock recovery. After the

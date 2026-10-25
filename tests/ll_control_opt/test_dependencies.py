@@ -390,10 +390,28 @@ def test_sibling_cache_rejects_changed_dependency_identity_before_checkout(sibli
         changed = git(root, 'rev-parse', 'HEAD')
         expected = 'Pinned Git dependencies changed'
     with pytest.raises(RuntimeError, match=expected):
-        build.build(changed, 30, root=root)
+        build.build(changed, 30, root=root, workspace=source)
     assert git(source, 'rev-parse', 'HEAD') == first
     assert len(observed) == 2
     assert not build.manifest_path(root, changed, 30).exists()
+
+
+def test_default_build_isolates_changed_dependencies_and_preserves_old_sdk(sibling_build):
+    root, _, first, _, observed = sibling_build
+    old_manifest = build.build(first, 30, root=root)
+    old_source = observed[0][2]
+    old_sdk = (old_source/build.SDK/'deepep-sdk.json').read_bytes()
+    (root/'dependencies.lock.json').write_text('{"changed": true}\n', encoding='utf-8')
+    changed = commit(root, 'independent SDK cache identity')
+    new_manifest = build.build(changed, 30, root=root)
+    new_source = observed[2][2]
+    assert new_source != old_source
+    assert git(old_source, 'rev-parse', 'HEAD') == first
+    assert (old_source/build.SDK/'deepep-sdk.json').read_bytes() == old_sdk
+    old = json.loads(old_manifest.read_text(encoding='utf-8'))
+    new = json.loads(new_manifest.read_text(encoding='utf-8'))
+    assert old['dependency_id'] != new['dependency_id']
+    assert len(observed) == 4
 
 
 def test_later_round_rejects_corrupt_finished_wheel_without_overwriting(sibling_build):

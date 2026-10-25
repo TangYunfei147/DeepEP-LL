@@ -1,0 +1,11 @@
+{
+  "schema": 2,
+  "comparison_base": "c705381ef8c2fa5e9db1e57e145b4f03ac076b30",
+  "baseline_note": "Baseline is c1e4faa LL kernel with official SHMEM master 8e3fc610. sdk-old isolates the SDK/compatibility update; buffered-c2 and immediate-c2 are independent children of the new-SDK baseline. Match round and uniform-routing seed; no physical-port utilization claim.",
+  "commits": [
+    {"label": "baseline", "revision": "c705381ef8c2fa5e9db1e57e145b4f03ac076b30"},
+    {"label": "sdk-old", "revision": "c1e4faaf32806da84f8818e1ac3eb34864b7958d"},
+    {"label": "buffered-c2", "revision": "8a23867f33f3157765dbbffb8f700d9cafbdef75"},
+    {"label": "immediate-c2", "revision": "0e9db99d28372e55611dac2569cd2fa1acdfdbf8"}
+  ]
+}

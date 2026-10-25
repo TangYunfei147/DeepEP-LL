@@ -47,6 +47,27 @@ def manifest_path(root, revision, send_cores):
     return root / STATE / 'wheels' / f'{revision}-off-s{send_cores}' / 'manifest.json'
 
 
+def dependency_identity(root, revision):
+    """Read committed dependency inputs, never a dirty checkout's current pin."""
+    lock = json.loads(git(root, 'show', revision+':dependencies.lock.json'))
+    gitlinks = [line for line in git(root, 'ls-tree', '-r', revision).splitlines() if line.startswith('160000 ')]
+    encoded = json.dumps(dict(lock=lock, gitlinks=gitlinks), sort_keys=True, separators=(',', ':')).encode('utf-8')
+    return dict(dependency_id=hashlib.sha256(encoded).hexdigest(),
+                shmem_revision=lock.get('shmem', {}).get('revision'))
+
+
+def default_source(root, revision, send_cores):
+    identity = dependency_identity(root, revision)
+    legacy = root / STATE / f'source-s{send_cores}'
+    if (legacy / '.git').exists():
+        try:
+            if common_dir(legacy) == common_dir(root) and dependency_identity(legacy, 'HEAD') == identity:
+                return legacy
+        except (OSError, ValueError, subprocess.CalledProcessError):
+            pass
+    return root / STATE / f'source-s{send_cores}-deps-{identity["dependency_id"][:12]}'
+
+
 def verify_manifest(path, revision, send_cores, root=ROOT):
     data = json.loads(Path(path).read_text(encoding='utf-8'))
     expected = (revision, send_cores, 56 - send_cores, 'OFF', 4, 'Release')
@@ -59,6 +80,14 @@ def verify_manifest(path, revision, send_cores, root=ROOT):
     sdk = resolve(root, data['sdk'])
     if sha(sdk / 'deepep-sdk.json') != data['sdk_manifest_sha256'] or sha(sdk / 'lib/libshmem.so') != data['sdk_library_sha256']:
         raise RuntimeError(f'Matching SDK changed or missing: {sdk}')
+    identity = dependency_identity(root, revision)
+    recorded = json.loads((sdk / 'deepep-sdk.json').read_text(encoding='utf-8'))
+    if identity['shmem_revision'] is not None and recorded.get('revision') != identity['shmem_revision']:
+        raise RuntimeError('SDK revision differs from the tested commit dependency lock')
+    for field, value in identity.items():
+        if field in data and data[field] != value:
+            raise RuntimeError(f'Wheel dependency identity mismatch: {field}')
+    data.update(identity)  # Legacy manifests are enriched in memory, never overwritten.
     return data
 
 
@@ -298,9 +327,9 @@ def dependency_donor(root, source):
     if existing:
         check_checkout(source/SHMEM,revision)
         if (source/SDK/'deepep-sdk.json').is_file():return source
-    if (root/SHMEM/'.git').exists():
+    if (root/SHMEM/'.git').exists() and git(root/SHMEM,'rev-parse','HEAD') == revision:
         check_checkout(root/SHMEM,revision)
-        if (root/SDK/'deepep-sdk.json').is_file():return root
+        if sdk_revision_suitable(root, revision):return root
         candidates=[root]
     else:candidates=[]
     manifests=list((root/'.ablation/wheels').glob('*/manifest.json'))
@@ -321,9 +350,22 @@ def dependency_donor(root, source):
         if existing:return source
         raise RuntimeError(f'Pinned SHMEM source unavailable in {root} or registered local caches; '
                            'initialize third-party/shmem or use --offline-deps. No network fallback.')
-    candidates.sort(key=lambda path:not (path/SDK/'deepep-sdk.json').is_file())
+    candidates.sort(key=lambda path:not sdk_revision_suitable(path, revision))
     print(f'Reusing SHMEM dependency source from {candidates[0]} (kernel sources unchanged)',flush=True)
     return candidates[0]
+
+
+def sdk_revision_suitable(source, revision):
+    manifest = source/SDK/'deepep-sdk.json'
+    if not manifest.is_file():
+        return False
+    # This is donor selection, not SDK qualification. Unknown/invalid legacy
+    # identities still go through the existing complete preparer validation.
+    try:
+        recorded = json.loads(manifest.read_text(encoding='utf-8')).get('revision')
+    except (OSError, ValueError, AttributeError):
+        return True
+    return recorded is None or recorded == revision
 
 
 def copy_sdk_assets(donor, source):
@@ -331,6 +373,10 @@ def copy_sdk_assets(donor, source):
         (source/JSON_HEADER).parent.mkdir(parents=True,exist_ok=True)
         shutil.copy2(donor/JSON_HEADER,source/JSON_HEADER)
     if (donor/SDK/'deepep-sdk.json').is_file() and not (source/SDK).exists():
+        requested = required_links(source).get(SHMEM.as_posix())
+        if requested is not None and not sdk_revision_suitable(donor, requested):
+            print(f'Preserving other-revision SDK in {donor}; preparing a separate SDK in {source}', flush=True)
+            return
         # scripts/build_shmem.py validates the copied identity and all hashes
         # before pip builds anything. Existing/incomplete SDKs are never replaced.
         shutil.copytree(donor/SDK,source/SDK,symlinks=False)
@@ -414,6 +460,7 @@ def check_dependencies(source, *, project=True):
 
 def build(revision, send_cores, *, root=ROOT, workspace=None, offline_deps=None, resume=False):
     revision = git(root, 'rev-parse', revision + '^{commit}')
+    identity = dependency_identity(root, revision)
     canonical = manifest_path(root, revision, send_cores)
     if canonical.exists():
         if not resume:
@@ -421,7 +468,7 @@ def build(revision, send_cores, *, root=ROOT, workspace=None, offline_deps=None,
         verify_manifest(canonical, revision, send_cores, root)
         print(f'Reusing verified wheel: {canonical}', flush=True)
         return canonical
-    source = resolve(root, workspace or STATE / f'source-s{send_cores}')
+    source = resolve(root, workspace) if workspace else default_source(root, revision, send_cores).resolve()
     if source == root.resolve() or source.is_symlink():
         raise RuntimeError('Build workspace must be a separate real worktree, never the main checkout')
     source.parent.mkdir(parents=True, exist_ok=True)
@@ -432,8 +479,6 @@ def build(revision, send_cores, *, root=ROOT, workspace=None, offline_deps=None,
                 raise RuntimeError('Build workspace must be a worktree of this repository')
             clean_source(source)
             previous = git(source, 'rev-parse', 'HEAD')
-            if git(source, 'show', previous + ':dependencies.lock.json') != git(root, 'show', revision + ':dependencies.lock.json'):
-                raise RuntimeError('Dependency identity changed; use a fresh build workspace')
             # A detached checkout may move between sibling candidates. It never
             # discards user edits; the normal native build below still checks
             # all dependency timestamps/configuration after each switch.
@@ -441,6 +486,8 @@ def build(revision, send_cores, *, root=ROOT, workspace=None, offline_deps=None,
             target_links = git(root, 'ls-tree', '-r', revision).splitlines()
             if [line for line in previous_links if line.startswith('160000 ')] != [line for line in target_links if line.startswith('160000 ')]:
                 raise RuntimeError('Pinned Git dependencies changed; use a fresh build workspace')
+            if dependency_identity(source, previous) != identity:
+                raise RuntimeError('Dependency identity changed; use a separate matching build workspace')
             subprocess.run(['git', '-C', str(source), 'checkout', '--no-recurse-submodules', '--detach', revision], check=True)
         else:
             subprocess.run(['git', '-C', str(root), 'worktree', 'add', '--detach', str(source), revision], check=True)
@@ -484,6 +531,7 @@ def build(revision, send_cores, *, root=ROOT, workspace=None, offline_deps=None,
             native_sha = hashlib.sha256(archive.read(natives[0])).hexdigest()
             kernel_sha = hashlib.sha256(archive.read(kernels[0])).hexdigest()
         data = dict(revision=revision, send_cores=send_cores, recv_cores=56 - send_cores, timer='OFF',
+                    **identity,
                     logical_group=4, build_type='Release', wheel=wheels[0].relative_to(canonical.parent).as_posix(),
                     wheel_sha256=sha(wheels[0]), native_sha256=native_sha, kernel_sha256=kernel_sha,
                     source=os.path.relpath(source, root), sdk=os.path.relpath(source / SDK, root),

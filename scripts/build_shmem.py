@@ -138,8 +138,8 @@ def prepare(root=ROOT, *, rebuild=False, if_needed=True, allow_local_changes=Fal
             "and pass --rebuild to regenerate it (then rebuild dependent wheels)"
         )
     if rebuild:
-        # Current upstream native builds keep build/install by default. Leaving
-        # them in place would retain stale artifacts and the old SDK manifest.
+        # Upstream retains build but removes install. Archive both first so an
+        # explicit rebuild preserves old artifacts and starts with a clean tree.
         archive_rebuild_outputs(root, source)
     print(f"[SHMEM] source={revision} CANN={version['Version']} target={lock['target']}", flush=True)
     if patches:

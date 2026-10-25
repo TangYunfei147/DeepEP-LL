@@ -82,3 +82,10 @@ count_layout DispatchSinglePrefixStageUbBytes包含256B对齐读缓冲，协议�
 
 schema13打点与communication_report补齐发送初始化、q准备、首发、探测/依赖/输出/尾部。
 源码业务token对照fb9263d存communication_baseline.json，计数/包格式/顺序不改。
+
+2026-10-25 delivery树采用c1e4faa成对flag预取：common/ll_receive_probe_pipeline.h
+编排两批稳定快照，recv.h在首批消费间提交第二批探测；64B额外快照只用原lane预算余量。
+SHMEM更新基线c705381不改变该LL算法。独立Buffered/Immediate候选以
+tests/ll_control_opt/commits-topology.json选择；其新增common/ll_early_receive.h
+和S侧有界回调不默认进入delivery源码。修改前查../ll_stage_timer/BUFFERED_RECEIVE.md
+及../ll_control_opt/TOPOLOGY_EXPERIMENTS.md；CPU检查不能视为CANN/设备验证。

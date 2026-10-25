@@ -115,3 +115,41 @@ provenance. No wheel/device preparation is needed if every item is reusable.
 Explicit continuation may recover only a confirmed dead local suite-lock owner;
 never kill processes or delete an active/unknown lock or its persistent OS guard.
 Kernel/SDK sources and the ST sampling protocol remain unchanged.
+
+## Topology trials and official SHMEM mainline (2026-10-25)
+
+User confirmed16NPUs per host and contiguous groups of4. Per NPU,3ports connect
+the other group members through fullmesh,4ports serve intra-host Clos and1port
+serves inter-host traffic. QP IDs are not physical port IDs; LL here still uses
+MTE. Endpoint packet accounting does not measure physical link utilization.
+
+The delivery tree now adopts the measured c1e4faa flag-prefetch kernel.
+3141120 retains its old SDK; c705381 changes SDK/compatibility only and is the
+new experiment reference. Official SHMEM master was verified on2026-10-25 at
+8e3fc610f91ae9e5e8cf13748cfb74826b272c2a (VERSION1.7.0). The submodule is
+unmodified. SDK identity is checked fully and mismatches fail closed; explicit
+rebuild archives project-owned old build/install. Never silently replace a live
+SDK or copy an old SDK into a new dependency cache. See docs/SHMEM_MAINLINE_20261025.md.
+
+The new pin removes the old UDMA peer-QP-mask setter and600000ms timeout override.
+HT sparse requests fail explicitly; no dense fallback is selected automatically.
+Its UDMA channel poll uses fixed120000ms. Single-host LL MTE is separate from
+that transport path. CPU API/WQE tests do not establish CANN/device compatibility.
+
+Use tests/ll_control_opt/commits-topology.json explicitly for the new experiment;
+the old default manifest stays stable for result continuation. Match every
+candidate/reference by round and requested seed; measured ST route is seed+2
+because the original3correctness repeats remain. Default10/100/last50 and real
+uniform top-k are unchanged. No fixed expert/rank/seed specialization.
+
+Early receive candidates retain the original TX/RX lanes and230KiB software
+budget. After every2actually submitted DIRECTs, a bounded16-slot probe selects
+at most2ready FIRST_HOPs. Buffered policy keeps payloads in original RX lanes
+until source sending finishes; immediate policy consumes at the callback.
+They are separate committed candidates on the same new-SDK baseline. Input
+lookahead stays active; control events are TPipe leases acquired after input
+queue creation, with every callback's control joins closed. No new drain or
+cross-core barrier. Source metadata remains at the original send tail.
+
+Only local CPU work is authorized while27is unavailable. New CANN compilation,
+NPU correctness and performance remain target-machine acceptance work.

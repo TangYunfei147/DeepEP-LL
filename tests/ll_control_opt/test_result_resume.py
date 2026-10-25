@@ -54,11 +54,11 @@ def project(tmp_path):
     return root, options
 
 
-def write_report(directory, revision, world=16, send_cores=30):
+def write_report(directory, revision, world=16, send_cores=30, seed=0):
     """Match the persisted full ST summary (including all 100 raw samples)."""
     directory = Path(directory)
     directory.mkdir(parents=True, exist_ok=True)
-    config = dict(warmup=10, num_iters=100, perf_tail=50, route='normal', seed=0,
+    config = dict(warmup=10, num_iters=100, perf_tail=50, route='normal', seed=seed,
                   skip_check=False, skip_perf_test=False, dispatch_only=False, ll_stage_timer=False)
     identity = dict(source_revision=revision, control_revision=revision, send_cores=send_cores,
         recv_cores=56-send_cores, active_aiv=56, logical_group=4, transport='mte', stage_timer=False,
@@ -172,7 +172,8 @@ def main_harness(monkeypatch, root, options, fail_once=None):
         assert Path(path) == suite.build.manifest_path(root, revision, split)
         observed.append(('verify', revision))
         return dict(wheel='fixture.whl', sdk='third-party/shmem/install/shmem',
-                    native_sha256='a'*64, kernel_sha256='b'*64, sdk_library_sha256='c'*64)
+                    native_sha256='a'*64, kernel_sha256='b'*64, sdk_library_sha256='c'*64,
+                    sdk_manifest_sha256='d'*64)
     monkeypatch.setattr(suite.build, 'verify_manifest', verify)
     monkeypatch.setattr(suite, 'run_environment', lambda selected, item, manifest, root=root: dict(
         DEEPEP_LL_CONTROL_REVISION=item['revision'], TEST_LABEL=item['label'], TEST_ROUND=str(item.get('round', 0))))
@@ -209,7 +210,8 @@ def main_harness(monkeypatch, root, options, fail_once=None):
             (directory/'partial.raw').write_bytes(b'preserve interrupted payload')
             raise InterruptedError('synthetic interruption after partial ST output')
         if options.node_rank == 0:
-            write_report(directory, environment['DEEPEP_LL_CONTROL_REVISION'], options.num_nodes*16, options.send_cores)
+            write_report(directory, environment['DEEPEP_LL_CONTROL_REVISION'], options.num_nodes*16, options.send_cores,
+                         seed=int(command[command.index('--seed')+1]) if '--seed' in command else 0)
     monkeypatch.setattr(suite, 'run_logged', run_st)
     return observed
 
@@ -426,6 +428,30 @@ def test_interruption_reentry_repeat_and_round_extension(project, monkeypatch):
     assert {row['result_status'] for row in newest['rows'] if row['round'] == 1} == {'reused'}
     assert {row['result_status'] for row in newest['rows'] if row['round'] == 2} == {'new'}
     assert interrupted[0].read_bytes() == original
+
+
+def test_multiple_seeds_run_once_and_resume_without_binary_dependencies(project, monkeypatch):
+    root, options = project
+    options.resume_results = False
+    options.seeds = [0, 17]
+    observed = main_harness(monkeypatch, root, options)
+    suite.main()
+    assert len([row for row in observed if row[0]=='build']) == 2
+    assert len([row for row in observed if row[0]=='launch']) == 4
+    base = root/options.output_dir/options.run_prefix
+    original = json.loads((base/'comparison.json').read_text(encoding='utf-8'))
+    assert {(row['label'],row['round'],row['seed'],row['operation']) for row in original['rows']} == {
+        (label,1,seed,operation) for label in ('baseline','candidate') for seed in (0,17) for operation in ('dispatch','combine')}
+    assert {row['measured_route_seed'] for row in original['rows']} == {2,19}
+    assert {row['sdk_identity_source'] for row in original['rows']} == {'recorded-build'}
+    assert all(row['sdk_manifest_sha256']=='d'*64 for row in original['rows'])
+    observed.clear()
+    options.resume_results = True
+    suite.main()
+    assert observed == []
+    resumed = session_comparisons(base)[0][1]['rows']
+    assert len(resumed)==8 and {row['result_status'] for row in resumed}=={'reused'}
+    assert {row['sdk_identity_source'] for row in resumed}=={'recorded-build'}
 
 
 @pytest.mark.parametrize('node_rank', [0, 1])

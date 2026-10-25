@@ -94,17 +94,24 @@ def require_idle(devices):
     return output
 
 
-def st_command(python, args, directory, root=ROOT):
+def selected_seeds(args):
+    seeds = list(getattr(args, 'seeds', [0]))
+    if not seeds or any(type(seed) is not int or not 0 <= seed <= 2147483645 for seed in seeds) or len(set(seeds)) != len(seeds):
+        raise ValueError('seeds must be distinct integers in0..2147483645')
+    return seeds
+
+
+def st_command(python, args, directory, root=ROOT, seed=0):
     return [str(python), '-I', str(root / 'tests/elastic/test_ep_low_latency.py'),
             '--num-processes', '16', '--num-nodes', str(args.num_nodes), '--node-rank', str(args.node_rank),
             '--master-addr', args.master_addr, '--master-port', str(args.master_port),
             '--shmem-port', str(args.shmem_port), '--num-tokens', '256',
             '--num-max-tokens-per-rank', '256', '--hidden', '3584', '--num-topk', '8',
-            '--num-experts', '384', '--dtype', 'fp8', '--do-cpu-sync', '0',
+            '--num-experts', '384', '--dtype', 'fp8', '--do-cpu-sync', '0', '--seed', str(seed),
             '--output-dir', str(directory.parent), '--run-name', directory.name]
 
 
-def validate_summary(directory, revision, send_cores, num_nodes):
+def validate_summary(directory, revision, send_cores, num_nodes, seed=0):
     """Use summary.csv mean_kernel_us; reject mixed cases or incomplete stable tails."""
     directory = Path(directory)
     report = json.loads((directory / 'summary.json').read_text(encoding='utf-8'))
@@ -114,14 +121,18 @@ def validate_summary(directory, revision, send_cores, num_nodes):
     if not isinstance(report.get('results'), list) or len(report['results']) != 1 or not isinstance(report['results'][0], dict) or not isinstance(report.get('config'), dict):
         raise ValueError(f'Malformed ST report structure: {directory}')
     config = report['config']
-    for key, value in dict(warmup=10, num_iters=100, perf_tail=50, route='normal', seed=0,
+    for key, value in dict(warmup=10, num_iters=100, perf_tail=50, route='normal', seed=seed,
                            skip_check=False, skip_perf_test=False, dispatch_only=False, ll_stage_timer=False).items():
         if config.get(key) != value:
             raise ValueError(f'Unexpected sampling setting {key}: {config.get(key)!r}')
+    if config.get('correctness_repeats', 3) != 3:
+        raise ValueError('Expected3 correctness routes; otherwise the measured routing seed changes')
     result = report['results'][0]
     if result['case_id'] != 0 or result['route'] != 'normal' or result['config'] != SHAPE or result.get('correctness') != 'passed':
         raise ValueError('Unexpected case, route, or shape')
     identity = result.get('comparison', {})
+    if identity.get('seed', seed) != seed or identity.get('correctness_repeats', 3) != 3:
+        raise ValueError('Routing seed/correctness-repeat identity mismatch')
     for key, value in dict(source_revision=revision, control_revision=revision, send_cores=send_cores, recv_cores=56-send_cores,
                            active_aiv=56, logical_group=4, transport='mte', stage_timer=False,
                            sampling_protocol='exp-reduce-stable-tail-v2', world_size=world).items():
@@ -158,7 +169,7 @@ def validate_summary(directory, revision, send_cores, num_nodes):
 
 
 def _run_key(item):
-    return item['label'], item['round']
+    return item['label'], item['round'], item.get('seed', 0)
 
 
 def _command_identity(command):
@@ -169,16 +180,24 @@ def _command_identity(command):
     options = command[starts[0]+1:]
     ignored = {'--master-port', '--shmem-port', '--output-dir', '--run-name'}
     result = []
+    seed = 0
+    seen_seed = False
     index = 0
     while index < len(options):
-        if options[index] in ignored:
+        if options[index] == '--seed':
+            if seen_seed or index+1 >= len(options):
+                raise ValueError('Incomplete seed in previous command')
+            seed = int(options[index+1])
+            seen_seed = True
+            index += 2
+        elif options[index] in ignored:
             if index+1 >= len(options):
                 raise ValueError('Incomplete command in previous plan')
             index += 2
         else:
             result.append(options[index])
             index += 1
-    return result
+    return result + ['--seed', str(seed)]
 
 
 def validate_previous_plan(previous, current, node_rank):
@@ -196,6 +215,10 @@ def validate_previous_plan(previous, current, node_rank):
         raise ValueError('Resume plan mismatch: commits/references')
     if previous.get('order', 'manifest') != current['order']:
         raise ValueError('Resume plan mismatch: order (legacy plans used --order manifest)')
+    if previous.get('seeds', [0]) != current.get('seeds', [0]):
+        raise ValueError('Resume plan mismatch: seeds; use a new run prefix for a different seed set')
+    if 'dependencies' in previous and previous['dependencies'] != current.get('dependencies'):
+        raise ValueError('Resume plan mismatch: committed SDK dependency identities')
     for field in ('metric', 'sampling', 'send_cores', 'recv_cores', 'timer'):
         if previous.get(field) != current.get(field):
             raise ValueError(f'Resume plan mismatch: {field}')
@@ -204,14 +227,16 @@ def validate_previous_plan(previous, current, node_rank):
     old_rounds = previous.get('rounds', max((item['round'] for item in old_runs), default=0))
     if not isinstance(old_rounds, int) or old_rounds < 1 or old_rounds > current['rounds']:
         raise ValueError('Resume may increase rounds, but cannot decrease previously planned rounds')
-    expected = {(entry['label'], round_id) for entry in current['commits'] for round_id in range(1, old_rounds+1)}
+    expected = {(entry['label'], round_id, seed) for entry in current['commits']
+                for round_id in range(1, old_rounds+1) for seed in current.get('seeds', [0])}
     if len(old_runs) != len(expected) or {_run_key(item) for item in old_runs} != expected:
         raise ValueError('Previous plan has missing or duplicate round/candidate entries')
     positions = {}
     for item in old_runs:
         target = new_runs[_run_key(item)]
-        positions[item['round']] = positions.get(item['round'], 0)+1
-        if item['revision'] != target['revision'] or item.get('execution_position', positions[item['round']]) != target['execution_position']:
+        pair = item['round'], item.get('seed', 0)
+        positions[pair] = positions.get(pair, 0)+1
+        if item['revision'] != target['revision'] or item.get('execution_position', positions[pair]) != target['execution_position']:
             raise ValueError(f'Resume plan mismatch: revision/execution_position for {_run_key(item)}')
         if _command_identity(item['command']) != _command_identity(target['command']):
             raise ValueError(f'Resume ST shape/topology/argument mismatch for {_run_key(item)}')
@@ -290,6 +315,36 @@ def _source_session(directory, history):
     return 'unknown' if '.attempt-' in Path(directory).name else 'legacy'
 
 
+SDK_HASH_FIELDS = ('native_sha256', 'kernel_sha256', 'sdk_manifest_sha256', 'sdk_library_sha256')
+
+
+def sdk_record_path(directory, node_rank=0):
+    return Path(str(directory)+f'.node-{node_rank}.build.json')
+
+
+def recorded_sdk_identity(directory, revision, expected):
+    """Read persisted provenance only; resuming never opens an old SDK binary."""
+    path = sdk_record_path(directory)
+    if not path.is_file():
+        return dict(expected, revision=revision, sdk_identity_source='legacy-unavailable',
+                    **{field: None for field in SDK_HASH_FIELDS})
+    record = json.loads(path.read_text(encoding='utf-8'))
+    if not isinstance(record, dict) or record.get('revision') != revision or any(record.get(field) != value for field, value in expected.items()):
+        raise ValueError('Saved SDK identity differs from the tested commit')
+    if any(not isinstance(record.get(field), str) or not re.fullmatch(r'[0-9a-f]{64}', record[field]) for field in SDK_HASH_FIELDS):
+        raise ValueError('Saved SDK identity has incomplete library/manifest hashes')
+    return dict(record, sdk_identity_source='recorded-build')
+
+
+def manifest_sdk_identity(revision, expected, manifest):
+    record = dict(expected, revision=revision, **{field: manifest[field] for field in SDK_HASH_FIELDS})
+    if any(field in manifest and manifest[field] != value for field, value in expected.items()):
+        raise ValueError('Installed wheel dependencies differ from the planned commit')
+    if any(not re.fullmatch(r'[0-9a-f]{64}', record[field]) for field in SDK_HASH_FIELDS):
+        raise ValueError('Invalid wheel/SDK hash in build manifest')
+    return dict(record, sdk_identity_source='recorded-build')
+
+
 def result_schedule(plan, args, root=ROOT):
     """Validate saved single-node results and choose complete items for reuse."""
     if args.num_nodes != 1 or args.node_rank != 0:
@@ -305,19 +360,21 @@ def result_schedule(plan, args, root=ROOT):
         complete, rejected = [], []
         for directory in _attempt_directories(canonical) if resume else []:
             try:
-                values = validate_summary(directory, planned['revision'], args.send_cores, args.num_nodes)
+                values = validate_summary(directory, planned['revision'], args.send_cores, args.num_nodes, seed=planned.get('seed', 0))
+                sdk_identity = recorded_sdk_identity(directory, planned['revision'], plan.get('dependencies', {}).get(planned['revision'], {}))
             except (OSError, ValueError, KeyError, TypeError, AttributeError, IndexError, csv.Error, OverflowError) as error:
                 rejected.append(dict(directory=str(directory), reason=str(error)[:2048]))
             else:
-                complete.append((directory, values))
+                complete.append((directory, values, sdk_identity))
         if len(complete) > 1:
-            raise ValueError(f'Ambiguous complete attempts for {_run_key(planned)}: '+', '.join(str(path) for path, _ in complete))
+            raise ValueError(f'Ambiguous complete attempts for {_run_key(planned)}: '+', '.join(str(item[0]) for item in complete))
         choice = dict(label=planned['label'], revision=planned['revision'], round=planned['round'],
+                      seed=planned.get('seed', 0), measured_route_seed=planned.get('seed', 0)+2,
                       execution_position=planned['execution_position'], rejected_attempts=rejected)
         if complete:
-            directory, values = complete[0]
+            directory, values, sdk_identity = complete[0]
             choice.update(action='reuse', directory=str(directory), source_directory=str(directory),
-                          values=values, source_session_id=_source_session(directory, history))
+                          values=values, source_session_id=_source_session(directory, history), sdk_identity=sdk_identity)
         else:
             directory = canonical.with_name(canonical.name+'.attempt-'+session_id) if resume else canonical
             choice.update(action='run', directory=str(directory), source_directory=str(directory),
@@ -359,7 +416,10 @@ def apply_result_schedule(plan, schedule):
 
 def comparisons(entries, measured, order='alternating'):
     rows = []
-    for round_id, values in sorted(measured.items()):
+    paired = {(key if isinstance(key, tuple) else (key, 0)): value for key, value in measured.items()}
+    if len(paired) != len(measured):
+        raise ValueError('Duplicate round/seed measurements')
+    for (round_id, seed), values in sorted(paired.items()):
         if set(values) != {entry['label'] for entry in entries}:
             raise ValueError('Every comparison round must contain every manifest entry')
         positions = {entry['label']: position for position, entry in enumerate(execution_entries(entries, round_id, order), 1)}
@@ -371,7 +431,8 @@ def comparisons(entries, measured, order='alternating'):
                 previous = entries[index-1] if index else None
                 previous_value = values[previous['label']][operation] if previous else None
                 cumulative = entry['comparison_kind'] == 'cumulative_parent'
-                rows.append(dict(round=round_id, label=entry['label'], revision=entry['revision'], operation=operation,
+                rows.append(dict(round=round_id, seed=seed, requested_seed=seed, measured_route_seed=seed+2,
+                                 label=entry['label'], revision=entry['revision'], operation=operation,
                                  execution_position=positions[entry['label']], comparison_kind=entry['comparison_kind'],
                                  baseline_label=entries[0]['label'], baseline_revision=entries[0]['revision'],
                                  mean_kernel_us=value, baseline_delta_us=value-baseline,
@@ -547,6 +608,8 @@ def parser():
     result.add_argument('--control-port', type=int, help='CPU readiness port; default first port after MASTER_PORT that is not SHMEM_PORT')
     result.add_argument('--ready-timeout', type=float, default=3600, help='Seconds to wait for all machines to finish preparation before each ST launch')
     result.add_argument('--rounds', type=int, default=1, help='Repeat complete commit sweeps; no changes to each ST sampling protocol')
+    result.add_argument('--seeds', type=int, nargs='+', default=[0],
+                        help='Requested uniform-route seeds; default0. Performance uses seed+2 after3 correctness routes')
     result.add_argument('--order', choices=('alternating', 'manifest'), default='alternating',
                         help='alternating: odd rounds use manifest order, even rounds reverse it; manifest: repeat fixed order')
     modes = result.add_mutually_exclusive_group()
@@ -565,6 +628,8 @@ def make_plan(args, root=ROOT):
     if not 1 <= args.send_cores <= 55 or args.rounds < 1 or not math.isfinite(args.ready_timeout) or args.ready_timeout <= 0:
         raise ValueError('send-cores must be 1..55, rounds must be positive')
     entries = commits(build.resolve(root, args.commits), root)
+    seeds = selected_seeds(args)
+    dependencies = {entry['revision']: build.dependency_identity(root, entry['revision']) for entry in entries}
     resume_results = bool(getattr(args, 'resume_results', False))
     if resume_results and (args.build_only or args.num_nodes != 1 or args.node_rank != 0):
         raise ValueError('--resume-results requires a single-node run (--num-nodes 1 --node-rank 0); it cannot be combined with --build-only')
@@ -598,18 +663,25 @@ def make_plan(args, root=ROOT):
         python = venv / ('Scripts/python.exe' if sys.platform == 'win32' else 'bin/python')
         phases['install'].append(dict(manifest=str(path), environment=str(venv), python=str(python)))
         for round_id in range(1, args.rounds+1):
-            directory = build.resolve(root, args.output_dir) / args.run_prefix / entry['label'] / f'round-{round_id:03}'
-            phases['run'].append(dict(label=entry['label'], revision=entry['revision'], round=round_id,
-                                      directory=str(directory), command=st_command(python, args, directory, root)))
+            for seed in seeds:
+                parent = build.resolve(root, args.output_dir) / args.run_prefix / entry['label']
+                if seeds != [0]:
+                    parent /= f'seed-{seed}'
+                directory = parent / f'round-{round_id:03}'
+                phases['run'].append(dict(label=entry['label'], revision=entry['revision'], round=round_id,
+                                          seed=seed, measured_route_seed=seed+2, directory=str(directory),
+                                          command=st_command(python, args, directory, root, seed=seed)))
     positions = {round_id: {entry['label']: index for index, entry in enumerate(execution_entries(entries, round_id, args.order), 1)}
                  for round_id in range(1, args.rounds+1)}
     for item in phases['run']:
         item['execution_position'] = positions[item['round']][item['label']]
-    phases['run'].sort(key=lambda item: (item['round'], item['execution_position']))
+    phases['run'].sort(key=lambda item: (item['round'], seeds.index(item['seed']), item['execution_position']))
     return dict(commits=entries, phases=phases, metric='summary.csv: pooled mean_kernel_us; dispatch and combine separately',
                 sampling=dict(warmup=10, num_iters=100, perf_tail=50), send_cores=args.send_cores,
                 recv_cores=56-args.send_cores, timer='OFF',
                 order=args.order, rounds=args.rounds, comparison_schema=2,
+                seeds=seeds, routing=dict(route='normal', correctness_repeats=3, measured_seed_offset=2),
+                dependencies=dependencies,
                 resume_results=resume_results,
                 run_identity=None if args.build_only else dict(shape=SHAPE, num_nodes=args.num_nodes, node_rank=args.node_rank,
                     devices=device_ids(args.devices), local_processes=16, master_addr=args.master_addr, hostname=socket.gethostname()),
@@ -690,9 +762,9 @@ def main():
         executed = 0
         for item in items:
             if item['action'] == 'reuse':
-                measured.setdefault(item['round'], {})[item['label']] = item['values']
+                measured.setdefault((item['round'], item.get('seed', 0)), {})[item['label']] = item['values']
                 item['invocation_execution_position'] = None
-                print(f'Reusing complete {item["label"]}, round{item["round"]}: {item["source_directory"]}', flush=True)
+                print(f'Reusing complete {item["label"]}, round{item["round"]}, seed{item.get("seed", 0)}: {item["source_directory"]}', flush=True)
                 continue
             executed += 1
             item['invocation_execution_position'] = executed
@@ -703,6 +775,7 @@ def main():
             env = run_environment(args, item, manifests[item['label']], root=ROOT)
             identity = dict(protocol=plan['control_protocol'], commits=plan['commits'], run_prefix=args.run_prefix,
                             label=item['label'], revision=item['revision'], round=item['round'], rounds=args.rounds,
+                            seed=item.get('seed', 0), seeds=plan['seeds'], dependencies=plan['dependencies'],
                             order=plan['order'], execution_position=item['execution_position'],
                             send_cores=args.send_cores, num_nodes=args.num_nodes, shape=SHAPE)
             ready_barrier(args, dict(identity, phase='prepared'))
@@ -713,32 +786,40 @@ def main():
             except (OSError, RuntimeError, subprocess.CalledProcessError) as exception:
                 idle_error = str(exception)[:2048]
             ready_barrier(args, dict(identity, phase='idle'), error=idle_error)
-            print(f'Run {item["label"]}, round{item["round"]}, node{args.node_rank}; stdout remains visible.', flush=True)
+            item['sdk_identity'] = manifest_sdk_identity(item['revision'], plan['dependencies'][item['revision']], manifests[item['label']])
+            write_new_json(sdk_record_path(directory, args.node_rank), item['sdk_identity'])
+            print(f'Run {item["label"]}, round{item["round"]}, seed{item.get("seed", 0)} (measured route seed{item.get("seed", 0)+2}), node{args.node_rank}; stdout remains visible.', flush=True)
             run_logged(item['command'], str(directory)+f'.node-{args.node_rank}.log', env)
             write_new_json(Path(str(directory) + f'.node-{args.node_rank}.done.json'),
-                           dict(revision=item['revision'], exit_code=0, session_id=schedule['session_id']))
+                           dict(revision=item['revision'], seed=item.get('seed', 0), exit_code=0, session_id=schedule['session_id']))
             if args.node_rank == 0:
-                values = validate_summary(directory, item['revision'], args.send_cores, args.num_nodes)
-                measured.setdefault(item['round'], {})[item['label']] = values
+                values = validate_summary(directory, item['revision'], args.send_cores, args.num_nodes, seed=item.get('seed', 0))
+                measured.setdefault((item['round'], item.get('seed', 0)), {})[item['label']] = values
         if args.node_rank != 0:
             print('All ST commands completed. Aggregated summary is written by node0.', flush=True)
             return
         rows = comparisons(plan['commits'], measured, plan['order'])
         sources = {_run_key(item): item for item in items}
         for row in rows:
-            source = sources[(row['label'], row['round'])]
-            reference = sources[(row['reference_label'], row['round'])]
+            source = sources[(row['label'], row['round'], row['seed'])]
+            reference = sources[(row['reference_label'], row['round'], row['seed'])]
             row.update(result_status='reused' if source['action']=='reuse' else 'new',
                        source_directory=source['source_directory'], source_session_id=source['source_session_id'],
                        invocation_session_id=schedule['session_id'], invocation_execution_position=source['invocation_execution_position'],
                        reference_crosses_sessions=None if 'unknown' in (source['source_session_id'], reference['source_session_id']) else
                            source['source_session_id'] != reference['source_session_id'])
+            for field in ('dependency_id', 'shmem_revision', 'sdk_manifest_sha256', 'sdk_library_sha256', 'sdk_identity_source'):
+                row[field] = source['sdk_identity'].get(field)
+                row['reference_'+field] = reference['sdk_identity'].get(field)
+            current_sdk, reference_sdk = row['sdk_library_sha256'], row['reference_sdk_library_sha256']
+            row['sdk_library_matches_reference'] = current_sdk == reference_sdk if current_sdk and reference_sdk else None
         stream = io.StringIO(newline='')
         writer = csv.DictWriter(stream, fieldnames=list(rows[0]))
         writer.writeheader()
         writer.writerows(rows)
         _write_new_file(output / 'comparison.csv', stream.getvalue())
         write_new_json(output / 'comparison.json', dict(comparison_schema=2, metric=plan['metric'], order=plan['order'], rows=rows,
+                       seeds=plan['seeds'], dependencies=plan['dependencies'], routing=plan['routing'],
                        session_id=schedule['session_id'], resume_results=args.resume_results,
                        legacy_devices_unavailable=schedule['legacy_devices_unavailable'],
                        ignored_session_plans=schedule['ignored_session_plans'],

@@ -355,3 +355,32 @@ regular native dependency checks on sibling checkout switches. New ON/OFF cold
 timings and full ON linkage remain unverified while the target compiler is
 unavailable. Commands and diagnostic limits:
 tests/ll_control_opt/RECEIVE_CANDIDATES.md.
+
+## Topology/SDK experiment validation,2026-10-25
+
+The delivery LL tree adopts c1e4faa at3141120 and keeps it unchanged through
+the official SHMEM update c705381. LL dispatch/combine source comparisons
+between c1e4faa and c705381 are empty. Buffered8a23867 and Immediate0e9db99
+are independent children of c705381; their only production-source difference
+is the early-receive policy constant. Both preserve seven dispatch TUs, all
+input modes, production target/O2 and the original lane counts/230KiB budget.
+
+Buffered passed69CPU checks, including the real one-input helper, bounded
+FIRST_HOP selector and pending table under S1/R55,28/28,30/26 and55/1.
+Immediate passed13targeted checks after its policy was selected; the shared
+native fixture covers both policies. Packet/consumer body comparisons remain
+identical to c1e4faa. These checks do not execute actual AscendC DMA or events.
+
+The final root suite passed155distinct CPU tests:153in the full run and the
+remaining2continuation tests after shortening their temporary directory to
+avoid Windows MAX_PATH. Earlier sandbox Git IPC/compiler failures were rerun
+outside the sandbox with project-owned logs/caches. No production change was
+made to bypass the failure. Logs: A5/.tmp/topology-root-final02.log,
+topology-root-path03.log and topology-immediate-01.log; Buffered logs are in
+the candidate validation worktree's .tmp/buffered-final004.log.
+
+The SDK-specific50checks and39production-Session CPU lifecycle checks are
+documented in SHMEM_MAINLINE_20261025.md. None of this is CANN or NPU acceptance.
+Current target access remains unavailable. Compile all exact OFF wheels, run
+their unchanged correctness checks and10/100/tail50sampling, then use matching
+ON wheels only for timing diagnosis. See tests/ll_control_opt/TOPOLOGY_EXPERIMENTS.md.

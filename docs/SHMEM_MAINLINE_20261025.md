@@ -74,6 +74,61 @@ does not convert the LL kernel's MTE DataCopy path into QP-specific UDMA, and a
 QP index is not a physical NIC index. The confirmed3fullmesh+4Clos+1inter-host
 ports inform experiment topology; actual per-port utilization needs telemetry.
 
+## Optional official primitive diagnostics
+
+The pinned source includes `examples/udma_qp_demo` for route/correctness checks,
+`examples/shmem_perftest/udma_perftest` for UDMA microbenchmarks and
+`examples/shmem_perftest/mte_perftest` for MTE microbenchmarks. Prepare an isolated
+SDK checkout under the project before running the official example build:
+
+```bash
+bash scripts/build.sh -examples -soc_type Ascend950 -multi_link
+```
+
+This prepares additional CATLASS/json dependencies and replaces that checkout's
+install directory. Do not run it against the SDK used by an existing LL job.
+Keep the checkout, environment, outputs, logs and caches inside the project;
+load the target's existing CANN environment and explicit device visibility.
+These commands have been checked against source, not executed on the target.
+
+From the isolated SDK, examples of route checks are:
+
+```bash
+# PE0..3 bind to device0..3; each sends to the next PE in a ring.
+bash examples/udma_qp_demo/run.sh \
+  -pes 4 -device_ids 0,1,2,3 -peer_stride 1 \
+  -qp_count 4 -op put -elems 1048576 \
+  -qp_net_layers 0:0,1:0,2:1,3:1
+# Two PEs bind to device0 and4, crossing the logical G4 boundary.
+bash examples/udma_qp_demo/run.sh \
+  -pes 2 -device_ids 0,4 -peer_stride 1 \
+  -qp_count 4 -op put -elems 1048576 \
+  -qp_net_layers 0:1,1:1,2:1,3:1
+```
+
+Read `[QP-ROUTE]`'s actual layer rather than assuming a request selected a
+particular port. These are logical-layer requests that must be supported by
+the target topology; the demo has no bandwidth statistic. It does not change
+the policy of another process or the LL MTE path.
+
+For the UDMA perftest, `-b` is QP count and `-e` is the byte exponent **per QP**.
+To hold total bytes at1MiB, use `(b,e)=(1,20),(2,19),(4,18),(8,17)`.
+`--metric bw` includes quiet/completion; `--metric lat` measures submission
+without completion and only supports `-b 1 -t put`. `--batch 0/1/N` selects
+fully asynchronous, per-operation or batched completion. This perftest has no
+`qp_net_layers` argument and does not inherit the route demo's policy.
+Its script reuses CSV names: run the binary in a fresh per-case output directory
+or retain each result before the next case. Preserve `Bandwidth/GB/s(1000)`,
+`Bandwidth/GiB/s(1024)`, `CoreMaxTime/us` and `SingleCoreTime/us` separately.
+
+`build/bin/root_info_generate <physical-device-id>` can reveal EIDs, planes,
+ports and logical layers. Capture its output in the project only; never install
+generated topology into `/etc/hccl_rootinfo` or change the live SHMEM topology.
+UDMA debug records can associate a peer/QP with layer, plane and EID indices,
+but an EID can cover multiple ports. Physical utilization requires per-port
+byte counters over a measured interval and the corresponding port peak rates.
+Primitive results cannot be reported as LL operator improvements.
+
 ## Validation limits
 
 Local CPU validation passed50SDK/identity/raw-WQE checks, including a C++ test
