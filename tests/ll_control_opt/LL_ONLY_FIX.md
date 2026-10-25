@@ -104,4 +104,22 @@ python tests/ll_control_opt/suite.py \
 当前本地Python/构建相关CPU检查为146项通过、14项因缺Torch跳过；
 native Session生命周期检查42项通过。它们验证初始化路径、拒绝回退和资源生命周期，
 不等于设备收发正确性或性能通过。
-CANN完整编译正在单独验证，当前不在此声明编译成功；目标机NPU正确性与性能仍需上述ST验收。
+2026-10-25已在27授权隔离目录完成新SDK构建、111项CPU检查和下表全部完整wheel构建。
+每个wheel均提取后单独Host导入，确认`high_throughput_enabled=False`、新LL MTE factory、
+timer OFF/ON、协议19030和实际加载SDK的SHA256一致。没有创建真实Runtime或运行NPU。
+
+| 版本 | 提交 | OFF完整wheel | ON完整wheel |
+|---|---|---:|---:|
+| baseline | `ed1c553` | 73.229s，通过 | 101.138s，通过 |
+| buffered-c2 | `4d37eb6` | 49.362s，通过 | 129.027s，通过 |
+| immediate-c2 | `c7d70a4` | 50.386s，通过 | 142.922s，通过 |
+
+这些是顺序构建与打包的墙钟时间，包含缓存复用，不能作为冷编译或算子性能对照。
+新SHMEM SDK独立构建35.955s；源提交仍为`8e3fc610`，未修改SDK源码。
+LL算法与各自原候选一致；本次修复改变构建组成和会话初始化。
+
+远端验证根目录：
+`/home/tyf/Q4_remote_test/DeepEP-LL-g4-small-b-prefix/.tmp/topology-mainline-20261025/ll-only-fix-001`。
+`.logs/validation.json`保存每阶段命令、退出码、时间与日志路径；`.logs/<label>-off/on.log`
+为构建日志；`.artifacts/<label>-off/on/`保留完整wheel及导入检查用解包文件。
+原部署与SDK未被本任务替换。目标机NPU正确性与性能仍需上述ST验收。

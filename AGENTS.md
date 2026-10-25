@@ -178,3 +178,9 @@ New commits-topology-mte.json uses a new run prefix and three same-SDK LL-only
 versions. Historical four-entry manifests/results remain separate; an old
 mixed-runtime result is not a new MTE-only measurement. No SDK source patch or
 forced SDK rebuild is needed when the installed new SDK passes identity checks.
+
+Isolated27validation completed: fresh unmodified8e3fc610 SDK,111CPU checks,
+and complete OFF/ON wheels for ed1c553/4d37eb6/c7d70a4 all passed. Six Host-only
+imports confirmed HT disabled, LL factory, timer/protocol and loaded SDK hash;
+no native Runtime/device execution. Logs and wheels remain in the authorized
+directory's ll-only-fix-001 child; see tests/ll_control_opt/LL_ONLY_FIX.md.

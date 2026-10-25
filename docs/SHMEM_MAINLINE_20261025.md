@@ -1,5 +1,12 @@
 # SHMEM mainline migration,2026-10-25
 
+Runtime correction: the first migration commit `c705381` still constructed the
+general Elastic MTE+UDMA session even when the LL kernel used MTE. That triggered
+the removed HT sparse-QP API before dispatch. Use the explicit LL-only fix
+`ed1c553` and [LL_ONLY_FIX.md](../tests/ll_control_opt/LL_ONLY_FIX.md), with the
+new three-entry manifest and HT compilation disabled. Updating only the root
+checkout while selecting `c705381` from the old manifest retains the old error.
+
 This update follows the user's explicit request to replace the old SHMEM pin.
 The official repository's advertised HEAD was checked twice on2026-10-25:
 
@@ -19,7 +26,7 @@ own historical pins; this migration belongs to kernel/ll-g4-control-opt.
 The new SDK removed `aclshmemx_set_shared_jetty`. Session now selects shared
 UDMA jetty through `attr.runtime_config.udma_shared_jetty`, while preserving the
 header-provided `option_attr.version` by assigning option fields individually.
-LL MTE does not enable this UDMA setting.
+The corrected explicit LL-only MTE session does not enable this UDMA setting.
 
 The legacy peer-QP-mask setter was also removed and has no equivalent public
 replacement in this pin. A request for that HT sparse policy fails explicitly
@@ -66,7 +73,7 @@ must never be merged under the same candidate revision or resumed run identity.
 The old pin exposed `SHMEM_UDMA_CONNECT_TIMEOUT_MS`. This master pin removes that
 reader and uses a fixed120000ms UDMA channel-status polling timeout. The old
 600000environment value no longer extends this path. It has not been restored
-through an unrequested SDK patch. Current single-host LL MTE does not initialize
+through an unrequested SDK patch. The corrected LL-only session does not initialize
 that UDMA transport path; HT/UDMA and future cross-host tests must account for it.
 
 The new SDK provides QP-specific/multi-link UDMA interfaces. Updating the SDK
@@ -137,8 +144,10 @@ with distinct local-heap, mapped-peer and remote-MR bases. The production Sessio
 also passed39C++ lifecycle/fault-injection checks, including missing sparse API,
 MTE independence and preservation of the new versioned runtime configuration.
 
-These are CPU semantic checks. No SSH connection, CANN full wheel build, NPU
-correctness test or performance run was performed during this migration.
-Compatibility of all seven dispatch entries and the other device targets still
-requires the target's normal full build. Historical CANN builds for4dd80e do not
-validate this SDK. Logs are retained in the project's .tmp validation directories.
+Those initial migration checks were CPU-only. The subsequent explicit LL-only
+fix was compiled in the user-authorized isolated27directory: a fresh SDK and
+six complete LL OFF/ON wheels passed, including all seven dispatch entries.
+Host-only imports verified HT disabled and the loaded SDK identity. See
+[LL_ONLY_FIX.md](../tests/ll_control_opt/LL_ONLY_FIX.md) for exact revisions and
+logs. No NPU correctness or performance run was performed. HT is excluded from
+this performance build and remains unqualified with this SDK.

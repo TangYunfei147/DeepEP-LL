@@ -384,3 +384,23 @@ documented in SHMEM_MAINLINE_20261025.md. None of this is CANN or NPU acceptance
 Current target access remains unavailable. Compile all exact OFF wheels, run
 their unchanged correctness checks and10/100/tail50sampling, then use matching
 ON wheels only for timing diagnosis. See tests/ll_control_opt/TOPOLOGY_EXPERIMENTS.md.
+
+## LL-only MTE initialization validation,2026-10-25
+
+The earlier Elastic constructor always requested UDMA, even for the LL MTE
+kernel. New baseline ed1c553 selects an explicit MTE-only Session and the
+performance suite builds with DEEPEP_BUILD_HT=OFF. Buffered4d37eb6 and
+Immediatec7d70a4 retain their respective original kernel sources. A new
+commits-topology-mte.json selects these three exact revisions, separately from
+the historical mixed-runtime results.
+
+Within the user's isolated27directory, the unmodified8e3fc610 SDK was built
+successfully and all three revisions compiled complete OFF and ON wheels:
+six successful wheel builds plus six successful Host-only imports. Each import
+checked HT disabled, explicit LL factory present, HT-only factories absent,
+matching timer/core protocol and loaded SHMEM library hash.111CPU checks also
+passed there, including the actual CMake source inventory and mocked Session
+lifecycle. No NPU Runtime was instantiated or device workload launched.
+Exact timings, artifact locations and rerun commands are in
+tests/ll_control_opt/LL_ONLY_FIX.md. This validates compilation/linkage, not
+target-device correctness or performance.
