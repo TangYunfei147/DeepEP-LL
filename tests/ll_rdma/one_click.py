@@ -187,15 +187,14 @@ def installed_identity(a):
 
 
 def peer_identity(identity):
-    """Compare protocol/source facts, not the local NIC's doorbell mechanism."""
+    """Require the same source/protocol and HNS mode for this experiment."""
     shared = json.loads(json.dumps(identity))
     build = shared["sdk_build"]
-    mode = build.pop("hns_1825_pi_on_chip", None)
+    mode = build.get("hns_1825_pi_on_chip")
     if type(mode) is not int or mode not in (0, 1):
         raise RuntimeError("Missing validated local HNS doorbell mode")
-    # SDK master uses this macro only in the local SQ doorbell update. It does
-    # not change the WQE or wire layout. installed_identity still requires this
-    # node's SDK and wheel to agree; identity.json retains the selected value.
+    # The experiment requires equal PI mode across hosts as well as each
+    # node's SDK/wheel consistency. Do not normalize this field away.
     return shared
 
 

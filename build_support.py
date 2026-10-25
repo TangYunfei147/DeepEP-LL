@@ -95,6 +95,19 @@ class CheckedInstallLib(install_lib):
 
 
 def source_fingerprint():
+    # Switching branches can leave untracked historical experiments under
+    # tests/. They are not this checkout's test inputs. Keep all real build
+    # inputs below (including new local csrc headers), but select tests from
+    # the Git index when present. Source archives have no index and retain the
+    # existing filesystem fallback. Hash working-tree bytes, never Git blobs.
+    tracked_tests = None
+    if (ROOT / ".git").exists():
+        git_env = dict(os.environ)
+        git_env.pop("LD_LIBRARY_PATH", None)
+        git_env.pop("LD_PRELOAD", None)
+        paths = subprocess.check_output(
+            ["git", "-C", str(ROOT), "ls-files", "-z", "--", "tests"], env=git_env)
+        tracked_tests = {os.fsdecode(path) for path in paths.split(b"\0") if path}
     files = [
         ROOT / name
         for name in (
@@ -128,6 +141,7 @@ def source_fingerprint():
             for path in (ROOT / name).rglob("*")
             if (path.suffix in {".sh", ".py", ".cpp", ".hpp", ".h", ".cmake", ".json"} or path.name == "CMakeLists.txt")
             and path.name != "_build_info.json"
+            and (name != "tests" or tracked_tests is None or path.relative_to(ROOT).as_posix() in tracked_tests)
         )
     digest = hashlib.sha256()
     for path in sorted(files):

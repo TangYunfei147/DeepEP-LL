@@ -191,12 +191,14 @@ def test_installed_check_rejects_stale_or_mixed_builds(tmp_path, monkeypatch, mo
         assert identity["arguments"][identity["arguments"].index("--node-rank") + 1] == "<node>"
 
 
-def test_peer_comparison_allows_local_doorbell_modes_but_not_source_drift():
+def test_peer_comparison_requires_matching_doorbell_modes_and_sources():
     first = {"source_sha256": "same", "sdk_build": {"rdma_backend": "HNS_1825", "hns_1825_pi_on_chip": 0}}
     second = {"source_sha256": "same", "sdk_build": {"rdma_backend": "HNS_1825", "hns_1825_pi_on_chip": 1}}
-    assert launch.peer_identity(first) == launch.peer_identity(second)
+    assert launch.peer_identity(first) != launch.peer_identity(second)
     assert first["sdk_build"]["hns_1825_pi_on_chip"] == 0
     assert second["sdk_build"]["hns_1825_pi_on_chip"] == 1
+    second["sdk_build"]["hns_1825_pi_on_chip"] = 0
+    assert launch.peer_identity(first) == launch.peer_identity(second)
     second["source_sha256"] = "different"
     assert launch.peer_identity(first) != launch.peer_identity(second)
 
