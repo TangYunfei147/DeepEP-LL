@@ -36,11 +36,12 @@ def test_device_event_and_spare_storage_contract():
                    source.index('__aicore__ inline LlReceiveProbeResult FinishProbe(uint32_t count) {',
                                 source.index('__aicore__ inline void RemoveProbe(uint32_t start,uint32_t count,uint32_t ready) {'))]
     finish = source[source.index('// This is the residual scalar join'):source.index('// 摘要：将稳定任务编号')]
-    assert start.index('SetFlag<HardEvent::MTE2_V>(6U)') < start.index('WaitFlag<HardEvent::MTE2_V>(6U)')
-    assert start.index('WaitFlag<HardEvent::MTE2_V>(6U)') < start.index('BuildReceiveFlagMasks(')
-    assert start.index('BuildReceiveFlagMasks(') < start.index('SetFlag<HardEvent::V_S>(6U)')
+    assert 'StartProbeWithEvents(start,count,offset,TEventID(6),TEventID(6));' in start
+    assert start.index('SetFlag<HardEvent::MTE2_V>(mte2Vector)') < start.index('WaitFlag<HardEvent::MTE2_V>(mte2Vector)')
+    assert start.index('WaitFlag<HardEvent::MTE2_V>(mte2Vector)') < start.index('BuildReceiveFlagMasks(')
+    assert start.index('BuildReceiveFlagMasks(') < start.index('SetFlag<HardEvent::V_S>(vectorScalar)')
     assert 'WaitFlag<HardEvent::V_S>' not in start
-    assert finish.index('WaitFlag<HardEvent::V_S>(6U)') < finish.index('masks.GetValue(0U)')
+    assert finish.index('WaitFlag<HardEvent::V_S>(vectorScalar)') < finish.index('masks.GetValue(0U)')
     assert 'SetFlag<HardEvent::V_S>' not in finish
     assert 'if (!probePrefetch_) return TrySerialBatch();' in source
     assert 'kProbeBatch * 4U + (probePrefetch_ ? kLlReceiveProbeExtraBytes : 0U)' in source

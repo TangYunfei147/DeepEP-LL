@@ -80,6 +80,9 @@ public:
     }
     // 摘要：等待所有前缀片段就绪，加载本核前缀副本，并由首个接收核输出各专家计数。
     __aicore__ inline void CompleteCumsum();
+    // S-only bounded reader while its input queue is still alive. The caller
+    // leases both events from TPipe after queue initialization; no MTE2_S 6/7.
+    __aicore__ inline bool TryLoadPrefixOnce(TEventID mte2Vector, TEventID vectorScalar);
     // 摘要：返回后续阶段可复用的 UB 池；在途计数发送使用的 statusBuf_ 不在复用范围内。
     __aicore__ inline TBufPool<TPosition::VECCALC, 16>& ScratchPool()
     {
@@ -156,6 +159,13 @@ private:
     __aicore__ inline void CalRecvAndSetFlag();
     // 等待R0发布当前epoch，不清理共享标记；下轮由R0交替发布。
     __aicore__ inline void WaitCumSumFlag();
+    __aicore__ inline void EnsurePrefixReader()
+    {
+        if (prefixReaderAllocated_) return;
+        tpipe_->InitBuffer(readyBuf_,32U);
+        tpipe_->InitBuffer(prefixBuf_,Ceil(rscvStatusNum_*4U,32U)*32U);
+        prefixReaderAllocated_=true;
+    }
 
     LlOverlapLayout overlap_{};
     bool buildLocalTasks_=true;
@@ -185,6 +195,7 @@ private:
     LocalTensor<float> workLocalTensor_, statusFp32Tensor_;
     GlobalTensor<uint32_t> prefixReadyGm_;
     uint32_t prefixEpoch_=0U;
+    bool prefixReaderAllocated_=false, prefixLoaded_=false;
     TBuf<> prefixPublishBuf_;
     // Both views outlive all their tensors. The record buffer is outside their
     // shared address range and remains immutable until the phase is retired.
@@ -378,10 +389,10 @@ __aicore__ inline void ServerDedupCounts::CompleteCumsum()
     if (!overlap_.Async()) { LL_SEG_SCOPE(TRANSITION_DRAIN); PipeBarrier<PIPE_ALL>(); }
     if (!overlap_.enabled) tpipe_->Reset();
     SetCtrlSpr<60,60>(0);
-    tpipe_->InitBuffer(readyBuf_,32U);
-    tpipe_->InitBuffer(prefixBuf_,Ceil(rscvStatusNum_*4U,32U)*32U);
-    WaitCumSumFlag();
+    EnsurePrefixReader();
     LocalTensor<int32_t> prefix = prefixBuf_.Get<int32_t>();
+    if (!prefixLoaded_) {
+    WaitCumSumFlag();
     GlobalTensor<int32_t> workspace;
     workspace.SetGlobalBuffer(reinterpret_cast<__gm__ int32_t*>(recvCntWorkspaceGM_));
     workspace.SetL2CacheHint(CacheMode::CACHE_MODE_DISABLE);
@@ -390,6 +401,8 @@ __aicore__ inline void ServerDedupCounts::CompleteCumsum()
     { LL_SEG_SCOPE(PREFIX_LOAD);
     DataCopyPad(prefix, workspace, copy, pad);
     SyncFunc<HardEvent::MTE2_S>();
+    }
+    prefixLoaded_=true;
     }
     // 仅接收组的第 0 核写公开专家计数，避免多核重复写同一输出。
     // 每个专家最后一个来源 rank 的前缀即该专家结束位置；type=0 输出累计数，
@@ -409,6 +422,37 @@ __aicore__ inline void ServerDedupCounts::CompleteCumsum()
         DataCopyPad(expertTokenNumsOutGMTensor_, expertCounts, output);
     }
     // No listening table or payload receive/copy is constructed in this increment.
+}
+
+__aicore__ inline bool ServerDedupCounts::TryLoadPrefixOnce(TEventID mte2Vector, TEventID vectorScalar)
+{
+    if (prefixLoaded_) return true;
+    EnsurePrefixReader();
+    auto ready=readyBuf_.Get<uint32_t>();
+    { LL_SEG_SCOPE(WAIT_CUMSUM);
+      LL_SEG_COUNT(WAIT_CUMSUM_ITERATIONS,1U);
+      DataCopy(ready,prefixReadyGm_,8U);
+      // A finite MTE2 -> V -> S join protects this scalar read without
+      // stealing the sender's pending-input MTE2_S event. No PIPE_ALL/drain.
+      SetFlag<HardEvent::MTE2_V>(mte2Vector);
+      WaitFlag<HardEvent::MTE2_V>(mte2Vector);
+      SetFlag<HardEvent::V_S>(vectorScalar);
+      WaitFlag<HardEvent::V_S>(vectorScalar);
+    }
+    if (ready.GetValue(0U)!=prefixEpoch_) return false;
+    GlobalTensor<int32_t> workspace;
+    workspace.SetGlobalBuffer(reinterpret_cast<__gm__ int32_t*>(recvCntWorkspaceGM_));
+    workspace.SetL2CacheHint(CacheMode::CACHE_MODE_DISABLE);
+    { LL_SEG_SCOPE(PREFIX_LOAD);
+      DataCopyPad(prefixBuf_.Get<int32_t>(),workspace,
+                  {1U,rscvStatusNum_*uint32_t(sizeof(int32_t)),0U,0U,0U},{false,0U,0U,0});
+      SetFlag<HardEvent::MTE2_V>(mte2Vector);
+      WaitFlag<HardEvent::MTE2_V>(mte2Vector);
+      SetFlag<HardEvent::V_S>(vectorScalar);
+      WaitFlag<HardEvent::V_S>(vectorScalar);
+    }
+    prefixLoaded_=true;
+    return true;
 }
 
 // 摘要：对原始路由执行逐专家匹配与归约，得到该专家的路由条数。
