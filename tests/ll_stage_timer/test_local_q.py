@@ -32,7 +32,7 @@ def test_q_table_lifetime_and_protocol():
     assert 'qTable_=qWorkBuf_.Get<uint32_t>()' in sender
     assert 'LlLocalQShard(bs_,k_,sendCores_,GetBlockIdx(),enableDedup_)' in sender
     core=(ROOT/'csrc/kernels/dispatch/low_latency/common/ll_core_config.h').read_text()
-    assert '(kLlCb59Replay ? 21000U : 19000U) + kLlSendCoreNum' in core
+    assert '(kLlCb59Stream ? 22000U : (kLlCb59Replay ? 21000U : 19000U)) + kLlSendCoreNum' in core
 
 def test_vf_seed_is_complete_before_scalar_updates():
     sender=(ROOT/'csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_send.h').read_text(encoding='utf-8')

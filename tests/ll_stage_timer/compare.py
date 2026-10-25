@@ -10,7 +10,7 @@ _DISPATCH=runpy.run_path(str(ROOT/'scripts/ll_dispatch_implementation.py'))
 # Cross-algorithm A/B may intentionally change source. Within one staged
 # diagnosis, diagnose.py separately requires source_sha256 equality for OFF/ON.
 PREFIX_FIELDS=('small_b_prefix_cores','effective_small_b_prefix_cores')
-DIFFERENCES={'implementation','dispatch_impl','transport','rdma_compiled','source_revision','source_dirty','source_sha256','logical_group','overlap_stage',*PREFIX_FIELDS}
+DIFFERENCES={'implementation','dispatch_impl','dispatch_capability','effective_dispatch_impl','transport','rdma_compiled','source_revision','source_dirty','source_sha256','logical_group','overlap_stage',*PREFIX_FIELDS}
 REQUIRED={'implementation','transport','world_size','logical_group','active_aiv','core_protocol',
           'case','warmup','num_iters','perf_tail','delay_rows','delay_cols','stage_capture','expert_capture',
           'timer_mode','stage_timer','stage_timer_schema','frequency_hz','seed','route','use_1g_huge_pages',
@@ -22,7 +22,8 @@ def dispatch_selection(identity):
     choice=identity.get('dispatch_impl')
     if choice is not None:
         return choice
-    return {'g4-small-b-parallel-prefix':'current', 'cb59-replay':'cb59'}.get(identity.get('implementation'))
+    return {'g4-small-b-parallel-prefix':'current', 'cb59-replay':'cb59',
+            'cb59-stream-recv':'cb59-stream'}.get(identity.get('implementation'))
 
 
 def check_identity(left,right):
@@ -47,7 +48,14 @@ def check_identity(left,right):
                     or not _DISPATCH['dispatch_group_valid'](choice,item['logical_group'],item['world_size'])
                     or item['core_protocol']!=expected['core_protocol']):
                 raise ValueError('Invalid dispatch implementation identity')
-        elif item['implementation']=='cb59-replay' or 21001<=item['core_protocol']<=21055:
+            if ('dispatch_capability' in item or choice=='cb59-stream') and item.get('dispatch_capability')!=_DISPATCH['dispatch_capability'](choice):
+                raise ValueError('Invalid dispatch capability scope identity')
+            if 'effective_dispatch_impl' in item or choice=='cb59-stream':
+                case=item.get('case') or {}
+                selected=_DISPATCH['effective_dispatch_implementation'](choice,item['world_size'],case.get('B'),case.get('M'))
+                if item.get('effective_dispatch_impl')!=selected:
+                    raise ValueError('Invalid effective dispatch path identity')
+        elif item['implementation'] in ('cb59-replay','cb59-stream-recv') or 21001<=item['core_protocol']<=21055 or 22001<=item['core_protocol']<=22055:
             raise ValueError('Missing cb59 dispatch implementation identity')
     if any(isinstance(s,int) and s>=13 for s in (left['stage_timer_schema'],right['stage_timer_schema'])) and left['stage_timer_schema']!=right['stage_timer_schema'] and any(
         item['stage_timer'] or item['stage_capture'] or item['expert_capture'] for item in (left,right)):
@@ -63,12 +71,12 @@ def check_identity(left,right):
         differences.update(('stage_timer_schema','stage_timer_slots','stage_timer_fields',
                             'stage_timer_points','stage_timer_recording','timer_profile','timer_profile_id',
                             'profile_capture','profile_capture_requested','expert_timer_requested'))
-    if all(19001<=item['core_protocol']<=19055 or 21001<=item['core_protocol']<=21055 for item in (left,right)):
+    if all(item['core_protocol']//1000 in (19,21,22) and 1<=item['core_protocol']%1000<=55 for item in (left,right)):
         for item in (left,right):
             send=item.get('send_cores',0);recv=item.get('recv_cores',0)
-            base=21000 if 21001<=item['core_protocol']<=21055 else 19000
+            base=item['core_protocol']//1000*1000
             if (send+recv!=56 or min(send,recv)<=0 or item['core_protocol']!=base+send or item['active_aiv']!=56
-                    or (base==21000 and (send,recv)!=(28,28))):
+                    or (base in (21000,22000) and (send,recv)!=(28,28))):
                 raise ValueError('Invalid configured core split identity')
         differences.update(('send_cores','recv_cores','dispatch_recv_cores','core_protocol','stage_timer_schema'))
 
@@ -159,7 +167,8 @@ def compare(left,right,kind):
                          if kind=='stage' and key[0]=='dispatch' and key in l and key in r else None)
         algorithm_changed = (kind!='perf' and key in l and key in r
                              and dispatch_selection(l[key][1])!=dispatch_selection(r[key][1])
-                             and 'cb59' in (dispatch_selection(l[key][1]),dispatch_selection(r[key][1])))
+                             and any(selection in ('cb59','cb59-stream') for selection in
+                                     (dispatch_selection(l[key][1]),dispatch_selection(r[key][1]))))
         rows.append(dict(key=json.dumps(key),baseline_mean_us=a,candidate_mean_us=b,
                          baseline_send_cores=l[key][1].get("send_cores") if key in l else None,
                          candidate_send_cores=r[key][1].get("send_cores") if key in r else None,

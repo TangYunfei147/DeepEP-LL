@@ -1,5 +1,36 @@
 # LL dispatch compile partition
 
+## cb59-stream local validation (2026-10-25)
+
+The candidate adds one compile selection, not a mode/template dimension:
+`DEEPEP_LL_DISPATCH_IMPL=cb59-stream` maps to macro2 and protocol22028. Each
+of the existing seven device TUs includes only the selected implementation.
+The source sender/count code and the replay's six generated files are kept.
+The stream receiver shares its packet loop with its shape-gated cb59 fallback.
+No TU was merged, optimization level changed, or supported dtype removed.
+
+- Integrated CPU suite: **978 passed, 75 environment skips, 8 existing
+  Windows/POSIX compiler tests deselected, 34.08s**. Log:
+  `.tmp/cb59-stream-integrated-001.log`.
+- Explicit local Zig C++ checks exercised all three identities with OFF/ON,
+  all seven Host launch modes, sparse role exports, legacy and stream Host UB
+  admission, the real stream protocol in 49 cases of 28 CPU threads, and the
+  real record-owned task builder. These were run separately because the
+  default compiler discovery used by the integrated suite has no C++ tool.
+- Independent event models cover zero/delayed counts, early R0, hotspot skew,
+  expert-boundary slices, empty receivers, two-bank reuse and legacy/stream
+  alternation. Source guards preserve the replay's packet methods exactly.
+- Both implementation build-only and run CPU plans pass; build-only plans
+  contain OFF/sparse compilation and no launcher. Replay generator `--check`
+  verifies all six original business-token and synchronization sequences.
+
+No SSH, CANN compilation or NPU run was performed. CPU thread emulation does
+not model NPU cache coherence or asynchronous DMA, and gives no device latency
+or cold-build-time claim. Target compilation/linking and correctness/performance
+steps are in [CB59_STREAM.md](../tests/ll_stage_timer/CB59_STREAM.md).
+
+## Existing mode partition
+
 The previous low_latency.cpp instantiated seven input/quantization modes inside
 one global function. With schema11 timer ON, one Bisheng process handled the
 expanded algorithm and all timers for every mode. This change compiles each mode

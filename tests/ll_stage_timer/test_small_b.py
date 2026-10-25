@@ -43,7 +43,7 @@ def test_unchanged_dedup_and_protocol_regions():
                 'static_assert(!kLlCb59Replay || (DEEPEP_LL_SEND_CORES == 28 && DEEPEP_LL_RECV_CORES == 28),\n'
                 '              "cb59 replay requires the original 1:1 split on the fixed 56-core comparison launch");\n':'',
                 'kLlCb59Replay ? kLlRecvCoreNum : kLlActiveCoreNum':'kLlActiveCoreNum',
-                '(kLlCb59Replay ? 21000U : 19000U) + kLlSendCoreNum':'19000U + kLlSendCoreNum',
+                '(kLlCb59Stream ? 22000U : (kLlCb59Replay ? 21000U : 19000U)) + kLlSendCoreNum':'19000U + kLlSendCoreNum',
             }
             for selected,current in switches.items():
                 assert text.count(selected)==1

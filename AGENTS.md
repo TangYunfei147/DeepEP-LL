@@ -1,5 +1,13 @@
 # LL 编译维护约束
 
+## cb59 分片接收候选（2026-10-25）
+
+- 用户要求先做接收调度与路由协议重设计。独立选择 `DEEPEP_LL_DISPATCH_IMPL=cb59-stream`，原 `cb59` 六生成算法文件保持不变；新算法在 `low_latency/cb59_stream/` 手工维护。固定 G16/S28R28/P0，协议22028，身份cb59-stream-recv。七模式仍各自单TU、O2，无新增设备启动。
+- 仅EP16/M<=32/B<=32启用分片接收，其他shape用原cb59协议，实际路径写effective_dispatch_impl。stream预算不足必须Host拒绝，不能静默回退或按单核路由切换。编译manifest及native/全rank继续严格区分实现。
+- 原source counts/Sender保留；R按连续count-record拥有全部q，只等本片及前序片段sum确定dense偏移。sum仅发布上三角，消费者唯一清自己列；专家末record owner结合跨片tail输出专家计数。保留固定packet槽、公开prefix及dense行序/combine元数据。
+- stream协议和接收器共享持久UB池，不Reset、不在首次接收前新增PIPE_ALL。协议8+任务2+探测4+lane1共15个TBuf，异步源独立保留到原counts.Finish。Host/device预算共用ll_stream_receive.h，190KiB不变，不能沿用总行数/R的任务上界。
+- stream的PREFIX_READY表示本片输出偏移就绪，不表示全rank前缀完成；OFF完整task是性能依据。当前仅CPU/原生mock验证，无CANN/NPU结论；热点可能因按记录归属而负载偏斜。先全部构建四wheel，再正确性/normal/hotspot串行对照，步骤见tests/ll_stage_timer/CB59_STREAM.md。
+
 ## 当前 cb59 对照移植（2026-10-25）
 
 - 用户要求把快基线cb59bff99ecd39d27ef57788c5e6fd0009e4e636移植当前分支并用打点定位差距。编译选择DEEPEP_LL_DISPATCH_IMPL=current|cb59，默认current；每个模式TU只编入一个算法，仍保留全部七种模式。

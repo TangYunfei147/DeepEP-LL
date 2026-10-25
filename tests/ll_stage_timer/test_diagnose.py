@@ -379,7 +379,8 @@ def test_installed_wheel_source_and_native_layout_are_checked(tmp_path,monkeypat
     package=tmp_path/'installed/deep_ep'
     package.mkdir(parents=True)
     info = dict(source_sha256='matching-source', ll_stage_timer=True, ll_timer_profile='sparse',
-                ll_send_cores=30, ll_recv_cores=26, ll_small_b_prefix_cores=6, ll_dispatch_impl='current')
+                ll_send_cores=30, ll_recv_cores=26, ll_small_b_prefix_cores=6, ll_dispatch_impl='current',
+                ll_dispatch_capability=dict(mode_count=7,scope='all-supported',fallback_impl=None))
     (package/'_build_info.json').write_text(json.dumps(info))
     from tests.elastic import test_ep_low_latency as st
     points=runpy.run_path(str(diagnose.ROOT/'deep_ep/utils/ll_stage_timer.py'))['SPARSE_POINTS']

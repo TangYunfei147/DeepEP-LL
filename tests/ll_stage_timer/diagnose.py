@@ -178,6 +178,7 @@ def make_plan(args, forwarded, root=ROOT, python=sys.executable):
                 core_split=dict(send=send, recv=recv),
                 small_b_prefix_cores=prefix,
                 dispatch_impl=dispatch_impl, implementation=identity['implementation'],
+                dispatch_capability=_DISPATCH['dispatch_capability'](dispatch_impl),
                 default_logical_group=identity['logical_group'],
                 required_logical_group=identity['fixed_logical_group'], core_protocol=identity['core_protocol'],
                 matrix=dict(B=args.bs, M=args.m, H=args.hidden, K=args.topk,
@@ -286,6 +287,7 @@ runpy.run_path('tests/elastic/test_ep_low_latency.py')['validate_sparse_timer_la
 info_path = Path(package.__file__).resolve().parent / '_build_info.json'
 info = json.loads(info_path.read_text(encoding='utf-8'))
 require(info.get('ll_dispatch_impl') == {dispatch_impl!r}, 'wheel dispatch selection differs from requested build configuration')
+require(info.get('ll_dispatch_capability') == {_DISPATCH['dispatch_capability'](dispatch_impl)!r}, 'wheel dispatch capability scope differs from requested build configuration')
 require(info.get('ll_stage_timer') is {stage['timer']!r} and info.get('ll_timer_profile') == {stage['profile']!r}, 'wheel build metadata differs from requested timer configuration')
 require(type(info.get('ll_small_b_prefix_cores')) is int and info.get('ll_small_b_prefix_cores') == {small_b_prefix_cores!r}, 'wheel P differs from requested build configuration')
 require(type(getattr(native, 'low_latency_small_b_prefix_cores', None)) is int and native.low_latency_small_b_prefix_cores == {small_b_prefix_cores!r}, 'native P differs from requested build configuration')
@@ -323,7 +325,7 @@ def _performance_rows(suite):
     baselines = {key(row['config'], row['route']): row for row in off.get('results', []) if 'dispatch' in row}
     identity_fields = ('implementation', 'transport', 'logical_group', 'active_aiv',
                        'send_cores', 'recv_cores', 'core_protocol', 'source_revision', 'source_sha256')
-    optional_identity_fields = ('dispatch_impl', 'small_b_prefix_cores', 'effective_small_b_prefix_cores',
+    optional_identity_fields = ('dispatch_impl', 'dispatch_capability', 'effective_dispatch_impl', 'small_b_prefix_cores', 'effective_small_b_prefix_cores',
                                 'session_transport', 'shmem_revision')
     rows = []
     for path in sorted((suite / 'runs').glob('*/case_*/*/active_capture_dispatch.json')):

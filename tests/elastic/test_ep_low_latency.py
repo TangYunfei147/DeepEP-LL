@@ -136,7 +136,10 @@ def installed_dispatch_identity(package, native, environment=None):
         raise RuntimeError(str(error)) from error
     if choice != requested:
         raise RuntimeError('Installed wheel dispatch identity differs from DEEPEP_LL_DISPATCH_IMPL')
-    return dict(dispatch_impl=choice)
+    capability = _DISPATCH['dispatch_capability'](choice)
+    if info.get('ll_dispatch_capability') != capability:
+        raise RuntimeError('Installed wheel dispatch identity has missing or inconsistent capability scope')
+    return dict(dispatch_impl=choice, dispatch_capability=capability)
 
 
 def validate_matching_capabilities(capabilities):
@@ -191,9 +194,13 @@ def comparison_metadata(args, world, m):
     prefix = runtime.get('small_b_prefix_cores')
     effective_prefix = None
     if prefix is not None and m <= 32 and args.num_tokens <= 32:
-        effective_prefix = runtime.get('recv_cores') if runtime.get('dispatch_impl') == 'cb59' else (
+        effective_prefix = runtime.get('recv_cores') if runtime.get('dispatch_impl') in ('cb59', 'cb59-stream') else (
             (prefix or runtime.get('recv_cores')) if world == 16 else runtime.get('recv_cores'))
-    return dict(**runtime, effective_small_b_prefix_cores=effective_prefix,
+    path_identity = {}
+    if runtime.get('dispatch_impl') is not None:
+        path_identity['effective_dispatch_impl'] = _DISPATCH['effective_dispatch_implementation'](
+            runtime['dispatch_impl'], world, args.num_tokens, m)
+    return dict(**runtime, **path_identity, effective_small_b_prefix_cores=effective_prefix,
                 comparison_schema=1, sampling_protocol='exp-reduce-stable-tail-v2',
                 perf_enabled=not args.skip_perf_test, world_size=world,
                 local_world_size=int(os.environ.get('LOCAL_WORLD_SIZE',args.num_processes)),
@@ -223,8 +230,12 @@ def validate_native_cases(native, cases, world):
         try:
             if native.low_latency_layout(*shape, dtype) is None:
                 raise ValueError("dispatch layout rejected")
+            # Capacity selects the stream/replay path and its simultaneous UB
+            # budget. Validate this before process-group or Session creation.
+            capacity = validate_args(case, world)
+            native.low_latency_dispatch_tiling(*shape, dtype, capacity)
             native.low_latency_combine_tiling(
-                *shape, "float16" if case.dtype == "fp16" else "bfloat16", validate_args(case, world)
+                *shape, "float16" if case.dtype == "fp16" else "bfloat16", capacity
             )
         except (ValueError, RuntimeError) as exc:
             raise ValueError(
@@ -441,7 +452,7 @@ def write_reports(directory, report):
             perf = result[operation]
             identity=result.get('comparison') or {}
             base = {"case_id": result["case_id"], **result["config"], "route": result["route"], "operation": operation,
-                    **{key:identity.get(key) for key in ('implementation','dispatch_impl','transport','logical_group','active_aiv','send_cores','recv_cores','core_protocol','source_revision')}}
+                    **{key:identity.get(key) for key in ('implementation','dispatch_impl','effective_dispatch_impl','transport','logical_group','active_aiv','send_cores','recv_cores','core_protocol','source_revision')}}
             summaries.append(
                 {
                     **base,
@@ -1332,7 +1343,7 @@ def worker(local_rank, args):
         validate_matching_capabilities(capabilities)
         validate_dispatch_algorithm_capability(capability, world)
         validate_core_split_capability(capability)
-        if capability['implementation'] not in ('ndr-hns1825','configurable-groups','g4-shared-recv','g4-overlap-recv','g4-r0-prefix','g4-small-b','g4-small-b-parallel-prefix','cb59-replay'):
+        if capability['implementation'] not in ('ndr-hns1825','configurable-groups','g4-shared-recv','g4-overlap-recv','g4-r0-prefix','g4-small-b','g4-small-b-parallel-prefix','cb59-replay','cb59-stream-recv'):
             raise RuntimeError('Rebuild the wheel with the shared experiment implementation identity')
         validate_overlap_stage_capability(capability)
         requested_impl=os.environ.get('DEEPEP_LL_EXPECT_IMPLEMENTATION')

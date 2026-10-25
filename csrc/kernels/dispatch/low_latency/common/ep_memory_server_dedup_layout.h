@@ -182,7 +182,10 @@ inline bool DispatchDedupPacketUbFits(const EpMemoryServerDedupLayout& layout, i
                                       int64_t num_experts, int64_t world_size, uint32_t coreNum = kLlDefaultPlanCoreNum, bool enableDedup=true)
 {
 #if DEEPEP_LL_DISPATCH_CB59
-    (void)enableDedup;  // cb59 uses its original S/R ownership in both modes.
+    // M is represented here by enableDedup; false means M<=32. All remaining
+    // shape gates are shared with the device, and stream UB failure is fatal.
+    if (kLlCb59Stream && !enableDedup && LlUseStreamReceive(uint32_t(world_size), uint32_t(b), 32U))
+        return Cb59Replay::StreamUbFits(layout, b, k, num_experts, world_size, coreNum);
     return Cb59Replay::PacketUbFits(layout, b, k, num_experts, world_size, coreNum);
 #else
     if (!LlCoreCountValid(coreNum)) return false;

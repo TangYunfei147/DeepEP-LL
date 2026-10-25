@@ -14,7 +14,7 @@ import sys
 import sysconfig
 import warnings
 from scripts.shmem_sdk_identity import validate_build_identity
-from scripts.ll_dispatch_implementation import dispatch_implementation, dispatch_configuration
+from scripts.ll_dispatch_implementation import dispatch_implementation, dispatch_configuration, dispatch_capability
 
 from setuptools.command.build_ext import build_ext
 from setuptools.command.build import build
@@ -239,6 +239,7 @@ def build_configuration(environment=None):
     result["ll_small_b_prefix_cores"] = ll_small_b_prefix_cores(env, recv)
     result["ll_dispatch_impl"] = dispatch_implementation(env)
     dispatch_configuration(result["ll_dispatch_impl"], send, recv, result["ll_small_b_prefix_cores"])
+    result["ll_dispatch_capability"] = dispatch_capability(result["ll_dispatch_impl"])
     result["ll_stage_timer"] = enabled("DEEPEP_LL_STAGE_TIMER", env)
     result["ll_timer_profile"] = ll_timer_profile(env)
     result["build_type"] = env.get("DEEPEP_BUILD_TYPE", "RelWithDebInfo" if lineinfo else "Release")

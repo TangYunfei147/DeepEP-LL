@@ -12,7 +12,9 @@
 #if CATLASS_ARCH == 3510
 #include "common/ll_dispatch_variant.h"
 #include "launch.hpp"
-#if DEEPEP_LL_DISPATCH_CB59
+#if DEEPEP_LL_DISPATCH_CB59 == 2
+#include "cb59_stream/kernel.h"
+#elif DEEPEP_LL_DISPATCH_CB59
 #include "cb59/dispatch_server_dedup_kernel.h"
 #else
 #include "dispatch_server_dedup_kernel.h"
@@ -90,7 +92,9 @@ extern "C" [[bisheng::core_ratio(0, 1)]] __global__ __aicore__ void LL_VARIANT_K
     }
     AscendC::TPipe pipe;
     {
-#if DEEPEP_LL_DISPATCH_CB59
+#if DEEPEP_LL_DISPATCH_CB59 == 2
+        namespace Algorithm = DispatchDedup::Cb59Stream;
+#elif DEEPEP_LL_DISPATCH_CB59
         namespace Algorithm = DispatchDedup::Cb59Replay;
 #else
         namespace Algorithm = DispatchDedup;

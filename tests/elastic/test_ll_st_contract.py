@@ -167,6 +167,7 @@ def test_native_preflight_dispatch_and_combine():
     calls = []
     native = SimpleNamespace(
         low_latency_layout=lambda *shape: {} if shape[2] == 4096 else None,
+        low_latency_dispatch_tiling=lambda *shape: None,
         low_latency_combine_tiling=lambda *shape: calls.append(shape),
     )
     args = st.make_parser().parse_args(["--dtype", "fp8", "--hidden", "4096", "7168"])
@@ -181,6 +182,20 @@ def test_native_preflight_dispatch_and_combine():
     native.low_latency_combine_tiling = reject_combine
     with pytest.raises(ValueError, match="combine UB exceeded"):
         st.validate_native_cases(native, list(st.matrix_cases(args)), 16)
+
+
+def test_native_preflight_checks_selected_dispatch_budget_before_combine_or_communication():
+    calls=[]
+    def reject_stream(*shape):
+        calls.append(shape)
+        raise ValueError('stream persistent UB exceeded')
+    native=SimpleNamespace(low_latency_layout=lambda *shape:{},low_latency_dispatch_tiling=reject_stream,
+                           low_latency_combine_tiling=lambda *shape:pytest.fail('dispatch rejection must stop preflight'))
+    args=st.make_parser().parse_args(['--dtype','fp8','--num-tokens','8','--num-max-tokens-per-rank','32',
+                                    '--hidden','3584','--num-topk','8','--num-experts','384'])
+    with pytest.raises(ValueError,match='stream persistent UB exceeded'):
+        st.validate_native_cases(native,list(st.matrix_cases(args)),16)
+    assert calls==[(16,8,3584,8,384,'float8_e4m3fn',32)]
 
 
 def test_case_progress_identifies_failure(tmp_path):

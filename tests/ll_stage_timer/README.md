@@ -1,5 +1,7 @@
 # LL稀疏诊断：当前入口
 
+新增接收调度候选见[CB59_STREAM.md](CB59_STREAM.md)：`cb59-stream`与原`cb59`独立A/B，固定G16/S28R28/P0，EP16小direct按count记录分片接收，协议22028。先构建四份OFF/ON wheel，再验证dispatch/combine并串行采normal/hotspot。当前仅本地CPU/原生模拟通过，尚无目标性能结论。
+
 最新对照入口见[CB59_REPLAY.md](CB59_REPLAY.md)：同一当前分支用`DEEPEP_LL_DISPATCH_IMPL=current|cb59`分别构建OFF/ON，固定56核28/28；current用P1，cb59保留旧R=28前缀和G16。两版共用当前SDK/普通页及稀疏打点，先完成全部四份wheel再串行测试。本次仅本地验证，未执行CANN或NPU。
 
 当前分支是`kernel/ll-g4-small-b-prefix`，实现`g4-small-b-parallel-prefix`，**schema15 / sparse**。

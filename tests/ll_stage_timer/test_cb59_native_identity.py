@@ -8,7 +8,7 @@ import pytest
 
 ROOT=Path(__file__).resolve().parents[2]
 
-@pytest.mark.parametrize('replay',[0,1])
+@pytest.mark.parametrize('replay',[0,1,2])
 @pytest.mark.parametrize('timer',[0,1])
 def test_actual_bridge_selected_identity_and_all_modes(tmp_path,replay,timer):
     cc=shlex.split(os.environ.get('CXX',''))
@@ -18,7 +18,9 @@ def test_actual_bridge_selected_identity_and_all_modes(tmp_path,replay,timer):
         cc=[found]
     source=tmp_path/'selector.cpp'
     source.write_text(r'''#include <cassert>
+#include <cstring>
 #include "csrc/kernels/dispatch/low_latency/launch.hpp"
+#include "csrc/kernels/dispatch/low_latency/common/ll_dispatch_implementation.h"
 static unsigned calls=0,selected=99;
 #define STUB(name,n) extern "C" void dispatch_server_dedup_launch_sparse15_##name(void*, const deepep::EpServerDedupKernelArgs*) {++calls;selected=n;}
 STUB(prequant_e4m3,0) STUB(fp16,1) STUB(fp16_e4m3,2) STUB(fp16_e5m2,3)
@@ -27,7 +29,11 @@ int main(){
  deepep::EpServerDedupKernelArgs args{};
  for(unsigned m=0;m<7;++m){calls=0;dispatch_server_dedup_kernel_do_sparse15(nullptr,&args,m);assert(calls==1&&selected==m);}
  assert(deepep_ll_dispatch_implementation()==EXPECTED_REPLAY);
- assert(deepep_ll_core_protocol_version()==(EXPECTED_REPLAY?21028U:19028U));
+ assert(DispatchDedup::kLlCb59Replay==(EXPECTED_REPLAY!=0));
+ assert(DispatchDedup::kLlCb59Stream==(EXPECTED_REPLAY==2));
+ assert(std::strcmp(DispatchDedup::kLlDispatchImplementation,EXPECTED_REPLAY==2?"cb59-stream":(EXPECTED_REPLAY?"cb59":"current"))==0);
+ assert(std::strcmp(DispatchDedup::kLlImplementationName,EXPECTED_REPLAY==2?"cb59-stream-recv":(EXPECTED_REPLAY?"cb59-replay":"g4-small-b-parallel-prefix"))==0);
+ assert(deepep_ll_core_protocol_version()==(EXPECTED_REPLAY==2?22028U:(EXPECTED_REPLAY?21028U:19028U)));
  assert(deepep_ll_ranks_per_group()==(EXPECTED_REPLAY?16U:4U));
  assert(deepep_ll_overlap_stage()==(EXPECTED_REPLAY?0U:3U));
  assert(deepep_ll_stage_timer_enabled()==EXPECTED_TIMER);
@@ -43,7 +49,7 @@ int main(){
                     str(ROOT/'csrc/kernels/dispatch/low_latency.cpp'),'-o',str(executable)],check=True)
     subprocess.run([str(executable)],check=True)
 
-@pytest.mark.parametrize('replay',[0,1])
+@pytest.mark.parametrize('replay',[0,1,2])
 def test_actual_recorder_exports_selected_sender_role(tmp_path,replay):
     cc=shlex.split(os.environ.get('CXX',''))
     if not cc:

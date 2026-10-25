@@ -1,5 +1,7 @@
 # 泛化分支生产LL路径
 
+分片接收候选见`../ll_stage_timer/CB59_STREAM.md`：`cb59-stream`在EP16小direct走`low_latency/cb59_stream/kernel.h`，使用原cb59的source counts/Sender；`stream_counts.h`实现上三角sum、前序偏移和专家计数，`receive_tasks.h`按record分片，`receiver.h`复用原packet消费逻辑。`common/ll_stream_receive.h`共用ownership/UB公式。其他shape走原cb59接收协议。新目录为独立手工实现，不直接修改cb59生成目录。
+
 当前新增cb59算法对照：DEEPEP_LL_DISPATCH_IMPL选择current或cb59，公共七模式入口dispatch_variant_kernel.h只包含所选算法。cb59六算法在low_latency/cb59/，由scripts/generate_cb59_replay.py固定提取；count_layout.h/host_layout.h保留旧私有布局和190KiB预算。公共Host、packet格式、combine及当前SDK共用。配置与测试见../ll_stage_timer/CB59_REPLAY.md。
 
 该分支保留MTE传输和DEEPEP_LL_RANKS_PER_GROUP静态可配置分组，默认4。

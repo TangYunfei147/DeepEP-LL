@@ -70,6 +70,18 @@ def test_summary_preserves_missing_and_probe_overhead_warnings():
     assert 'ALL supplied samples' in text and 'Probe overhead' in text
 
 
+def test_stream_summary_reports_effective_path_and_slice_ready_scope():
+    data = worst_matrix()
+    for case in data['cases']:
+        case['provenance'].update(implementation='cb59-stream-recv', core_protocol=22028,
+                                  dispatch_impl='cb59-stream', effective_dispatch_impl='cb59-stream')
+    text = triage.render(data)
+    assert 'this owner slice can receive' in text
+    assert 'not full-rank prefix readiness' in text
+    assert 'effective_dispatch_impl' in text and 'cb59-stream' in text
+    assert len(text.replace('\n', '\r\n').encode()) <= 60000
+
+
 def test_export_report_replaces_only_pointer_and_keeps_all_local_metrics(tmp_path,monkeypatch):
     data=worst_matrix();suite=tmp_path/'suite';suite.mkdir()
     (suite/'SEND_FIRST.txt').write_text('old archive says transmit887files')

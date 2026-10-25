@@ -72,6 +72,10 @@ def collect(suite):
             provenance = {key: (context.get('comparison') or {}).get(key) for key in (
                 'implementation', 'transport', 'logical_group', 'core_protocol',
                 'source_revision', 'source_sha256')}
+            for key in ('dispatch_impl', 'effective_dispatch_impl', 'dispatch_capability'):
+                value = (context.get('comparison') or {}).get(key)
+                if value is not None:
+                    provenance[key] = value
             cases.append(dict(source=relative, source_bundle_id=manifest.get('bundle_id'),
                               metrics=summary, provenance=provenance))
             seen.add(source_id)
@@ -134,6 +138,9 @@ def _essential(data):
         'Matrix: '+_json(data.get('matrix')),
         'Selection: '+_json(data.get('selection','all cases'))+'; coverage above refers to the source matrix.', '',
         'OFF PERFORMANCE (maximum of rank means, full device task)', 'B | route | us']
+    if any(case.get('provenance', {}).get('implementation') == 'cb59-stream-recv'
+           for case in data['cases']):
+        lines.insert(-3, 'For effective cb59-stream cases, PREFIX_READY means this owner slice can receive; it is not full-rank prefix readiness. Other shapes retain cb59.')
     for row in data['off']:
         lines.append(f"{row['B']} | {row.get('route')} | {_num(row['us'])}")
     lines += ['', 'ACTIVE-CAPTURE PERTURBATION (same-source identity checked)',

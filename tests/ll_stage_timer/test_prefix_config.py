@@ -99,6 +99,8 @@ def test_comparison_records_raw_and_only_applicable_effective_prefix(world, m, b
 
 
 @pytest.mark.parametrize('field,left_value,right_value', [
+    ('dispatch_impl', 'cb59', 'cb59-stream'),
+    ('effective_dispatch_impl', 'cb59', 'cb59-stream'),
     ('small_b_prefix_cores', 6, 1), ('effective_small_b_prefix_cores', 6, 1),
     ('session_transport', 'mte', 'rdma'), ('shmem_revision', 'a' * 40, 'b' * 40)])
 def test_optional_performance_identity_must_match_if_present(tmp_path, field, left_value, right_value):
