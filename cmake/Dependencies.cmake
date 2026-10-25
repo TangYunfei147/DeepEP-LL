@@ -25,7 +25,7 @@ string(JSON _patches_count ERROR_VARIABLE _count_error LENGTH "${_sdk_identity}"
 string(JSON _target ERROR_VARIABLE _target_error GET "${_sdk_identity}" build target)
 if(_fields_error OR _type_error OR _count_error OR _target_error
    OR NOT _patches_type STREQUAL "ARRAY" OR NOT _target STREQUAL "Ascend950"
-   OR _field_count LESS 4 OR _field_count GREATER 5)
+   OR NOT _field_count EQUAL 6)
     message(FATAL_ERROR "Require a current native SHMEM SDK identity; stop SDK users and rebuild explicitly")
 endif()
 foreach(_identity_key cann_version cann_timestamp target)
@@ -35,14 +35,13 @@ foreach(_identity_key cann_version cann_timestamp target)
         message(FATAL_ERROR "Incomplete native SHMEM SDK build identity")
     endif()
 endforeach()
-if(_field_count EQUAL 5)
-    string(JSON _rdma_backend ERROR_VARIABLE _rdma_error GET "${_sdk_identity}" build rdma_backend)
-    if(_rdma_error OR NOT _rdma_backend STREQUAL "HNS_1825")
-        message(FATAL_ERROR "Unknown SHMEM SDK capability or build identity field")
-    endif()
-endif()
-if(NOT _field_count EQUAL 5)
-    message(FATAL_ERROR "NDR requires the native HNS_1825 SHMEM SDK")
+string(JSON _rdma_backend ERROR_VARIABLE _rdma_error GET "${_sdk_identity}" build rdma_backend)
+string(JSON _hns_mode_type ERROR_VARIABLE _hns_type_error TYPE "${_sdk_identity}" build hns_1825_pi_on_chip)
+string(JSON DEEPEP_SHMEM_HNS_1825_PI_ON_CHIP ERROR_VARIABLE _hns_mode_error GET "${_sdk_identity}" build hns_1825_pi_on_chip)
+if(_rdma_error OR NOT _rdma_backend STREQUAL "HNS_1825"
+   OR _hns_type_error OR _hns_mode_error OR NOT _hns_mode_type STREQUAL "NUMBER"
+   OR NOT DEEPEP_SHMEM_HNS_1825_PI_ON_CHIP MATCHES "^[01]$")
+    message(FATAL_ERROR "NDR requires the native HNS_1825 SDK and its recorded doorbell mode; rebuild the SDK explicitly")
 endif()
 # Resolve from the selected SDK on every configure, including direct CMake use.
 unset(ASCENDCL_LIBRARY CACHE)

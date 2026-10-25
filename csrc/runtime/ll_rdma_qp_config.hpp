@@ -4,7 +4,7 @@
 #include <string>
 
 namespace deepep {
-// Native ROCE capacity in SHMEM 4dd80e2129da42bd773982c2bb3758af1ed0bba8.
+// Native ROCE capacity in the pinned SHMEM master (8e3fc610).
 // This is separate from LL's 72-core control storage capacity.
 constexpr uint32_t kLlNativeRoceQpLimit = 56;
 

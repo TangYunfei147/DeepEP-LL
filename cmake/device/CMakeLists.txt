@@ -66,7 +66,8 @@ target_compile_options(deepep_kernel_options INTERFACE "$<$<NOT:$<CONFIG:Debug>>
     "-ffile-prefix-map=${SHMEM_ROOT}=SHMEM_SDK")
 # Preserve the original SHARED target's automatically added export definition.
 target_compile_definitions(deepep_kernel_options INTERFACE CATLASS_ARCH=3510 USE_SIMT L2_CACHE_HINT
-    DEEPEP_LL_RDMA=1 ACLSHMEMI_RDMA_K_BACKEND_HNS_1825=1 deepep_kernels_EXPORTS)
+    DEEPEP_LL_RDMA=1 ACLSHMEMI_RDMA_K_BACKEND_HNS_1825=1
+    ACLSHMEMI_HNS_1825_PI_ON_CHIP=${DEEPEP_SHMEM_HNS_1825_PI_ON_CHIP} deepep_kernels_EXPORTS)
 target_include_directories(deepep_kernel_options INTERFACE
     "${_sdk_include}" "${_arch_include}"
     "${_tikcpp}" "${_tikcpp}/tikcfw"

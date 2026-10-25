@@ -15,6 +15,7 @@ import subprocess
 import tempfile
 
 from record_shmem_sdk import record
+from shmem_sdk_identity import compiled_hns_1825_pi_on_chip, validate_build_identity
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -84,7 +85,7 @@ def prepare(root=ROOT, *, rebuild=False, if_needed=True, allow_local_changes=Fal
     if not jobs.isdecimal() or not 1 <= int(jobs) <= 64:
         raise ValueError("CMAKE_BUILD_PARALLEL_LEVEL must be in [1, 64]")
 
-    # 上游脚本会清空 build/install，并生成 ci 打包产物；禁止跳转到其他目录。
+    # 上游脚本会更新 build/install，并生成 ci 打包产物；禁止跳转到其他目录。
     for name in ("build", "install", "ci", "3rdparty"):
         path = source / name
         if path.resolve() != path:
@@ -92,18 +93,23 @@ def prepare(root=ROOT, *, rebuild=False, if_needed=True, allow_local_changes=Fal
     manifest = source / "install/shmem/deepep-sdk.json"
     if not rebuild and manifest.is_file():
         identity = json.loads(manifest.read_text(encoding="utf-8"))
+        validate_build_identity(identity.get("build"), require_rdma=True)
+        recorded_mode = identity["build"]["hns_1825_pi_on_chip"]
         expected_build = {
             "cann_version": version["Version"],
             "cann_timestamp": version.get("timestamp", "unknown"),
             "target": lock["target"],
             "source_patches": patches,
             **rdma_build,
+            "hns_1825_pi_on_chip": recorded_mode,
         }
         if identity.get("revision") != revision or identity.get("build") != expected_build:
             raise RuntimeError(
                 "Existing SHMEM build identity changed; stop SDK users and rebuild explicitly "
                 "with --rebuild (cluster launcher: --rebuild-shmem)"
             )
+        if (source / "build").is_dir() and compiled_hns_1825_pi_on_chip(source / "build") != recorded_mode:
+            raise RuntimeError("SHMEM device build flags differ from SDK doorbell mode; stop SDK users and --rebuild")
         # 复用也校验全部头文件/库哈希，不把存在 manifest 当成构建成功。
         import sys
 
@@ -136,6 +142,11 @@ def prepare(root=ROOT, *, rebuild=False, if_needed=True, allow_local_changes=Fal
         wrapper.chmod(0o700)
         build_env = dict(os.environ, CMAKE_BUILD_PARALLEL_LEVEL=jobs)
         build_env["PATH"] = git_dir + os.pathsep + build_env.get("PATH", os.defpath)
+        # The upstream ordinary build keeps install/. Invalidate only its old
+        # generated attestation before an explicitly requested rebuild writes
+        # SDK files; a failed rebuild must not leave a reusable old identity.
+        if rebuild:
+            manifest.unlink(missing_ok=True)
         # -e 防止上游中间命令失败后继续打包，随后误登记旧库为成功产物。
         subprocess.run(
             ["bash", "-e", "scripts/build.sh", "-soc_type", lock["target"]]
@@ -150,12 +161,14 @@ def prepare(root=ROOT, *, rebuild=False, if_needed=True, allow_local_changes=Fal
     manifest = record(
         sdk,
         revision,
+        build_root=source / "build",
         build_info={
             "cann_version": version["Version"],
             "cann_timestamp": version.get("timestamp", "unknown"),
             "target": lock["target"],
             "source_patches": patches,
             **rdma_build,
+            "hns_1825_pi_on_chip": compiled_hns_1825_pi_on_chip(source / "build"),
         },
     )
     print(f"[SHMEM] SDK identity: {manifest}", flush=True)

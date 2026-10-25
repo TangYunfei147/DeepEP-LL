@@ -105,7 +105,7 @@ def test_ndr_sdk_identity_is_required(build, monkeypatch, tmp_path, fault):
     monkeypatch.setitem(sys.modules, "pybind11", SimpleNamespace(__version__=lock["python_build"]["pybind11"]))
     identity = {
         "revision": lock["shmem"]["revision"],
-        "build": {"rdma_backend": "HNS_1825", "cann_version": "test", "cann_timestamp": "test", "target": "Ascend950", "source_patches": []},
+        "build": {"rdma_backend": "HNS_1825", "hns_1825_pi_on_chip": 0, "cann_version": "test", "cann_timestamp": "test", "target": "Ascend950", "source_patches": []},
         "sha256": {
             str(path.relative_to(sdk).as_posix()): hashlib.sha256(path.read_bytes()).hexdigest()
             for path in files
@@ -162,6 +162,10 @@ def test_ndr_sdk_identity_is_required(build, monkeypatch, tmp_path, fault):
         == hashlib.sha256((sdk / "lib/libshmem.so").read_bytes()).hexdigest()
     )
     assert result["shmem"]["revision"] == identity["revision"]
+    assert result["shmem"]["build"]["hns_1825_pi_on_chip"] == 0
+    initial_key = build.build_cache_key(result)
+    result["shmem"]["build"]["hns_1825_pi_on_chip"] = 1
+    assert build.build_cache_key(result) != initial_key
     assert manifest.exists() == (fault != "missing")
     before = build.build_cache_key(result)
     result["shmem"]["sha256"]["lib/libshmem.so"] = "0" * 64
@@ -419,7 +423,7 @@ def test_compiler_symlink_keeps_invocation_name(build, monkeypatch, tmp_path):
     monkeypatch.setattr(build, "ROOT", source)
     manifest = {
         "revision": lock["shmem"]["revision"],
-        "build": {"rdma_backend": "HNS_1825", "cann_version": "test", "cann_timestamp": "test", "target": "Ascend950", "source_patches": []},
+        "build": {"rdma_backend": "HNS_1825", "hns_1825_pi_on_chip": 0, "cann_version": "test", "cann_timestamp": "test", "target": "Ascend950", "source_patches": []},
         "sha256": {
             path.relative_to(sdk).as_posix(): hashlib.sha256(data.encode()).hexdigest()
             for path, data in files.items()

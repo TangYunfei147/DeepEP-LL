@@ -9,11 +9,8 @@
 #include <cstring>
 #include <cstdlib>
 #include <exception>
-#include <dlfcn.h>
 #include <vector>
 #include "kernels/udma_layout.hpp"
-#include "kernels/common.hpp"
-#include "runtime/udma_peer_masks.hpp"
 #include <mutex>
 #include <stdexcept>
 #include "host/init/shmem_host_init.h"
@@ -88,6 +85,11 @@ Session::Session(int rank, int size, uint64_t bytes, const std::string& endpoint
     const char* dense_env = std::getenv("DEEPEP_SHMEM_DENSE_QPS");
     const std::string dense = dense_env == nullptr ? "0" : dense_env;
     if (dense != "0" && dense != "1") throw std::invalid_argument("DEEPEP_SHMEM_DENSE_QPS must be 0 or 1");
+    if (udma && dense != "1") {
+        throw std::runtime_error(
+            "Pinned SHMEM no longer supports sparse UDMA peer-QP masks; explicitly select dense channels "
+            "with DEEPEP_SHMEM_DENSE_QPS=1");
+    }
     combine_only_ = combine_only;
     constexpr uint64_t alignment = 2ULL * 1024 * 1024;
     if (size < 2 || size > (megamoe ? 128 : 512) || (!megamoe && (size & (size - 1))) || rank < 0 || rank >= size ||
@@ -148,14 +150,9 @@ Session::Session(int rank, int size, uint64_t bytes, const std::string& endpoint
     attr.option_attr.shm_init_timeout = timeout;
     attr.option_attr.shm_create_timeout = timeout;
     attr.option_attr.control_operation_timeout = timeout;
-    using SetPeerQpMasks = int (*)(const uint64_t*, uint32_t);
-    auto set_masks =
-        udma ? reinterpret_cast<SetPeerQpMasks>(dlsym(RTLD_DEFAULT, "aclshmemx_set_udma_peer_qp_masks")) : nullptr;
-    if (udma && dense != "1" && !set_masks) {
-        throw std::runtime_error(
-            "SHMEM lacks aclshmemx_set_udma_peer_qp_masks; use the SDK pinned in dependencies.lock.json, "
-            "or explicitly select dense channels with DEEPEP_SHMEM_DENSE_QPS=1");
-    }
+    // Preserve option_attr.version from attr{}: the SDK uses it to recognize
+    // the appended runtime_config layout.
+    if (udma) attr.runtime_config.udma_shared_jetty = ACLSHMEM_CONFIG_ENABLED;
     // A failed initialization can leave SDK state behind. Keep the process
     // reserved until a new process is launched; do not finalize foreign state.
     occupied = true;
@@ -171,19 +168,6 @@ Session::Session(int rank, int size, uint64_t bytes, const std::string& endpoint
             // The pinned SDK shares Clos SQs across peers; MESH routes are separate.
             check(aclshmemx_set_qp_num(ACLSHMEM_DATA_OP_UDMA, ascend_deepep::udma_layout::kQpCount),
                   "aclshmemx_set_qp_num");
-            check(aclshmemx_set_shared_jetty(ACLSHMEM_DATA_OP_UDMA, true), "aclshmemx_set_shared_jetty");
-            std::vector<uint64_t> masks;
-            if (dense != "1") {
-                masks.resize(size);
-                for (int peer = 0; peer < size; ++peer)
-                    masks[peer] = combine_only ? first_hit_schedule::CombineQpMask(rank, peer, size)
-                                               : udma_admission::PeerMask(rank, peer, size);
-            }
-            if (set_masks) {
-                check(set_masks(masks.empty() ? nullptr : masks.data(), masks.size()),
-                      "aclshmemx_set_udma_peer_qp_masks");
-                sparse_qp_enabled_ = !masks.empty();
-            }
         }
         const auto mode = mpi ? ACLSHMEMX_INIT_WITH_MPI : ACLSHMEMX_INIT_WITH_DEFAULT;
         if (use_1g_huge_pages_) {

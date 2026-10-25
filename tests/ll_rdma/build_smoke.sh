@@ -6,17 +6,11 @@ set -u
 SDK="$LL_RDMA_ROOT/third-party/shmem/install/shmem"
 OUT="$LL_RDMA_ROOT/build/ll_rdma"
 mkdir -p "$OUT"
-python3 - "$SDK" "$LL_RDMA_ROOT" <<'PY'
-import json,sys
-from pathlib import Path
-m=json.loads((Path(sys.argv[1])/'deepep-sdk.json').read_text())
-sys.path.insert(0, sys.argv[2])
-from scripts.shmem_sdk_identity import validate_build_identity
-validate_build_identity(m.get('build'), require_rdma=True)
-PY
+HNS_PI_ON_CHIP=$(python3 "$LL_RDMA_ROOT/scripts/shmem_sdk_identity.py" "$SDK")
 INC=(-I"$LL_RDMA_ROOT/csrc" -I"$ASCEND_HOME_PATH/asc/include" -I"$ASCEND_HOME_PATH/include"
      -I"$SDK/include" -I"$SDK/src" -I"$SDK/src/device")
-FLAGS=(-DDEEPEP_LL_RDMA=1 -DACLSHMEMI_RDMA_K_BACKEND_HNS_1825=1 -DCATLASS_ARCH=3510 -DL2_CACHE_HINT)
+FLAGS=(-DDEEPEP_LL_RDMA=1 -DACLSHMEMI_RDMA_K_BACKEND_HNS_1825=1
+       "-DACLSHMEMI_HNS_1825_PI_ON_CHIP=$HNS_PI_ON_CHIP" -DCATLASS_ARCH=3510 -DL2_CACHE_HINT)
 bisheng -O2 -std=c++17 -xasc --npu-arch=dav-3510 --cce-auto-infer-kernel-type=false \
     "${FLAGS[@]}" "${INC[@]}" -c "$HERE/smoke_device.cpp" -o "$OUT/smoke_device.o"
 bisheng -O2 -std=c++17 -xasc --npu-arch=dav-3510 --cce-auto-infer-kernel-type=false \

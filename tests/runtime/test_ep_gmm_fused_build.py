@@ -289,7 +289,7 @@ def sdk_environment(build, monkeypatch, tmp_path):
         json.dumps(
             {
                 "revision": lock["shmem"]["revision"],
-                "build": {"rdma_backend": "HNS_1825", "cann_version": "test", "cann_timestamp": "test", "target": "Ascend950", "source_patches": []},
+                "build": {"rdma_backend": "HNS_1825", "hns_1825_pi_on_chip": 0, "cann_version": "test", "cann_timestamp": "test", "target": "Ascend950", "source_patches": []},
                 "sha256": {
                     path.relative_to(sdk).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
                     for path in files

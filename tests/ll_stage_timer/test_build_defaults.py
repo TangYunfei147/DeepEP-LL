@@ -40,7 +40,7 @@ def sdk_fixture(tmp_path, monkeypatch):
     manifest.parent.mkdir(parents=True)
     identity = {"revision": "pinned", "build": {
         "cann_version": "9.3.0", "cann_timestamp": "known", "target": "Ascend950",
-        "source_patches": [], "rdma_backend": "HNS_1825"}}
+        "source_patches": [], "rdma_backend": "HNS_1825", "hns_1825_pi_on_chip": 0}}
     manifest.write_text(json.dumps(identity))
     monkeypatch.setattr(build_shmem.platform, "system", lambda: "Linux")
     monkeypatch.setattr(build_shmem, "source_patches", lambda _: [])
@@ -90,3 +90,61 @@ def test_source_edits_have_no_implicit_exemption(tmp_path, monkeypatch):
     monkeypatch.setattr(build_shmem, "source_patches", lambda _: [{"kind": "local-worktree", "sha256": "edited"}])
     with pytest.raises(RuntimeError, match="--allow-local-changes"):
         build_shmem.prepare(root)
+
+
+def test_reuse_rejects_mode_disagreement_with_retained_sdk_build(tmp_path, monkeypatch):
+    root, manifest, _ = sdk_fixture(tmp_path, monkeypatch)
+    flags = root / "third-party/shmem/build/src/CMakeFiles/aclshmem_device.dir/flags.make"
+    flags.parent.mkdir(parents=True)
+    flags.write_text("CXX_DEFINES = -DACLSHMEMI_HNS_1825_PI_ON_CHIP=1\n")
+    with pytest.raises(RuntimeError, match="doorbell mode"):
+        build_shmem.prepare(root)
+
+
+def test_reuse_checks_matching_device_flags_without_firmware_reprobe(tmp_path, monkeypatch):
+    root, manifest, _ = sdk_fixture(tmp_path, monkeypatch)
+    flags = root / "third-party/shmem/build/src/CMakeFiles/aclshmem_device.dir/flags.make"
+    flags.parent.mkdir(parents=True)
+    flags.write_text("CXX_DEFINES = -DACLSHMEMI_HNS_1825_PI_ON_CHIP=0\n")
+    monkeypatch.setattr(build_support, "validate_shmem_sdk", lambda *args: None)
+    assert build_shmem.prepare(root) == manifest
+
+
+@pytest.mark.parametrize("mode", [0, 1, None])
+def test_new_sdk_records_actual_device_mode_only_after_successful_build(tmp_path, monkeypatch, mode):
+    root, manifest, _ = sdk_fixture(tmp_path, monkeypatch)
+    captured = []
+
+    def compile_sdk(*args, **kwargs):
+        assert not manifest.exists()
+        if mode is not None:
+            flags = root / "third-party/shmem/build/src/CMakeFiles/aclshmem_device.dir/flags.make"
+            flags.parent.mkdir(parents=True)
+            flags.write_text(f"CXX_DEFINES = -DACLSHMEMI_HNS_1825_PI_ON_CHIP={mode}\n")
+
+    def record_sdk(sdk, revision, *, build_info, build_root):
+        assert build_root == root / "third-party/shmem/build"
+        captured.append(build_info)
+        return manifest
+
+    monkeypatch.setattr(build_shmem.subprocess, "run", compile_sdk)
+    monkeypatch.setattr(build_shmem, "record", record_sdk)
+    if mode is None:
+        with pytest.raises(RuntimeError, match="doorbell mode"):
+            build_shmem.prepare(root, rebuild=True)
+        assert not captured
+    else:
+        assert build_shmem.prepare(root, rebuild=True) == manifest
+        assert captured[0]["hns_1825_pi_on_chip"] == mode
+
+
+def test_failed_explicit_rebuild_cannot_reuse_old_sdk_identity(tmp_path, monkeypatch):
+    root, manifest, _ = sdk_fixture(tmp_path, monkeypatch)
+
+    def fail_build(*args, **kwargs):
+        raise RuntimeError("deliberate compile failure")
+
+    monkeypatch.setattr(build_shmem.subprocess, "run", fail_build)
+    with pytest.raises(RuntimeError, match="compile failure"):
+        build_shmem.prepare(root, rebuild=True)
+    assert not manifest.exists()

@@ -153,7 +153,7 @@ def test_real_device_rules_recompile_only_ll_when_timer_changes(tmp_path):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("fake SDK library")
     (sdk / "deepep-sdk.json").write_text(
-        '{"build":{"rdma_backend":"HNS_1825","cann_version":"test","cann_timestamp":"test","target":"Ascend950","source_patches":[]}}')
+        '{"build":{"rdma_backend":"HNS_1825","hns_1825_pi_on_chip":0,"cann_version":"test","cann_timestamp":"test","target":"Ascend950","source_patches":[]}}')
     shared_header = sdk / "shared.h"
     shared_header.write_text("// fake dependency used by LL dispatch\n")
     compiler = tmp_path / "fake_compiler.py"
@@ -222,6 +222,7 @@ if "-o" in args:
             assert ("-DDEEPEP_LL_STAGE_TIMER=1" in args) == ("deepep_kernel_ll_timer.dir" in output)
             assert "-fPIC" in args
             assert "-Ddeepep_kernels_EXPORTS" in args
+            assert "-DACLSHMEMI_HNS_1825_PI_ON_CHIP=0" in args
     shared_header.write_text("// changed SDK dependency\n")
     changed = run("OFF")
     assert len(changed) == 2
@@ -245,3 +246,16 @@ if "-o" in args:
         assert {Path(unit).relative_to(source / "csrc/kernels").as_posix()
                 for unit in changed if unit != "link"} == set(DISPATCH_VARIANTS)
     assert run("ON") == []
+    # SDK and inline LL headers must select the same doorbell mode. Changing
+    # that recorded mode changes real compiler commands for every device unit.
+    identity_path = sdk / "deepep-sdk.json"
+    identity = json.loads(identity_path.read_text())
+    identity["build"]["hns_1825_pi_on_chip"] = 1
+    identity_path.write_text(json.dumps(identity))
+    previous_commands = len((tmp_path / "command_args.jsonl").read_text().splitlines())
+    assert len(run("ON")) == 22
+    for line in (tmp_path / "command_args.jsonl").read_text().splitlines()[previous_commands:]:
+        args = json.loads(line)
+        if "-c" in args:
+            assert "-DACLSHMEMI_HNS_1825_PI_ON_CHIP=1" in args
+            assert "-DACLSHMEMI_HNS_1825_PI_ON_CHIP=0" not in args

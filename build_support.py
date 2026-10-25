@@ -300,6 +300,7 @@ def build_configuration(environment=None):
     # Record actual inputs so replacing an unpinned SDK invalidates the build cache.
     result["shmem"] = {
         "revision": sdk.get("revision", "unknown") if isinstance(sdk, dict) else "unknown",
+        "build": sdk["build"],
         "sha256": {
             path.relative_to(manifest.parent).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
             for path in files

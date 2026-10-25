@@ -54,6 +54,8 @@ def lifecycle_binary(tmp_path_factory):
         "barrier-fault",
         "normal",
         "udma",
+        "udma-sparse-default",
+        "udma-sparse-disabled",
         "megamoe",
         "low-latency",
         "ll-rank-bias-16",
