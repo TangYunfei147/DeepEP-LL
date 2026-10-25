@@ -221,3 +221,85 @@ CPU emulation does not establish NPU cache coherence, asynchronous DMA timing,
 compiler code generation, device correctness or performance. No SSH, CANN
 compilation or NPU execution was performed for this change. Cold compilation,
 full wheel linking and target correctness/performance remain target checks.
+
+## First user target A/B results, 2026-10-25
+
+The user subsequently supplied all four `stream_{cb59,cb59-stream}_{normal,hotspot}_run_001`
+summaries from `ae87d842d76d1bb5130df9870b71e44aac8eef4d`, with source SHA256
+`cb08d1ecf819e922a5fc21aa8a48911ab4c4d8341abd7780291065e9db7ef139`.
+All use EP16/M32/H3584/K8/E384, FP8, cpu_sync0, G16 and S28/R28/P0.
+Every case reports 80/80 rank-rounds and 56/56 cores, with no listed source
+issues. The recorded protocol/selection is 21028/cb59 or 22028/cb59-stream.
+
+These are complete OFF profiler tasks, maximum of rank means, in microseconds.
+Reduction is `(cb59 - stream) / cb59`; a negative value means this stream run
+was slower. Each row is one reported A/B pair, without independent repeat-run
+variance or a confidence interval.
+
+| B | Normal cb59 | Normal stream | Reduction | Hotspot cb59 | Hotspot stream | Reduction |
+|---|---:|---:|---:|---:|---:|---:|
+| 1 | 22.0172 | 18.8280 | 14.49% | 22.6302 | 18.2588 | 19.32% |
+| 2 | 22.2737 | 18.8395 | 15.42% | 23.6069 | 18.9810 | 19.60% |
+| 4 | 22.7154 | 19.3781 | 14.69% | 24.8244 | 21.6766 | 12.68% |
+| 8 | 22.7884 | 19.0634 | 16.35% | 28.9663 | 26.2242 | 9.47% |
+| 16 | 23.5796 | 20.3110 | 13.86% | 38.2222 | 38.7090 | -1.27% |
+| 24 | 24.4532 | 22.3279 | 8.69% | 51.2471 | 53.1069 | -3.63% |
+| 32 | 26.0140 | 25.6531 | 1.39% | 64.0493 | 65.4232 | -2.15% |
+
+The candidate is useful for small B: both route distributions improve at
+B1/2/4/8. Normal also improves at B16/24, while its B32 advantage is only
+0.3609us. Hotspot B16/24/32 regresses by 0.4868/1.8598/1.3739us in this run.
+Do not make an unconditional default replacement from these results; repeat
+the boundary cases in reversed A/B order using the same existing wheels.
+
+### What the sparse captures support
+
+Normal ENTRY-to-first-probe median rank-round maxima advance by 2.6915–3.2260us.
+For hotspot, the advance is 2.2210–4.3590us on the ten rank-rounds that actually
+receive payload. Thus the intended earlier receive start is observed.
+Initial R-group INIT does not decrease: normal medians rise by about
+0.0925–0.3310us. This experiment did not optimize kernel initialization.
+
+| Case | ENTRY to first probe, cb59 -> stream | FIRST_READY to RECV_DONE, cb59 -> stream |
+|---|---:|---:|
+| Normal B8 | 17.0285 -> 14.1235 | 2.6625 -> 2.8925 |
+| Normal B32 | 17.7765 -> 14.5505 | 5.1575 -> 7.1830 |
+| Hotspot B32 | 20.1925 -> 16.6630 | 39.6635 -> 44.6240 |
+
+These ON spans are independent rank-round/core maxima, not an additive OFF
+decomposition. Starting FIRST_READY earlier can itself lengthen the later
+span; that span also includes waiting for subsequent packets. For example,
+hotspot B32 sender FIRST_SEND-to-SEND_DONE increases from 39.7220 to 40.4495us,
+yet sender ENTRY-to-WORK_DONE is almost unchanged, 48.1945 vs 48.0450us.
+Longer relative spans alone do not prove extra execution work.
+
+Normal ON-minus-OFF overhead is 1.8660–2.6793us for cb59 and 1.4769–3.9421us
+for stream; most stream small-B captures have greater perturbation. Hotspot
+overhead is 1.4636–2.3321us for cb59 and 1.8192–3.6618us for stream. Use OFF
+for the gain/regression decision and ON to locate investigation priorities.
+
+Hotspot selects the first 48 experts here, so payload goes to ranks0 and1.
+Seventy of the 80 rank-rounds have no receive payload. Their full-R medians
+for WORK_DONE or receive preparation do not describe the hot ranks; first
+probe/ready spans have ten observations. The activity maximum of28 means
+that all R cores can participate on a hot destination, not that the hotspot
+necessarily limits work to one or two R cores.
+
+### Next decision
+
+Keep the earlier local-prefix handoff as a successful small-B candidate.
+Investigate completion latency at B24/32 and hotspot B16/24/32 before adding
+further synchronization. Record ownership changes per-core workload, but the
+summary does not measure packet counts or later packet arrival order; it
+does not establish load imbalance as the sole cause of the regression.
+Use the actual route seed/config to derive per-owner work offline and compare
+with same-core ENTRY-to-WORK_DONE observations. If heavy slices explain the
+late cores, test bounded q-range splitting or coarse assistance as a separate
+candidate while preserving early startup and unique output/cleanup ownership.
+
+Compared only as a historical reference, stream normal B1..16 is now
+0.9527–1.3130us above the original fast cb59 measurements; B24 and B32 remain
+2.3861 and 3.7514us above them. The original binary/environment has not been
+rerun in this A/B, so these residuals cannot be assigned to SDK or page costs.
+This section records user-provided target results; the assistant did not
+perform a new remote run or change the kernel while analyzing them.
