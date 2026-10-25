@@ -190,6 +190,8 @@ def analyze_samples(samples):
         if not rows[-1]['time_measured']:
             for name in ('mean','minimum','maximum','p50','p90','p99'): rows[-1][name]=None
     result = dict(timer_profile=identity[11],schema=identity[9],world_size=identity[0],boundary_mode=identity[3],frequency_hz=identity[4],comparison=identity[10],
+                small_b_prefix_cores=(identity[10] or {}).get('small_b_prefix_cores'),
+                effective_small_b_prefix_cores=(identity[10] or {}).get('effective_small_b_prefix_cores'),
                 configurations=configurations,sampling=identity[8],per_rank_core_stage=rows,
                 communication=communication_report.report(wait_samples),
                 overlap_receive=overlap_receive_report(wait_samples),

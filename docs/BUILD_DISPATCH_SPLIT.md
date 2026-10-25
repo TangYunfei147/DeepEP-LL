@@ -576,3 +576,66 @@ and wheel-map reuse after moving a checkout with spaces. The pure CPU plan for
 S30/R26 returns build_only=true, visibility=null and both stage.run=null.
 Evidence: .tmp/build-first-identity-final.log. Native sources and build graph are
 unchanged by these two fixes; no actual CANN build or NPU run was performed.
+
+## 2026-10-25 official SHMEM master and EP16 prefix P
+
+SDK commit `864e4f1` pins official master
+`8e3fc610f91ae9e5e8cf13748cfb74826b272c2a` with no vendor patch. The Host Session,
+MTE-only LL entry, private HT address contexts, explicit unsupported ordinary
+peer-output guard and SDK manifest/cache validation were adapted. This needs a
+fresh SDK build and complete OFF/ON wheels, including HT dispatch/combine
+translation units; a successful LL-only compile cannot validate all SDK changes.
+See `docs/SHMEM_MASTER_UPDATE.md` for API limitations and build steps.
+
+The independent P candidate retains seven dispatch TUs, O2, Ascend950, all
+input modes, core protocol19000+S and sparse schema15. Default P0 uses R;
+explicit1..R reduces producers only for EP16 M<=32/B<=32. Other domains retain
+their old paths. Host/device UB planning, native getter, build/cache identity,
+ST and all-rank checks carry P. No extra mode/template dimension was added.
+Every receiving core advances its generation; only the first P are prefix-ready
+dependencies. Receive-row ownership, sender order and combine are unchanged.
+
+Validation in the local Windows workspace:
+
+- Final combined Python regression: **877 passed,67 environment skips,8
+  deselected in38.22s**. Coverage: all `tests/ll_stage_timer`, elastic ST contract,
+  runtime/build/SDK identity and update tests, prefix/profile build tests.
+  The eight deselections are existing POSIX shell compiler mocks and symlink
+  cases unavailable on this host. Log `.tmp/topology-final-cpu-01.log`.
+- Actual portable-Zig C++ prefix/VF/protocol/UB tests:20passed in88.96s,
+  `.tmp/prefix-p-native-verified.log`. S30/R26 P0/1/4/6/8/26 plus defaultS28/R28;
+ 855random protocol rounds per full configuration, empty/zero slices, generation
+  wrap, mode alternation, invalid P and unchanged non-target plan checks.
+- Production Host Session compiled/executed against fault-injection stubs:
+ 41cases; the actual mainline public Host declaration smoke also passed.
+  Evidence `.tmp/shmem-main-host/`. These are host mocks, not SDK linking.
+- Private UDMA address adapter:6CPU tests including actual C++ execution for
+  PUT/GET with distinct local symmetric, mapped peer and remote MR address
+  spaces and invalid ranges. Evidence `.tmp/udma-address-tests-final/`.
+- P metadata, sparse raw/restored traces and comparison/summary tests are in
+  the combined result. Same-core ENTRY→PREFIX_READY uses saved clock frequency;
+  absent points/P stay unknown. Different effective P gets no per-core stage
+  ratio. Complete OFF tasks remain comparable with other settings fixed.
+- S30/R26 P26/6/1 CPU build plans each contain two wheel builds and no device
+  command. EP16 seven-B runtime plan also succeeds. Existing tests cover moving
+  the checkout/map to paths with spaces. Git Bash validates compile_off.sh
+  syntax; this does not execute Bisheng.
+
+Remote validation is **not complete**. On27, an isolated clone was prepared at
+`/home/tyf/Q4_remote_test/DeepEP-LL-g4-small-b-prefix/.tmp/topology-mainline-20261025`
+from the SDK commit and official submodule bundles. The original checkout and
+installed SDK were preserved. The fresh SDK needs its offline JSON build
+dependency. A subsequent SSH environment/dependency check was rejected by
+automatic approval review because the active local-maintenance restriction
+was not recognized as overridden. No workaround or further SSH attempt was
+made after that rejection. There are no new CANN ON/OFF cold times, full wheel
+link results, NPU correctness or performance results for this configuration.
+
+After explicit remote authorization or on the user's allocated target: prepare
+the new SDK, measure separate empty OFF/ON compile directories with
+`benchmark_compile.py`, compile combine with `compile_off.sh`, then build and
+Host-verify all P26/6/1 OFF/sparse wheels using `diagnose.py --build-only` before
+any target run. Full ON wheel linking also compiles the changed HT paths.
+Complete commands are in `tests/ll_stage_timer/PARALLEL_PREFIX.md`.
+No latency recovery, port bandwidth or hardware bottleneck conclusion follows
+from these CPU tests or the earlier old-SDK compilation records.

@@ -1,6 +1,7 @@
 # LL稀疏诊断：当前入口
 
 当前分支是`kernel/ll-g4-small-b-prefix`，实现`g4-small-b-parallel-prefix`，**schema15 / sparse**。
+2026-10-25已升级官方SHMEM master，并增加EP16小B前缀生产核数P。先按[SDK升级说明](../../docs/SHMEM_MASTER_UPDATE.md)重建新SDK，再按[P26/6/1对照步骤](PARALLEL_PREFIX.md)构建全部wheel后串行采样。默认P=0沿用R；本次不改接收任务归属，不宣称已取得时延收益。
 保持原收发逻辑、通信协议和已有业务同步顺序；删除仅诊断用的末尾SyncAll，计时器改为每核最多14个首次时间戳，512B独占槽，实际发布192B。
 当前新采集只支持sparse；旧schema7～14及其full/phase数据仍可离线读取。下方折叠内容是历史说明，不作为当前构建或新手命令。
 
@@ -50,7 +51,7 @@ python tests/ll_stage_timer/diagnose.py --analyze-existing diagnostic-runs/small
 同一份sparse数据可以并行检查初始化、count、prefix、首次发送准备及接收Probe/ready；设备OFF A/B仍应独立串行。
 ENTRY包含timer初始化；SEND_DONE是原发送资源退休，可能与接收重叠，不能当成纯网络时间。
 包数、逐包均衡、轮询次数和ready/probe比例未采集；稀疏跨度可能重叠，不能相加。先核实完整ON/OFF扰动，再解释阶段耗时。
-本地CPU验证不等于设备验收。本次26/27各一次SSH连接超时，尚无schema15 CANN编译或NPU性能结论；完整记录见[BUILD_DISPATCH_SPLIT.md](../../docs/BUILD_DISPATCH_SPLIT.md)。
+本地CPU验证不等于设备验收。当前新SDK/P配置尚无CANN编译或NPU性能结论；远端验证状态和完整记录见[BUILD_DISPATCH_SPLIT.md](../../docs/BUILD_DISPATCH_SPLIT.md)。
 
 <details>
 <summary>历史分支、schema与命令存档（不用于当前新采集）</summary>

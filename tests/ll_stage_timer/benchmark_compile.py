@@ -4,6 +4,7 @@ from concurrent.futures import ThreadPoolExecutor
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import time
 ROOT=Path(__file__).resolve().parents[2]
@@ -16,13 +17,20 @@ def main():
     parser.add_argument('--source-headers',action='store_true',help='Compile-only with pinned SHMEM source headers; does not validate SDK linking')
     args=parser.parse_args()
     if not 1<=args.jobs<=64: parser.error('jobs must be 1..64')
+    send=int(os.environ.get('DEEPEP_LL_SEND_CORES','28'))
+    recv=int(os.environ.get('DEEPEP_LL_RECV_CORES','28'))
+    if send<=0 or recv<=0 or send+recv!=56:parser.error('SEND_CORES and RECV_CORES must be positive and sum to 56')
+    prefix=os.environ.get('DEEPEP_LL_SMALL_B_PREFIX_CORES','0')
+    if not re.fullmatch(r'0|[1-9][0-9]?',prefix) or int(prefix)>recv:
+        parser.error('DEEPEP_LL_SMALL_B_PREFIX_CORES must be 0 or an integer in [1, RECV_CORES]')
     out=Path(args.output);out=out if out.is_absolute() else ROOT/out
     out.mkdir(parents=True,exist_ok=False)
     cann=Path(os.environ['ASCEND_HOME_PATH']);sdk=ROOT/('third-party/shmem' if args.source_headers else 'third-party/shmem/install/shmem')
     flags=['-O2','-std=c++17','-fPIC','-xasc','--npu-arch=dav-3510','--cce-auto-infer-kernel-type=false',
            '-DCATLASS_ARCH=3510','-DUSE_SIMT','-DL2_CACHE_HINT',
-           '-DDEEPEP_LL_SEND_CORES='+os.environ.get('DEEPEP_LL_SEND_CORES','28'),
-           '-DDEEPEP_LL_RECV_CORES='+os.environ.get('DEEPEP_LL_RECV_CORES','28')]
+           '-DDEEPEP_LL_SEND_CORES='+str(send),
+           '-DDEEPEP_LL_RECV_CORES='+str(recv),
+           '-DDEEPEP_LL_SMALL_B_PREFIX_CORES='+prefix]
     flags.append('-DDEEPEP_LL_TIMER_PROFILE_ID=6')
     if args.timer=='ON':flags.append('-DDEEPEP_LL_STAGE_TIMER=1')
     for path in [cann/'include',cann/'asc/include',sdk/'include',sdk/'src',sdk/'src/device',sdk/'src/device_simt']:

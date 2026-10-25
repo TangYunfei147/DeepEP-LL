@@ -183,6 +183,8 @@ def trace_from_decoded(samples, trace_iteration=0, frequency_hz=None):
                                args=dict(rank=rank, iteration=iteration, core=core, raw_cycle=tick)))
         info.append(dict(operation=operation, rank=rank, iteration=iteration, pid=pid,
                          origin_tick=origin, frequency_hz=frequency,
+                         small_b_prefix_cores=(meta.get('comparison') or {}).get('small_b_prefix_cores'),
+                         effective_small_b_prefix_cores=(meta.get('comparison') or {}).get('effective_small_b_prefix_cores'),
                          cores=decoded.get('cores', []), timer_profile=profile[0],
                          timer_profile_id=profile[1]))
     decoded, profile = checked[0][1:3]

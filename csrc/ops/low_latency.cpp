@@ -128,10 +128,13 @@ void bind_low_latency(py::module_& module)
         throw std::runtime_error("LL Host/device timer layout mismatch; rebuild and reinstall the complete wheel");
     if (deepep_ll_core_protocol_version() != DispatchDedup::kLlCoreProtocolVersion)
         throw std::runtime_error("LL Host/device core protocol mismatch; rebuild and reinstall the complete wheel");
+    if (deepep_ll_small_b_prefix_cores()!=DispatchDedup::kLlSmallBPrefixCores)
+        throw std::runtime_error("LL Host/device small-B prefix producer count mismatch; rebuild the complete wheel");
     if (deepep_ll_overlap_stage()!=DispatchDedup::kLlOverlapExperimentStage)
         throw std::runtime_error("LL A/B stage differs between Host and device library");
     module.attr("low_latency_overlap_stage")=DispatchDedup::kLlOverlapExperimentStage;
     module.attr("low_latency_core_protocol") = DispatchDedup::kLlCoreProtocolVersion;
+    module.attr("low_latency_small_b_prefix_cores") = DispatchDedup::kLlSmallBPrefixCores;
     module.attr("low_latency_q_table_enabled") = true;
     module.attr("low_latency_q_seed_vf") = true;
     module.attr("low_latency_implementation") = "g4-small-b-parallel-prefix";

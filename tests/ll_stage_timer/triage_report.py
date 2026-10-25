@@ -142,19 +142,22 @@ def _essential(data):
         status = 'ok' if row['status'] == 'available' else 'unavailable'
         lines.append(f"{row['B']} | {row['profile']} | {_num(row.get('off_max_rank_mean_us'))} | "
                      f"{_num(row.get('active_max_rank_mean_us'))} | {_num(row.get('ratio'))} | {_num(row.get('delta_us'))} | {status}")
-    lines += ['', 'CASE COVERAGE / SHAPE', 'id | B | profile | EP | M,H,K,E,dtype | S/R | samples/expected | cores | hz']
+    lines += ['', 'CASE COVERAGE / SHAPE', 'id | B | profile | EP | M,H,K,E,dtype | S/R | P raw/effective | samples/expected | cores | hz',
+              'P raw=0 selects R on the supported small-direct path; effective=- is unrecorded or not applicable, never inferred for old captures.']
     for case in data['cases']:
         identity, coverage = case['metrics']['identity'], case['metrics']['coverage']
         shape = ','.join(str(identity.get(k)) for k in ('M', 'H', 'K', 'E', 'dtype'))
         lines.append(f"{case['id']} | {identity['B']} | {identity['profile']} | {identity['world_size']} | {shape} | "
-                     f"{identity['send_cores']}/{identity['recv_cores']} | {coverage['samples']}/{coverage['expected_rank_iterations']} | "
+                     f"{identity['send_cores']}/{identity['recv_cores']} | "
+                     f"{_num(identity.get('small_b_prefix_cores'))}/{_num(identity.get('effective_small_b_prefix_cores'))} | "
+                     f"{coverage['samples']}/{coverage['expected_rank_iterations']} | "
                      f"{_pair(coverage['kernel_core_count'])} | {_num(identity['frequency_hz'])}")
     lines += ['', 'PREPARATION AND KERNEL SPANS (p50/max[n], not additive)',
-              'id/group | KERNEL | INIT | TIMER_SETUP | ENTRY->first send | ENTRY->first probe | ENTRY->WORK_DONE']
+              'id/group | KERNEL | INIT | TIMER_SETUP | ENTRY->first send | ENTRY->PREFIX_READY | ENTRY->first probe | ENTRY->WORK_DONE']
     for case in data['cases']:
         for group in ('S', 'R'):
             values = [_pair(_lat(case, name, group)) for name in (
-                'KERNEL', 'INIT', 'TIMER_SETUP', 'entry_to_first_send', 'entry_to_first_probe', 'entry_to_kernel_end')]
+                'KERNEL', 'INIT', 'TIMER_SETUP', 'entry_to_first_send', 'entry_to_prefix_ready', 'entry_to_first_probe', 'entry_to_kernel_end')]
             lines.append(f"{case['id']}/{group} | "+' | '.join(values))
     sparse_cases = [c for c in data['cases'] if c['metrics']['identity']['schema'] == 15]
     if sparse_cases:

@@ -1,5 +1,110 @@
 # Small non-dedup parallel prefix candidate
 
+## Current EP16 producer-count experiment (2026-10-25)
+
+Current recorder is schema15/sparse; the older schema13 discussion below is
+historical. This experiment targets one physical host with 16 contiguous ranks,
+four contiguous G4 groups, and M<=32/B<=32. Each NPU has three fullmesh ports,
+four intra-host Clos ports and one inter-host port. The LL MTE API cannot select
+those ports explicitly; this change reduces prefix control work, with no claim
+of port striping or measured bandwidth improvement.
+
+`DEEPEP_LL_SMALL_B_PREFIX_CORES=P` selects 1..R prefix producers. The default 0
+means R and preserves the baseline. Only EP16 small direct calls use a reduced
+P; other EP sizes retain R, and dedup retains its original R0 prefix path. The
+first P receiving cores consume disjoint count slices and publish the prefix;
+all R cores keep their original output-row receive ownership. Nonproducers
+advance their own generation through a zero-total record but do not become
+ready dependencies. Sender order, q, packet/count layout, combine and the
+230KiB UB limit remain unchanged. Host and device use the same P-dependent
+budget; no lane count is deliberately reduced.
+
+P is a build constant recorded by native and Python wheel identities, build
+caches, all-rank checks and result metadata. `small_b_prefix_cores` is the raw
+value; `effective_small_b_prefix_cores` reports P/R only for the small direct
+path and is null for other modes. Old results without P remain unknown. Do not
+mix different P wheels in one job. Full OFF timing can compare different P;
+per-core stage ratios cannot assume the same producer roles across P.
+
+The prior S28/R28 trace places approximately21–23us between PREFIX_LOCAL_DONE
+and PREFIX_READY. This includes publication, short DMA, waits, Scalar checks
+and prefix loading, not just inter-core waiting. It does not prove that the
+whole historical latency gap is caused by parallel prefix. Keep S30/R26 fixed
+in the new experiment, with P=26 as its control; do not directly attribute a
+comparison against the old S28/R28 run to P.
+
+For E384/R26, a successful one-pass control read uses:
+
+| P | Own-generation bytes | Preceding-total bytes | R×P ready bytes | Total bytes |
+|---|---:|---:|---:|---:|
+| 26 | 832 | 10400 | 21632 | 32864 |
+| 6 | 832 | 480 | 4992 | 6304 |
+| 1 | 832 | 0 | 832 | 1664 |
+
+Retries add traffic. All R still load the complete prefix (39936 bytes for
+E384/R26); each producer scans more records as P falls. These are protocol
+operation/byte counts, not measured network bandwidth or latency. P6 gives
+64 records per producer for this shape, but the implementation handles general
+E and empty slices and does not specialize route IDs, seeds or expert choices.
+
+### Build every variant before any device run
+
+First follow [the mainline SDK transition](../../docs/SHMEM_MASTER_UPDATE.md).
+It requires the new SDK even for P26; reuse of the old SDK is rejected.
+From the project root, after loading the target's existing environment:
+
+```bash
+export DEEPEP_LL_SEND_CORES=30 DEEPEP_LL_RECV_CORES=26
+for p in 26 6 1; do
+  DEEPEP_LL_SMALL_B_PREFIX_CORES="$p" \
+    python tests/ll_stage_timer/diagnose.py --build-only \
+      --run-name "prefix_p${p}_build_001" || exit $?
+done
+```
+
+This finishes all six OFF/sparse wheels and Host-only identity checks before
+any sample is launched. It does not query or run a device. Existing output
+directories are rejected; use a new shared suffix for a new attempt.
+
+Only on the allocated 16-card target, set the actual MASTER_ADDR, MASTER_PORT
+and SHMEM_PORT for this job, then run the candidates serially:
+
+```bash
+for p in 26 6 1; do
+  DEEPEP_LL_SMALL_B_PREFIX_CORES="$p" \
+    python tests/ll_stage_timer/diagnose.py --skip-build \
+      --wheel-map "diagnostic-runs/prefix_p${p}_build_001/node_000/wheel-map.json" \
+      --run-name "prefix_p${p}_run_001" \
+      --bs 1 2 4 8 16 24 32 --m 32 \
+      --hidden 3584 --topk 8 --experts 384 --dtype fp8 --cpu-sync 0 \
+      --devices 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 \
+      --num-nodes 1 --node-rank 0 \
+      --master-addr "$MASTER_ADDR" --master-port "$MASTER_PORT" \
+      --shmem-port "$SHMEM_PORT" || exit $?
+done
+```
+
+Use uniform random top-k and identical seeds across P. The first sweep uses
+the ST's existing deterministic seed sequence. Confirm a promising result with
+paired independent seeds and alternating candidate order, rather than tuning
+for the one initial seed. First send only the three resulting SEND_FIRST.txt
+files (three sends total); subsequent requested supplements across this
+experiment must keep the total at most ten. Do not send CSVs or archives.
+
+Compare full OFF task time first, then active ON/OFF perturbation, the same-core
+ENTRY→PREFIX_READY span, first receive probe and receive completion. Sparse
+spans can overlap and must not be summed or subtracted across ranks. A shorter
+wait alone is insufficient. Early payload prefetch is intentionally a separate
+candidate because current receive ownership depends on complete prefix/T.
+
+CPU model validation covers P0/1/4/6/8/26, S30/R26 and default S28/R28,
+generation wrap, empty slices, repeated calls and unchanged non-target plans.
+Current CANN and device status is in
+[BUILD_DISPATCH_SPLIT.md](../../docs/BUILD_DISPATCH_SPLIT.md); old successful
+builds below do not qualify the new SDK/P configuration.
+
+## Historical parallel-prefix implementation
+
 Branch `kernel/ll-g4-small-b-prefix`, baseline `kernel/ll-g4-small-b@c68d8c6`.
 Active only for M<=32/B<=32. Dedup keeps the original R0 prefix. The new wheel
 identity is `g4-small-b-parallel-prefix`; install matching wheels on all ranks.

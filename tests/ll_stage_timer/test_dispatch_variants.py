@@ -78,6 +78,7 @@ int main() {
  }
  bool threw=false;try {dispatch_server_dedup_kernel_do_sparse15(nullptr,nullptr,0);}catch(const std::invalid_argument&){threw=true;}assert(threw);
  assert(deepep_ll_stage_timer_schema()==15 && deepep_ll_stage_timer_profile_id()==6);
+ assert(deepep_ll_small_b_prefix_cores()==0);
  assert(deepep_ll_core_protocol_version()==19028);
  assert(deepep_ll_ranks_per_group()==4);
 #ifdef DEEPEP_LL_STAGE_TIMER

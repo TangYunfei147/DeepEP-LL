@@ -4,6 +4,7 @@
 #include "low_latency/launch.hpp"
 #include "low_latency/common/ll_overlap_stage.h"
 #include "low_latency/common/ll_core_config.h"
+#include "low_latency/common/ll_small_b_prefix_config.h"
 #include "low_latency/common/ll_stage_timer_profile.h"
 #include "low_latency/common/ep_memory_server_dedup_protocol.h"
 #if CATLASS_ARCH == 3510
@@ -19,6 +20,7 @@ extern "C" DEEPEP_EXPORT uint32_t deepep_ll_overlap_stage() {
 }
 extern "C" DEEPEP_EXPORT uint32_t deepep_ll_stage_timer_schema() { return LlStageTimer::kSchema; }
 extern "C" DEEPEP_EXPORT uint32_t deepep_ll_stage_timer_profile_id() { return LlStageTimer::kProfileId; }
+extern "C" DEEPEP_EXPORT uint32_t deepep_ll_small_b_prefix_cores() { return DispatchDedup::kLlSmallBPrefixCores; }
 extern "C" DEEPEP_EXPORT uint32_t deepep_ll_stage_timer_enabled()
 {
 #ifdef DEEPEP_LL_STAGE_TIMER

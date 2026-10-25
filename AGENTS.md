@@ -71,3 +71,11 @@ schema15须全rank完整重编；内部sparse15链接符号与Host/device布局�
 
 诊断入口须先完成全部OFF/sparse编译及Host身份校验，再开始任何设备采样。--build-only独立编译无需设备/拓扑，保留已有可见性，成功后发布相对路径wheel-map.json；运行以新目录配合--skip-build复用并重新核验。多机先各自编译完成再统一运行，不假定脚本有跨机构建屏障。
 active_capture_profile的kernel_us/status/reason属于逐rank/轮次观察值，不作共同身份；measurement口径及shape/source/SR/schema/profile保护保留。
+
+## 2026-10-25 机内EP16小B与官方SHMEM主线
+
+本任务仅机内EP16/M<=32/B<=32；每NPU的3个组内fullmesh、4个机内Clos、1个跨机口不能直接当作软件可指定的8个QP。LL保留MTE，物理16连续rank/G4不变。先独立测试前缀生产核P，默认DEEPEP_LL_SMALL_B_PREFIX_CORES=0表示R，显式1..R仅影响EP16小direct；其他EP用R、dedup保留原R0。S/R、receiver owner、wire、send顺序及combine不变；Host/device UB同步且230KiB不变，不降低既有lanes来换预算。所有R代次继续前进，仅前P核发布ready依赖。raw/effective P写入wheel/全rank/结果；不同P不能混装或算逐核阶段比。P-only与早接收/预取重构分开。
+
+用户授权SHMEM升级官方最新主线：锁定master8e3fc610f91ae9e5e8cf13748cfb74826b272c2a，不改vendor源码。runtime_config替代旧sharedjetty setter，旧peerMask和可配置UDMA超时已移除，显式UDMA dense须用户配置。LL ST显式MTE；旧HT普通peer输出缺注册证明，Host/Notify前明确拒绝。新SDK与完整wheel都需重建，不能以旧SDK复用。SDK完整include/src/lib身份和源码revision均严格检查。
+
+P26/6/1实验固定S30/R26、新SDK、采样参数及均匀随机top-k种子配对。先完成全部六个OFF/sparse wheel及Host检查，再串行采样；首次只发三个SEND_FIRST，整个实验含补充累计<=10次。实际设备与CANN验收状态以docs/BUILD_DISPATCH_SPLIT.md为准，不以CPU或历史schema编译代替。

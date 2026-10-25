@@ -61,6 +61,9 @@ def _identity(context, meta, decoded):
     config.update(meta.get('config') or {})
     send = decoded.get('send_cores')
     cores = decoded.get('active_aiv')
+    # P is a recorded build/run property, absent from the timer tensor header.
+    # In particular, do not turn an old capture's missing P into today's default.
+    comparison = meta.get('comparison') or context.get('comparison') or {}
     return dict(
         operation=operation, B=_pick(config, 'B', 'num_tokens'),
         M=_pick(config, 'M', 'num_max_tokens_per_rank'), H=_pick(config, 'H', 'hidden'),
@@ -68,6 +71,8 @@ def _identity(context, meta, decoded):
         dtype=config.get('dtype'), world_size=meta.get('world_size', context.get('world_size')),
         schema=decoded.get('schema'), profile=decoded.get('timer_profile', 'full'),
         send_cores=send, recv_cores=decoded.get('recv_cores', cores-send if cores is not None and send is not None else None),
+        small_b_prefix_cores=comparison.get('small_b_prefix_cores'),
+        effective_small_b_prefix_cores=comparison.get('effective_small_b_prefix_cores'),
         active_aiv=cores, frequency_hz=decoded.get('frequency_hz', context.get('frequency_hz')),
         boundary_mode=decoded.get('boundary_mode', context.get('boundary_mode', 'observe')),
     )
@@ -135,7 +140,7 @@ def summarize_case(context, samples):
     for meta, decoded in samples:
         current = _identity(context, meta, decoded)
         if identity is not None and current != identity:
-            raise ValueError('Mixed shape, profile, operation, core split or frequency in triage case')
+            raise ValueError('Mixed shape, profile, operation, core split, prefix configuration or frequency in triage case')
         identity = current
         frequency = identity['frequency_hz']
         if frequency is not None and (not math.isfinite(frequency) or frequency <= 0):
@@ -198,6 +203,11 @@ def summarize_case(context, samples):
                 spans[label] = _us(raw_spans[label], frequency)
             if identity['schema'] == 15:
                 points = milestones_by_core[core]
+                if 'ENTRY' in points and 'PREFIX_READY' in points:
+                    ticks = points['PREFIX_READY'] - points['ENTRY']
+                    if ticks < 0:
+                        raise ValueError('Invalid same-core entry to prefix-ready span')
+                    spans['entry_to_prefix_ready'] = _us(ticks, frequency)
                 if 'FIRST_RECV_READY' in points:
                     spans['entry_to_first_ready'] = _us(points['FIRST_RECV_READY']-points['ENTRY'], frequency)
                     spans['init_to_first_ready'] = _us(points['FIRST_RECV_READY']-points['INIT_DONE'], frequency)

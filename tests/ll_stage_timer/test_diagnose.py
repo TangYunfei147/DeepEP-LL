@@ -379,7 +379,7 @@ def test_installed_wheel_source_and_native_layout_are_checked(tmp_path,monkeypat
     package=tmp_path/'installed/deep_ep'
     package.mkdir(parents=True)
     info = dict(source_sha256='matching-source', ll_stage_timer=True, ll_timer_profile='sparse',
-                ll_send_cores=30, ll_recv_cores=26)
+                ll_send_cores=30, ll_recv_cores=26, ll_small_b_prefix_cores=6)
     (package/'_build_info.json').write_text(json.dumps(info))
     from tests.elastic import test_ep_low_latency as st
     points=runpy.run_path(str(diagnose.ROOT/'deep_ep/utils/ll_stage_timer.py'))['SPARSE_POINTS']
@@ -387,6 +387,7 @@ def test_installed_wheel_source_and_native_layout_are_checked(tmp_path,monkeypat
                 points=list(points),timer_profile='sparse',timer_profile_id=6)
     native=SimpleNamespace(low_latency_implementation='candidate',low_latency_stage_timer_enabled=True,
                            low_latency_core_protocol=19030,
+                           low_latency_small_b_prefix_cores=6,
                            low_latency_stage_timer_profile='sparse',low_latency_stage_timer_profile_id=6,
                            low_latency_stage_timer_layout=lambda:dict(layout))
     def no_device_query(*args, **kwargs):
@@ -410,8 +411,17 @@ def test_installed_wheel_source_and_native_layout_are_checked(tmp_path,monkeypat
             return dict(source_fingerprint=lambda:'matching-source')
         raise AssertionError(path)
     monkeypatch.setattr(runpy,'run_path',fake_run_path)
-    code=diagnose._verify_code(result['stages'][1],'candidate', dict(send=30, recv=26))
+    code=diagnose._verify_code(result['stages'][1],'candidate', dict(send=30, recv=26), 6)
     exec(code,{})
+    native.low_latency_small_b_prefix_cores=1
+    with pytest.raises(RuntimeError,match='native P differs'):
+        exec(code,{})
+    native.low_latency_small_b_prefix_cores=6
+    for value in (None,0,1,True):
+        (package/'_build_info.json').write_text(json.dumps(dict(info,ll_small_b_prefix_cores=value)))
+        with pytest.raises(RuntimeError,match='wheel P differs'):
+            exec(code,{})
+    (package/'_build_info.json').write_text(json.dumps(info))
     native.low_latency_stage_timer_layout=lambda:dict(timer_profile='recv',timer_profile_id=5)
     with pytest.raises(RuntimeError,match='layout mismatch'):
         exec(code,{})

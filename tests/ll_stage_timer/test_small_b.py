@@ -34,6 +34,16 @@ def test_unchanged_dedup_and_protocol_regions():
         if entry.get('begin'):
             start=text.index(entry['begin'])
             text=text[start:text.index(entry['end'],start)]
+        if entry['path'].endswith('/ll_overlap_layout.h'):
+            # P-only deliberately changes the small-direct budget branch. The
+            # historical digest/restoration is kept; all dedup code outside
+            # that already-exempt branch must still match the old baseline.
+            begin=text.index('    const bool parallelPrefix=')
+            end=text.index('\n    const uint64_t maxRows=',begin)
+            branch=text[begin:end]
+            assert 'prefixProducers=parallelPrefix ? LlSmallBPrefixProducerCount(ranks):kLlRecvCoreNum' in branch
+            prior=next(c['new'] for c in entry['restore'] if 'const bool parallelPrefix=' in c['new'])
+            text=text[:begin]+prior+text[end:]
         for change in entry.get('restore',[]):
             assert text.count(change['new'])==1
             text=text.replace(change['new'],change['old'])

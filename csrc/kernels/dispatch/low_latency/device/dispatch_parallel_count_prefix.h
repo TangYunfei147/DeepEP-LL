@@ -12,7 +12,8 @@ __aicore__ inline void ServerDedupCounts::PrepareParallelRecvCnt()
     if(aivId_<kLlSendCoreNum)return;
     LL_SEG_SCOPE(INIT_COUNT_BUFFERS);
     LL_SEG_SCOPE(PREFIX_CONTROL_INIT);
-    const auto slice=LlParallelPrefixSlice(rscvStatusNum_,aivUsedCumSum_,aivId_-kLlSendCoreNum);
+    const uint32_t producers=LlSmallBPrefixProducerCount(epWorldSize_);
+    const auto slice=LlParallelPrefixSlice(rscvStatusNum_,producers,aivId_-kLlSendCoreNum);
     startStatusIndex_=slice.begin;endStatusIndex_=slice.begin+slice.count;recStatusNumPerCore_=slice.count;
     RecvPool().InitBuffer(prefixPublishBuf_,32U);
     const uint32_t workBytes=Ceil(slice.count*4U,256U)*256U;
@@ -76,6 +77,7 @@ __aicore__ inline void ServerDedupCounts::CalcParallelCumsum()
 {
     LL_SEG_SCOPE(BUILD_RECV_CUMSUM);
     const uint32_t receiver=aivId_-kLlSendCoreNum;
+    const uint32_t producers=LlSmallBPrefixProducerCount(epWorldSize_);
     LocalTensor<uint32_t> prefix;
     uint32_t total=0;
     if(recStatusNumPerCore_){
@@ -86,7 +88,7 @@ __aicore__ inline void ServerDedupCounts::CalcParallelCumsum()
         SyncFunc<HardEvent::V_S>(); total=prefix.GetValue(recStatusNumPerCore_-1U);
         LL_SEG_END(prefixLocalScan, PREFIX_LOCAL_SCAN);
     }
-    LL_SPARSE_MARK(PREFIX_LOCAL_DONE);
+    if(receiver<producers){LL_SPARSE_MARK(PREFIX_LOCAL_DONE);}
     LL_SEG_BEGIN(prefixTotalPublish, PREFIX_TOTAL_PUBLISH);
     auto publication=prefixPublishBuf_.Get<uint32_t>();
     publication.SetValue(0U,total);publication.SetValue(1U,prefixGeneration_);
@@ -95,6 +97,10 @@ __aicore__ inline void ServerDedupCounts::CalcParallelCumsum()
     SyncFunc<HardEvent::S_MTE3>();
     DataCopy(sums[uint64_t(receiver)*128U],publication,8U);
     LL_SEG_END(prefixTotalPublish, PREFIX_TOTAL_PUBLISH);
+    // Every R advances its private generation, including consumers with no
+    // prefix slice. Its zero-total record is not a producer dependency and the
+    // immutable source remains live until Finish (or the existing fallback drain).
+    if(receiver>=producers)return;
     // Published total stays in its fixed slot until the next kernel.
     // A slice only needs preceding totals. R0 and empty slices need none.
     uint32_t offset=0;
@@ -151,7 +157,8 @@ __aicore__ inline void ServerDedupCounts::CompleteParallelCumsum()
     if(!overlap_.enabled)tpipe_->Reset();
     LL_SEG_BEGIN(prefixControlInit, PREFIX_CONTROL_INIT);
     SetCtrlSpr<60,60>(0);
-    tpipe_->InitBuffer(readyBuf_,aivUsedCumSum_*32U);
+    const uint32_t producers=LlSmallBPrefixProducerCount(epWorldSize_);
+    tpipe_->InitBuffer(readyBuf_,producers*32U);
     tpipe_->InitBuffer(prefixBuf_,Ceil(rscvStatusNum_*4U,32U)*32U);
     const uint32_t receiver=aivId_-kLlSendCoreNum;
     GlobalTensor<uint32_t> flags;
@@ -163,12 +170,12 @@ __aicore__ inline void ServerDedupCounts::CompleteParallelCumsum()
       while(true){
         LL_SEG_COUNT(WAIT_CUMSUM_ITERATIONS,1U);
         LL_SEG_BEGIN(prefixReadyProbe, PREFIX_READY_PROBE);
-        DataCopy(ready,flags,DataCopyParams{uint16_t(aivUsedCumSum_),1U,15U,0U});
+        DataCopy(ready,flags,DataCopyParams{uint16_t(producers),1U,15U,0U});
         SyncFunc<HardEvent::MTE2_S>();
         LL_SEG_END(prefixReadyProbe, PREFIX_READY_PROBE);
         LL_SEG_BEGIN(prefixReadyDecode, PREFIX_READY_DECODE);
         bool complete=true;
-        for(uint32_t p=0;p<aivUsedCumSum_;++p)
+        for(uint32_t p=0;p<producers;++p)
             if(ready.GetValue(p*8U)!=prefixGeneration_){complete=false;break;}
         LL_SEG_END(prefixReadyDecode, PREFIX_READY_DECODE);
         if(complete)break;

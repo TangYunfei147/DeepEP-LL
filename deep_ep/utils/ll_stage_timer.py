@@ -217,6 +217,8 @@ def chrome_trace(saved_records, frequency_hz=None, lane_layout='core', show_repe
                                ts=(point['tick']-origin)*1e6/frequency,
                                args=dict(rank=rank,iteration=iteration,raw_cycle=point['tick'])))
         info.append(dict(operation=report['operation'],rank=rank,iteration=iteration,cores=report['cores'],
+                         small_b_prefix_cores=(meta.get('comparison') or {}).get('small_b_prefix_cores'),
+                         effective_small_b_prefix_cores=(meta.get('comparison') or {}).get('effective_small_b_prefix_cores'),
                          timer_profile=report['timer_profile'],timer_profile_id=report['timer_profile_id']))
     return dict(traceEvents=events,metadata=dict(format='sparse milestones' if report['schema']==15 else 'dc_seg sampled intervals',sampled_calls_per_stage=None if report['schema']==15 else 2,
                 timer_profile=report['timer_profile'],timer_profile_id=report['timer_profile_id'],

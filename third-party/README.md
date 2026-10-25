@@ -35,7 +35,7 @@ export LD_LIBRARY_PATH="$PWD/third-party/shmem/install/shmem/lib:${LD_LIBRARY_PA
 成功后生成 `third-party/shmem/install/shmem/deepep-sdk.json`。上游首次构建 Ascend950 会下载 nlohmann/json v3.11.3；
 离线环境需预先提供 `third-party/shmem/3rdparty/json/single_include/nlohmann/json.hpp` 及对应源码。
 
-已有 build/install 时默认停止，避免覆盖正在被其他作业使用的 SDK。明确需要重建时，先停止使用该 SDK 的作业，
+已有完整且身份匹配的SDK时默认校验复用；身份变化或产物不完整时停止，避免覆盖正在被其他作业使用的 SDK。明确需要重建时，先停止使用该 SDK 的作业，
 再运行 `python scripts/build_shmem.py --rebuild`；上游会重新生成该子模块的 build/install，随后必须重建依赖它的 wheel。
 默认拒绝修改过的源码；开发验证可显式传入 `--allow-local-changes`，脚本会记录修改指纹，并在编译后检查源码未再次变化。该选项不允许更换锁定提交；`--rebuild` 不会强制重置或覆盖源码。
 

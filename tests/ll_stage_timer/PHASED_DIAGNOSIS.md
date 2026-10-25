@@ -1,6 +1,7 @@
 # 小 B 稀疏时间戳诊断与有限长度传输
 
 当前分支 `kernel/ll-g4-small-b-prefix`，实现 `g4-small-b-parallel-prefix`，使用 **schema15 / sparse**。
+2026-10-25当前新增EP16小B的可配置前缀生产核数P，并升级官方SHMEM master。新SDK必须显式重建，见[升级说明](../../docs/SHMEM_MASTER_UPDATE.md)；P26/6/1的完整“全部编译后运行”流程见[PARALLEL_PREFIX.md](PARALLEL_PREFIX.md)。P默认0表示R，身份和结果均保存实际配置。下文诊断器用法仍适用；旧版本“无需SDK重建”只适用于其当时已匹配的SDK。
 本次仅改变诊断记录与解析，保持收发逻辑、原有业务同步顺序和通信协议不变；删除了仅用于旧计时器导出的末尾SyncAll。不宣称已恢复目标机17–23 µs性能，也不把CPU验证作为设备验收。
 
 ## 一个命令跑多个 B
@@ -108,7 +109,7 @@ python tests/ll_stage_timer/diagnose.py --analyze-existing diagnostic-runs/small
 | FIRST_RECV_READY / RECV_DONE | 首次观察到可消费接收任务 / 有任务接收流程的原有收尾完成 |
 | WORK_DONE | 业务结束，位于本核诊断导出之前；没有额外诊断SyncAll |
 
-`INIT=ENTRY→INIT_DONE`，`KERNEL=INIT_DONE→WORK_DONE`。其余报告使用明确的同核端点名称，如`COUNTS_TO_PREFIX_LOCAL`、`FIRST_PROBE_TO_FIRST_READY`。
+`INIT=ENTRY→INIT_DONE`，`KERNEL=INIT_DONE→WORK_DONE`。其余报告使用明确的同核端点名称，如`ENTRY_TO_PREFIX_READY`、`COUNTS_TO_PREFIX_LOCAL`、`FIRST_PROBE_TO_FIRST_READY`。
 这些是首次事件之间的跨度，不是逐包累计时间。`FIRST_SEND→SEND_DONE`可能包含与接收重叠的工作，**不是纯网络传输耗时**。
 小B并行路径的PREFIX_LOCAL_DONE位于既有V_S之后；去重R0路径位于既有V_MTE3之后，只表示该阶段指令下发到此处，不代表Scalar已确认VF物理完成。诊断不为统一这两个含义而增加同步。
 发送和接收可以交错，解析不要求按表格顺序全局递增，只验证同核合理依赖和端点范围。保留原始ticks；用户目标频率按1GHz转换，其他频率需明确传入。

@@ -4,6 +4,18 @@ set -eo pipefail
 HERE=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 source "$HERE/../../scripts/ll_timer_env.sh"
 set -u
+LL_OFF_SEND=${DEEPEP_LL_SEND_CORES:-28}
+LL_OFF_RECV=${DEEPEP_LL_RECV_CORES:-28}
+LL_OFF_PREFIX=${DEEPEP_LL_SMALL_B_PREFIX_CORES-0}
+if [[ ! $LL_OFF_SEND =~ ^[1-9][0-9]?$ || ! $LL_OFF_RECV =~ ^[1-9][0-9]?$ ]] ||
+   (( LL_OFF_SEND + LL_OFF_RECV != 56 )); then
+  printf '%s\n' 'SEND_CORES and RECV_CORES must be positive and sum to 56' >&2
+  exit 1
+fi
+if [[ ! $LL_OFF_PREFIX =~ ^(0|[1-9][0-9]?)$ ]] || (( LL_OFF_PREFIX > LL_OFF_RECV )); then
+  printf '%s\n' 'DEEPEP_LL_SMALL_B_PREFIX_CORES must be 0 or an integer in [1, RECV_CORES]' >&2
+  exit 1
+fi
 OUT=$(mktemp -d "$LL_TIMER_ROOT/.tmp/ll-timer-off-XXXXXXXX")
 SDK="$LL_TIMER_ROOT/third-party/shmem/install/shmem"
 test -f "$SDK/lib/libshmem.so"
@@ -13,6 +25,8 @@ for source in "$LL_TIMER_ROOT/csrc/kernels/dispatch/low_latency.cpp" \
   name=$(basename "$(dirname "$source")")-$(basename "$source")
   bisheng -O2 -std=c++17 -fPIC -xasc --npu-arch=dav-3510 --cce-auto-infer-kernel-type=false \
     -DCATLASS_ARCH=3510 -DUSE_SIMT -DL2_CACHE_HINT \
+    -DDEEPEP_LL_SEND_CORES="$LL_OFF_SEND" -DDEEPEP_LL_RECV_CORES="$LL_OFF_RECV" \
+    -DDEEPEP_LL_SMALL_B_PREFIX_CORES="$LL_OFF_PREFIX" \
     -I"$ASCEND_HOME_PATH/include" -I"$ASCEND_HOME_PATH/asc/include" \
     -I"$SDK/include" -I"$SDK/src" -I"$SDK/src/device" -I"$SDK/src/device_simt" \
     -c "$source" -o "$OUT/$name.o"

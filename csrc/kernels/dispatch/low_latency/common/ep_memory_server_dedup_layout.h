@@ -196,7 +196,8 @@ inline bool DispatchDedupPacketUbFits(const EpMemoryServerDedupLayout& layout, i
                               16 * align((layout.data.blockCount + 7) / 8, 32) * 4 + 256 + 16 * 36 +
                               layout.data.tokenStride + 64;
     const bool parallelPrefix=!enableDedup && b<=32;
-    const uint64_t countStage=parallelPrefix ? DispatchParallelPrefixStageUbBytes(uint32_t(num_experts)) :
+    const uint64_t countStage=parallelPrefix ? DispatchParallelPrefixStageUbBytes(uint32_t(num_experts),
+        LlSmallBPrefixProducerCount(uint32_t(world_size))) :
         DispatchSinglePrefixStageUbBytes(uint32_t(num_experts));
     const uint64_t countScratch=parallelPrefix ? DispatchGroupLocalCountSendUbBytes(b*k,num_experts,world_size):0U;
     return layout.data.blockCount > 0 && layout.data.blockCount <= UINT8_MAX &&

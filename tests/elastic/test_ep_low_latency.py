@@ -86,6 +86,25 @@ def installed_source_fingerprint(package):
     return value
 
 
+def installed_prefix_identity(package, native, recv_cores, environment=None):
+    """Validate constant P against installed metadata without querying a device."""
+    info = json.loads((Path(package.__file__).resolve().parent / '_build_info.json').read_text(encoding='utf-8'))
+    prefix = getattr(native, 'low_latency_small_b_prefix_cores', None)
+    if (type(prefix) is not int or not 0 <= prefix <= recv_cores
+            or type(info.get('ll_small_b_prefix_cores')) is not int
+            or info['ll_small_b_prefix_cores'] != prefix):
+        raise RuntimeError('Installed wheel P identity is missing or inconsistent; rebuild matching wheels')
+    env = os.environ if environment is None else environment
+    requested = env.get('DEEPEP_LL_SMALL_B_PREFIX_CORES')
+    if requested is not None and (not re.fullmatch(r'0|[1-9][0-9]?', requested) or int(requested) != prefix):
+        raise RuntimeError('Installed wheel P differs from DEEPEP_LL_SMALL_B_PREFIX_CORES')
+    shmem = info.get('shmem')
+    revision = shmem.get('revision') if isinstance(shmem, dict) else None
+    if not isinstance(revision, str) or not re.fullmatch(r'[0-9a-f]{40}', revision):
+        raise RuntimeError('Installed wheel has no valid SHMEM revision build identity; rebuild matching wheels')
+    return dict(small_b_prefix_cores=prefix, shmem_revision=revision)
+
+
 def validate_matching_capabilities(capabilities):
     if not capabilities or any(item != capabilities[0] for item in capabilities):
         raise RuntimeError('LL AIV/group/protocol/timer/profile/source build differs across ranks')
@@ -135,7 +154,12 @@ def compiled_group(native, world):
 def comparison_metadata(args, world, m):
     runtime=getattr(args,'runtime_identity',None)
     if runtime is None: return None  # CPU fixtures / legacy custom callers.
-    return dict(**runtime, comparison_schema=1, sampling_protocol='exp-reduce-stable-tail-v2',
+    prefix = runtime.get('small_b_prefix_cores')
+    effective_prefix = None
+    if prefix is not None and m <= 32 and args.num_tokens <= 32:
+        effective_prefix = (prefix or runtime.get('recv_cores')) if world == 16 else runtime.get('recv_cores')
+    return dict(**runtime, effective_small_b_prefix_cores=effective_prefix,
+                comparison_schema=1, sampling_protocol='exp-reduce-stable-tail-v2',
                 perf_enabled=not args.skip_perf_test, world_size=world,
                 local_world_size=int(os.environ.get('LOCAL_WORLD_SIZE',args.num_processes)),
                 case=case_config(args,m), route=args.route, seed=args.seed,
@@ -1252,6 +1276,7 @@ def worker(local_rank, args):
                       "logical_group": compiled_group(native,world),
                       "implementation": implementation,
                       "source_sha256": installed_source_fingerprint(deep_ep),
+                      **installed_prefix_identity(deep_ep, native, core_config["recv_cores"]),
                       "local_q_table": bool(getattr(native,"low_latency_q_table_enabled",False)),
                       "local_q_seed_vf": bool(getattr(native,"low_latency_q_seed_vf",False)),
                       "overlap_stage": getattr(native,"low_latency_overlap_stage",0),

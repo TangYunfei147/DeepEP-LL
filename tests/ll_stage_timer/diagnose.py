@@ -134,6 +134,10 @@ def make_plan(args, forwarded, root=ROOT, python=sys.executable):
     recv = int(os.environ.get('DEEPEP_LL_RECV_CORES', '28'))
     if send <= 0 or recv <= 0 or send + recv != 56:
         raise ValueError('DEEPEP_LL_SEND_CORES and DEEPEP_LL_RECV_CORES must be positive and sum to 56')
+    prefix_text = os.environ.get('DEEPEP_LL_SMALL_B_PREFIX_CORES', '0')
+    if not re.fullmatch(r'0|[1-9][0-9]?', prefix_text) or int(prefix_text) > recv:
+        raise ValueError('DEEPEP_LL_SMALL_B_PREFIX_CORES must be 0 or an integer in [1, RECV_CORES]')
+    prefix = int(prefix_text)
     suite = _within_project(Path(args.output_root) / args.run_name, root)
     node_dir = suite / f'node_{node:03d}'
     venv = node_dir / 'venv'
@@ -169,6 +173,7 @@ def make_plan(args, forwarded, root=ROOT, python=sys.executable):
                 create_venv=[python, '-m', 'venv', '--system-site-packages', str(venv)],
                 device_visibility=None if args.build_only else devices,
                 core_split=dict(send=send, recv=recv),
+                small_b_prefix_cores=prefix,
                 matrix=dict(B=args.bs, M=args.m, H=args.hidden, K=args.topk,
                                                        E=args.experts, dtype=args.dtype, cpu_sync=args.cpu_sync),
                 stages=stages, skip_build=args.skip_build, wheel_map=str(args.wheel_map) if args.wheel_map else None,
@@ -199,6 +204,7 @@ def _environment(plan, stage=None):
     if 'core_split' in plan:
         env['DEEPEP_LL_SEND_CORES'] = str(plan['core_split']['send'])
         env['DEEPEP_LL_RECV_CORES'] = str(plan['core_split']['recv'])
+    env['DEEPEP_LL_SMALL_B_PREFIX_CORES'] = str(plan.get('small_b_prefix_cores', 0))
     env.pop('SHMEM_ROOT', None)
     env.pop('CATLASS_ROOT', None)
     library = str(Path(plan['root']) / 'third-party/shmem/install/shmem/lib')
@@ -237,7 +243,7 @@ def _wheel_map(plan):
     return result
 
 
-def _verify_code(stage, implementation, core_split=None):
+def _verify_code(stage, implementation, core_split=None, small_b_prefix_cores=0):
     # The installed-wheel helper prevents checkout PYTHONPATH shadowing.
     if stage['profile'] != 'sparse':
         raise ValueError('New captures require sparse milestone wheels; legacy profiles are offline-analysis only')
@@ -265,6 +271,8 @@ runpy.run_path('tests/elastic/test_ep_low_latency.py')['validate_sparse_timer_la
 info_path = Path(package.__file__).resolve().parent / '_build_info.json'
 info = json.loads(info_path.read_text(encoding='utf-8'))
 require(info.get('ll_stage_timer') is {stage['timer']!r} and info.get('ll_timer_profile') == {stage['profile']!r}, 'wheel build metadata differs from requested timer configuration')
+require(type(info.get('ll_small_b_prefix_cores')) is int and info.get('ll_small_b_prefix_cores') == {small_b_prefix_cores!r}, 'wheel P differs from requested build configuration')
+require(type(getattr(native, 'low_latency_small_b_prefix_cores', None)) is int and native.low_latency_small_b_prefix_cores == {small_b_prefix_cores!r}, 'native P differs from requested build configuration')
 {core_checks}
 fingerprint = runpy.run_path('build_support.py')['source_fingerprint']()
 require(info.get('source_sha256') == fingerprint, 'installed wheel source fingerprint differs from this checkout; rebuild matching wheels')
@@ -299,6 +307,8 @@ def _performance_rows(suite):
     baselines = {key(row['config'], row['route']): row for row in off.get('results', []) if 'dispatch' in row}
     identity_fields = ('implementation', 'transport', 'logical_group', 'active_aiv',
                        'send_cores', 'recv_cores', 'core_protocol', 'source_revision', 'source_sha256')
+    optional_identity_fields = ('small_b_prefix_cores', 'effective_small_b_prefix_cores',
+                                'session_transport', 'shmem_revision')
     rows = []
     for path in sorted((suite / 'runs').glob('*/case_*/*/active_capture_dispatch.json')):
         data = json.loads(path.read_text(encoding='utf-8'))
@@ -309,7 +319,10 @@ def _performance_rows(suite):
         left = (baseline or {}).get('comparison') or {}
         right = data.get('comparison') or {}
         comparable = (baseline is not None and all(name in left and name in right for name in identity_fields)
-                      and all(left[name] == right[name] for name in identity_fields))
+                      and all(left[name] == right[name] for name in identity_fields)
+                      and all((name not in left and name not in right)
+                              or (name in left and name in right and left[name] == right[name])
+                              for name in optional_identity_fields))
         if not comparable:
             row['status'] = 'unavailable: missing/mismatched OFF configuration or identity'
         elif data.get('status') == 'available':
@@ -455,7 +468,7 @@ def execute(plan, *, receipt=None):
         profile = stage['name']
         command = [wheels[profile] if value == '{wheel}' else value for value in stage['install']]
         _command(command, plan, env, logs / f'{profile}-install.log')
-        _command([plan['venv_python'], '-c', _verify_code(stage, implementation, plan.get('core_split'))],
+        _command([plan['venv_python'], '-c', _verify_code(stage, implementation, plan.get('core_split'), plan.get('small_b_prefix_cores', 0))],
                  plan, env, logs / f'{profile}-identity.log')
     wheel_map = _publish_wheel_map(plan, wheels)
     if plan.get('build_only', False):
@@ -467,7 +480,7 @@ def execute(plan, *, receipt=None):
         # wheel before each stage and recheck it without opening an NPU context.
         command = [wheels[profile] if value == '{wheel}' else value for value in stage['install']]
         _command(command, plan, env, logs / f'{profile}-run-install.log')
-        _command([plan['venv_python'], '-c', _verify_code(stage, implementation, plan.get('core_split'))],
+        _command([plan['venv_python'], '-c', _verify_code(stage, implementation, plan.get('core_split'), plan.get('small_b_prefix_cores', 0))],
                  plan, env, logs / f'{profile}-run-identity.log')
         _command(stage['run'], plan, env, logs / f'{profile}-run.log')
         if stage['timer'] and plan['node'] == 0 and not plan['defer_analysis']:

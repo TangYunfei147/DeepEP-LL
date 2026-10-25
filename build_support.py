@@ -52,6 +52,16 @@ def ll_timer_profile(environment=None):
     return "sparse"
 
 
+def ll_small_b_prefix_cores(environment=None, recv_cores=28):
+    """Raw P=0 keeps the compiled R producers; explicit P is limited to R."""
+    env = os.environ if environment is None else environment
+    value = env.get("DEEPEP_LL_SMALL_B_PREFIX_CORES", "0")
+    if (not isinstance(value, str) or not value.isascii() or not value.isdecimal()
+            or str(int(value)) != value or not 0 <= int(value) <= recv_cores):
+        raise ValueError("DEEPEP_LL_SMALL_B_PREFIX_CORES must be 0 or an integer in [1, RECV_CORES]")
+    return int(value)
+
+
 class ConfiguredBuild(build):
     def finalize_options(self):
         default_lib = (
@@ -225,6 +235,7 @@ def build_configuration(environment=None):
     if send <= 0 or recv <= 0 or send + recv != 56:
         raise ValueError("DEEPEP_LL_SEND_CORES and DEEPEP_LL_RECV_CORES must be positive and sum to 56")
     result["ll_send_cores"], result["ll_recv_cores"] = send, recv
+    result["ll_small_b_prefix_cores"] = ll_small_b_prefix_cores(env, recv)
     result["ll_stage_timer"] = enabled("DEEPEP_LL_STAGE_TIMER", env)
     result["ll_timer_profile"] = ll_timer_profile(env)
     result["build_type"] = env.get("DEEPEP_BUILD_TYPE", "RelWithDebInfo" if lineinfo else "Release")
@@ -407,6 +418,7 @@ class CMakeBuild(build_ext):
             f"-DDEEPEP_LL_TIMER_PROFILE={configuration.get('ll_timer_profile', 'sparse')}",
             f"-DDEEPEP_LL_SEND_CORES={configuration.get('ll_send_cores', 28)}",
             f"-DDEEPEP_LL_RECV_CORES={configuration.get('ll_recv_cores', 28)}",
+            f"-DDEEPEP_LL_SMALL_B_PREFIX_CORES={configuration.get('ll_small_b_prefix_cores', 0)}",
             f"-DPython_EXECUTABLE={sys.executable}",
             f"-Dpybind11_DIR={pybind11.get_cmake_dir()}",
             f"-DCMAKE_CXX_COMPILER={configuration['compiler_path']}",

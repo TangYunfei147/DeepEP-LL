@@ -6,6 +6,7 @@
 #include <random>
 #include <vector>
 #include <numeric>
+#include <cstdio>
 #include "csrc/kernels/dispatch/low_latency/common/ll_parallel_prefix.h"
 #include "csrc/kernels/dispatch/low_latency/common/ep_memory_server_dedup_layout.h"
 #include "csrc/kernels/dispatch/low_latency/common/ll_overlap_layout.h"
@@ -13,7 +14,9 @@
 using namespace DispatchDedup;
 int main(){
     std::mt19937 rng(163503);
-    for(unsigned receivers:{1U,2U,26U,28U,55U}) {
+    unsigned cases=0;
+    for(unsigned receivers:{1U,2U,26U,28U,55U}) for(unsigned producers:{1U,4U,6U,8U,receivers}) {
+        if(producers>receivers)continue;
         const unsigned send=56-receivers;
         std::vector<uint32_t> totals(receivers),totalTags(receivers),readyTags(receivers);
         uint32_t generation=0,legacyEpoch=0;
@@ -32,7 +35,13 @@ int main(){
             std::vector<uint32_t*> aligned(receivers);
             unsigned coverage=0;
             for(unsigned r=0;r<receivers;++r){
-                const auto s=LlParallelPrefixSlice(e,receivers,r);assert(s.begin==coverage);coverage+=s.count;
+                const auto s=LlParallelPrefixSlice(e,producers,r);assert(s.begin==coverage);coverage+=s.count;
+                if(r>=producers)assert(s.begin==e && s.count==0);
+                if(producers==receivers){
+                    // Exact old quotient/remainder ownership, including empty slices.
+                    assert(s.begin==r*(e/receivers)+std::min(r,e%receivers));
+                    assert(s.count==e/receivers+(r<e%receivers));
+                }
                 local[r].resize((s.count+63)/64*64+64,999999U);
                 aligned[r]=reinterpret_cast<uint32_t*>((reinterpret_cast<uintptr_t>(local[r].data())+255U)&~uintptr_t(255U));
                 std::copy(counts.begin()+s.begin,counts.begin()+s.begin+s.count,aligned[r]);
@@ -47,15 +56,18 @@ int main(){
             while(done<receivers){
                 assert(++steps<receivers*10000);
                 const unsigned r=rng()%receivers;
-                const auto s=LlParallelPrefixSlice(e,receivers,r);
+                const auto s=LlParallelPrefixSlice(e,producers,r);
                 if(state[r]==0){
-                    R0PrefixScan(aligned[r],s.count);
-                    totals[r]=s.count?aligned[r][s.count-1]:0;totalTags[r]=next;state[r]=1;
+                    if(s.count)R0PrefixScan(aligned[r],s.count);
+                    totals[r]=s.count?aligned[r][s.count-1]:0;totalTags[r]=next;
+                    // Consumers still advance their generation, but never write
+                    // prefix bytes or publish a ready flag as a producer.
+                    state[r]=r<producers?1:2;
                 } else if(state[r]==1 && (!s.count || std::all_of(totalTags.begin(),totalTags.begin()+r,[&](auto t){return t==next;}))){
                     uint32_t offset=0;if(s.count)for(unsigned p=0;p<r;++p)offset+=totals[p];
                     for(unsigned i=0;i<s.count;++i)output[s.begin+i]=aligned[r][i]+offset;
                     readyTags[r]=next;state[r]=2; // Ready only after this slice is written.
-                } else if(state[r]==2 && std::all_of(readyTags.begin(),readyTags.end(),[&](auto t){return t==next;})){
+                } else if(state[r]==2 && std::all_of(readyTags.begin(),readyTags.begin()+producers,[&](auto t){return t==next;})){
                     assert(output==reference);
                     if(r==0)legacyEpoch=(round+1)%2;
                     state[r]=3;++done;
@@ -65,7 +77,12 @@ int main(){
             // A dedup call does not touch +64/+96. Its old R0 epoch still toggles;
             // next small call advances its own generation instead of accepting old flags.
             legacyEpoch^=1;
-            for(unsigned r=0;r<receivers;++r)assert(totalTags[r]==generation && readyTags[r]==generation);
+            for(unsigned r=0;r<receivers;++r){
+                assert(totalTags[r]==generation);
+                if(r<producers)assert(readyTags[r]==generation);
+                else assert(totals[r]==0 && readyTags[r]!=generation);
+            }
+            ++cases;
         }
     }
     for(unsigned e:{16U,384U,1024U})for(unsigned r:{1U,26U,28U,55U}){
@@ -79,11 +96,38 @@ int main(){
     // Existing dedup plan is numerically unchanged at the documented production case.
     auto d=DispatchServerDedupDataLayout(256,3584,8,384,EpServerDedupInputMode::PrequantizedFp8Packs);
     auto p=LlMakeOverlapLayout(d,256,8,384,16,0,0,EpServerDedupInputMode::PrequantizedFp8Packs,true);
-    assert(p.enabled && p.totalBytes==105792 && p.sendLanes==6 && p.recvLanes==6);
+    assert(p.enabled && p.sendLanes==6 && p.recvLanes==6);
+    if(kLlSendCoreNum==28)assert(p.totalBytes==105792);
+    assert(LlSmallBPrefixProducerCount(16)==(kLlSmallBPrefixCores?kLlSmallBPrefixCores:kLlRecvCoreNum));
+    for(unsigned world:{32U,64U,128U,256U})assert(LlSmallBPrefixProducerCount(world)==kLlRecvCoreNum);
     for(unsigned b:{1U,2U,4U,8U,16U,32U})for(unsigned c=0;c<56;++c){
         auto d=DispatchServerDedupDataLayout(b,3584,8,384,EpServerDedupInputMode::PrequantizedFp8Packs);
         auto p=LlMakeOverlapLayout(d,b,8,384,16,0,c,EpServerDedupInputMode::PrequantizedFp8Packs,false);
         assert(p.enabled && p.totalBytes<=kLlDispatchUbBytes);
-        assert(p.countBytes==(c<kLlSendCoreNum?0:DispatchParallelPrefixStageUbBytes(384)));
+        const unsigned producers=LlSmallBPrefixProducerCount(16);
+        assert(p.countBytes==(c<kLlSendCoreNum?0:
+            c-kLlSendCoreNum<producers?DispatchParallelPrefixStageUbBytes(384,producers):32U));
+        // Actual allocations for this core fit its reservation, including the
+        // 256B padded VF input and preceding-total snapshot. Nonproducers keep
+        // only their immutable 32B generation publication through final drain.
+        if(c>=kLlSendCoreNum){
+            const auto s=LlParallelPrefixSlice(384,producers,c-kLlSendCoreNum);
+            auto align=[](uint64_t value,uint64_t a){return (value+a-1)/a*a;};
+            const uint64_t actual=32U+(s.count ? 96U+align(s.count*32U+256U,256U)+
+                align(s.count*4U,256U)+std::max(align(s.count*4U,256U),align((c-kLlSendCoreNum)*32U,256U)):0U);
+            assert(actual<=p.countBytes);
+        }
     }
+    // Emit an independent checksum over all non-target plans. Python compares
+    // this across compiled P values, so EP32+ and dedup must remain unchanged.
+    uint64_t checksum=1469598103934665603ULL;
+    auto add=[&](uint64_t value){checksum=(checksum^value)*1099511628211ULL;};
+    for(unsigned world:{16U,32U,64U,128U})for(bool dedup:{false,true})
+    for(unsigned b:{1U,8U,32U,256U})for(unsigned c=0;c<56;++c){
+        if(world==16 && !dedup && b<=32)continue;
+        auto data=DispatchServerDedupDataLayout(b,3584,8,384,EpServerDedupInputMode::PrequantizedFp8Packs);
+        auto plan=LlMakeOverlapLayout(data,b,8,384,world,0,c,EpServerDedupInputMode::PrequantizedFp8Packs,dedup);
+        add(plan.enabled);add(plan.countBytes);add(plan.totalBytes);add(plan.sendLanes);add(plan.recvLanes);
+    }
+    std::printf("prefix_cases=%u non_target=%llu\n",cases,static_cast<unsigned long long>(checksum));
 }

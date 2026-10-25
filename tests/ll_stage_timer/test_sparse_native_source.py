@@ -37,6 +37,11 @@ def test_only_sparse_buffers_and_compatible_linkage_are_exposed():
 def test_receive_send_count_logic_tokens_match_pre_sparse_commit():
     baseline=json.loads((Path(__file__).with_name('sparse_business_baseline.json')).read_text(encoding='utf-8'))
     for rel,expected in baseline['files'].items():
+        if rel.endswith('/dispatch_parallel_count_prefix.h'):
+            # The P-only candidate deliberately changes this implementation.
+            # Keep the historical hash untouched; actual helper/VF/generation
+            # tests in test_parallel_prefix guard default P=R equivalence.
+            continue
         source=(ROOT/rel).read_text(encoding='utf-8')
         source=re.sub(r'//[^\n]*|/\*.*?\*/','',source,flags=re.S)
         source=re.sub(r'LL_SPARSE_(?:MARK|AFTER)\([^)]*\);','',source)

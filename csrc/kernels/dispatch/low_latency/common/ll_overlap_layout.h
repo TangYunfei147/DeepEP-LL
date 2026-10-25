@@ -36,9 +36,11 @@ LL_OVERLAP_INLINE LlOverlapLayout LlMakeOverlapLayout(const EpServerDedupDataLay
         2*input+q+(quant?work+d.packedPayloadBytes:0);
     const uint64_t countScratch=plan.count?4*routes+records*4:0;
     const bool parallelPrefix=!enableDedup && bs<=32U && core>=kLlSendCoreNum;
-    const uint64_t countStage=parallelPrefix ? DispatchParallelPrefixStageUbBytes(e) :
+    const uint32_t prefixProducers=parallelPrefix ? LlSmallBPrefixProducerCount(ranks):kLlRecvCoreNum;
+    const uint64_t countStage=parallelPrefix ?
+        (core-kLlSendCoreNum<prefixProducers ? DispatchParallelPrefixStageUbBytes(e,prefixProducers):32U) :
         (core==kLlSendCoreNum ? DispatchSinglePrefixStageUbBytes(e):0);
-    const uint64_t complete=parallelPrefix ? DispatchParallelPrefixCompleteUbBytes(e,ranks) :
+    const uint64_t complete=parallelPrefix ? DispatchParallelPrefixCompleteUbBytes(e,ranks,prefixProducers) :
         32+DispatchDedupAlign(e*4,32)+DispatchDedupAlign(uint64_t(e/ranks)*8,32);
     const uint64_t maxRows=uint64_t(bs)*ranks*(k<e/ranks?k:e/ranks);
     const uint64_t receiveCores=enableDedup?kLlDispatchRecvCoreNum:kLlRecvCoreNum;
