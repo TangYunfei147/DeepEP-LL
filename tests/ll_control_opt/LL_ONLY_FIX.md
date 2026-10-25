@@ -1,5 +1,7 @@
 # 纯 LL MTE 初始化修复与本轮测试
 
+baseline主瓶颈采样与单文件回传入口见 [BASELINE_DIAGNOSIS.md](BASELINE_DIAGNOSIS.md)。
+
 本轮使用 `commits-topology-mte.json`，只测新SDK下的 **baseline、buffered、immediate**
 三项；准确SHA和比较reference见清单。原四项 `commits-topology.json` 保留为历史，
 本轮不再加入旧SDK对照。

@@ -89,3 +89,10 @@ SHMEM更新基线c705381不改变该LL算法。独立Buffered/Immediate候选以
 tests/ll_control_opt/commits-topology.json选择；其新增common/ll_early_receive.h
 和S侧有界回调不默认进入delivery源码。修改前查../ll_stage_timer/BUFFERED_RECEIVE.md
 及../ll_control_opt/TOPOLOGY_EXPERIMENTS.md；CPU检查不能视为CANN/设备验证。
+
+当前主瓶颈诊断参考small-b-prefix@39eadb0的schema15 sparse：
+common/ll_stage_timer_{layout,device,profile}.h只保留14个首次时间戳，512B/核，导出192B；
+dispatch成对和串行探测都标记首次Probe/ready，combine仅入口/初始化/结束三点。
+dispatch/combine内部launch符号带_sparse15拒绝旧对象混装；7个profiler入口名称不变。
+原业务同步和c1算法不变，删除的是旧timer专用SyncAll。说明及OFF/active扰动验收见
+../ll_control_opt/BASELINE_DIAGNOSIS.md，源码证据见../ll_stage_timer/sparse_control_business_baseline.json。

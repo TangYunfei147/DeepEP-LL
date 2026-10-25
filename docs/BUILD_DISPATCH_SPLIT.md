@@ -404,3 +404,38 @@ lifecycle. No NPU Runtime was instantiated or device workload launched.
 Exact timings, artifact locations and rerun commands are in
 tests/ll_control_opt/LL_ONLY_FIX.md. This validates compilation/linkage, not
 target-device correctness or performance.
+
+## Sparse baseline bottleneck capture,2026-10-25
+
+Diagnostic source9c2c333 ports schema15 sparse milestones from
+kernel/ll-g4-small-b-prefix@39eadb0557525f98f2528b4814901740366f46aa.
+It preserves the ed1c553 business algorithm and all seven independent dispatch
+entries, production O2, target architecture, configured S/R and business UB.
+53 non-probe token streams match the ed1 snapshot; this is a source guard, not
+a CANN code-generation or timing-equivalence proof.
+
+Only14 first timestamps remain per core, with a512B carrier and192B export.
+Legacy accumulation macros do no work. The removed SyncAll was diagnostic-only;
+existing business barriers and lane ownership remain. Internal sparse15 launch
+symbols and schema/profile checks reject mismatched Host/device objects.
+PREFIX_LOCAL_DONE is a V_MTE3 submission-side boundary, not Scalar-confirmed
+completion of the prefix VF. No extra synchronization was added to its probe.
+
+The new profile_baseline.py builds and Host-checks complete OFF and SPARSE wheels
+from the same pinned source before any device run. The actual attached sparse
+capture calls are timed in a separate profiler window, including INIT/export.
+Unknown or ambiguous task durations remain unavailable; ordinary unattached ON
+calls and internal spans cannot substitute for this measurement.
+
+Local CPU validation:443passed/2skipped across the timer suite, ST contract and
+paired launcher, plus37passing compact-report checks using complete480-sample
+disk fixtures. Skips are Windows/POSIX path semantics and the obsolete historical
+schema13 business snapshot; the new ed1 token guard covers the current source.
+The pre-existing local-q fixture now includes c1's64B flag snapshot, and the
+non-dedup preservation test compares against the accepted ed1 source rather
+than the pre-optimization split. No production algorithm was changed for tests.
+Main regression log: A5/.tmp/sparse-baseline-final3.log.
+
+No SSH, CANN compilation or NPU run was performed for this change, following the
+user's updated local-check/direct-push workflow. The target commands and bounded
+single-file handoff are in tests/ll_control_opt/BASELINE_DIAGNOSIS.md.

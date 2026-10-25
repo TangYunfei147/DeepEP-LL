@@ -12,6 +12,15 @@
 - 完成修改及必要本地检查后，直接提交、推送，并提供对应提交和可执行的测试命令，由用户在目标机编译和测试；远端编译不作为推送前置条件。
 - 如实标注未执行的CANN编译、设备正确性和性能验证；不擅自改用其他远端主机，也不反复询问27编译授权，除非用户明确更新本规则。
 
+## 当前baseline主瓶颈诊断（2026-10-25）
+
+- 用户追加参考kernel/ll-g4-small-b-prefix降低打点膨胀：固定参考39eadb0，仅移植schema15 sparse/实际capture profiler，不带入小B算法、P1 VF或SDK更改。ed1c553是业务算法参考，准确诊断源码固定在profile_baseline.py。
+- 每核14个首次时间戳，512B槽、192B导出，无逐包累计/计数和额外诊断SyncAll；7模式/G4/核数配置/230KiB及业务同步保持。53文件去探针token与ed1一致，但不作为CANN代码生成证明。
+- 同一诊断源码构建OFF/SPARSE两份完整wheel、独立venv，全部Host校验通过后启动设备；原OFF环境不替换。OFF为10/100/尾50，SPARSE为10预热+100稳定+5次实际挂载打点的profiler capture，每轮Exp+all_reduce；3seed仍0/17/101（实际2/19/103）。
+- report_baseline.py核对全rank/轮次/shape/seed、源码与实际加载库哈希和active task逐样本对应，交付1个≤65535UTF-8字节报告。先观察完整active/OFF扰动，不用未挂载timer的ON调用或内部跨度代替。
+- 稀疏第一轮不采包数、空轮询率和逐包Scalar累计。PREFIX_LOCAL_DONE是原V_MTE3提交侧边界，不代表Scalar确认VF完成；SEND_DONE可能含接收重叠。缺失不补0，不混seed，不相加跨度，不跨rank相减时钟。
+- 旧schema13离线报告用RX_FLAG_DECODE.calls作空快照率分母，RECV_POLL/RX_FLAG_REDUCE是片段calls。旧communication_baseline.json保留历史，新业务证据为sparse_control_business_baseline.json。指南tests/ll_control_opt/BASELINE_DIAGNOSIS.md。
+
 修改 LL kernel、模板、打点或构建配置前，先阅读：
 
 - `tests/ll_probe/KERNEL_MAP.md`

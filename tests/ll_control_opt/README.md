@@ -1,5 +1,9 @@
 # Control-path candidates: commit-by-commit A/B
 
+To measure the current baseline's bottleneck, use the paired OFF/SPARSE launcher
+and one-file report in [BASELINE_DIAGNOSIS.md](BASELINE_DIAGNOSIS.md). It fixes the
+tested baseline revision and preserves the existing OFF performance environments.
+
 Result handoff is limited to10files, each at most65535UTF-8 bytes. For the first
 analysis, run `python tests/ll_control_opt/export_report.py <comparison-directory>`
 and send its single `analysis-report.txt`. It retains every comparison row and

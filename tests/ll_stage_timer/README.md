@@ -1,4 +1,8 @@
-当前打点为schema13，请以[COMMUNICATION_DIAGNOSTICS.md](COMMUNICATION_DIAGNOSTICS.md)为采集/解析入口。
+当前control-opt新采集为schema15稀疏首次里程碑，请用
+[BASELINE_DIAGNOSIS.md](../ll_control_opt/BASELINE_DIAGNOSIS.md)的一键OFF/SPARSE入口及单文件报告。
+schema7～13仅保留离线读取。下方分支/格式说明是历史记录，不作为当前构建和采样命令。
+
+历史schema13打点说明见[COMMUNICATION_DIAGNOSTICS.md](COMMUNICATION_DIAGNOSTICS.md)。
 新增首包准备、通信邻域和新报告，须全rank安装匹配ON wheel并重采；下方旧schema资料仅供历史追溯。
 
 当前独立候选为kernel/ll-g4-local-q-table；以[LOCAL_Q_TABLE.md](LOCAL_Q_TABLE.md)作为A/B指南。
