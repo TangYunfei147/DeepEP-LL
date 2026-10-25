@@ -123,6 +123,9 @@ int aclshmemx_init_attr_with_buffers(int mode, aclshmemx_init_attr_t* attr, cons
     assert(mode == ACLSHMEMX_INIT_WITH_DEFAULT || mode == ACLSHMEMX_INIT_WITH_MPI);
     assert(attr->n_pes == expected_world && attr->local_mem_size == 0 && count == 1);
     assert(attr->option_attr.data_op_engine_type == (ACLSHMEM_DATA_OP_MTE | ACLSHMEM_DATA_OP_UDMA));
+    assert(attr->option_attr.version == ACLSHMEM_TEST_INIT_VERSION);
+    assert(attr->runtime_config.udma_shared_jetty == ACLSHMEM_CONFIG_ENABLED);
+    for (auto value : attr->runtime_config.reserved) assert(value == 0);
     assert(descriptors->addr == source_address && descriptors->size == physical_bytes);
     assert(descriptors->optional_attr->mem_handle == &physical_token);
     assert(descriptors->optional_attr->fabric_handle == nullptr);
@@ -149,15 +152,13 @@ int aclshmemx_init_attr(int, aclshmemx_init_attr_t* attr)
 {
     assert(attr->n_pes == expected_world && attr->local_mem_size == expected_bytes);
     assert(attr->option_attr.data_op_engine_type == (ACLSHMEM_DATA_OP_MTE | (qp_count ? ACLSHMEM_DATA_OP_UDMA : 0)));
+    assert(attr->option_attr.version == ACLSHMEM_TEST_INIT_VERSION);
+    assert(attr->runtime_config.udma_shared_jetty == (qp_count ? ACLSHMEM_CONFIG_ENABLED : ACLSHMEM_CONFIG_DEFAULT));
+    for (auto value : attr->runtime_config.reserved) assert(value == 0);
     if (init_status == 0) {
         initialized = 2;
     }
     return init_status;
-}
-int aclshmemx_set_shared_jetty(data_op_engine_type_t engine, bool enabled)
-{
-    assert(engine == ACLSHMEM_DATA_OP_UDMA && enabled);
-    return 0;
 }
 int aclshmemx_set_qp_num(data_op_engine_type_t engine, uint32_t count)
 {
@@ -275,6 +276,28 @@ int main(int argc, char** argv)
         assert(session.capacity() == (2 << 20));
         session.close();
         assert(frees == 1 && finalized == 1 && !deepep::Session::busy());
+    } else if (mode == "mte-no-masks") {
+        // LL MTE must work with the official SDK, which has no peer-mask API.
+        setenv("DEEPEP_SHMEM_DENSE_QPS", "0", 1);
+        expected_world = 16;
+        expected_bytes = (8ULL << 30) + (2ULL << 20);
+        deepep::Session session(0, 16, 8ULL << 30, "tcp://127.0.0.1:19091", 30, false);
+        assert(!session.udma() && qp_count == 0 && !session.sparse_qp_enabled());
+        assert(session.capacity() == (8ULL << 30) && session.workspace_allocation_bytes() == expected_bytes);
+        session.close();
+        assert(!deepep::Session::busy() && frees == 1 && finalized == 1);
+    } else if (mode == "udma-no-masks") {
+        setenv("DEEPEP_SHMEM_DENSE_QPS", "0", 1);
+        bool rejected = false;
+        try { deepep::Session session(0, 2, 2 << 20, "tcp://127.0.0.1:19091", 30, true); }
+        catch (const std::runtime_error& error) {
+            rejected = std::string(error.what()).find("UDMA sparse admission is unavailable") != std::string::npos;
+        }
+        assert(rejected && !deepep::Session::busy() && initialized == 0 && allocations == 0 && qp_count == 0);
+    } else if (mode == "udma-config-rejected") {
+        init_status = -77;
+        fails([]() { deepep::Session session(0, 2, 2 << 20, "tcp://127.0.0.1:19091", 30, true); });
+        assert(deepep::Session::busy() && initialized == 0 && allocations == 0 && qp_count == 32 && finalized == 0);
     } else if (mode == "udma") {
         deepep::Session session(0, 2, 2 << 20, "tcp://127.0.0.1:19091", 30, true);
         assert(session.udma() && qp_count == 32);

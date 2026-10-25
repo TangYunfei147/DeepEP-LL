@@ -51,6 +51,12 @@ uint8_t* pointer(py::handle tensor, const Shape& shape, const char* dtype, int d
 
 void bind_dispatch(py::module_& module)
 {
+    // This HT path publishes ordinary peer framework VAs, not registered-MR
+    // descriptors. Official SHMEM master only guarantees symmetric MR targets.
+    // Reject before any launch/collective rather than bypass its translation.
+    // LL MTE has a separate entry and is not affected; local layout queries stay
+    // available. Restoring HT needs an explicit registered-staging design.
+    module.attr("ht_dispatch_live_peer_output_supported") = false;
     module.def(
         "dispatch_layout",
         [](int rank, int world, int tokens, int topk, int experts, int rows, bool fp8, bool weights, int hidden) {
@@ -81,6 +87,9 @@ void bind_dispatch(py::module_& module)
     module.def("dispatch_plan_bytes", &ascend_deepep::DispatchPlanBytes);
     module.def("dispatch", [](Session& session, py::dict tensors, int tokens, int topk, int experts, int rows,
                               int local_rows, bool fp8, uintptr_t stream_address) {
+        throw std::runtime_error(
+            "HT Dispatch ordinary peer output is not a registered SHMEM MR on the pinned official master; "
+            "this legacy private path is unsupported. Use the explicit LL MTE path or implement registered staging.");
         if (session.combine_only()) throw std::invalid_argument("Dispatch requires combine_only=False");
         const int hidden = tensors["input"].attr("size")(1).cast<int>();
         const auto t = layout(session.rank(), session.world(), tokens, topk, experts, rows, fp8,

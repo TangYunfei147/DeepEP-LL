@@ -219,6 +219,50 @@ def test_elastic_huge_page_default_and_opt_out(monkeypatch, option, expected):
     assert calls[0]["debug_collectives"] is False
 
 
+@pytest.mark.parametrize('transport,expected_udma,expected_huge', [('mte',False,False),('udma',True,True)])
+def test_elastic_transport_is_explicit_and_not_guessed_from_capacity(monkeypatch, transport, expected_udma, expected_huge):
+    module = importlib.import_module(deep_ep.ElasticBuffer.__module__)
+    monkeypatch.setattr(module, 'require_native', lambda _: None)
+    calls = []
+    monkeypatch.setattr(module, 'Runtime', lambda *a, **kw: calls.append(kw) or SimpleNamespace(closed=True))
+    for capacity in (2 << 20, 8 << 30):
+        deep_ep.ElasticBuffer(rank=0, world_size=16, num_bytes=capacity, explicitly_destroy=True, transport=transport)
+    assert all(call['udma'] is expected_udma and call['use_1g_huge_pages'] is expected_huge for call in calls)
+
+
+@pytest.mark.parametrize('options', [dict(transport='bad'), dict(transport='mte',use_1g_huge_pages=True),
+    dict(transport='mte',combine_only=True), dict(transport='mte',bootstrap='mpi')])
+def test_elastic_mte_rejects_incompatible_choices_before_runtime(monkeypatch, options):
+    module = importlib.import_module(deep_ep.ElasticBuffer.__module__)
+    monkeypatch.setattr(module, 'require_native', lambda _: None)
+    monkeypatch.setattr(module, 'Runtime', lambda *a, **kw: pytest.fail('incompatible transport created a runtime'))
+    with pytest.raises(ValueError):
+        deep_ep.ElasticBuffer(rank=0,world_size=16,num_bytes=8<<30,explicitly_destroy=True,**options)
+
+
+@pytest.mark.parametrize('ll_supported', [True, False])
+def test_mainline_ht_output_guard_does_not_block_ll_and_runs_before_notify(monkeypatch, ll_supported):
+    module = importlib.import_module(deep_ep.ElasticBuffer.__module__)
+    native = SimpleNamespace(ht_dispatch_live_peer_output_supported=False)
+    class Input:
+        ndim = 2
+        shape = (1, 3584)
+    monkeypatch.setitem(sys.modules, 'torch', SimpleNamespace(Tensor=Input))
+    monkeypatch.setattr(module, 'require_native', lambda _: native)
+    monkeypatch.setattr(module, 'npu_api', lambda: object())
+    runtime = SimpleNamespace(ensure_alive=lambda: None, capacity=8<<30, combine_only=False)
+    monkeypatch.setattr(module, 'runtime_of', lambda _: runtime)
+    buffer = deep_ep.ElasticBuffer.__new__(deep_ep.ElasticBuffer)
+    buffer.num_max_tokens_per_rank = 32
+    monkeypatch.setattr(buffer, '_low_latency_plan', lambda *args: {} if ll_supported else None)
+    monkeypatch.setattr(buffer, '_dispatch_low_latency', lambda *args: 'LL MTE selected')
+    if ll_supported:
+        assert buffer.dispatch(Input(), num_experts=384) == 'LL MTE selected'
+    else:
+        with pytest.raises(NotImplementedError, match='before Notify'):
+            buffer.dispatch(Input(), num_experts=384)
+
+
 def test_elastic_debug_collectives_reaches_runtime(monkeypatch):
     module = importlib.import_module(deep_ep.ElasticBuffer.__module__)
     monkeypatch.setattr(module, "require_native", lambda _: None)

@@ -87,13 +87,18 @@ Session::Session(int rank, int size, uint64_t bytes, const std::string& endpoint
     attr.option_attr.shm_init_timeout = timeout;
     attr.option_attr.shm_create_timeout = timeout;
     attr.option_attr.control_operation_timeout = timeout;
+    // Current SHMEM carries runtime configuration in the versioned attributes.
+    // Keep option_attr's format/version initializer intact; the removed setter
+    // must not be emulated by silently changing queue sharing semantics.
+    if (udma) attr.runtime_config.udma_shared_jetty = ACLSHMEM_CONFIG_ENABLED;
     using SetPeerQpMasks = int (*)(const uint64_t*, uint32_t);
     auto set_masks =
         udma ? reinterpret_cast<SetPeerQpMasks>(dlsym(RTLD_DEFAULT, "aclshmemx_set_udma_peer_qp_masks")) : nullptr;
     if (udma && dense != "1" && !set_masks) {
         throw std::runtime_error(
-            "SHMEM lacks aclshmemx_set_udma_peer_qp_masks; use the SDK pinned in dependencies.lock.json, "
-            "or explicitly select dense channels with DEEPEP_SHMEM_DENSE_QPS=1");
+            "This SHMEM does not expose the optional aclshmemx_set_udma_peer_qp_masks extension; "
+            "UDMA sparse admission is unavailable. Explicitly select dense channels with "
+            "DEEPEP_SHMEM_DENSE_QPS=1 if this UDMA runtime is required");
     }
     // A failed initialization can leave SDK state behind. Keep the process
     // reserved until a new process is launched; do not finalize foreign state.
@@ -107,7 +112,6 @@ Session::Session(int rank, int size, uint64_t bytes, const std::string& endpoint
             // The pinned SDK shares Clos SQs across peers; MESH routes are separate.
             check(aclshmemx_set_qp_num(ACLSHMEM_DATA_OP_UDMA, ascend_deepep::udma_layout::kQpCount),
                   "aclshmemx_set_qp_num");
-            check(aclshmemx_set_shared_jetty(ACLSHMEM_DATA_OP_UDMA, true), "aclshmemx_set_shared_jetty");
             std::vector<uint64_t> masks;
             if (dense != "1") {
                 masks.resize(size);

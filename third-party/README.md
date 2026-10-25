@@ -6,11 +6,15 @@
 
 | 目录 | 用途 | 固定提交 |
 | --- | --- | --- |
-| `shmem/` | 通信 SDK，提供 shared-jetty 支持 | `7f9d961d378225e69058080532cf4f5be16cc83d` |
+| `shmem/` | 官方master通信SDK，固定版本并适配runtime配置 | `8e3fc610f91ae9e5e8cf13748cfb74826b272c2a` |
 | `catlass/` | MegaMoE 编译时使用的模板头文件，不单独编译动态库 | `2b4bd7cbf7e67ebab23d7d5a99d472c83f90d9a1` |
 
 来源见根 [.gitmodules](../.gitmodules)，版本约束见 [dependencies.lock.json](../dependencies.lock.json)。
-SHMEM 固定到 `cann/shmem` 的 dev 提交；升级后需重编 SDK 和 wheel，准备步骤见[构建指南](../docs/build.md)。
+SHMEM于2026-10-25核对官方默认主线master后固定到上述提交（提交时间2026-10-23）；不在构建时追随移动分支。升级后需显式重编SDK和完整wheel。
+旧dev的peer-QP-mask扩展及可配置UDMA建连超时不在该主线：shared-jetty改用`init_attr.runtime_config.udma_shared_jetty`，UDMA建连轮询为120000ms，`SHMEM_UDMA_CONNECT_TIMEOUT_MS`不再生效。
+当前LL测试入口显式创建MTE-only Session，不初始化旧HT的UDMA/QP资源；跨rank packet/count布局不因升级改变。
+旧HT Dispatch直接写普通framework远端输出，缺少新SDK要求的已注册MR证明，已在Host/Notify前明确拒绝；不使用零地址context或伪造注册绕过。LL MTE以及合法对称workspace/control接口单独保持。
+显式UDMA使用者仍须选择`DEEPEP_SHMEM_DENSE_QPS=1`，不会静默退化到dense连接；不能将其当作上述HT普通GM输出限制的绕过方式。
 两个子仓库的许可证均为 CANN Open Software License Agreement Version 2.0，原文保留在各自的 `LICENSE` 中。
 MegaMoE 源文件中的 CANN 版权和许可声明保留，许可全文归档于 [cann.LICENSE](cann.LICENSE)，并随启用 MegaMoE 的 wheel 分发。
 第三方许可适用于对应来源内容，不替代项目自身的发行许可；引入依赖时遵循[贡献指南](../CONTRIBUTING.md#许可证)。
@@ -20,9 +24,10 @@ SHMEM 已有构建产物时，确认停止使用该 SDK 后可向准备脚本显
 下列分步骤入口仍保留给 SDK 准备与 CI 使用：
 
 ```bash
-git submodule update --init --recursive
-# 先加载 CANN 9.2.0 环境，再显式准备 SHMEM；不需要另外 clone CATLASS。
-python scripts/build_shmem.py
+git submodule update --init --recursive --depth 1
+# 先加载当前CANN环境；原SDK有使用者时先停止这些作业，再重建。
+unset SHMEM_ROOT CATLASS_ROOT
+python scripts/build_shmem.py --rebuild
 export LD_LIBRARY_PATH="$PWD/third-party/shmem/install/shmem/lib:${LD_LIBRARY_PATH:-}"
 ```
 
@@ -45,7 +50,7 @@ SDK 和 CANN 由部署环境提供，完整编译命令见 [构建说明](../doc
 
 EpGmmFused 使用单独准备的固定版本 CatCCOS、其 CATLASS 子模块及 SHMEM 源码/SDK，不以 MegaMoE 的 CATLASS 路径替代。准备命令、源码路径和版本检查见 [EpGmmFused 构建说明](../experiments/ep_gmm_fused/README.md#构建)；overlay 来源和打包许可见 [NOTICE](../experiments/ep_gmm_fused/NOTICE.md)。
 
-SDK 提供方声明源码版本，`scripts/record_shmem_sdk.py` 校验固定头文件并记录头文件与库的校验和；运行时核对实际加载的 SHMEM 库。头文件哈希相同不能单独证明二进制来源。依赖更新时同步更新 gitlink、锁文件和验证记录。
+SDK提供方声明源码版本，`scripts/record_shmem_sdk.py`校验固定头文件并记录完整include/src/lib输入（含设备hpp及helper/bootstrap库）的校验和；所有native wheel都拒绝旧revision、缺失或损坏的SDK。`--rebuild`明确执行上游`-clean`，不复用旧版本的CMake对象。头文件哈希相同不能单独证明二进制来源。
 
 ## API 参考来源
 

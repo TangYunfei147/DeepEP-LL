@@ -40,6 +40,15 @@ _PERSISTENT = (
 )
 
 
+def _require_ht_dispatch_capability(native):
+    if getattr(native, 'ht_dispatch_live_peer_output_supported', True) is False:
+        raise NotImplementedError(
+            'This SHMEM master build cannot validate the legacy HT ordinary peer-output registration; '
+            'expanded HT dispatch is disabled before Notify. Use the supported LL MTE path or a '
+            'separately qualified HT registered-output implementation.'
+        )
+
+
 def _collective_check(runtime, error, signature, operation, phase=0):
     """Validate locally, or exchange fixed-size preflight records in debug mode."""
     if not runtime.debug_collectives or runtime.group is None:
@@ -187,10 +196,11 @@ class ElasticBuffer:
         world_size: Optional[int] = None,
         bootstrap: str = "default",
         combine_only: bool = False,
-        use_1g_huge_pages: bool = True,
+        use_1g_huge_pages: Optional[bool] = None,
         debug_collectives: bool = False,
+        transport: str = "udma",
     ):
-        """Initialize MTE+URMA using a group or explicit rank/world_size.
+        """Initialize an explicitly selected transport with rank identities.
 
         Explicit identities bootstrap SHMEM directly and only validate locally.
         bootstrap="mpi" uses MPI_COMM_WORLD under MPICH instead of Config Store.
@@ -201,10 +211,21 @@ class ElasticBuffer:
         debug_collectives=True requires a group and enables HT preflight collectives.
         Otherwise HT checks parameters locally; the caller handles job-wide failure.
         num_bytes is the entire symmetric workspace, cleared at construction.
-        The workspace uses 1 GiB pages by default; allocation failure does not fall back to smaller pages.
+        transport="udma" retains the HT-capable MTE+UDMA resource default.
+        transport="mte" explicitly creates an LL MTE-only session, without HT QPs.
+        Omitted page size uses 1 GiB pages for UDMA and ordinary SHMEM allocation
+        for MTE. Explicit incompatible choices are rejected; no runtime fallback.
         Dispatch validates exactly 8 GiB when selecting LL; no extra allocation.
         """
         require_native("ElasticBuffer.__init__")
+        if transport not in ("udma", "mte"):
+            raise ValueError('transport must be "udma" or "mte"')
+        if use_1g_huge_pages is None:
+            use_1g_huge_pages = transport == "udma"
+        if type(use_1g_huge_pages) is not bool:
+            raise TypeError("use_1g_huge_pages must be bool or None")
+        if transport == "mte" and (use_1g_huge_pages or combine_only or bootstrap == "mpi"):
+            raise ValueError("MTE-only ElasticBuffer does not support 1 GiB pages, HT combine-only or MPI bootstrap")
         if (
             num_cpu_bytes != 0
             or deterministic is not False
@@ -240,7 +261,7 @@ class ElasticBuffer:
             group,
             num_bytes,
             num_cpu_timeout_secs,
-            udma=True,
+            udma=transport == "udma",
             rank=rank,
             world_size=world_size,
             bootstrap=bootstrap,
@@ -728,6 +749,7 @@ class ElasticBuffer:
                     return self._dispatch_low_latency(
                         x, topk_idx, topk_weights, num_experts, capacity, do_handle_copy, do_cpu_sync, plan
                     )
+        _require_ht_dispatch_capability(native)
         with runtime.notify_lock:
             error, signature = None, []
             try:

@@ -5,6 +5,9 @@ Modified by Joyce_An 2026
 
 # API 与运行时
 
+本分支2026-10-25升级至官方SHMEM master。LL入口显式使用`ElasticBuffer(..., transport="mte", use_1g_huge_pages=False)`，不按容量或B猜测资源后端；省略transport仍保留UDMA资源默认，省略page选项按显式transport推导。显式MTE与1GiB页/HT combine-only/MPI组合会拒绝。
+新版SDK没有旧dev的peer-QP-mask扩展，显式UDMA用户须主动选择dense连接。旧HT Dispatch普通framework远端输出不具备新主线已注册MR的证明，当前Host在Notify/launch前明确拒绝；LL MTE与合法对称workspace接口不受此能力限制。不能将“native库编译成功”描述为HT普通GM直写已通过设备验证。详见[依赖说明](../third-party/README.md)。
+
 `deep_ep.ElasticBuffer` 提供 V2 dispatch/combine。高吞吐（HT）和低时延（LL）使用相同方法，输入、权重、布局及路径选择见 [Elastic 接口](elastic.md)。本页说明核心 `deep_ep` 的公共对象、初始化、资源生命周期和兼容范围。MegaMoE 的 `SymmBuffer/StoreGroup` 和 EpGmmFused 的 UDMA 域使用独立接口，分别见 [MegaMoE](../experiments/megamoe/README.md)与 [EpGmmFused](../experiments/ep_gmm_fused/README.md)。
 
 ## 公共对象

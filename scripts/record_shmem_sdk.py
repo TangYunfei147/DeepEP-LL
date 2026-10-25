@@ -17,6 +17,33 @@ import json
 from pathlib import Path
 
 
+def sdk_input_files(sdk):
+    """Return every installed compile/link input, including Device headers.
+
+    The full SDK installs include/, src/{device,device_simt,host_device}/ and
+    lib/. A manifest limited to public *.h files misses implementation *.hpp
+    files and bootstrap/helper libraries that participate in the real build.
+    """
+    sdk = Path(sdk).resolve()
+    required = ("include/shmem.h", "src/device/gm2gm/shmemi_device_cc.h", "lib/libshmem.so")
+    for relative in required:
+        path = sdk / relative
+        if not path.is_file():
+            raise ValueError(f"Incomplete SHMEM SDK: missing {relative}")
+        if not path.resolve().is_relative_to(sdk):
+            raise ValueError(f"SDK files must stay inside the selected root: {relative}")
+    files = []
+    for directory in ("include", "src", "lib"):
+        for path in (sdk / directory).rglob("*"):
+            if path.is_symlink() and not path.resolve().is_relative_to(sdk):
+                raise ValueError(f"SDK files must stay inside the selected root: {path.relative_to(sdk)}")
+            if path.is_file():
+                if not path.resolve().is_relative_to(sdk):
+                    raise ValueError(f"SDK files must stay inside the selected root: {path.relative_to(sdk)}")
+                files.append(path)
+    return sorted(files)
+
+
 def record(sdk, revision, *, build_info=None):
     validate_build_identity(build_info)
     sdk = Path(sdk).resolve()
@@ -29,7 +56,7 @@ def record(sdk, revision, *, build_info=None):
         normalized = header.read_bytes().replace(b"\r\n", b"\n")
         if hashlib.sha256(normalized).hexdigest() != digest:
             raise ValueError(f"SDK public header mismatch: {relative}")
-    files = sorted((sdk / "include").rglob("*.h")) + [sdk / "lib/libshmem.so"]
+    files = sdk_input_files(sdk)
     hashes = {}
     for path in files:
         if not path.resolve().is_relative_to(sdk) or not path.is_file():
@@ -41,7 +68,9 @@ def record(sdk, revision, *, build_info=None):
     identity = {"revision": revision, "sha256": hashes}
     if build_info is not None:
         identity["build"] = build_info
-    manifest.write_text(json.dumps(identity, indent=2) + "\n", encoding="utf-8")
+    with manifest.open("x", encoding="utf-8", newline="\n") as stream:
+        json.dump(identity, stream, indent=2)
+        stream.write("\n")
     return manifest
 
 
@@ -51,6 +80,8 @@ def check(sdk):
     lock = json.loads((Path(__file__).resolve().parents[1] / "dependencies.lock.json").read_text())["shmem"]
     manifest = sdk / "deepep-sdk.json"
     recorded = json.loads(manifest.read_text())
+    if not isinstance(recorded, dict):
+        raise ValueError("Invalid SDK identity")
     validate_build_identity(recorded.get("build"))
     if recorded.get("revision") != lock["revision"]:
         raise ValueError("SDK source revision must match dependencies.lock.json")
@@ -59,9 +90,12 @@ def check(sdk):
         if hashlib.sha256(data).hexdigest() != expected:
             raise ValueError(f"SDK public header mismatch: {relative}")
     hashes = recorded.get("sha256", {})
-    required = {"lib/libshmem.so", *("include/" + name for name in lock["header_sha256_lf"])}
+    if not isinstance(hashes, dict):
+        raise ValueError("Invalid SDK manifest checksums")
+    required = {path.relative_to(sdk).as_posix() for path in sdk_input_files(sdk)}
+    required.update("include/" + name for name in lock["header_sha256_lf"])
     if not required.issubset(hashes):
-        raise ValueError("SDK manifest must cover the locked headers and libshmem.so")
+        raise ValueError("SDK manifest must cover all installed include/src/lib inputs")
     for relative, expected in hashes.items():
         path = (sdk / relative).resolve()
         if not path.is_relative_to(sdk) or not path.is_file():

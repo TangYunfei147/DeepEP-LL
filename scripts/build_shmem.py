@@ -82,7 +82,8 @@ def prepare(root=ROOT, *, rebuild=False, if_needed=True, allow_local_changes=Fal
     if not jobs.isdecimal() or not 1 <= int(jobs) <= 64:
         raise ValueError("CMAKE_BUILD_PARALLEL_LEVEL must be in [1, 64]")
 
-    # 上游脚本会清空 build/install，并生成 ci 打包产物；禁止跳转到其他目录。
+    # Mainline always recreates install/, but reuses build/ unless -clean is
+    # requested. Validate every upstream output root before either operation.
     for name in ("build", "install", "ci", "3rdparty"):
         path = source / name
         if path.resolve() != path:
@@ -131,11 +132,28 @@ def prepare(root=ROOT, *, rebuild=False, if_needed=True, allow_local_changes=Fal
             f'exec {shlex.quote(str(Path(git_executable).resolve()))} "$@"\n'
         )
         wrapper.chmod(0o700)
-        build_env = dict(os.environ, CMAKE_BUILD_PARALLEL_LEVEL=jobs)
+        cache = root / ".cache" / "shmem-build"
+        logs = root / ".logs" / "shmem-build"
+        for path in (cache, logs):
+            path.mkdir(parents=True, exist_ok=True)
+        build_env = dict(os.environ, CMAKE_BUILD_PARALLEL_LEVEL=jobs,
+                         TMPDIR=git_dir, TMP=git_dir, TEMP=git_dir,
+                         XDG_CACHE_HOME=str(cache), ASCEND_CACHE_PATH=str(cache / "ascend"),
+                         ASCEND_WORK_PATH=str(logs / "ascend"),
+                         ASCEND_PROCESS_LOG_PATH=str(logs / "ascend"),
+                         SHMEM_LOG_PATH=str(logs / "shmem"))
         build_env["PATH"] = git_dir + os.pathsep + build_env.get("PATH", os.defpath)
+        command = ["bash", "-e", "scripts/build.sh", "-soc_type", lock["target"]]
+        if rebuild:
+            # Explicit rebuild is also a cold CMake configure. A previous
+            # revision's cache, options or object graph must not leak across it.
+            command.append("-clean")
+        # Do not request docs/examples/package modes: those can install Python
+        # tooling or build unrelated dependencies. The normal vendor build may
+        # fetch nlohmann-json under source/3rdparty unless preseeded there.
         # -e 防止上游中间命令失败后继续打包，随后误登记旧库为成功产物。
         subprocess.run(
-            ["bash", "-e", "scripts/build.sh", "-soc_type", lock["target"]],
+            command,
             cwd=source,
             env=build_env,
             check=True,
@@ -160,7 +178,7 @@ def prepare(root=ROOT, *, rebuild=False, if_needed=True, allow_local_changes=Fal
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--rebuild", action="store_true", help="Regenerate this submodule's build/install artifacts")
+    parser.add_argument("--rebuild", action="store_true", help="Clean this submodule's native build cache and regenerate its SDK; stop SDK users first")
     parser.add_argument("--if-needed", action="store_true", help="Compatibility alias: verified SDK reuse is already the default")
     parser.add_argument(
         "--allow-local-changes",

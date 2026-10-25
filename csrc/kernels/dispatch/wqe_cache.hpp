@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: BSD-3-Clause
 #pragma once
+#include "../shmem_udma_address.hpp"
 
 // Clos-only scratch. Cache one 32-row descriptor batch per destination server;
 // each visit still submits its original DB batch before rotating to the next peer.
@@ -28,10 +29,9 @@ __aicore__ inline LocalTensor<uint64_t> PrepareClosBuiltWqes(DeepepSecondaryStat
         DetailAdd<Profile>(s.detail, 7U, build_start - load_start);
         const uint32_t slot = aclshmemi_udma_compute_slot(peer, static_cast<uint32_t>(-1));
         auto* header = reinterpret_cast<__ubuf__ uint64_t*>(scratch);
-        aclshmemi_udma_fill_sqe_base_ctx<uint8_t, aclshmemi_udma_opcode_t::UDMA_OP_WRITE, __ubuf__ aclshmemi_sqe_ctx_t*,
-                                         kUdmaDataRoNoCqeConfig>(
+        if (!DeepepUdmaAddress::FillRegisteredRemote<uint8_t,aclshmemi_udma_opcode_t::UDMA_OP_WRITE,kUdmaDataRoNoCqeConfig>(
             reinterpret_cast<__ubuf__ aclshmemi_sqe_ctx_t*>(header), reinterpret_cast<__gm__ uint8_t*>(target),
-            aclshmemi_udma_get_mem_info(aclshmemi_udma_qp_info_fetch(), slot, qp), 0U);
+            aclshmemi_udma_get_mem_info(aclshmemi_udma_qp_info_fetch(), slot, qp), 0U)) return slots.Get<uint64_t>();
         auto output = slots.GetWithOffset<uint64_t>(128U, 256U);
         SetFlag<HardEvent::S_V>(EVENT_ID0);
         WaitFlag<HardEvent::S_V>(EVENT_ID0);
@@ -39,7 +39,7 @@ __aicore__ inline LocalTensor<uint64_t> PrepareClosBuiltWqes(DeepepSecondaryStat
         WaitFlag<HardEvent::MTE2_V>(EVENT_ID0);
         asc_vf_call<DispatchBuildPeerTableWqesVf>(dim3(32U), reinterpret_cast<__ubuf__ uint64_t*>(output.GetPhyAddr()),
                                                   header, reinterpret_cast<__ubuf__ uint32_t*>(rows.GetPhyAddr()),
-                                                  emit_count, s.row_bytes, source, target);
+                                                  emit_count, s.row_bytes, source, header[5]);
         SetFlag<HardEvent::V_S>(EVENT_ID0);
         WaitFlag<HardEvent::V_S>(EVENT_ID0);
         DetailAdd<Profile>(s.detail, 8U, DetailClock<Profile>(s.detail_mode) - build_start);
@@ -55,10 +55,9 @@ __aicore__ inline LocalTensor<uint64_t> PrepareClosBuiltWqes(DeepepSecondaryStat
     // are also part of the key; phase changes invalidate the row range below.
     if (!(s.wqe_cache_valid & bit) || tag[0] != key || header[5] != target) {
         const uint32_t slot = aclshmemi_udma_compute_slot(peer, static_cast<uint32_t>(-1));
-        aclshmemi_udma_fill_sqe_base_ctx<uint8_t, aclshmemi_udma_opcode_t::UDMA_OP_WRITE, __ubuf__ aclshmemi_sqe_ctx_t*,
-                                         kUdmaDataRoNoCqeConfig>(
+        if (!DeepepUdmaAddress::FillRegisteredRemote<uint8_t,aclshmemi_udma_opcode_t::UDMA_OP_WRITE,kUdmaDataRoNoCqeConfig>(
             reinterpret_cast<__ubuf__ aclshmemi_sqe_ctx_t*>(header), reinterpret_cast<__gm__ uint8_t*>(target),
-            aclshmemi_udma_get_mem_info(aclshmemi_udma_qp_info_fetch(), slot, qp), 0U);
+            aclshmemi_udma_get_mem_info(aclshmemi_udma_qp_info_fetch(), slot, qp), 0U)) return slots.Get<uint64_t>();
         tag[0] = key;
         tag[1] = 0U;
         tag[2] = 0U;
@@ -81,7 +80,7 @@ __aicore__ inline LocalTensor<uint64_t> PrepareClosBuiltWqes(DeepepSecondaryStat
         WaitFlag<HardEvent::MTE2_V>(EVENT_ID0);
         asc_vf_call<DispatchBuildPeerTableWqesVf>(dim3(32U), reinterpret_cast<__ubuf__ uint64_t*>(output.GetPhyAddr()),
                                                   header, reinterpret_cast<__ubuf__ uint32_t*>(rows.GetPhyAddr()),
-                                                  count, s.row_bytes, source, target);
+                                                  count, s.row_bytes, source, header[5]);
         SetFlag<HardEvent::V_S>(EVENT_ID0);
         WaitFlag<HardEvent::V_S>(EVENT_ID0);
         DetailAdd<Profile>(s.detail, 8U, DetailClock<Profile>(s.detail_mode) - build_start);

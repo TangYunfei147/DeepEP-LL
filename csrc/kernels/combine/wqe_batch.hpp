@@ -1,5 +1,6 @@
 // Copyright (c) 2026, Lu Lu
 #pragma once
+#include "../shmem_udma_address.hpp"
 
 // A descriptor is {source VA, target VA, immutable header UB address, reserved}.
 // Prepare addresses once in route order; the SIMT loop contains no mode/peer
@@ -52,11 +53,10 @@ __aicore__ inline void CacheCombinePutHeader(__ubuf__ uint64_t* header, GM_ADDR 
 {
     auto* info = aclshmemi_udma_qp_info_fetch();
     const uint32_t slot = aclshmemi_udma_compute_slot(peer, static_cast<uint32_t>(-1));
-    auto* remote = reinterpret_cast<__gm__ uint8_t*>(aclshmem_ptr(workspace, peer));
-    aclshmemi_udma_fill_sqe_base_ctx<uint8_t, aclshmemi_udma_opcode_t::UDMA_OP_WRITE, __ubuf__ aclshmemi_sqe_ctx_t*,
-                                     kPayloadRoNoCqeConfig>(reinterpret_cast<__ubuf__ aclshmemi_sqe_ctx_t*>(header),
-                                                            remote, aclshmemi_udma_get_mem_info(info, slot, qp), 0U);
-    header[7] = reinterpret_cast<uint64_t>(remote);
+    if (!DeepepUdmaAddress::FillLocalSymmetric<uint8_t,aclshmemi_udma_opcode_t::UDMA_OP_WRITE,kPayloadRoNoCqeConfig>(
+            reinterpret_cast<__ubuf__ aclshmemi_sqe_ctx_t*>(header),workspace,
+            aclshmemi_udma_get_mem_info(info,slot,qp),0U)) return;
+    header[7] = header[5]; // Already translated workspace base in the peer MR.
 }
 
 // Local URMA keeps the existing 128-row submit quantum and its single tail
@@ -86,11 +86,10 @@ struct LocalPutBatch {
         auto* tail_header = reinterpret_cast<__ubuf__ uint64_t*>(scratch + kLocalHeaderOffset + 64U);
         // Match the SDK aggregate contract: only the final RO requests a CQE,
         // and the SDK remains responsible for SQ admission/CQ accounting.
-        aclshmemi_udma_fill_sqe_base_ctx<uint8_t, aclshmemi_udma_opcode_t::UDMA_OP_WRITE, __ubuf__ aclshmemi_sqe_ctx_t*,
-                                         kPayloadRoConfig>(
+        if (!DeepepUdmaAddress::FillRegisteredRemote<uint8_t,aclshmemi_udma_opcode_t::UDMA_OP_WRITE,kPayloadRoConfig>(
             reinterpret_cast<__ubuf__ aclshmemi_sqe_ctx_t*>(tail_header),
             reinterpret_cast<__gm__ uint8_t*>(rows[(count - 1U) * 4U + 1U]),
-            aclshmemi_udma_get_mem_info(aclshmemi_udma_qp_info_fetch(), slot, 0U), count - 1U);
+            aclshmemi_udma_get_mem_info(aclshmemi_udma_qp_info_fetch(), slot, 0U), count - 1U)) return;
         rows[(count - 1U) * 4U + 2U] = reinterpret_cast<uint64_t>(tail_header);
         BuildCombinePutWqes(scratch, rows, count, bytes);
         aclshmemi_udma_flush_aggregate_wqes(scratch, context, slot, 0U, EVENT_ID0, count, kWqeBytes);

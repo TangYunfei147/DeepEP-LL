@@ -150,7 +150,8 @@ def comparison_metadata(args, world, m):
                 skip_check=args.skip_check, dispatch_only=args.dispatch_only,
                 fresh_buffer_per_case=args.fresh_buffer_per_case,
                 trace_ops=args.trace_ops, num_bytes=args.num_bytes,
-                use_1g_huge_pages=(runtime['transport']!='rdma' if args.use_1g_huge_pages is None else bool(args.use_1g_huge_pages)),
+                session_transport='mte',
+                use_1g_huge_pages=(False if args.use_1g_huge_pages is None else bool(args.use_1g_huge_pages)),
                 source_revision=os.environ.get('DEEPEP_LL_RUN_REVISION','unknown'),
                 source_dirty=os.environ.get('DEEPEP_LL_RUN_DIRTY','unknown'))
 
@@ -255,7 +256,7 @@ def make_parser():
     parser.add_argument("--dispatch-only", action="store_true")
     parser.add_argument("--repeat-combine", type=int, default=2)
     parser.add_argument("--correctness-repeats", type=int, default=3, help="Fresh routes on the same Buffer; outside profiling")
-    parser.add_argument("--use-1g-huge-pages", type=int, choices=(0, 1), default=0, help="LL defaults to 0; explicit 1 is MTE-only")
+    parser.add_argument("--use-1g-huge-pages", type=int, choices=(0, 1), default=0, help="Current pure-MTE LL session requires 0")
     parser.add_argument("--output", help="New rank-0 JSON result file (will not overwrite)")
     return parser
 
@@ -513,6 +514,8 @@ def resolve_delay_counts(args):
 
 
 def validate_args(args, world):
+    if args.use_1g_huge_pages:
+        raise ValueError('The current LL MTE-only session requires --use-1g-huge-pages 0')
     if args.ll_expert_timer:
         raise ValueError("Sparse milestone capture rejects legacy per-expert GM instrumentation")
     if getattr(args,'ll_profile_capture',False) and not args.ll_stage_timer:
@@ -1326,7 +1329,8 @@ def worker(local_rank, args):
                 num_topk=0,
                 explicitly_destroy=True,
                 num_cpu_timeout_secs=args.num_cpu_timeout_secs,
-                use_1g_huge_pages=(capability["transport"] != "rdma" if args.use_1g_huge_pages is None else bool(args.use_1g_huge_pages)),
+                transport="mte",
+                use_1g_huge_pages=(False if args.use_1g_huge_pages is None else bool(args.use_1g_huge_pages)),
             )
 
         if not args.fresh_buffer_per_case:

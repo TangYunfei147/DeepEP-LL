@@ -73,7 +73,7 @@ def test_beta_requires_sdk_and_timer_requires_beta(build):
         "missing_device_header",
     ],
 )
-def test_sdk_identity_warning(build, monkeypatch, tmp_path, fault):
+def test_sdk_identity_is_required_for_every_native_wheel(build, monkeypatch, tmp_path, fault):
     import hashlib
     import warnings
     from types import SimpleNamespace
@@ -109,7 +109,7 @@ def test_sdk_identity_warning(build, monkeypatch, tmp_path, fault):
         "sha256": {
             str(path.relative_to(sdk).as_posix()): hashlib.sha256(path.read_bytes()).hexdigest()
             for path in files
-            if path.is_relative_to(sdk) and not path.is_relative_to(sdk / "src")
+            if path.is_relative_to(sdk)
         },
     }
     if fault == "revision":
@@ -136,17 +136,13 @@ def test_sdk_identity_warning(build, monkeypatch, tmp_path, fault):
     }
     with warnings.catch_warnings(record=True) as messages:
         warnings.simplefilter("always")
-        if fault in ("missing_library", "missing_device_header"):
-            with pytest.raises(RuntimeError, match="missing"):
+        if fault is not None:
+            with pytest.raises(RuntimeError):
                 build.build_configuration(env)
-            return
-        if fault in ("missing", "json", "list"):
-            with pytest.raises(RuntimeError, match="identity"):
-                build.build_configuration(env)
+            assert not messages  # Do not continue with old or damaged SDK files.
             return
         result = build.build_configuration(env)
-    assert bool(messages) == (fault is not None)
-    assert all("continuing with SHMEM_ROOT=" in str(message.message) for message in messages)
+    assert not messages
     assert (
         result["shmem"]["sha256"]["lib/libshmem.so"]
         == hashlib.sha256((sdk / "lib/libshmem.so").read_bytes()).hexdigest()

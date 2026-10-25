@@ -138,6 +138,7 @@ def checked_run(argv, **kwargs):
 
 
 def validate_shmem_sdk(root, expected):
+    from scripts.record_shmem_sdk import sdk_input_files
     manifest = Path(root) / "deepep-sdk.json"
     if not manifest.is_file():
         raise RuntimeError("SHMEM SDK needs deepep-sdk.json; see scripts/record_shmem_sdk.py")
@@ -149,14 +150,19 @@ def validate_shmem_sdk(root, expected):
         data = (manifest.parent / "include" / relative).read_bytes().replace(b"\r\n", b"\n")
         if hashlib.sha256(data).hexdigest() != digest:
             raise RuntimeError(f"SHMEM public API differs from the pinned SDK: {relative}")
-    for relative, digest in sdk["sha256"].items():
+    hashes = sdk.get("sha256")
+    if not isinstance(hashes, dict):
+        raise RuntimeError("Invalid SHMEM SDK manifest checksums")
+    required = {path.relative_to(manifest.parent.resolve()).as_posix()
+                for path in sdk_input_files(manifest.parent)}
+    if not required.issubset(hashes):
+        raise RuntimeError("SHMEM SDK manifest must cover all installed include/src/lib inputs")
+    for relative, digest in hashes.items():
         path = (manifest.parent / relative).resolve()
         if not path.is_relative_to(manifest.parent.resolve()) or not path.is_file():
             raise RuntimeError("Invalid SHMEM SDK manifest path")
         if hashlib.sha256(path.read_bytes()).hexdigest() != digest:
             raise RuntimeError(f"SHMEM SDK checksum mismatch: {relative}")
-    if "lib/libshmem.so" not in sdk["sha256"] or not any(key.startswith("include/") for key in sdk["sha256"]):
-        raise RuntimeError("SHMEM SDK manifest must cover headers and libshmem.so")
     return sdk
 
 
@@ -237,41 +243,20 @@ def build_configuration(environment=None):
     lock = json.loads((ROOT / "dependencies.lock.json").read_text(encoding="utf-8"))
     sdk = {}
     try:
-        if not manifest.is_file():
-            raise RuntimeError("SHMEM SDK has no deepep-sdk.json")
-        sdk = json.loads(manifest.read_text(encoding="utf-8"))
-        if not isinstance(sdk, dict):
-            raise ValueError("Invalid SHMEM SDK manifest")
-        validate_build_identity(sdk.get("build") if isinstance(sdk, dict) else None)
-        if sdk.get("revision") != lock["shmem"]["revision"]:
-            raise RuntimeError("SHMEM SDK source revision differs from dependencies.lock.json")
-        for relative, expected in lock["shmem"]["header_sha256_lf"].items():
-            data = (manifest.parent / "include" / relative).read_bytes().replace(b"\r\n", b"\n")
-            if hashlib.sha256(data).hexdigest() != expected:
-                raise RuntimeError(f"SHMEM public API differs from the pinned SDK: {relative}")
-        hashes = sdk.get("sha256")
-        if not isinstance(hashes, dict):
-            raise ValueError("Invalid SHMEM SDK manifest checksums")
-        for relative, expected in hashes.items():
-            path = (manifest.parent / relative).resolve()
-            if not path.is_relative_to(manifest.parent.resolve()) or not path.is_file():
-                raise RuntimeError("Invalid SHMEM SDK manifest path")
-            if hashlib.sha256(path.read_bytes()).hexdigest() != expected:
-                raise RuntimeError(f"SHMEM SDK checksum mismatch: {relative}")
-        if "lib/libshmem.so" not in hashes or not any(key.startswith("include/") for key in hashes):
-            raise RuntimeError("SHMEM SDK manifest must cover headers and libshmem.so")
+        sdk = validate_shmem_sdk(manifest.parent, lock["shmem"])
     except (OSError, ValueError, TypeError, RuntimeError) as exc:
-        if beta == "ON":
-            raise
-        warnings.warn(f"{exc}; continuing with SHMEM_ROOT={manifest.parent}", RuntimeWarning, stacklevel=2)
+        # LL and HT both consume SDK internals. A moving/incompatible SDK must
+        # not silently build against the old revision after a submodule update.
+        raise RuntimeError(
+            f"Invalid SHMEM SDK identity: {exc}; initialize the pinned submodule "
+            "and explicitly rebuild the project SDK before building the wheel"
+        ) from exc
     library = manifest.parent / "lib/libshmem.so"
     validate_build_identity(sdk.get("build") if isinstance(sdk, dict) else None)
     if not library.is_file():
         raise RuntimeError(f"SHMEM SDK is missing {library}")
-    files = sorted(
-        path for path in (manifest.parent / "include").rglob("*") if path.suffix in {".h", ".hpp"} and path.is_file()
-    )
-    files.append(library)
+    from scripts.record_shmem_sdk import sdk_input_files
+    files = sdk_input_files(manifest.parent)
     # Record actual inputs so replacing an unpinned SDK invalidates the build cache.
     result["shmem"] = {
         "revision": sdk.get("revision", "unknown") if isinstance(sdk, dict) else "unknown",

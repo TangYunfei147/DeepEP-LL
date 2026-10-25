@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: BSD-3-Clause
 #pragma once
+#include "../shmem_udma_address.hpp"
 
 // Each pair is (source row, final peer row). The caller selects input or received GM.
 // No per-WQE branch or CQE selection; the header fixes every data WQE to RO/no-CQE.
@@ -42,11 +43,9 @@ __aicore__ inline void InitFmPrimaryContext(DeepepPrimaryState& p, uint32_t peer
             trap();
             return;
         }
-        aclshmemi_udma_fill_sqe_base_ctx<uint8_t, aclshmemi_udma_opcode_t::UDMA_OP_WRITE, __ubuf__ aclshmemi_sqe_ctx_t*,
-                                         kUdmaDataRoNoCqeConfig>(
+        if (!DeepepUdmaAddress::FillRegisteredRemote<uint8_t,aclshmemi_udma_opcode_t::UDMA_OP_WRITE,kUdmaDataRoNoCqeConfig>(
             reinterpret_cast<__ubuf__ aclshmemi_sqe_ctx_t*>(header), target,
-            aclshmemi_udma_get_mem_info(info, slot, 0U), 0U);
-        header[5] = reinterpret_cast<uint64_t>(target);
+            aclshmemi_udma_get_mem_info(info, slot, 0U), 0U)) return;
         p.fm_context = reinterpret_cast<uint64_t>(ctx);
         p.fm_queue = ctx->state_addr;
         p.fm_slot = slot;
