@@ -98,3 +98,5 @@ ST `--ll-profile-capture`将实际capture调用放进独立profiler窗口，包�
 使非模板DeviceTimer/RelayCompletionScope在Bisheng Host预处理阶段也引用__aicore__函数。
 Host绑定直接包含profile头保持普通constexpr；不要只依赖__CCE_IS_AICORE__，也不要仅修补某个调用点。
 回归tests/ll_stage_timer/test_profile_device_context.py包含真实Bisheng OFF/六组ON编译探针（不运行NPU）。
+
+EP16小direct/P1计数接收候选：device/dispatch_count_ready_extract.h把ready判断和uint32计数提取合并为一个VF，由dispatch_parallel_count_prefix.h调用；原快照MTE2和V_S依赖、clear/前缀发布顺序不变。其他P/域保持旧路径。基线与测试见../ll_stage_timer/P1_COUNT_VF.md。

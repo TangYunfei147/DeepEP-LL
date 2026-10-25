@@ -688,3 +688,78 @@ Evidence paths relative to the remote artifact root:
 Complete target A/B commands are in `tests/ll_stage_timer/PARALLEL_PREFIX.md`.
 NPU correctness, port utilization and target OFF/ON performance remain untested;
 neither CPU models nor compilation establish latency recovery.
+
+## 2026-10-25 P1 fused count ready/extraction VF
+
+Independent candidate against `578d32b37330fd579b2c7376d651b7ffadeff9e8`.
+Only EP16 small-direct with effective P1 uses a single VF for ready checking
+and uint32 count extraction. Keep S30/R26/P1 for A/B. The original MTE2 snapshot,
+one V-to-Scalar retirement, count cleanup/publication ordering, buffers, lane
+counts, protocol19030, sparse schema15 and all seven input modes remain.
+Other P/domain/dedup paths retain their previous implementation. There is no
+new build switch or template-mode multiplication; SDK8e3fc61 is unchanged.
+
+Local validation:
+
+- Actual portable-Zig C++ execution:3tests, including9816VF semantic cases and
+ 108polling configurations extracted from the actual production method. Covers
+ exact ready bits, uint32 counts above2^24, all tails0..1024, failed polls followed
+ by ready retries, source/guard preservation, and unchanged fallback paths.
+- Full related Python/source/build suite:769passed,53environment skips in30.63s,
+ `.tmp/count-vf-full-cpu-001.log`. A pytest-cache permission warning did not affect
+ results. Native tests were separately executed as above.
+- Independent review checked EP/P scope, input/output lifetimes, masks, retry
+ retirement and unchanged count cleanup ordering.
+
+Authorized27 validation used the same isolated root as the preceding SDK/P
+experiment. An unrelated untracked directory triggered the old whole-worktree
+cleanliness precheck before compilation. All unrelated untracked files were
+preserved; tracked sources and SDK remained clean. No NPU was run.
+
+The standalone new-VF CANN interface probe passed. Separate empty production
+object directories, S30/R26/P1, CANN9.3.0, Ascend950/dav-3510, O2 and jobs4:
+
+| Timer | Cold selector + seven-mode compilation | Result |
+|---|---:|---|
+| OFF | 38.185s | all8units exit0 |
+| sparse ON | 40.251s | all8units exit0 |
+
+These are compile wall times, not operator performance. The earlier P6 cold
+times are a different configuration and are not a controlled speedup comparison.
+The first complete OFF/ON wheels both built and linked successfully. A parallel
+Linux/G++ CPU test run found missing `<iterator>` includes in the two new test
+fixtures (`std::begin/end` not declared). This was reported immediately and
+fixed in the fixtures only; no production kernel correction was required.
+The corrected Linux suite then passed **142/142 in12.54s**, with no skips.
+
+Both complete wheels were rebuilt under the final test/source fingerprint,
+installed into private venvs and Host-verified. The complete build includes
+HT/LL dispatch and combine plus all Host bindings; no production component,
+architecture or optimization was removed. Final OFF/ON builds had no compiler
+or linker errors. Existing upstream macro/deprecation warnings remain.
+The actual loaded SDK path and library SHA256 match the verified SDK manifest
+for each wheel; P1, protocol19030, timer mode and source fingerprint also match.
+No shared Python, original deployment or original SDK was changed.
+
+Final Linux source fingerprint (also covers tests and scripts):
+`3cf59518dc900d23883db9eea6b768fbaa6fb22ac6aefdad18ec7a1c29489e0a`.
+Only Markdown validation records were added after this verification; their
+contents do not participate in that fingerprint. Final wheel SHA256:
+
+- OFF: `5816719e0d559bec1d38c22686dc669d429c52b7f046c0617b91536f0c2997fa`
+- ON: `e32455f08f1575ec76fec8a554fa46faafcb57a2bd14b9e36f8aa3535d3c232a`
+
+Evidence relative to the isolated root:
+
+- `.logs/p1-count-vf-sdk-reuse.log`, `.logs/p1-count-vf-preflight.log`
+- `.tmp/p1-count-vf-cold-{off,on}-001/timing.json`
+- `.logs/p1-count-vf-native-001.log` (initial fixture error) and
+  `.logs/p1-count-vf-native-002.log` (142passed)
+- `diagnostic-runs/p1_count_vf_candidate_build_002/node_000/wheel-map.json`
+- That node's `logs/{off,sparse}-{build,install,identity}.log` and `wheels/`
+- `.logs/p1-count-vf-loaded-sdk.json` and `.logs/p1-count-vf-{off,sparse}-load.log`
+
+Target correctness and OFF latency still require the user's16-card machine.
+Use `tests/ll_stage_timer/P1_COUNT_VF.md` for matched baseline/candidate builds
+and sequential runs; send only the two initial summaries. No latency benefit
+is claimed from compilation or CPU models.

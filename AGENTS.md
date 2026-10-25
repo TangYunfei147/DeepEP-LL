@@ -81,3 +81,9 @@ active_capture_profile的kernel_us/status/reason属于逐rank/轮次观察值，
 P26/6/1实验固定S30/R26、新SDK、采样参数及均匀随机top-k种子配对。先完成全部六个OFF/sparse wheel及Host检查，再串行采样；首次只发三个SEND_FIRST，整个实验含补充累计<=10次。实际设备与CANN验收状态以docs/BUILD_DISPATCH_SPLIT.md为准，不以CPU或历史schema编译代替。
 
 同日用户明确授权27在`/home/tyf/Q4_remote_test/DeepEP-LL-g4-small-b-prefix/.tmp/topology-mainline-20261025`编译新SDK及完整OFF/ON wheel，不运行NPU，编译报错及时告知。已完成dda407e源码验证：官方SDK8e3fc61无补丁；P6/S30R26七mode+selector冷编译OFF37.682s/ON39.696s；P26/6/1六份完整wheel全部编译、链接、Host身份和实际新SDK路径/哈希核验通过。Linux Host/C++回归162pass；无编译/链接错误，仅上游宏重定义警告。原部署、SDK和共享Python未改；四可见性变量0,1。无NPU正确性/性能结论。日志及wheel-map在该隔离根目录，细节见docs/BUILD_DISPATCH_SPLIT.md。
+
+## P1 count 单VF独立候选（2026-10-25）
+
+用户要求固定P1，把ready检查和计数提取合并成单个VF，单独提交以便A/B，并继续27隔离目录完整OFF/ON编译、不运行NPU。基线578d32b；仅EP16小direct且有效P1启用P1CountReadyAndExtract，其他P/域/dedup保持原路径，P全局默认不改。保留MTE2_V及单次V_S；ready精确float1位模式，count保留uint32，失败轮私有scratch不得用于清理/发布。复用已有UB，不改清理顺序、前缀发布、wire、SDK、lane或combine。A/B两边固定S30R26/P1，使用各自源码匹配的wheel，先全部构建后串行采样；指南tests/ll_stage_timer/P1_COUNT_VF.md。
+
+该候选已通过27独立VF预编译、七mode+selector冷编译OFF38.185s/ON40.251s、完整OFF/ON wheel及Host/实际SDK路径哈希核验。Linux相关142pass；初轮CPU测试漏<iterator>已修正并重跑，生产kernel无编译错误。SDK8e3fc61校验复用未重建，原部署及隔离目录其他任务未跟踪文件保留。最终源码指纹3cf59518dc900d23883db9eea6b768fbaa6fb22ac6aefdad18ec7a1c29489e0a；没有NPU正确性/性能结论。证据见docs/BUILD_DISPATCH_SPLIT.md。

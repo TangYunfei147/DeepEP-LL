@@ -1,4 +1,5 @@
 #pragma once
+#include "dispatch_count_ready_extract.h"
 // Included after ServerDedupCounts is defined. Small non-dedup only.
 namespace DispatchDedup {
 __aicore__ inline void ServerDedupCounts::ParallelControl(GlobalTensor<uint32_t>& view,uint64_t offset)
@@ -49,6 +50,20 @@ __aicore__ inline bool ServerDedupCounts::TryParallelRecvCnt()
     LL_SEG_BEGIN(countSnapshotWait, COUNT_SNAPSHOT_WAIT);
     SyncFunc<HardEvent::MTE2_V>();
     LL_SEG_END(countSnapshotWait, COUNT_SNAPSHOT_WAIT);
+    if(epWorldSize_==16U && LlSmallBPrefixProducerCount(epWorldSize_)==1U){
+        LL_SEG_BEGIN(countReadyAndExtract, COUNT_READY_CHECK);
+        auto complete=scalarBuf_.GetWithOffset<uint32_t>(8U,32U);
+        asc_vf_call<P1CountReadyAndExtract>(
+            reinterpret_cast<__ubuf__ uint32_t*>(status.GetPhyAddr()),
+            reinterpret_cast<__ubuf__ uint32_t*>(gatherMaskOutBuf_.Get<uint32_t>().GetPhyAddr()),
+            reinterpret_cast<__ubuf__ uint32_t*>(complete.GetPhyAddr()),recStatusNumPerCore_);
+        // Retire every VF read/write before a retry overwrites the snapshot.
+        // Extracted counts remain private scratch until the ready result passes.
+        SyncFunc<HardEvent::V_S>();
+        const bool ready=complete.GetValue(0U)!=0U;
+        LL_SEG_END(countReadyAndExtract, COUNT_READY_CHECK);
+        if(!ready)return false;
+    }else{
     LL_SEG_BEGIN(countReadyCheck, COUNT_READY_CHECK);
     auto gather=gatherMaskOutBuf_.Get<float>();
     auto pattern=scalarBuf_.GetWithOffset<uint32_t>(8U,0U);
@@ -69,6 +84,7 @@ __aicore__ inline bool ServerDedupCounts::TryParallelRecvCnt()
     GatherMask(gather,status,pattern,true,2U,{1U,uint16_t(recStatusNumPerCore_),1U,0U},n);
     SyncFunc<HardEvent::V_S>();
     LL_SEG_END(countValueExtract, COUNT_VALUE_EXTRACT);
+    }
     WaitDispatchClearStatus(); // Only this producer's disjoint count slice.
     LL_SPARSE_MARK(COUNTS_RECEIVED);
     return true;
