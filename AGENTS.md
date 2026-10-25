@@ -1,5 +1,13 @@
 # LL 编译维护约束
 
+## MTE3反压专项验证（2026-10-25，当前诊断）
+
+- 用户要求通过增加流水等待验证MTE3是否为主瓶颈，完成后提交推送、给目标测试命令。沿用不连接27和单文件≤65535字节/最多10文件约定。
+- schema16/profile7/mte3保持512B/核，18首次点＋8项指定依赖统计。observe不增加同步；mte3-tx/mte3-rx仅挂载capture的dispatch S核增加MTE3_S，随后立即重复同事件作为无新搬运对照。OFF及ON未挂载timer不增加wait/clock。
+- 当前ST FP8是预量化tuple，TX_INPUT_READY实际MTE2_S；RX_PREPARE_VS精确对应原接收任务表Build末V_S。不得误称该case测到量化等待。原始等待、强制等待和对照分别统计，MTE3_S含此前工作及生产者依赖，不能称纯网络时间。
+- 一键入口tests/ll_control_opt/profile_mte3.py固定EP16/B=M256/H3584/K8/E384/G4/S30R26、dispatch-only。同源码OFF/ON完整wheel与独立venv，全rank身份/正确性校验；3seed下ON条件轮换顺序，实际capture profiler核对完整task。详情MTE3_BACKPRESSURE.md。
+- 报告检查各rank/core路由包数、实际lane/overlap身份，按同rank/core比较等待迁移；固定observe最慢核作尾部对照。不从干预导致的耗时增长或单项强制等待直接判定baseline主瓶颈，不相加重叠里程碑，不跨rank时钟相减。
+
 ## 结果回传文件限制（2026-10-25，持续有效）
 
 - 用户只能发送单个不超过65535、总数不超过10个的文件；导出时按每个文件实际UTF-8字节数不超过65535字节保守控制，总文件数不超过10。

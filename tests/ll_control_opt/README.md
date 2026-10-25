@@ -1,5 +1,10 @@
 # Control-path candidates: commit-by-commit A/B
 
+For the next targeted MTE3 backpressure experiment, use
+[MTE3_BACKPRESSURE.md](MTE3_BACKPRESSURE.md): same-source OFF/ON builds,
+observe/TX/RX actual captures, original Scalar wait migration and one compact
+report. The added waits are diagnostic interventions, not optimizations.
+
 To measure the current baseline's bottleneck, use the paired OFF/SPARSE launcher
 and one-file report in [BASELINE_DIAGNOSIS.md](BASELINE_DIAGNOSIS.md). It fixes the
 tested baseline revision and preserves the existing OFF performance environments.

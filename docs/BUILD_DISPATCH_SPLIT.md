@@ -1,5 +1,37 @@
 # LL dispatch compile partition
 
+## MTE3 dependency diagnostics (2026-10-25)
+
+Current control-opt diagnostics use schema16/profile7 (`mte3`), with 18 first-hit
+milestones and eight scoped wait statistics in the same 512-byte carrier. Seven
+dispatch translation units, all input modes, production O2/Ascend950, the 152-byte
+launch arguments, wire19000+S and UB/lane budgets are unchanged. Internal Host/
+device bridge symbols now contain `mte3_16` to reject old-object mixing.
+
+Observe adds no synchronization. Explicit dispatch TX/RX captures on S cores add
+MTE3_S at selected lane-reuse/end boundaries, immediately followed by an empty
+control pair. Statistics also measure existing input MTE2_S (the tested FP8 input
+is prequantized), receive-table V_S, receive-payload MTE2_S and final PIPE_ALL.
+OFF and ON calls without a capture buffer add neither waits nor clock reads.
+These are purposeful diagnostic interventions, not production speedups.
+
+Local checks completed: 532 timer/ST/runner regressions passed, 2 skipped
+(historical schema13 source snapshot and Windows/POSIX path semantics); the
+final focused capture/runner/new-and-historical-report batch passed 174 checks,
+including the complete 720-record fixture and an unmodified-input, single-file
+report of about 24KB. These batches overlap and their counts are not additive. Native CPU mocks
+cover OFF/ON, real mode/core gating, event/control pairs, actual overlap metadata,
+all seven selectors and the existing 53-file business-token reference. Removing
+only diagnostic plumbing still matches ed1c553; this is not a code-generation
+proof. Source-guard tests were updated for the new probe placement/schema; the
+production waits and algorithm were preserved.
+
+No CANN compilation, target NPU correctness or performance was executed for this
+revision. Follow [MTE3_BACKPRESSURE.md](../tests/ll_control_opt/MTE3_BACKPRESSURE.md)
+for two isolated full OFF/ON builds, Host identity checks and actual active-task
+profiling. SDK identity is still validated by the standard builder. The separate
+cold-compile commands below remain available; CPU mocks do not replace them.
+
 The previous low_latency.cpp instantiated seven input/quantization modes inside
 one global function. With schema11 timer ON, one Bisheng process handled the
 expanded algorithm and all timers for every mode. This change compiles each mode

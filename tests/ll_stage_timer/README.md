@@ -1,6 +1,7 @@
-当前control-opt新采集为schema15稀疏首次里程碑，请用
-[BASELINE_DIAGNOSIS.md](../ll_control_opt/BASELINE_DIAGNOSIS.md)的一键OFF/SPARSE入口及单文件报告。
-schema7～13仅保留离线读取。下方分支/格式说明是历史记录，不作为当前构建和采样命令。
+当前control-opt采用schema16/profile7专项验证MTE3反压，请用
+[MTE3_BACKPRESSURE.md](../ll_control_opt/MTE3_BACKPRESSURE.md)的一键OFF/observe/TX/RX对照和单文件报告。
+历史schema15的固定源码采集入口仍见[BASELINE_DIAGNOSIS.md](../ll_control_opt/BASELINE_DIAGNOSIS.md)。
+schema7～13保留离线读取。下方分支/格式说明是历史记录，不作为当前构建和采样命令。
 
 历史schema13打点说明见[COMMUNICATION_DIAGNOSTICS.md](COMMUNICATION_DIAGNOSTICS.md)。
 新增首包准备、通信邻域和新报告，须全rank安装匹配ON wheel并重采；下方旧schema资料仅供历史追溯。

@@ -1,5 +1,10 @@
 # 泛化分支生产LL路径
 
+当前MTE3反压诊断采用schema16/profile7：发送输入就绪、接收表V_S、
+接收payload MTE2_S和最终PIPE_ALL的原等待统计，与S核限定的TX/RX MTE3_S干预。
+完整说明见[../ll_control_opt/MTE3_BACKPRESSURE.md](../ll_control_opt/MTE3_BACKPRESSURE.md)。
+下文schema15及更早打点为历史；原业务分工、wire和lane预算不变。
+
 该分支保留MTE传输和DEEPEP_LL_RANKS_PER_GROUP静态可配置分组，默认4。
 不要复制NDR的Session、ll_transport或tiling-key策略来替代这里的实现。
 
