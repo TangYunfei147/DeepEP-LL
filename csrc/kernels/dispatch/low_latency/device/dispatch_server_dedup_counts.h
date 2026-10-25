@@ -111,6 +111,9 @@ public:
     __aicore__ inline void Finish()
     {
         PipeBarrier<PIPE_ALL>();
+        // The existing full drain makes asynchronous sender completion visible
+        // to Scalar; MTE3_V waits in sender Retire alone do not establish this.
+        LL_SPARSE_AFTER(FIRST_SEND,SEND_DONE);
         SetCtrlSpr<60, 60>(originalOverflowMode_);
     }
 
@@ -247,6 +250,7 @@ __aicore__ inline void ServerDedupCounts::SendCnt()
         const auto range=countPlan_.ranges[part];
         SendExpertCntRange(range.begin,range.end,range.record);
     }
+    LL_SPARSE_MARK(COUNTS_SENT);
 }
 
 // 摘要：向量筛选本核专家区间内的路由，再用直方图生成每专家的 ready 标记和计数。
@@ -409,6 +413,7 @@ __aicore__ inline void ServerDedupCounts::CompleteCumsum()
         DataCopyPad(expertTokenNumsOutGMTensor_, expertCounts, output);
     }
     // No listening table or payload receive/copy is constructed in this increment.
+    LL_SPARSE_MARK(PREFIX_READY);
 }
 
 // 摘要：对原始路由执行逐专家匹配与归约，得到该专家的路由条数。
@@ -488,6 +493,7 @@ __aicore__ inline bool ServerDedupCounts::TryRecvCnt()
     GatherMask(gather,statusFp32Tensor_,pattern,true,2U,{1U,uint16_t(rscvStatusNum_),1U,0U},n);
     SyncFunc<HardEvent::V_S>();
     WaitDispatchClearStatus();
+    LL_SPARSE_MARK(COUNTS_RECEIVED);
     return true;
 }
 
@@ -501,6 +507,9 @@ __aicore__ inline void ServerDedupCounts::CalRecvAndSetFlag()
     SyncFunc<HardEvent::S_V>();
     asc_vf_call<R0PrefixScan>(reinterpret_cast<__ubuf__ uint32_t*>(prefix.GetPhyAddr()),rscvStatusNum_);
     SyncFunc<HardEvent::V_MTE3>();
+    // Submission-side milestone: V_MTE3 orders the MTE3 consumer, not Scalar.
+    // Do not interpret this clock read as confirmed completion of the prefix VF.
+    LL_SPARSE_MARK(PREFIX_LOCAL_DONE);
     GlobalTensor<int32_t> workspace,output;
     workspace.SetGlobalBuffer(reinterpret_cast<__gm__ int32_t*>(recvCntWorkspaceGM_));
     workspace.SetL2CacheHint(CacheMode::CACHE_MODE_DISABLE);

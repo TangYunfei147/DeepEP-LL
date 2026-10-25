@@ -193,6 +193,7 @@ public:
 
         LL_SEG_END(segBegin1, PREPARE_INPUT);
         LL_SEG_END(setupBegin, SEND_SETUP);
+        LL_SPARSE_MARK(SEND_PREPARED);
         { LL_SEG_SCOPE(SEND_TOKENS);
         BeginInputPrefetch();
         if (enableDedup_)
@@ -219,6 +220,7 @@ public:
         { LL_SEG_SCOPE(SEND_SUBMIT_END); }
         if (!overlap_.Async()) { LL_SEG_SCOPE(SEND_COMPLETE_WAIT);
         Sync<HardEvent::MTE3_S>();
+        LL_SPARSE_AFTER(FIRST_SEND,SEND_DONE);
         }
     }
 
@@ -275,6 +277,7 @@ public:
         PipeBarrier<PIPE_V>();
         LL_SEG_END(localPrepareBegin, PREPARE_INPUT);
         LL_SEG_END(localSetupBegin, SEND_SETUP);
+        LL_SPARSE_MARK(SEND_PREPARED);
         // Only the cooperative overlap path yields. Serial fallback keeps one
         // continuous lookahead stream. Eight tasks amortize the callback/flush.
         cooperate();
@@ -305,6 +308,7 @@ public:
         // count-receive reductions require integer FP32 subnormals preserved.
         SetCtrlSpr<60,60>(0);
         LL_SEG_END(localDrainBegin, SEND_DRAIN);
+        LL_SPARSE_AFTER(FIRST_SEND,SEND_DONE);
         }
 
     }
@@ -628,6 +632,7 @@ private:
                                                                         expert % localExperts_, q, args_->rankSize,
                                                                         localExperts_, bs_));
         LL_SEG_FIRST(BEFORE_FIRST_SEND);
+        LL_SPARSE_MARK(FIRST_SEND);
         LL_SEG_COUNT(TX_PACKETS,1U);
         LL_SEG_BEGIN(segBegin7, TOKEN_SEND_ISSUE);
         DataCopy(destinationGm, out, uint32_t(data_.tokenStride));

@@ -10,6 +10,7 @@
 #include "runtime/session.hpp"
 #include "runtime/ll_core_config.hpp"
 #include "../kernels/dispatch/low_latency/common/ll_stage_timer_layout.h"
+#include "../kernels/dispatch/low_latency/common/ll_stage_timer_profile.h"
 #include "../kernels/dispatch/low_latency/common/ll_overlap_layout.h"
 #include "../kernels/dispatch/low_latency/common/ll_expert_timer_layout.h"
 #include "host/mem/shmem_host_heap.h"
@@ -58,14 +59,14 @@ uint8_t* tensor(py::handle value, const Shape& shape, const char* dtype)
     }
     return reinterpret_cast<uint8_t*>(obj.attr("data_ptr")().cast<uintptr_t>());
 }
-uint8_t* stage_timer(py::dict tensors, uint32_t cores, uint32_t& mode, bool allowRelayCompletion = false)
+uint8_t* stage_timer(py::dict tensors, uint32_t cores, uint32_t& mode)
 {
     mode = 1U;
     if (!tensors.contains("ll_stage_timer") || tensors["ll_stage_timer"].is_none()) return nullptr;
     if (!deepep_ll_stage_timer_enabled()) throw std::invalid_argument("Rebuild with DEEPEP_LL_STAGE_TIMER=ON");
     if (tensors.contains("ll_stage_timer_mode")) mode = tensors["ll_stage_timer_mode"].cast<uint32_t>();
-    if (mode != 1U && !(allowRelayCompletion && mode == 3U))
-        throw std::invalid_argument("LL timer supports observe, or relay-complete for dispatch only");
+    if (mode != 1U)
+        throw std::invalid_argument("Sparse LL timer supports observe only; relay-complete/drain are unsupported");
     auto timer = py::reinterpret_borrow<py::object>(tensors["ll_stage_timer"]);
     auto device = timer.attr("device");
     if (device.attr("type").cast<std::string>() != "npu" ||
@@ -122,6 +123,9 @@ DispatchDedup::EpServerDedupTilingData dispatch_format_tiling(const std::string&
 
 void bind_low_latency(py::module_& module)
 {
+    if (deepep_ll_stage_timer_schema()!=LlStageTimer::kSchema ||
+        deepep_ll_stage_timer_profile_id()!=LlStageTimer::kProfileId)
+        throw std::runtime_error("LL Host/device timer layout mismatch; rebuild and reinstall the complete wheel");
     if (deepep_ll_core_protocol_version() != DispatchDedup::kLlCoreProtocolVersion)
         throw std::runtime_error("LL Host/device core protocol mismatch; rebuild and reinstall the complete wheel");
     if (deepep_ll_overlap_stage()!=DispatchDedup::kLlOverlapExperimentStage)
@@ -134,6 +138,8 @@ void bind_low_latency(py::module_& module)
     module.attr("low_latency_rdma_enabled") = false;
     module.attr("low_latency_expert_timer_enabled") = false;
     module.attr("low_latency_stage_timer_enabled") = bool(deepep_ll_stage_timer_enabled());
+    module.attr("low_latency_stage_timer_profile") = LlStageTimer::kProfileName;
+    module.attr("low_latency_stage_timer_profile_id") = LlStageTimer::kProfileId;
     module.def("low_latency_expert_timer_layout", []() {
         py::dict result;
         result["schema"]=LlExpertTimer::kSchema;
@@ -147,6 +153,12 @@ void bind_low_latency(py::module_& module)
     module.def("low_latency_stage_timer_layout", []() {
         py::dict result;
         result["schema"] = LlStageTimer::kSchema;
+        result["recording"] = "sparse-milestones";
+        std::vector<std::string> points;
+        for(const auto* point : LlStageTimer::kPointNames) points.emplace_back(point);
+        result["points"] = points;
+        result["timer_profile"] = LlStageTimer::kProfileName;
+        result["timer_profile_id"] = LlStageTimer::kProfileId;
         result["slots"] = LlStageTimer::kSlots;
         result["fields"] = LlStageTimer::kFields;
         std::vector<std::string> names;
@@ -264,7 +276,7 @@ void bind_low_latency(py::module_& module)
         auto get = [&](const char* name, Shape shape, const char* type) { return tensor(tensors[name], shape, type); };
         deepep::EpServerDedupKernelArgs args{};
         args.coreNum = pin_session_cores(session);
-        args.stageTimer = stage_timer(tensors, args.coreNum, args.timerMode, true);
+        args.stageTimer = stage_timer(tensors, args.coreNum, args.timerMode);
         args.expertTimer = expert_timer(tensors, args.coreNum, e, args.stageTimer);
         args.commArgs = get("comm_args", {sizeof(DispatchDedup::CommArgs)}, "uint8");
         args.x = get("input", {b, h}, dtype.c_str());
@@ -296,7 +308,7 @@ void bind_low_latency(py::module_& module)
                                                                     format.expandXOutDtype,format.inputMode);
         py::gil_scoped_release release;
         session.invalidate_dispatch_controls();
-        dispatch_server_dedup_kernel_do_v2(reinterpret_cast<void*>(stream_address), &args, variant);
+        dispatch_server_dedup_kernel_do_sparse15(reinterpret_cast<void*>(stream_address), &args, variant);
     });
     module.def("combine_low_latency", [](Session& session, py::dict tensors, int b, int h, int k, int e,
                                          const std::string& dtype, uintptr_t stream_address) {
@@ -331,7 +343,7 @@ void bind_low_latency(py::module_& module)
         session.workspace();
         py::gil_scoped_release release;
         session.invalidate_dispatch_controls();
-        combine_server_dedup_kernel_do(reinterpret_cast<void*>(stream_address), &args);
+        combine_server_dedup_kernel_do_sparse15(reinterpret_cast<void*>(stream_address), &args);
     });
 }
 }  // namespace deepep

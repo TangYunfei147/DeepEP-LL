@@ -22,5 +22,7 @@ int main(){
  }
  auto d=DispatchServerDedupDataLayout(256,3584,8,384,EpServerDedupInputMode::PrequantizedFp8Packs);
  auto p=LlMakeOverlapLayout(d,256,8,384,16,0,0,EpServerDedupInputMode::PrequantizedFp8Packs,true);
- assert(p.enabled && p.sendLanes==6 && p.recvLanes==6 && p.totalBytes==105792);
+ // Accepted c1 baseline keeps the original lanes and adds one64B flag snapshot.
+ assert(p.enabled && p.sendLanes==6 && p.recvLanes==6 && p.recvProbePrefetch);
+ assert(p.totalBytes==105792+kLlReceiveProbeExtraBytes);
 }

@@ -5,14 +5,27 @@
 #pragma once
 #include <cstdint>
 namespace LlStageTimer {
-constexpr uint32_t kSchema = 13U;
+constexpr uint32_t kSchema = 15U;
 constexpr uint64_t kMagic = 0x4c4c5431ULL;
 constexpr uint32_t kTraceRecords = 192U, kMetrics = 108U;
 constexpr uint32_t kRecords = kTraceRecords + kMetrics;
-// Same 16-byte event/metric records as dc_seg. LL keeps per-core 512B alignment.
-constexpr uint32_t kSlots = 80U, kFields = 8U;
+// Sparse per-core timestamps; legacy stage IDs below remain source identifiers only.
+constexpr uint32_t kSlots = 8U, kFields = 8U;
 constexpr uint32_t kWordsPerCore = kSlots * kFields;
 constexpr uint32_t kRecordWordOffset = 8U;
+enum Point : uint32_t {
+    ENTRY=0, INIT_DONE, COUNTS_SENT, COUNTS_RECEIVED, PREFIX_LOCAL_DONE,
+    PREFIX_READY, SEND_PREPARED, FIRST_SEND, SEND_DONE, RECV_PREPARED,
+    FIRST_RECV_PROBE, FIRST_RECV_READY, RECV_DONE, WORK_DONE, PointCount
+};
+constexpr uint32_t kPointCount=uint32_t(PointCount);
+constexpr const char* kPointNames[] = {
+    "ENTRY", "INIT_DONE", "COUNTS_SENT", "COUNTS_RECEIVED", "PREFIX_LOCAL_DONE",
+    "PREFIX_READY", "SEND_PREPARED", "FIRST_SEND", "SEND_DONE", "RECV_PREPARED",
+    "FIRST_RECV_PROBE", "FIRST_RECV_READY", "RECV_DONE", "WORK_DONE"
+};
+// Export the header and timestamps, padded to three 64B cache lines only.
+constexpr uint32_t kExportWords=((kRecordWordOffset+kPointCount+7U)/8U)*8U;
 enum Stage : uint32_t {
     KERNEL = 0,
     SEND_TOKENS = 1,
@@ -237,6 +250,7 @@ constexpr const char* kNames[] = {
 
 
 };
-static_assert(kRecordWordOffset + kRecords * 2U <= kWordsPerCore, "segment capacity");
+static_assert(kExportWords <= kWordsPerCore, "sparse capacity");
+static_assert(kPointCount < 64U, "point validity bitmap");
 static_assert(kWordsPerCore * sizeof(uint64_t) % 512U == 0U, "core alignment");
 }

@@ -95,6 +95,7 @@ public:
 
         // 空任务核没有拥有的接收槽，完成打点后直接返回，无需参与 packet 轮询。
         if (tasks_.Count() == 0U) {
+            LL_SPARSE_MARK(RECV_PREPARED);
             return;
         }
 
@@ -124,6 +125,7 @@ public:
         pipe_->InitBuffer(probeIdxBuf_, kProbeBatch * 4U + (probePrefetch_ ? kLlReceiveProbeExtraBytes : 0U));
         pipe_->InitBuffer(lanesBuf_, lanes_ * laneStride_);
         if (!overlap_.enabled) for (uint32_t lane = 0; lane < lanes_; ++lane) SetFlag<HardEvent::MTE3_MTE2>(lane);
+        LL_SPARSE_MARK(RECV_PREPARED);
 
     }
 
@@ -203,6 +205,7 @@ public:
         { LL_SEG_SCOPE(RECV_COMPLETE_WAIT);
         PipeBarrier<PIPE_ALL>();
         }
+        LL_SPARSE_MARK(RECV_DONE);
     }
 
 private:
@@ -275,6 +278,7 @@ private:
     // survives TryBatch, so cooperative sender/count callbacks cannot collide.
     __aicore__ inline void StartProbe(uint32_t start,uint32_t count,uint32_t offset) {
         LL_SEG_FIRST(BEFORE_FIRST_RECV_POLL);
+        LL_SPARSE_MARK(FIRST_RECV_PROBE);
         LL_SEG_SCOPE(RECV_POLL);
         LL_SEG_COUNT(RX_PROBED,count);
         auto indices=probeIdxBuf_.Get<uint32_t>();
@@ -322,6 +326,7 @@ private:
         }
         LL_SEG_COUNT(RX_READY,uint32_t(__builtin_popcount(result.readyMask)));
         if (!result.readyMask) { LL_SEG_COUNT(RX_EMPTY_POLLS,1U); }
+        LL_SPARSE_WHEN(result.readyMask!=0U,FIRST_RECV_READY);
         return result;
     }
     // 摘要：将稳定任务编号 j 映射为本轮通信窗口中的实际 packet 槽地址。
@@ -334,6 +339,7 @@ private:
     __aicore__ inline ProbeResult Probe(uint32_t start, uint32_t count)
     {
         LL_SEG_FIRST(BEFORE_FIRST_RECV_POLL);
+        LL_SPARSE_MARK(FIRST_RECV_PROBE);
         LL_SEG_SCOPE(RECV_POLL);
         LL_SEG_COUNT(RX_PROBED,count);
         auto indices = probeIdxBuf_.Get<uint32_t>();
@@ -373,6 +379,7 @@ private:
         }
         }
         LL_SEG_END(flagDecode,RX_FLAG_DECODE);
+        LL_SPARSE_WHEN(result.readyMask!=0U,FIRST_RECV_READY);
         return result;
     }
 

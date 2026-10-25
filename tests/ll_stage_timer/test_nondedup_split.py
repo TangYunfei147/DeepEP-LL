@@ -13,7 +13,9 @@ def method(text,name):
     return text[a:i]
 def test_sender_is_main_loop_and_dedup_unchanged():
     sender=(BASE/'device/dispatch_server_dedup_send.h').read_text(encoding='utf-8')
-    old=subprocess.check_output(['git','-C',str(ROOT),'show','4ec82a5:csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_send.h'],encoding='utf-8')
+    # The accepted baseline includes later q/source-mask optimizations. Guard
+    # this diagnostic-only change against ed1, not the pre-optimization split.
+    old=subprocess.check_output(['git','-C',str(ROOT),'show','ed1c5531dbb22d4d2a6b5571a2d1bce17a3683b5:csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_send.h'],encoding='utf-8')
     normalize=runpy.run_path(str(ROOT/'tests/ll_stage_timer/test_segment_source.py'))['normalize']
     assert normalize(method(sender,'SendWithDedup'))==normalize(method(old,'SendWithDedup'))
     assert normalize(method(sender,'ProcessGroupLocal'))==normalize(method(old,'ProcessGroupLocal'))

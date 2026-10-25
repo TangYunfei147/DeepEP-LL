@@ -41,6 +41,27 @@ WAIT_STAGES={'Q_SEED_WAIT','TOKEN_INPUT_WAIT','TOKEN_QUANT_WAIT','TOKEN_BUFFER_W
  'TX_PACK_READY_WAIT','SEND_RETIRE_WAIT','WAIT_RECV_COUNTS','PREFIX_PUBLISH_WAIT','WAIT_CUMSUM',
  'PREFIX_LOAD','RX_FLAG_WAIT','RX_LANE_REUSE_WAIT','RX_PAYLOAD_READY_WAIT','RECV_COMPLETE_WAIT'}
 
+def poll_snapshot_counts(st,probed,empty):
+    """Count completed flag snapshots, not split submit/join timer fragments."""
+    segments=st.get('RECV_POLL',{}).get('calls',0)
+    counts=[st.get(name,{}).get('calls') for name in
+            ('RX_FLAG_ISSUE','RX_FLAG_WAIT','RX_FLAG_DECODE')]
+    if empty<0:
+        raise ValueError('RX_EMPTY_POLLS must be nonnegative')
+    if not (probed or empty or segments or any(value is not None for value in counts)):
+        return segments,0,'no_receive'
+    if counts[2] is None:
+        # Earlier/incomplete schema13 exports cannot establish this denominator.
+        # In particular, RECV_POLL can contain one OR two fragments per snapshot.
+        if counts[0] is not None and counts[1] is not None and counts[0]!=counts[1]:
+            raise ValueError('Inconsistent RX_FLAG_ISSUE/WAIT snapshot calls')
+        return segments,None,'missing_flag_snapshot_metrics'
+    if not counts[2]>0 or counts[0]!=counts[2] or counts[1]!=counts[2]:
+        raise ValueError('Inconsistent RX_FLAG_ISSUE/WAIT/DECODE snapshot calls')
+    if empty>counts[2]:
+        raise ValueError('RX_EMPTY_POLLS exceeds completed flag snapshots')
+    return segments,counts[2],'measured'
+
 def report(samples):
     rows=[];costs=[];unsupported=0
     for meta,decoded in samples:
@@ -72,8 +93,14 @@ def report(samples):
             probed=row['rx_probed'];ready=row['rx_ready'];rx=row['rx_packets'];tx=row['tx_packets']
             row['ready_fraction']=ready/probed if probed else None
             row['probes_per_consumed_packet']=probed/rx if rx else None
-            row['poll_batches']=st.get('RECV_POLL',{}).get('calls',0)
-            row['empty_poll_fraction']=row['rx_empty_polls']/row['poll_batches'] if row['poll_batches'] else None
+            segments,snapshots,status=poll_snapshot_counts(st,probed,row['rx_empty_polls'])
+            row['recv_poll_segments']=segments
+            row['poll_snapshots']=snapshots
+            row['poll_snapshot_status']=status
+            # Compatibility alias: corrected to snapshots; legacy reports used
+            # RECV_POLL fragments and understated the split-path empty fraction.
+            row['poll_batches']=snapshots
+            row['empty_poll_fraction']=row['rx_empty_polls']/snapshots if snapshots else None
             row['first_send_status']='measured' if tx and row['before_first_send_ticks'] is not None else ('missing' if tx else 'no_send')
             row['first_recv_status']='measured' if probed and row['before_first_recv_poll_ticks'] is not None else ('missing' if probed else 'no_receive')
             if ready>probed or ready!=rx:raise ValueError('Incomplete RX readiness/consumption counters')
@@ -101,7 +128,7 @@ def report(samples):
                   critical_fraction=sum(r['critical_core'] for r in group)/len(group))
         for field in ('entry_to_first_send_us','entry_to_first_send_ticks','before_first_send_us','before_first_send_ticks','send_setup_us','send_setup_ticks',
                       'before_first_recv_poll_us','before_first_recv_poll_ticks','kernel_us','kernel_ticks',
-                      'ready_fraction','probes_per_consumed_packet'):
+                      'ready_fraction','probes_per_consumed_packet','empty_poll_fraction'):
             values=[r[field] for r in group if r[field] is not None]
             item[field+'_samples']=len(values)
             item[field+'_p50']=statistics.median(values) if values else None
@@ -109,6 +136,10 @@ def report(samples):
     return dict(schema=13,status='available' if rows else 'requires_schema13_dispatch',unsupported_samples=unsupported,
                 samples=rows,costs=costs,per_core=aggregate,
                 note='Elapsed intervals and accumulated costs are nested. Do not add them. '
+                     'poll_snapshots uses RX_FLAG_DECODE calls, validated against RX_FLAG_ISSUE/WAIT; '
+                     'poll_batches is its corrected compatibility alias, not the legacy RECV_POLL fragment count. '
+                     'recv_poll_segments preserves RECV_POLL calls; split paths also have two RX_FLAG_REDUCE calls per snapshot. '
+                     'Missing snapshot metrics leave the denominator and empty fraction unavailable. '
                      'Submission is not transfer completion. No cross-rank clock subtraction. Relay-complete mode adds drains and is not an observe baseline. '
                      'Largest observed costs are prioritization hints, not proof of a hardware bottleneck.')
 
@@ -119,6 +150,9 @@ def markdown(data):
       'entry_to_first_send：同核INIT真实起点到首发真实终点；INIT在KERNEL外单列。无发包核不补零。',
       'BEFORE_FIRST_RECV_POLL：本核KERNEL起点至首次接收Probe之前；不表示首包到达。',
       'RX_FLAG_*拆分下发/等待/归约/解码，RX_PAYLOAD_READY_WAIT是原有依赖等待。',
+      '空快照率=RX_EMPTY_POLLS / RX_FLAG_DECODE.calls；ISSUE/WAIT/DECODE次数须一致。',
+      'poll_snapshots及兼容字段poll_batches均表示完整快照数；旧报表poll_batches曾使用RECV_POLL片段数。',
+      'recv_poll_segments保留RECV_POLL片段数，分段路径每快照有两段；RX_FLAG_REDUCE.calls也按片段计。缺解码计数时快照数和空快照率留空。',
       'ready_fraction低只说明被探测项尚未全部就绪，不能单独归因为网络拥塞。',
       '计时仅记录每类前两次真实区间，metrics累计全部调用；不能重建逐包完整时间线。','',
       '## 各核准备开销','',

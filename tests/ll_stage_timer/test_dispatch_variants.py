@@ -2,8 +2,6 @@
 import csv
 import importlib.util
 import re
-import shutil
-import subprocess
 from pathlib import Path
 import pytest
 ROOT=Path(__file__).resolve().parents[2]
@@ -37,60 +35,24 @@ def test_variant_inventory_and_timer_lifetimes():
     assert 'OperatorSources.cmake' in cmake and '${DEEPEP_CORE_DEVICE_SOURCES}' in cmake
     for mode in MODES: assert f'variants/{mode}.cpp' in inventory
     entry=(base/'dispatch_variant_kernel.h').read_text()
-    ordered=['kernel.Init(','timer.End(LlStageTimer::INIT','timer.Begin(LlStageTimer::KERNEL',
-             'kernel.Process();','timer.End(LlStageTimer::KERNEL','AscendC::SyncAll<true>()','timer.Flush()']
+    ordered=['kernel.Init(','timer.Mark<LlStageTimer::INIT_DONE>()',
+             'kernel.Process();','timer.Mark<LlStageTimer::WORK_DONE>()','timer.Flush()']
     positions=[entry.index(x) for x in ordered]
     assert positions==sorted(positions)
     assert entry.count('DispatchMemoryServerDedupKernel<')==1
     assert 'LlDispatchVariantForTiling' in entry
+    assert 'SyncAll' not in entry
     host=(ROOT/'csrc/ops/low_latency.cpp').read_text()
     assert host.count('dispatch_format_tiling(dtype)')==2
-    assert 'dispatch_server_dedup_kernel_do_v2(' in host
+    assert 'dispatch_server_dedup_kernel_do_sparse15(' in host
 
 @pytest.mark.parametrize('timer',[False,True])
 def test_real_host_selector_all_modes_and_rejections(tmp_path,timer):
-    cc=shutil.which('g++') or shutil.which('clang++')
-    if not cc:pytest.skip('C++ compiler required; also run on A3')
-    code=r'''#include <cassert>
-#include <stdexcept>
-#include <initializer_list>
-#include "csrc/kernels/dispatch/low_latency/common/ll_dispatch_variant.h"
-#include "csrc/kernels/dispatch/low_latency/launch.hpp"
-using namespace DispatchDedup;
-static unsigned calls=0,selected=99;
-#define STUB(name,n) extern "C" void dispatch_server_dedup_launch_##name(void*, const deepep::EpServerDedupKernelArgs*) {++calls;selected=n;}
-STUB(prequant_e4m3,0) STUB(fp16,1) STUB(fp16_e4m3,2) STUB(fp16_e5m2,3)
-STUB(bf16,4) STUB(bf16_e4m3,5) STUB(bf16_e5m2,6)
-int main() {
- const unsigned table[7][4]={{15,4,15,2},{3,0,3,0},{3,4,15,1},{3,4,16,1},{11,0,11,0},{11,4,15,1},{11,4,16,1}};
- for(unsigned dtype=0;dtype<256;++dtype) for(unsigned quant:{0U,1U,4U,255U})
- for(unsigned output:{3U,11U,15U,16U,255U}) for(unsigned input=0;input<4;++input) {
-   unsigned expected=0xffffffffU;
-   for(unsigned m=0;m<7;++m) if(dtype==table[m][0] && quant==table[m][1] && input==table[m][3] &&
-       (output==table[m][2] || (output==255 && (m==1 || m==4)))) expected=m;
-   assert(LlDispatchVariantForTiling(dtype,quant,output,input)==expected);
- }
- deepep::EpServerDedupKernelArgs args{};
- static_assert(sizeof(args)==152);
- for(unsigned m=0;m<7;++m) { calls=0;dispatch_server_dedup_kernel_do_v2(nullptr,&args,m);assert(calls==1 && selected==m); }
- for(unsigned m:{7U,255U,0xffffffffU}) {
-   calls=0;bool threw=false;try {dispatch_server_dedup_kernel_do_v2(nullptr,&args,m);}catch(const std::invalid_argument&){threw=true;}
-   assert(threw && !calls);
- }
- bool threw=false;try {dispatch_server_dedup_kernel_do_v2(nullptr,nullptr,0);}catch(const std::invalid_argument&){threw=true;}assert(threw);
- assert(deepep_ll_core_protocol_version()==19028);
- assert(deepep_ll_ranks_per_group()==4);
-#ifdef DEEPEP_LL_STAGE_TIMER
- assert(deepep_ll_stage_timer_enabled()==1);
-#else
- assert(deepep_ll_stage_timer_enabled()==0);
-#endif
-}'''
-    source=tmp_path/'selector.cpp';source.write_text(code)
-    exe=tmp_path/'selector'
-    flags=['-DDEEPEP_LL_STAGE_TIMER=1'] if timer else []
-    subprocess.run([cc,'-std=c++17','-DCATLASS_ARCH=3510',*flags,'-I',str(ROOT),str(source),str(ROOT/'csrc/kernels/dispatch/low_latency.cpp'),'-o',str(exe)],check=True)
-    subprocess.run([str(exe)],check=True)
+    path=Path(__file__).with_name('test_sparse_control_native.py')
+    spec=importlib.util.spec_from_file_location('sparse_selector_native',path)
+    helper=importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(helper)
+    helper.run_sparse_host_selector_mock(tmp_path,timer)
 
 @pytest.mark.parametrize('mode',MODES)
 def test_profiler_matches_exact_variant_and_rejects_mixed(tmp_path,mode):

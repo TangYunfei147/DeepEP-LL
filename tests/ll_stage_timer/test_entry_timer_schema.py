@@ -19,12 +19,14 @@ timer = load('schema_timer', 'deep_ep/utils/ll_stage_timer.py')
 
 
 def test_current_timer_schema_passes_st_preflight():
-    entry.validate_stage_timer_capability(dict(stage_timer=True, stage_timer_schema=timer.SCHEMA))
+    entry.validate_stage_timer_capability(dict(stage_timer=True, stage_timer_schema=timer.SCHEMA,
+        timer_profile='sparse',timer_profile_id=6,stage_timer_slots=8,stage_timer_fields=8,
+        stage_timer_points=list(timer.POINTS),stage_timer_recording='sparse-milestones'))
 
 
-@pytest.mark.parametrize('schema', [7, 9, 10, 11, 12, 14, None])
+@pytest.mark.parametrize('schema', [7, 9, 10, 11, 12, 13, 14, None])
 def test_stale_or_unknown_schema_is_rejected(schema):
-    with pytest.raises(RuntimeError, match=f'timer schema 13; got {schema}'):
+    with pytest.raises(RuntimeError, match=f'timer schema 15; got {schema}'):
         entry.validate_stage_timer_capability(dict(stage_timer=True, stage_timer_schema=schema))
 
 
@@ -36,3 +38,14 @@ def test_timer_off_wheel_is_still_rejected():
 def test_worker_uses_tested_preflight():
     import inspect
     assert 'validate_stage_timer_capability(capability)' in inspect.getsource(entry.worker)
+
+
+@pytest.mark.parametrize('field,value',[('timer_profile','full'),('timer_profile_id',0),
+    ('stage_timer_slots',80),('stage_timer_fields',7),('stage_timer_recording','segments'),
+    ('stage_timer_points',list(reversed(timer.POINTS)))])
+def test_sparse_contract_rejects_mismatched_layout(field,value):
+    capability=dict(stage_timer=True,stage_timer_schema=15,timer_profile='sparse',timer_profile_id=6,
+        stage_timer_slots=8,stage_timer_fields=8,stage_timer_points=list(timer.POINTS),
+        stage_timer_recording='sparse-milestones')
+    capability[field]=value
+    with pytest.raises(RuntimeError):entry.validate_stage_timer_capability(capability)

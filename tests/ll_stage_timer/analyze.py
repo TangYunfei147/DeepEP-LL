@@ -314,7 +314,7 @@ def process_directory(source, output, frequency_hz, trace_iteration, lane_layout
     for path in paths:
         saved=json.loads(path.read_text());meta=saved['metadata']
         decoded=timer.parse_records(saved['raw'],saved['operation'],frequency_hz)
-        if decoded['schema'] not in (7,9,10,11,timer.SCHEMA): continue
+        if decoded['schema'] not in timer.CURRENT_SCHEMAS: continue
         shared=dict(operation=saved['operation'],rank=meta['rank'],iteration=meta['iteration'])
         segment_metrics.extend(dict(**shared,**row) for row in decoded['records'])
         segment_intervals.extend(dict(**shared,**row) for row in decoded['intervals'])
