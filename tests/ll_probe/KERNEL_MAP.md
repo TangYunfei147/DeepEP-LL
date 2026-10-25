@@ -1,5 +1,7 @@
 # 泛化分支生产LL路径
 
+最新两项实验：`cb59-pair`走`low_latency/cb59_pair/`，`pair_handoff.h`共享相邻两count-owner的区间，`receive_tasks.h`将dense半区映射回原record/q；预算与规划在`common/ll_pair_receive.h`。`cb59-small`走独立生成目录`low_latency/cb59_small/`，只能由`scripts/generate_cb59_small.py`生成，强制1<=B<=M<=32并在编译期消除dedup/大B计数选择，保留七dtype。当前打点schema16在入口增加tiling/pipe/object点，各kernel.Init的magic之后增加MAGIC_DONE；旧schema15只离线解析。指南`../ll_stage_timer/CB59_PAIR.md`与`CB59_SMALL.md`。
+
 分片接收候选见`../ll_stage_timer/CB59_STREAM.md`：`cb59-stream`在EP16小direct走`low_latency/cb59_stream/kernel.h`，使用原cb59的source counts/Sender；`stream_counts.h`实现上三角sum、前序偏移和专家计数，`receive_tasks.h`按record分片，`receiver.h`复用原packet消费逻辑。`common/ll_stream_receive.h`共用ownership/UB公式。其他shape走原cb59接收协议。新目录为独立手工实现，不直接修改cb59生成目录。
 
 当前新增cb59算法对照：DEEPEP_LL_DISPATCH_IMPL选择current或cb59，公共七模式入口dispatch_variant_kernel.h只包含所选算法。cb59六算法在low_latency/cb59/，由scripts/generate_cb59_replay.py固定提取；count_layout.h/host_layout.h保留旧私有布局和190KiB预算。公共Host、packet格式、combine及当前SDK共用。配置与测试见../ll_stage_timer/CB59_REPLAY.md。

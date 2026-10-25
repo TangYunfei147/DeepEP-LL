@@ -67,6 +67,8 @@ def adapt(relative: str, source: str) -> str:
                               "LlStageTimer::DeviceTimer* timer = nullptr,\n"
                               "                                LlExpertTimer::DeviceTimer* expertTimer = nullptr)")
         source = replace_once(source, "        timer_ = timer;", "        (void)expertTimer;\n        timer_ = timer;")
+        source = replace_once(source, "        const uint32_t magic = RotateDispatchServerDedupMagic(args_, core_, pipe);",
+                              "        const uint32_t magic = RotateDispatchServerDedupMagic(args_, core_, pipe);\n        LL_SPARSE_MARK(MAGIC_DONE);")
         source = replace_once(source, "                     magic, pipe);",
                               "                     magic, pipe);\n        counts_.SetTimer(timer_);")
         source = replace_once(source, "            PipeBarrier<PIPE_ALL>();",

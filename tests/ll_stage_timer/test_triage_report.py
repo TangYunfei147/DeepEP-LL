@@ -82,6 +82,18 @@ def test_stream_summary_reports_effective_path_and_slice_ready_scope():
     assert len(text.replace('\n', '\r\n').encode()) <= 60000
 
 
+def test_pair_summary_reports_pair_ready_scope_without_claiming_stream_ownership():
+    data=worst_matrix()
+    for case in data['cases']:
+        case['provenance'].update(implementation='cb59-pair-recv',core_protocol=23028,
+                                  dispatch_impl='cb59-pair',effective_dispatch_impl='cb59-pair')
+    text=triage.render(data)
+    assert 'adjacent-pair range exchange' in text
+    assert 'not full-rank prefix readiness' in text
+    assert 'this owner slice can receive' not in text
+    assert len(text.replace('\n','\r\n').encode())<=60000
+
+
 def test_export_report_replaces_only_pointer_and_keeps_all_local_metrics(tmp_path,monkeypatch):
     data=worst_matrix();suite=tmp_path/'suite';suite.mkdir()
     (suite/'SEND_FIRST.txt').write_text('old archive says transmit887files')

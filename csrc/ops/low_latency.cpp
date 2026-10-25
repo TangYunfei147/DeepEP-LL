@@ -83,8 +83,14 @@ uint8_t* expert_timer(py::dict tensors, uint32_t cores, uint32_t experts, uint8_
     (void)cores; (void)experts; (void)stage;
     throw std::invalid_argument("Reference segment capture rejects legacy per-expert GM instrumentation");
 }
+void require_small_dispatch_scope(int b, int capacity)
+{
+    if (DispatchDedup::kLlCb59Small && !(b > 0 && b <= capacity && capacity <= 32))
+        throw std::invalid_argument("cb59-small requires 1<=B<=M<=32; no large-B or dedup fallback is compiled");
+}
 DispatchDedup::EpMemoryServerDedupLayout layout(int p, int b, int h, int k, int e, bool fp8)
 {
+    require_small_dispatch_scope(b, b);
     const uint32_t coreNum = query_ll_core_config().active;
     DispatchDedup::EpMemoryServerDedupLayout result{};
     auto mode = fp8 ? DispatchDedup::EpServerDedupInputMode::PrequantizedFp8Packs
@@ -207,6 +213,9 @@ void bind_low_latency(py::module_& module)
     module.def("low_latency_layout", [](int p, int b, int h, int k, int e, const std::string& dtype) {
         // A rejected shape is a Host-only capability result, not a launch failure.
         dtype_code(dtype);
+        // A scoped diagnostic build must reject explicitly before the generic
+        // capability-to-None path could select a different transport.
+        require_small_dispatch_scope(b, b);
         try {
             auto plan = layout(p, b, h, k, e, dtype == "float8_e4m3fn");
             py::dict result;
@@ -242,6 +251,7 @@ void bind_low_latency(py::module_& module)
     });
     module.def("low_latency_dispatch_tiling", [](int p, int b, int h, int k, int e, const std::string& dtype,
                                                  int num_max_tokens_per_rank) {
+        require_small_dispatch_scope(b, num_max_tokens_per_rank);
         const bool fp8 = dtype == "float8_e4m3fn";
         auto checked=layout(p, b, h, k, e, fp8);
         if (!DispatchDedup::EpServerDedupEnabled(num_max_tokens_per_rank) &&
@@ -316,7 +326,7 @@ void bind_low_latency(py::module_& module)
                                                                     format.expandXOutDtype,format.inputMode);
         py::gil_scoped_release release;
         session.invalidate_dispatch_controls();
-        dispatch_server_dedup_kernel_do_sparse15(reinterpret_cast<void*>(stream_address), &args, variant);
+        dispatch_server_dedup_kernel_do_sparse16(reinterpret_cast<void*>(stream_address), &args, variant);
     });
     module.def("combine_low_latency", [](Session& session, py::dict tensors, int b, int h, int k, int e,
                                          const std::string& dtype, uintptr_t stream_address) {
@@ -351,7 +361,7 @@ void bind_low_latency(py::module_& module)
         session.workspace();
         py::gil_scoped_release release;
         session.invalidate_dispatch_controls();
-        combine_server_dedup_kernel_do_sparse15(reinterpret_cast<void*>(stream_address), &args);
+        combine_server_dedup_kernel_do_sparse16(reinterpret_cast<void*>(stream_address), &args);
     });
 }
 }  // namespace deepep

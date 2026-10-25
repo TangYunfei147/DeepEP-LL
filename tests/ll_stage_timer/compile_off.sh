@@ -19,14 +19,16 @@ if [[ ! $LL_OFF_PREFIX =~ ^(0|[1-9][0-9]?)$ ]] || (( LL_OFF_PREFIX > LL_OFF_RECV
 fi
 case "$LL_OFF_IMPL" in
   current) LL_OFF_CB59=0 ;;
-  cb59|cb59-stream)
+  cb59|cb59-stream|cb59-pair|cb59-small)
     if (( LL_OFF_SEND != 28 || LL_OFF_RECV != 28 || LL_OFF_PREFIX != 0 )); then
       printf '%s\n' "$LL_OFF_IMPL requires SEND_CORES=28, RECV_CORES=28 and SMALL_B_PREFIX_CORES=0" >&2
       exit 1
     fi
     LL_OFF_CB59=1
-    if [[ $LL_OFF_IMPL == cb59-stream ]]; then LL_OFF_CB59=2; fi ;;
-  *) printf '%s\n' 'DEEPEP_LL_DISPATCH_IMPL must be current, cb59 or cb59-stream' >&2; exit 1 ;;
+    if [[ $LL_OFF_IMPL == cb59-stream ]]; then LL_OFF_CB59=2; fi
+    if [[ $LL_OFF_IMPL == cb59-pair ]]; then LL_OFF_CB59=3; fi
+    if [[ $LL_OFF_IMPL == cb59-small ]]; then LL_OFF_CB59=4; fi ;;
+  *) printf '%s\n' 'DEEPEP_LL_DISPATCH_IMPL must be current, cb59, cb59-stream, cb59-pair or cb59-small' >&2; exit 1 ;;
 esac
 OUT=$(mktemp -d "$LL_TIMER_ROOT/.tmp/ll-timer-off-XXXXXXXX")
 SDK="$LL_TIMER_ROOT/third-party/shmem/install/shmem"

@@ -31,6 +31,7 @@ public:
         sendCores_ = GetBlockNum() / 2U;
         pipe_ = pipe;
         const uint32_t magic = RotateDispatchServerDedupMagic(args_, core_, pipe);
+        LL_SPARSE_MARK(MAGIC_DONE);
         counts_.Init(commArgs, expertIds, expertTokenNumsOut, sendCountsOut, bs, topK, experts, expertTokenNumsType,
                      magic, pipe);
         counts_.SetTimer(timer_);

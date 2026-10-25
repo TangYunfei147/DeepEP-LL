@@ -6,6 +6,7 @@
 #include "../common/ep_memory_server_dedup_input.h"
 #include "../common/ep_memory_server_dedup_protocol.h"
 #include "../common/ll_stream_receive.h"
+#include "../common/ll_pair_receive.h"
 
 namespace DispatchDedup {
 namespace Cb59Replay {
@@ -67,6 +68,24 @@ inline bool StreamUbFits(const Layout& layout, int64_t b, int64_t k, int64_t num
     const uint64_t rows = LlStreamOwnedRowsUpperBound(uint32_t(num_experts), uint32_t(world_size),
                                                     uint32_t(b), uint32_t(k), receivers);
     const uint64_t fixed = reserved + LlStreamMaxCountBufferBytes(uint32_t(num_experts), uint32_t(world_size), receivers) +
+                           LlStreamReceiverBufferBytes(rows, layout.data.blockCount);
+    const uint64_t lane = layout.data.tokenStride + 64U;
+    return fixed <= kEpServerDedupCountUbBytes && lane <= kEpServerDedupCountUbBytes - fixed;
+}
+
+template<class Layout>
+inline bool PairUbFits(const Layout& layout, int64_t b, int64_t k, int64_t num_experts,
+                       int64_t world_size, uint32_t coreNum)
+{
+    if (world_size != 16 || b <= 0 || b > 32 || k <= 0 || k > kEpServerDedupMaxTopK ||
+        num_experts < world_size || num_experts > kEpServerDedupMaxExperts || num_experts % world_size != 0 ||
+        !PacketUbFits(layout, b, k, num_experts, world_size, coreNum)) return false;
+    const uint32_t receivers = coreNum / 2U;
+    const uint64_t reserved = LlStreamAlign((uint64_t(num_experts) + coreNum - 1U) / coreNum, 8U) * 32U;
+    const uint64_t rows = LlPairOwnedRowsUpperBound(uint32_t(num_experts), uint32_t(world_size),
+                                                  uint32_t(b), uint32_t(k), receivers);
+    const uint64_t fixed = reserved + LlStreamMaxCountBufferBytes(uint32_t(num_experts), uint32_t(world_size), receivers) +
+                           LlPairMaxExtraBufferBytes(uint32_t(num_experts), receivers) +
                            LlStreamReceiverBufferBytes(rows, layout.data.blockCount);
     const uint64_t lane = layout.data.tokenStride + 64U;
     return fixed <= kEpServerDedupCountUbBytes && lane <= kEpServerDedupCountUbBytes - fixed;

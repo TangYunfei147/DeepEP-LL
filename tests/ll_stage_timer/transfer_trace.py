@@ -42,7 +42,7 @@ def _profile(decoded):
             name != _PROFILES[profile_id] or
             (decoded['schema'] == 13 and profile_id != 0) or
             (decoded['schema'] == 14 and profile_id == 6) or
-            (decoded['schema'] == 15 and profile_id != 6)):
+            (decoded['schema'] in (15,16) and profile_id != 6)):
         raise ValueError('Invalid timer profile identity')
     return name, profile_id
 
@@ -89,8 +89,8 @@ def trace_from_decoded(samples, trace_iteration=0, frequency_hz=None):
     checked = []
     stages = set()
     for meta, decoded in selected:
-        if decoded.get('schema') not in (13, 14, 15):
-            raise ValueError('Restored trace requires schema 13 or 14 intervals, or schema15 sparse milestones')
+        if decoded.get('schema') not in (13, 14, 15, 16):
+            raise ValueError('Restored trace requires schema 13 or 14 intervals, or schema15/16 sparse milestones')
         if decoded.get('operation') not in ('dispatch', 'combine'):
             raise ValueError('Expected dispatch or combine operation')
         active = _integer(decoded.get('active_aiv'), 'active_aiv')
@@ -189,10 +189,10 @@ def trace_from_decoded(samples, trace_iteration=0, frequency_hz=None):
                          timer_profile_id=profile[1]))
     decoded, profile = checked[0][1:3]
     return dict(traceEvents=events, displayTimeUnit='us', metadata=dict(
-        format='sparse milestones restored from lossless text' if decoded['schema']==15 else 'dc_seg sampled intervals restored from lossless text',
+        format='sparse milestones restored from lossless text' if decoded['schema'] in (15,16) else 'dc_seg sampled intervals restored from lossless text',
         schema=decoded['schema'], boundary_mode=decoded.get('boundary_mode'),
         timer_profile=profile[0], timer_profile_id=profile[1],
-        sampled_calls_per_stage=None if decoded['schema']==15 else 2, all_calls_in_metrics=decoded['schema']!=15,
+        sampled_calls_per_stage=None if decoded['schema'] in (15,16) else 2, all_calls_in_metrics=decoded['schema'] not in (15,16),
         trace_iteration=trace_iteration, source_samples=len(samples),
         selected_samples=len(selected), cores=info,
         lane_layout='AIV/stage; parent milestones and KERNEL use separate tracks',

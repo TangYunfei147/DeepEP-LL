@@ -186,6 +186,9 @@ inline bool DispatchDedupPacketUbFits(const EpMemoryServerDedupLayout& layout, i
     // shape gates are shared with the device, and stream UB failure is fatal.
     if (kLlCb59Stream && !enableDedup && LlUseStreamReceive(uint32_t(world_size), uint32_t(b), 32U))
         return Cb59Replay::StreamUbFits(layout, b, k, num_experts, world_size, coreNum);
+    if (kLlCb59Pair && !enableDedup && LlUseStreamReceive(uint32_t(world_size), uint32_t(b), 32U))
+        return Cb59Replay::PairUbFits(layout, b, k, num_experts, world_size, coreNum);
+    if (kLlCb59Small && (b <= 0 || b > 32)) return false;
     return Cb59Replay::PacketUbFits(layout, b, k, num_experts, world_size, coreNum);
 #else
     if (!LlCoreCountValid(coreNum)) return false;

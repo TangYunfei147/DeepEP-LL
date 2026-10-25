@@ -23,7 +23,8 @@ def dispatch_selection(identity):
     if choice is not None:
         return choice
     return {'g4-small-b-parallel-prefix':'current', 'cb59-replay':'cb59',
-            'cb59-stream-recv':'cb59-stream'}.get(identity.get('implementation'))
+            'cb59-stream-recv':'cb59-stream','cb59-pair-recv':'cb59-pair',
+            'cb59-small-direct':'cb59-small'}.get(identity.get('implementation'))
 
 
 def check_identity(left,right):
@@ -48,14 +49,15 @@ def check_identity(left,right):
                     or not _DISPATCH['dispatch_group_valid'](choice,item['logical_group'],item['world_size'])
                     or item['core_protocol']!=expected['core_protocol']):
                 raise ValueError('Invalid dispatch implementation identity')
-            if ('dispatch_capability' in item or choice=='cb59-stream') and item.get('dispatch_capability')!=_DISPATCH['dispatch_capability'](choice):
+            if ('dispatch_capability' in item or choice in ('cb59-stream','cb59-pair','cb59-small')) and item.get('dispatch_capability')!=_DISPATCH['dispatch_capability'](choice):
                 raise ValueError('Invalid dispatch capability scope identity')
-            if 'effective_dispatch_impl' in item or choice=='cb59-stream':
+            if 'effective_dispatch_impl' in item or choice in ('cb59-stream','cb59-pair','cb59-small'):
                 case=item.get('case') or {}
                 selected=_DISPATCH['effective_dispatch_implementation'](choice,item['world_size'],case.get('B'),case.get('M'))
                 if item.get('effective_dispatch_impl')!=selected:
                     raise ValueError('Invalid effective dispatch path identity')
-        elif item['implementation'] in ('cb59-replay','cb59-stream-recv') or 21001<=item['core_protocol']<=21055 or 22001<=item['core_protocol']<=22055:
+        elif item['implementation'] in ('cb59-replay','cb59-stream-recv','cb59-pair-recv','cb59-small-direct') or (
+                item['core_protocol']//1000 in (21,22,23,24) and 1<=item['core_protocol']%1000<=55):
             raise ValueError('Missing cb59 dispatch implementation identity')
     if any(isinstance(s,int) and s>=13 for s in (left['stage_timer_schema'],right['stage_timer_schema'])) and left['stage_timer_schema']!=right['stage_timer_schema'] and any(
         item['stage_timer'] or item['stage_capture'] or item['expert_capture'] for item in (left,right)):
@@ -71,12 +73,12 @@ def check_identity(left,right):
         differences.update(('stage_timer_schema','stage_timer_slots','stage_timer_fields',
                             'stage_timer_points','stage_timer_recording','timer_profile','timer_profile_id',
                             'profile_capture','profile_capture_requested','expert_timer_requested'))
-    if all(item['core_protocol']//1000 in (19,21,22) and 1<=item['core_protocol']%1000<=55 for item in (left,right)):
+    if all(item['core_protocol']//1000 in (19,21,22,23,24) and 1<=item['core_protocol']%1000<=55 for item in (left,right)):
         for item in (left,right):
             send=item.get('send_cores',0);recv=item.get('recv_cores',0)
             base=item['core_protocol']//1000*1000
             if (send+recv!=56 or min(send,recv)<=0 or item['core_protocol']!=base+send or item['active_aiv']!=56
-                    or (base in (21000,22000) and (send,recv)!=(28,28))):
+                    or (base in (21000,22000,23000,24000) and (send,recv)!=(28,28))):
                 raise ValueError('Invalid configured core split identity')
         differences.update(('send_cores','recv_cores','dispatch_recv_cores','core_protocol','stage_timer_schema'))
 
@@ -148,7 +150,7 @@ def compare(left,right,kind):
     if not l or not r: raise ValueError('No matching measurement data in one report')
     if not l.keys()&r.keys(): raise ValueError('No overlapping measurement keys')
     if kind!='perf':
-        if (left.get('schema')==15 or right.get('schema')==15) and left.get('schema')!=right.get('schema'):
+        if (left.get('schema') in (15,16) or right.get('schema') in (15,16)) and left.get('schema')!=right.get('schema'):
             raise ValueError('Incomparable diagnostic semantics: different stage schemas')
         if left.get('timer_profile','full') != right.get('timer_profile','full'):
             raise ValueError('Incomparable diagnostic semantics: different timer profiles')
@@ -167,7 +169,7 @@ def compare(left,right,kind):
                          if kind=='stage' and key[0]=='dispatch' and key in l and key in r else None)
         algorithm_changed = (kind!='perf' and key in l and key in r
                              and dispatch_selection(l[key][1])!=dispatch_selection(r[key][1])
-                             and any(selection in ('cb59','cb59-stream') for selection in
+                             and any(selection in ('cb59','cb59-stream','cb59-pair','cb59-small') for selection in
                                      (dispatch_selection(l[key][1]),dispatch_selection(r[key][1]))))
         rows.append(dict(key=json.dumps(key),baseline_mean_us=a,candidate_mean_us=b,
                          baseline_send_cores=l[key][1].get("send_cores") if key in l else None,

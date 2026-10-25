@@ -11,7 +11,7 @@ timer=load("overlap_timer","deep_ep/utils/ll_stage_timer.py")
 def test_schema12_and_legacy():
     for schema in (7,9,10,11,12):
         assert timer.parse_records(fixtures.raw(schema=schema),"dispatch")["schema"]==schema
-    assert timer.SCHEMA==15
+    assert timer.SCHEMA==16
     assert timer.STAGES[70:81]==("SEND_COMPLETE_WAIT","TRANSITION_DRAIN","RECV_PREPARE","SEND_SUBMIT_END","OVERLAP_PATH","SERIAL_FALLBACK","SEND_LANES","RECV_LANES","PREFIX_COMPLETE","PREFIX_LOAD","RECV_COMPLETE_WAIT")
     assert (8+2*timer.RECORDS)*8<=timer.SCHEMA_SLOTS[14]*timer.FIELDS*8
     assert (8+len(timer.POINTS))*8<=timer.SLOTS*timer.FIELDS*8

@@ -46,17 +46,20 @@ int main(int argc, char** argv)
                     throw std::runtime_error("header mismatch");
                 using namespace LlStageTimer;
                 const uint64_t expected=(1ULL<<ENTRY)|(1ULL<<INIT_DONE)|(1ULL<<FIRST_RECV_PROBE)|
-                    (1ULL<<FIRST_RECV_READY)|(1ULL<<RECV_DONE)|(1ULL<<WORK_DONE);
+                    (1ULL<<FIRST_RECV_READY)|(1ULL<<RECV_DONE)|(1ULL<<WORK_DONE)|
+                    (1ULL<<TILING_DONE)|(1ULL<<PIPE_READY)|(1ULL<<OBJECT_READY)|(1ULL<<MAGIC_DONE);
                 if (row[6]!=expected || row[7]!=0U || ((row[5]>>24)&255)!=6U)
                     throw std::runtime_error("sparse point mask/profile mismatch");
                 uint64_t previous=0;
-                for(uint32_t point=0;point<kPointCount;++point) {
+                for(uint32_t point : {ENTRY,TILING_DONE,PIPE_READY,OBJECT_READY,MAGIC_DONE,INIT_DONE,
+                                     FIRST_RECV_PROBE,FIRST_RECV_READY,RECV_DONE,WORK_DONE}) {
                     const uint64_t tick=row[kRecordWordOffset+point];
-                    if(expected&(1ULL<<point)) {
-                        if(tick<previous)throw std::runtime_error("non-monotonic sparse point");
-                        previous=tick;
-                    } else if(tick) throw std::runtime_error("unvisited point must be zero");
+                    if(tick<previous)throw std::runtime_error("non-monotonic sparse point");
+                    previous=tick;
                 }
+                for(uint32_t point=0;point<kPointCount;++point)
+                    if(!(expected&(1ULL<<point)) && row[kRecordWordOffset+point])
+                        throw std::runtime_error("unvisited point must be zero");
             }
         std::ofstream file(argv[1]);
         if (!file) throw std::runtime_error("cannot create output");

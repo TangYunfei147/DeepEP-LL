@@ -214,7 +214,7 @@ def st_profile_metadata(rank=0, iteration=0, iterations=3):
         active_aiv=56,send_cores=30,recv_cores=26,logical_group=4,core_protocol=19030,
         source_sha256='a'*64,stage_timer=True,stage_timer_schema=15,timer_profile='sparse',
         timer_profile_id=6,stage_timer_slots=8,stage_timer_fields=8,
-        stage_timer_points=list(timer.POINTS),stage_timer_recording='sparse-milestones',
+        stage_timer_points=list(timer.sparse.POINTS_V15),stage_timer_recording='sparse-milestones',
         profile_capture_requested=True,rdma_compiled=False)
     return dict(rank=rank,world_size=16,iteration=iteration,correctness='passed',
         comparison=st.comparison_metadata(args,16,32),run_id='sparse_profile',seed=args.seed,case_id=0,

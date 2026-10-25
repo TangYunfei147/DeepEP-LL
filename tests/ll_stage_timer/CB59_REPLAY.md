@@ -4,6 +4,12 @@ Reference: `cb59bff99ecd39d27ef57788c5e6fd0009e4e636` from
 `kernel/ll-configurable-groups`. Select `DEEPEP_LL_DISPATCH_IMPL=cb59` or
 `current` when building and running. The default remains `current`.
 
+Current builds use sparse schema16 with four additional initialization points;
+the c227a76/ae87d84 measurements below used schema15. The business algorithm
+and synchronization sequence are preserved; regenerate the original replay
+only through its generator. New independent experiments are documented in
+[CB59_PAIR.md](CB59_PAIR.md) and [CB59_SMALL.md](CB59_SMALL.md).
+
 The user confirmed EP16/M32/H3584/K8/E384, prequantized FP8, timer OFF:
 
 | B | Original cb59 us | Current P1/VF 39eadb0 us | Difference us |
@@ -61,9 +67,10 @@ algorithm or automatically change these settings together.
 
 ## What to compare
 
-Use full OFF profiler kernel tasks as the performance result. ON sparse capture
-keeps schema15, the512B per-core carrier and14 first timestamps. It adds no
-business barrier or final SyncAll. Replay senders are labelled send-only;
+Use full OFF profiler kernel tasks as the performance result. Current ON sparse
+capture uses schema16, the512B per-core carrier and18 first timestamps (the14
+original milestones plus4 initialization points). It adds no business barrier
+or final SyncAll. Replay senders are labelled send-only;
 current's existing shared-receive capability label remains separately encoded.
 
 Compare same-core ENTRY→PREFIX_READY, ENTRY→FIRST_RECV_PROBE and ENTRY→WORK_DONE

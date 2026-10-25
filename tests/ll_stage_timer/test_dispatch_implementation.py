@@ -39,13 +39,14 @@ def test_invalid_selection_fails_before_planning(tmp_path, monkeypatch, value):
 
 
 @pytest.mark.parametrize('send,recv,prefix', [(30,26,0), (28,28,1), (28,28,28)])
-@pytest.mark.parametrize('choice', ['cb59', 'cb59-stream'])
+@pytest.mark.parametrize('choice', ['cb59', 'cb59-stream', 'cb59-pair', 'cb59-small'])
 def test_cb59_rejects_stale_split_and_prefix(send, recv, prefix, choice):
     with pytest.raises(ValueError, match=choice+' requires'):
         dispatch_configuration(choice, send, recv, prefix)
 
 
-@pytest.mark.parametrize('choice,group,protocol', [('current',4,19028), ('cb59',16,21028), ('cb59-stream',16,22028)])
+@pytest.mark.parametrize('choice,group,protocol', [('current',4,19028), ('cb59',16,21028), ('cb59-stream',16,22028),
+                                                 ('cb59-pair',16,23028),('cb59-small',16,24028)])
 def test_plan_freezes_selection_for_every_build_and_run(tmp_path, monkeypatch, choice, group, protocol):
     monkeypatch.setenv('DEEPEP_LL_DISPATCH_IMPL', choice)
     monkeypatch.setenv('DEEPEP_LL_SEND_CORES', '28')
@@ -68,10 +69,10 @@ def test_default_and_native_cache_are_independent_of_source_hash():
     assert dispatch_implementation({}) == 'current'
     config = dict(source_sha256='same-source',ll_stage_timer=False,ll_send_cores=28,ll_recv_cores=28)
     assert len({build.build_cache_key(dict(config,ll_dispatch_impl=choice,ll_stage_timer=timer))
-                for choice in ('current','cb59','cb59-stream') for timer in (False,True)}) == 6
+                for choice in ('current','cb59','cb59-stream','cb59-pair','cb59-small') for timer in (False,True)}) == 10
 
 
-@pytest.mark.parametrize('choice', ['current','cb59','cb59-stream'])
+@pytest.mark.parametrize('choice', ['current','cb59','cb59-stream','cb59-pair','cb59-small'])
 def test_cmake_and_build_info_receive_selection(tmp_path, monkeypatch, choice):
     build = load('impl_package_build', 'build_support.py')
     from setuptools import Distribution, Extension
@@ -102,7 +103,7 @@ def test_cmake_and_build_info_receive_selection(tmp_path, monkeypatch, choice):
     assert json.loads((destination/'_build_info.json').read_text())['ll_dispatch_capability']==dispatch_capability(choice)
 
 
-@pytest.mark.parametrize('choice', ['current','cb59','cb59-stream'])
+@pytest.mark.parametrize('choice', ['current','cb59','cb59-stream','cb59-pair','cb59-small'])
 def test_installed_selection_is_required_even_for_same_source(tmp_path, choice):
     package=SimpleNamespace(__file__=str(tmp_path/'__init__.py'))
     native=SimpleNamespace(low_latency_dispatch_impl=choice)
@@ -121,7 +122,7 @@ def test_installed_selection_is_required_even_for_same_source(tmp_path, choice):
         st.validate_matching_capabilities([identity,dict(dispatch_impl='cb59' if choice=='current' else 'current')])
 
 
-@pytest.mark.parametrize('choice', ['current','cb59','cb59-stream'])
+@pytest.mark.parametrize('choice', ['current','cb59','cb59-stream','cb59-pair','cb59-small'])
 def test_host_verification_requires_plan_native_and_info_agreement(tmp_path, monkeypatch, choice):
     identity=dispatch_configuration(choice)
     package=tmp_path/'deep_ep';package.mkdir()
@@ -129,7 +130,7 @@ def test_host_verification_requires_plan_native_and_info_agreement(tmp_path, mon
               ll_dispatch_impl=choice,ll_dispatch_capability=dispatch_capability(choice),
               ll_send_cores=28,ll_recv_cores=28,ll_small_b_prefix_cores=0)
     info_path=package/'_build_info.json';info_path.write_text(json.dumps(info))
-    layout=dict(schema=15,slots=8,fields=8,recording='sparse-milestones',timer_profile='sparse',timer_profile_id=6,
+    layout=dict(schema=16,slots=8,fields=8,recording='sparse-milestones',timer_profile='sparse',timer_profile_id=6,
                 points=list(runpy.run_path(str(ROOT/'deep_ep/utils/ll_stage_timer.py'))['SPARSE_POINTS']))
     native=SimpleNamespace(low_latency_dispatch_impl=choice,low_latency_implementation=identity['implementation'],
         low_latency_ranks_per_group=identity['logical_group'],low_latency_overlap_stage=identity['overlap_stage'],
@@ -173,13 +174,14 @@ def recorded_identity(choice):
         dispatch_capability=dispatch_capability(choice),
         transport='mte',active_aiv=56,send_cores=28,recv_cores=28,dispatch_recv_cores=56 if choice=='current' else 28,
         logical_group=expected['logical_group'],core_protocol=expected['core_protocol'],stage_timer=False,
-        stage_timer_schema=15,rdma_compiled=False,small_b_prefix_cores=0,shmem_revision='a'*40,
+        stage_timer_schema=16,rdma_compiled=False,small_b_prefix_cores=0,shmem_revision='a'*40,
         local_q_table=expected['local_q_table'],local_q_seed_vf=expected['local_q_seed_vf'],
         source_sha256='b'*64,overlap_stage=expected['overlap_stage'])
     return st.comparison_metadata(args,16,32)
 
 
-@pytest.mark.parametrize('left_choice,right_choice', [('current','cb59'),('current','cb59-stream'),('cb59','cb59-stream')])
+@pytest.mark.parametrize('left_choice,right_choice', [('current','cb59'),('current','cb59-stream'),('cb59','cb59-stream'),
+                                                     ('cb59-stream','cb59-pair'),('cb59','cb59-small'),('cb59-pair','cb59-small')])
 def test_same_carrier_does_not_turn_different_algorithms_into_stage_speedup(left_choice,right_choice):
     left,right=recorded_identity(left_choice),recorded_identity(right_choice)
     assert right['effective_small_b_prefix_cores']==28
@@ -188,7 +190,7 @@ def test_same_carrier_does_not_turn_different_algorithms_into_stage_speedup(left
                     dispatch=dict(ranks=[dict(rank=0,mean_us=mean)]))])
     assert comparison.compare(perf(left,30),perf(right,18),'perf')[0]['candidate_over_baseline']==.6
     def stage(identity, mean):
-        return dict(schema=15,timer_profile='sparse',comparison=identity,per_rank_core_stage=[
+        return dict(schema=16,timer_profile='sparse',comparison=identity,per_rank_core_stage=[
             dict(operation='dispatch',rank=0,core=28,stage='ENTRY_TO_PREFIX_READY',unit='us',mean=mean)])
     row=comparison.compare(stage(left,30),stage(right,18),'stage')[0]
     assert row['status']=='dispatch_algorithm_changed' and row['candidate_over_baseline'] is None
@@ -197,7 +199,7 @@ def test_same_carrier_does_not_turn_different_algorithms_into_stage_speedup(left
             comparison.check_identity(left,dict(right,**{field:value}))
 
 
-@pytest.mark.parametrize('choice', ['cb59','cb59-stream'])
+@pytest.mark.parametrize('choice', ['cb59','cb59-stream','cb59-pair','cb59-small'])
 def test_legacy_reports_remain_offline_readable_without_new_identity(choice):
     old=recorded_identity('current');old.pop('dispatch_impl')
     comparison.check_identity(old,dict(old))
@@ -219,7 +221,8 @@ def test_current_explicit_group_override_is_validated_and_recorded(group):
             st.validate_matching_capabilities([identity,dict(identity,logical_group=4)])
 
 
-@pytest.mark.parametrize('choice,group,world', [('current',3,16),('current',17,32),('current',True,16),('cb59',4,16),('cb59-stream',4,16)])
+@pytest.mark.parametrize('choice,group,world', [('current',3,16),('current',17,32),('current',True,16),('cb59',4,16),
+                                              ('cb59-stream',4,16),('cb59-pair',4,16),('cb59-small',4,16)])
 def test_invalid_group_and_cb59_override_remain_rejected(choice,group,world):
     identity=recorded_identity(choice);identity['logical_group']=group;identity['world_size']=world
     assert not dispatch_group_valid(choice,group,world)
@@ -228,7 +231,7 @@ def test_invalid_group_and_cb59_override_remain_rejected(choice,group,world):
     with pytest.raises(ValueError):comparison.check_identity(identity,dict(identity))
 
 
-@pytest.mark.parametrize('choice,macro', [('cb59',1),('cb59-stream',2)])
+@pytest.mark.parametrize('choice,macro', [('cb59',1),('cb59-stream',2),('cb59-pair',3),('cb59-small',4)])
 def test_compile_benchmark_selects_one_algorithm_in_every_existing_unit(tmp_path, monkeypatch, choice, macro):
     monkeypatch.setenv('DEEPEP_LL_DISPATCH_IMPL',choice)
     monkeypatch.setenv('DEEPEP_LL_SEND_CORES','28');monkeypatch.setenv('DEEPEP_LL_RECV_CORES','28')
@@ -246,7 +249,9 @@ def test_compile_benchmark_selects_one_algorithm_in_every_existing_unit(tmp_path
 @pytest.mark.parametrize('choice,send,recv,prefix,valid', [
     ('current',30,26,1,True),('cb59',28,28,0,True),('cb59',30,26,0,False),
     ('cb59',28,28,1,False),('cb59-stream',28,28,0,True),('cb59-stream',30,26,0,False),
-    ('cb59-stream',28,28,1,False),('invalid',28,28,0,False)])
+    ('cb59-stream',28,28,1,False),('cb59-pair',28,28,0,True),('cb59-pair',30,26,0,False),
+    ('cb59-pair',28,28,1,False),('cb59-small',28,28,0,True),('cb59-small',30,26,0,False),
+    ('cb59-small',28,28,1,False),('invalid',28,28,0,False)])
 def test_real_cmake_selection_and_constraints_match_python(tmp_path, choice, send, recv, prefix, valid):
     cmake=shutil.which('cmake')
     if cmake is None:pytest.skip('CMake unavailable')
@@ -323,3 +328,30 @@ def test_stream_capability_covers_every_mode_but_does_not_claim_large_or_multiho
     identity=recorded_identity('cb59-stream')
     with pytest.raises(ValueError,match='capability scope'):
         comparison.check_identity(identity,dict(identity,dispatch_capability=dispatch_capability('cb59')))
+
+
+@pytest.mark.parametrize('world,b,m', [(16,1,32),(32,8,32),(64,16,32),(128,32,32),(256,1,1)])
+def test_small_scope_keeps_original_domains_and_pair_falls_back(world,b,m,monkeypatch):
+    assert effective_dispatch_implementation('cb59-small',world,b,m)=='cb59-small'
+    assert effective_dispatch_implementation('cb59-pair',world,b,m)==('cb59-pair' if world==16 else 'cb59')
+    monkeypatch.setenv('DEEPEP_LL_DISPATCH_IMPL','cb59-small')
+    args=st.parse_args(['--num-tokens',str(b),'--num-max-tokens-per-rank',str(m),'--num-experts','256'])
+    assert st.validate_args(args,world)==m
+
+
+@pytest.mark.parametrize('b,m', [(1,64),(32,64),(48,48),(64,128)])
+def test_small_scope_rejects_large_capacity_before_execution_or_fallback(b,m,monkeypatch):
+    with pytest.raises(ValueError,match='no fallback'):
+        effective_dispatch_implementation('cb59-small',16,b,m)
+    monkeypatch.setenv('DEEPEP_LL_DISPATCH_IMPL','cb59-small')
+    args=st.parse_args(['--num-tokens',str(b),'--num-max-tokens-per-rank',str(m)])
+    with pytest.raises(ValueError,match='no fallback'):
+        st.validate_args(args,16)
+    assert effective_dispatch_implementation('cb59-pair',16,b,m)=='cb59'
+
+
+def test_pair_and_small_capabilities_do_not_mislabel_scope_or_fallback():
+    assert dispatch_capability('cb59-pair')==dict(mode_count=7,scope='ep16-small-direct-paired',world_size=16,
+        max_B=32,max_M=32,receiver_pair_size=2,fallback_impl='cb59')
+    assert dispatch_capability('cb59-small')==dict(mode_count=7,scope='small-direct-only',max_B=32,max_M=32,
+        temporary=True,fallback_impl=None)

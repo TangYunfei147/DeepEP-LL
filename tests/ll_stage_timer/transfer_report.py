@@ -291,7 +291,7 @@ def prepare_restored(context,samples,trace_iteration=0,render=True):
         elif samples and all(m.get('correctness')=='passed' and 'world_size' in m for m,_ in samples):
             analysis=_load('analyze');report=analysis.analyze_samples(samples)
             files['summary.json']=_json(report)+'\n'
-            if report['schema'] != 15:
+            if report['schema'] not in (15,16):
                 files['communication_bottleneck.md']=analysis.communication_report.markdown(report['communication'])
         else:
             files['analysis_status.json']=_json(dict(status='unavailable',reason='Source metadata lacks complete correctness/world identity; decoded data and real intervals retained.'))+'\n'

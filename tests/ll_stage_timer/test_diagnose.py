@@ -384,7 +384,7 @@ def test_installed_wheel_source_and_native_layout_are_checked(tmp_path,monkeypat
     (package/'_build_info.json').write_text(json.dumps(info))
     from tests.elastic import test_ep_low_latency as st
     points=runpy.run_path(str(diagnose.ROOT/'deep_ep/utils/ll_stage_timer.py'))['SPARSE_POINTS']
-    layout=dict(schema=15,slots=8,fields=8,recording='sparse-milestones',
+    layout=dict(schema=16,slots=8,fields=8,recording='sparse-milestones',
                 points=list(points),timer_profile='sparse',timer_profile_id=6)
     native=SimpleNamespace(low_latency_implementation='candidate',low_latency_stage_timer_enabled=True,
                            low_latency_dispatch_impl='current',low_latency_ranks_per_group=4,

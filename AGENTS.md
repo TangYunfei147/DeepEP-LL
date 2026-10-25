@@ -1,5 +1,13 @@
 # LL 编译维护约束
 
+## 配对接收与小场景启动诊断（2026-10-25，最新实验授权）
+
+- 用户要求继续分离count记录归属与payload消费归属，并允许临时删除B>32场景来定位移植性能差距。独立候选`cb59-pair`（macro3/23028/cb59-pair-recv）在EP16小direct中由相邻两个R核交换精确dense区间后均分payload；count生产、专家计数写者、source发送均保持stream/cb59。其他shape使用cb59协议，未改默认选择。
+- pair只在配对内部平衡，不假定热点退化已证明由负载不均引起。单消费者mailbox用旧cumsumFlag矩阵，不占用仍在途的sum矩阵；publicprefix先于header发布，整32B清理。packed handoff只用一个TBuf，协议8+handoff1+tasks2+probe4+lane1=16，190KiB总预算同步Host；本片0payload可借入partner，按最终pair.Count判断空接收，q不得从consumer边界重新编号。
+- 临时`cb59-small`（macro4/24028/cb59-small-direct）仅接受1<=B<=M<=32，原合法EP范围/七dtype/O2保留，超范围明确报错无fallback。编译期关闭dedup/relay并固定全核count；原cb59/current大场景保留。本次用户授权覆盖下方“不裁剪功能”条款，仅限独立临时small选择，不作为生产功能或性能结论。
+- 新采集统一schema16：原14个点后追加TILING_DONE/PIPE_READY/OBJECT_READY/MAGIC_DONE，18点、512B每核、导出256B，内部链接sparse16拒混装。dispatch四点必需，combine不补不存在的细分点；schema15按原14点离线解析。无新增打点屏障，不能用OFF总时间减ON内部跨度估算launch/prologue。
+- cb59生成文件只经generate_cb59_replay.py更新MAGIC_DONE；small生成目录只能经generate_cb59_small.py修改，逆归一化逐token/同步校验。四实现cb59/cb59-small/cb59-stream/cb59-pair都须用同一提交重编完整OFF/ON，不能复用schema15轮次wheel。SDK复用已验证版本。步骤见CB59_PAIR.md与CB59_SMALL.md；仍只本地检查，不SSH/27，不宣称设备性能已验证。
+
 ## cb59 分片接收候选（2026-10-25）
 
 - 用户要求先做接收调度与路由协议重设计。独立选择 `DEEPEP_LL_DISPATCH_IMPL=cb59-stream`，原 `cb59` 六生成算法文件保持不变；新算法在 `low_latency/cb59_stream/` 手工维护。固定 G16/S28R28/P0，协议22028，身份cb59-stream-recv。七模式仍各自单TU、O2，无新增设备启动。

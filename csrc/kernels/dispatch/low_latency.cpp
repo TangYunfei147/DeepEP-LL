@@ -8,13 +8,13 @@
 #include "low_latency/common/ll_stage_timer_profile.h"
 #include "low_latency/common/ep_memory_server_dedup_protocol.h"
 #if CATLASS_ARCH == 3510
-extern "C" void dispatch_server_dedup_launch_sparse15_prequant_e4m3(void*,const deepep::EpServerDedupKernelArgs*);
-extern "C" void dispatch_server_dedup_launch_sparse15_fp16(void*,const deepep::EpServerDedupKernelArgs*);
-extern "C" void dispatch_server_dedup_launch_sparse15_fp16_e4m3(void*,const deepep::EpServerDedupKernelArgs*);
-extern "C" void dispatch_server_dedup_launch_sparse15_fp16_e5m2(void*,const deepep::EpServerDedupKernelArgs*);
-extern "C" void dispatch_server_dedup_launch_sparse15_bf16(void*,const deepep::EpServerDedupKernelArgs*);
-extern "C" void dispatch_server_dedup_launch_sparse15_bf16_e4m3(void*,const deepep::EpServerDedupKernelArgs*);
-extern "C" void dispatch_server_dedup_launch_sparse15_bf16_e5m2(void*,const deepep::EpServerDedupKernelArgs*);
+extern "C" void dispatch_server_dedup_launch_sparse16_prequant_e4m3(void*,const deepep::EpServerDedupKernelArgs*);
+extern "C" void dispatch_server_dedup_launch_sparse16_fp16(void*,const deepep::EpServerDedupKernelArgs*);
+extern "C" void dispatch_server_dedup_launch_sparse16_fp16_e4m3(void*,const deepep::EpServerDedupKernelArgs*);
+extern "C" void dispatch_server_dedup_launch_sparse16_fp16_e5m2(void*,const deepep::EpServerDedupKernelArgs*);
+extern "C" void dispatch_server_dedup_launch_sparse16_bf16(void*,const deepep::EpServerDedupKernelArgs*);
+extern "C" void dispatch_server_dedup_launch_sparse16_bf16_e4m3(void*,const deepep::EpServerDedupKernelArgs*);
+extern "C" void dispatch_server_dedup_launch_sparse16_bf16_e5m2(void*,const deepep::EpServerDedupKernelArgs*);
 extern "C" DEEPEP_EXPORT uint32_t deepep_ll_overlap_stage() {
     return DispatchDedup::kLlCb59Replay ? 0U : DispatchDedup::kLlOverlapExperimentStage;
 }
@@ -40,17 +40,17 @@ extern "C" DEEPEP_EXPORT uint32_t deepep_ll_core_protocol_version()
     return DispatchDedup::kLlCoreProtocolVersion;
 }
 
-extern "C" DEEPEP_EXPORT void dispatch_server_dedup_kernel_do_sparse15(
+extern "C" DEEPEP_EXPORT void dispatch_server_dedup_kernel_do_sparse16(
     void* stream,const deepep::EpServerDedupKernelArgs* args,uint32_t variant) {
     if (!args) throw std::invalid_argument("Null LL dispatch arguments");
     switch (variant) {
-    case 0: dispatch_server_dedup_launch_sparse15_prequant_e4m3(stream,args); return;
-    case 1: dispatch_server_dedup_launch_sparse15_fp16(stream,args); return;
-    case 2: dispatch_server_dedup_launch_sparse15_fp16_e4m3(stream,args); return;
-    case 3: dispatch_server_dedup_launch_sparse15_fp16_e5m2(stream,args); return;
-    case 4: dispatch_server_dedup_launch_sparse15_bf16(stream,args); return;
-    case 5: dispatch_server_dedup_launch_sparse15_bf16_e4m3(stream,args); return;
-    case 6: dispatch_server_dedup_launch_sparse15_bf16_e5m2(stream,args); return;
+    case 0: dispatch_server_dedup_launch_sparse16_prequant_e4m3(stream,args); return;
+    case 1: dispatch_server_dedup_launch_sparse16_fp16(stream,args); return;
+    case 2: dispatch_server_dedup_launch_sparse16_fp16_e4m3(stream,args); return;
+    case 3: dispatch_server_dedup_launch_sparse16_fp16_e5m2(stream,args); return;
+    case 4: dispatch_server_dedup_launch_sparse16_bf16(stream,args); return;
+    case 5: dispatch_server_dedup_launch_sparse16_bf16_e4m3(stream,args); return;
+    case 6: dispatch_server_dedup_launch_sparse16_bf16_e5m2(stream,args); return;
     default: throw std::invalid_argument("Invalid LL dispatch variant");
     }
 }

@@ -16,6 +16,12 @@ IMPLEMENTATIONS = {
     "cb59-stream": dict(implementation="cb59-stream-recv", protocol_base=22000,
                         logical_group=16, fixed_logical_group=16, overlap_stage=0, local_q_table=False,
                         local_q_seed_vf=False, cb59=2),
+    "cb59-pair": dict(implementation="cb59-pair-recv", protocol_base=23000,
+                      logical_group=16, fixed_logical_group=16, overlap_stage=0, local_q_table=False,
+                      local_q_seed_vf=False, cb59=3),
+    "cb59-small": dict(implementation="cb59-small-direct", protocol_base=24000,
+                       logical_group=16, fixed_logical_group=16, overlap_stage=0, local_q_table=False,
+                       local_q_seed_vf=False, cb59=4),
 }
 
 
@@ -23,13 +29,13 @@ def dispatch_implementation(environment=None):
     env = os.environ if environment is None else environment
     value = env.get("DEEPEP_LL_DISPATCH_IMPL", "current")
     if value not in IMPLEMENTATIONS:
-        raise ValueError("DEEPEP_LL_DISPATCH_IMPL must be current, cb59 or cb59-stream")
+        raise ValueError("DEEPEP_LL_DISPATCH_IMPL must be " + ', '.join(IMPLEMENTATIONS))
     return value
 
 
 def dispatch_configuration(choice, send=28, recv=28, prefix=0):
     if choice not in IMPLEMENTATIONS:
-        raise ValueError("DEEPEP_LL_DISPATCH_IMPL must be current, cb59 or cb59-stream")
+        raise ValueError("DEEPEP_LL_DISPATCH_IMPL must be " + ', '.join(IMPLEMENTATIONS))
     if any(type(value) is not int for value in (send, recv, prefix)) or min(send, recv) <= 0 or send + recv != 56:
         raise ValueError("DEEPEP_LL_SEND_CORES and DEEPEP_LL_RECV_CORES must be positive and sum to 56")
     if not 0 <= prefix <= recv:
@@ -57,7 +63,9 @@ def effective_dispatch_implementation(choice, world, tokens, capacity):
         raise ValueError("Unknown compiled LL dispatch implementation")
     if any(type(value) is not int for value in (world, tokens, capacity)) or world <= 0 or not 1 <= tokens <= capacity:
         raise ValueError("Invalid LL dispatch shape identity")
-    if choice == 'cb59-stream' and not (world == 16 and capacity <= 32 and tokens <= 32):
+    if choice == 'cb59-small' and capacity > 32:
+        raise ValueError('cb59-small is a temporary small-direct build requiring 1<=B<=M<=32; no fallback is compiled')
+    if choice in ('cb59-stream', 'cb59-pair') and not (world == 16 and capacity <= 32 and tokens <= 32):
         return 'cb59'
     return choice
 
@@ -69,4 +77,9 @@ def dispatch_capability(choice):
     result = dict(mode_count=7, scope='all-supported', fallback_impl=None)
     if choice == 'cb59-stream':
         result.update(scope='ep16-small-direct', world_size=16, max_B=32, max_M=32, fallback_impl='cb59')
+    elif choice == 'cb59-pair':
+        result.update(scope='ep16-small-direct-paired', world_size=16, max_B=32, max_M=32,
+                      receiver_pair_size=2, fallback_impl='cb59')
+    elif choice == 'cb59-small':
+        result.update(scope='small-direct-only', max_B=32, max_M=32, temporary=True)
     return result

@@ -1,0 +1,64 @@
+{
+  "reference_commit": "cb59bff99ecd39d27ef57788c5e6fd0009e4e636",
+  "source_fixture": "cb59_replay_tokens.json",
+  "specialization": "1<=B<=M<=32; all original EP domains and seven dtype entries",
+  "changes": [
+    "enableDedup_ is static constexpr false",
+    "useAllCoreCount_ is static constexpr true",
+    "constant-only if statements use if constexpr",
+    "receiver firstHop is constexpr false"
+  ],
+  "unchanged": [
+    "routing",
+    "record and packet ownership",
+    "UB allocations and budgets",
+    "event IDs",
+    "synchronization ordering",
+    "all public output metadata",
+    "the default cb59 selector"
+  ],
+  "files": {
+    "dispatch_server_dedup_kernel.h": {
+      "replay_business_sha256": "ff4f06a8bd9e147f6cace6e70ddd5d407e66054e40a12e82be35024e40f177f0",
+      "normalized_business_sha256": "ff4f06a8bd9e147f6cace6e70ddd5d407e66054e40a12e82be35024e40f177f0",
+      "specialized_sha256": "f230f54167be3bd9f063b47c2c2e1277fd6aaf6bff196d0a489057dab4e6c2b7",
+      "replay_synchronization_sha256": "b996634889a74f7e0c6b6f1e4d3e18e58a2ff93e5bc67c9a0851190539db2209",
+      "normalized_synchronization_sha256": "b996634889a74f7e0c6b6f1e4d3e18e58a2ff93e5bc67c9a0851190539db2209"
+    },
+    "device/dispatch_server_dedup_counts.h": {
+      "replay_business_sha256": "769c064d39d53a88fd20e56b6c9b0b23963863a599555aadb3ff98177b41898e",
+      "normalized_business_sha256": "769c064d39d53a88fd20e56b6c9b0b23963863a599555aadb3ff98177b41898e",
+      "specialized_sha256": "67c03f72e7564903ffdb83c3efad241e6d2f2e8f49127af0db101bad411403e0",
+      "replay_synchronization_sha256": "d9c0892938cb16eaad85f94b2d9cafcabdb73eff782a9a6f02e89e92b8800dac",
+      "normalized_synchronization_sha256": "d9c0892938cb16eaad85f94b2d9cafcabdb73eff782a9a6f02e89e92b8800dac"
+    },
+    "device/dispatch_server_dedup_send.h": {
+      "replay_business_sha256": "757106883df4639750273c3a6d85a9e4b41177a14c06fbc5e2710d80ca70be44",
+      "normalized_business_sha256": "757106883df4639750273c3a6d85a9e4b41177a14c06fbc5e2710d80ca70be44",
+      "specialized_sha256": "c248725cd2c762c4ac2760cd255044f2ec1a683dcffc6cbb6a03a490e7ec2b21",
+      "replay_synchronization_sha256": "3354254c6225ee9223d37df2681751b1f17fde8114d402f1c57cab3922dc7a63",
+      "normalized_synchronization_sha256": "3354254c6225ee9223d37df2681751b1f17fde8114d402f1c57cab3922dc7a63"
+    },
+    "device/dispatch_server_dedup_recv.h": {
+      "replay_business_sha256": "282c8df00bb5f25fe7a74bb3bb138afc16631c9fc35cbdd747d3d35130e815ac",
+      "normalized_business_sha256": "282c8df00bb5f25fe7a74bb3bb138afc16631c9fc35cbdd747d3d35130e815ac",
+      "specialized_sha256": "6cc63f0f2f86ee50b346e2c51a84a8180f5fa9e7d6592d65a5cbc9359b699906",
+      "replay_synchronization_sha256": "4527d283b6978eb0222cb054f499b30719e9ed67e94f0a1b829d90e7c93baaef",
+      "normalized_synchronization_sha256": "4527d283b6978eb0222cb054f499b30719e9ed67e94f0a1b829d90e7c93baaef"
+    },
+    "device/dispatch_server_dedup_receive_packet.h": {
+      "replay_business_sha256": "3bbcacb236426f2ba1685caebcdcea8aeee8329a0917f01970f0813f8891fad7",
+      "normalized_business_sha256": "3bbcacb236426f2ba1685caebcdcea8aeee8329a0917f01970f0813f8891fad7",
+      "specialized_sha256": "c28b2a782e2dd5031149fcc69c63e05e8d0dedc9e9570c70b45c46aa754233f1",
+      "replay_synchronization_sha256": "31bceb58062f2500ae933f76c97ac740651a696103c6573f4b89ad96f63eeb07",
+      "normalized_synchronization_sha256": "31bceb58062f2500ae933f76c97ac740651a696103c6573f4b89ad96f63eeb07"
+    },
+    "device/dispatch_server_dedup_receive_tasks.h": {
+      "replay_business_sha256": "3c58b27386a8b5a99ecfc3f60d8b586b2194471faf446c8a52c7b9c99f22b805",
+      "normalized_business_sha256": "3c58b27386a8b5a99ecfc3f60d8b586b2194471faf446c8a52c7b9c99f22b805",
+      "specialized_sha256": "064b676aa591a8d497660da3dd7ca8ac39c7bd4e12e17f7041eea51f012c200a",
+      "replay_synchronization_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "normalized_synchronization_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    }
+  }
+}

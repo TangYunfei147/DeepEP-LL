@@ -105,7 +105,7 @@ def test_full_capture_is_deferred_and_saves_extended_json(monkeypatch,tmp_path):
     monkeypatch.setitem(sys.modules,'deep_ep',package);monkeypatch.setitem(sys.modules,'deep_ep.utils',utils)
     copies=[]
     class Tensor:
-        def __init__(self):self.ptr=256;self.device='npu:0';self.raw=load('deferred_sparse_fixture','tests/ll_stage_timer/test_sparse_timer.py').raw(send=10)
+        def __init__(self):self.ptr=256;self.device='npu:0';self.raw=load('deferred_sparse_fixture','tests/ll_stage_timer/test_sparse_init16.py').raw16(send=10)
         def data_ptr(self):return self.ptr
         def narrow(self,dim,offset,count):self.ptr+=offset*8;return self
         def view(self,*shape):self.shape=shape;return self

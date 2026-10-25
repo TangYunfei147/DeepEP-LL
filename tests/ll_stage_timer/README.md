@@ -1,14 +1,16 @@
 # LL稀疏诊断：当前入口
 
+最新两组实验：[配对接收CB59_PAIR.md](CB59_PAIR.md)比较`cb59-stream`/`cb59-pair`；[小场景启动诊断CB59_SMALL.md](CB59_SMALL.md)比较`cb59`/`cb59-small`。新采集为schema16，增加tiling、TPipe、对象及magic四点；仍每核512B，无新打点屏障。两组全部构建完成（四实现共八份OFF/ON wheel）后再串行测试，SDK可复用；历史schema15报告可离线读取，旧wheel不能混用。
+
 新增接收调度候选见[CB59_STREAM.md](CB59_STREAM.md)：`cb59-stream`与原`cb59`独立A/B，固定G16/S28R28/P0，EP16小direct按count记录分片接收，协议22028。先构建四份OFF/ON wheel，再验证dispatch/combine并串行采normal/hotspot。当前仅本地CPU/原生模拟通过，尚无目标性能结论。
 
 最新对照入口见[CB59_REPLAY.md](CB59_REPLAY.md)：同一当前分支用`DEEPEP_LL_DISPATCH_IMPL=current|cb59`分别构建OFF/ON，固定56核28/28；current用P1，cb59保留旧R=28前缀和G16。两版共用当前SDK/普通页及稀疏打点，先完成全部四份wheel再串行测试。本次仅本地验证，未执行CANN或NPU。
 
-当前分支是`kernel/ll-g4-small-b-prefix`，实现`g4-small-b-parallel-prefix`，**schema15 / sparse**。
+当前分支是`kernel/ll-g4-small-b-prefix`，默认实现`g4-small-b-parallel-prefix`，新采集为**schema16 / sparse**；下方旧实验描述中的schema15属于历史记录。
 当前独立候选固定S30/R26/P1，将count ready检查与计数提取合并为一个VF；基线578d32b，完整A/B命令见[P1_COUNT_VF.md](P1_COUNT_VF.md)。已匹配的官方新SDK无需因本次VF修改重建，完整OFF/ON wheel需要重编。
 2026-10-25已升级官方SHMEM master，并增加EP16小B前缀生产核数P。先按[SDK升级说明](../../docs/SHMEM_MASTER_UPDATE.md)重建新SDK，再按[P26/6/1对照步骤](PARALLEL_PREFIX.md)构建全部wheel后串行采样。默认P=0沿用R；本次不改接收任务归属，不宣称已取得时延收益。
-保持原收发逻辑、通信协议和已有业务同步顺序；删除仅诊断用的末尾SyncAll，计时器改为每核最多14个首次时间戳，512B独占槽，实际发布192B。
-当前新采集只支持sparse；旧schema7～14及其full/phase数据仍可离线读取。下方折叠内容是历史说明，不作为当前构建或新手命令。
+诊断点不新增业务屏障或末尾SyncAll；新候选的协议差异见对应指南。当前计时器每核最多18个首次时间戳，512B独占槽，实际发布256B，其中四点用于初始化细分。
+当前新采集只支持schema16 sparse；旧schema15 sparse和schema7～14的full/phase数据仍可离线读取。下方折叠内容是历史说明，不作为当前构建或新手命令。
 
 ## 一个命令跑多个B
 

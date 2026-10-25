@@ -19,7 +19,7 @@ timer = load('schema_timer', 'deep_ep/utils/ll_stage_timer.py')
 
 
 def capability(**changes):
-    result=dict(stage_timer=True, stage_timer_schema=15, timer_profile='sparse', timer_profile_id=6,
+    result=dict(stage_timer=True, stage_timer_schema=16, timer_profile='sparse', timer_profile_id=6,
                 stage_timer_slots=8, stage_timer_fields=8, stage_timer_recording='sparse-milestones',
                 stage_timer_points=list(timer.SPARSE_POINTS))
     result.update(changes)
@@ -30,9 +30,9 @@ def test_current_timer_schema_passes_st_preflight():
     entry.validate_stage_timer_capability(capability())
 
 
-@pytest.mark.parametrize('schema', [7, 9, 10, 11, 12, 13, 14, 16, None])
+@pytest.mark.parametrize('schema', [7, 9, 10, 11, 12, 13, 14, 15, 17, None])
 def test_stale_or_unknown_schema_is_rejected(schema):
-    with pytest.raises(RuntimeError, match=f'timer schema 15; got {schema}'):
+    with pytest.raises(RuntimeError, match=f'timer schema 16; got {schema}'):
         entry.validate_stage_timer_capability(capability(stage_timer_schema=schema))
 
 
@@ -61,5 +61,5 @@ def test_point_names_and_order_are_checked():
 
 
 def test_sparse_layout_helper_uses_same_contract():
-    entry.validate_sparse_timer_layout(dict(schema=15,slots=8,fields=8,recording='sparse-milestones',
+    entry.validate_sparse_timer_layout(dict(schema=16,slots=8,fields=8,recording='sparse-milestones',
         timer_profile='sparse',timer_profile_id=6,points=list(timer.SPARSE_POINTS)))

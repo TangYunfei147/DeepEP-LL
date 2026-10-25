@@ -18,7 +18,7 @@ def test_sparse_recorder_has_no_dynamic_stage_lookup_or_accumulator():
 
 def test_only_sparse_buffers_and_compatible_linkage_are_exposed():
     layout=(COMMON/'ll_stage_timer_layout.h').read_text(encoding='utf-8')
-    assert 'kSchema = 15U' in layout and 'kSlots = 8U' in layout
+    assert 'kSchema = 16U' in layout and 'kSlots = 8U' in layout
     assert 'kPointCount < 64U' in layout
     host=(ROOT/'csrc/ops/low_latency.cpp').read_text(encoding='utf-8')
     assert 'deepep_ll_stage_timer_schema()!=LlStageTimer::kSchema' in host
@@ -26,6 +26,8 @@ def test_only_sparse_buffers_and_compatible_linkage_are_exposed():
     assert 'Sparse LL timer supports observe only' in host
     assert 'result["recording"] = "sparse-milestones"' in host
     assert 'result["points"] = points' in host
+    assert 'dispatch_server_dedup_kernel_do_sparse16' in host and 'combine_server_dedup_kernel_do_sparse16' in host
+    assert 'sparse15' not in host
     for path in ['csrc/kernels/dispatch/low_latency/dispatch_variant_kernel.h','csrc/kernels/combine/low_latency.cpp']:
         text=(ROOT/path).read_text(encoding='utf-8')
         assert 'SyncAll' not in text

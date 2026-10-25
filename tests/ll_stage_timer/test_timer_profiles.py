@@ -97,7 +97,7 @@ def fake_native(monkeypatch, profile=6, **layout_changes):
     utils = ModuleType('deep_ep.utils'); utils.__path__ = []
     monkeypatch.setitem(sys.modules, 'deep_ep', package)
     monkeypatch.setitem(sys.modules, 'deep_ep.utils', utils)
-    data = sparse_fixture.raw(send=10)
+    data = load('active_sparse16_fixture', 'tests/ll_stage_timer/test_sparse_init16.py').raw16(send=10)
 
     class Tensor:
         device = 'npu:0'

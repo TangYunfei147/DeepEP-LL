@@ -4,9 +4,15 @@
 #include "kernel_operator.h"
 #include "../cb59/count_layout.h"
 #include "../common/ll_stage_timer_device.h"
+#ifndef DEEPEP_LL_STREAM_DEVICE_CONTEXT
 #define DEEPEP_LL_STREAM_DEVICE_CONTEXT 1
+#define DEEPEP_LL_STREAM_COUNTS_OWNS_CONTEXT 1
+#endif
 #include "../common/ll_stream_receive.h"
+#ifdef DEEPEP_LL_STREAM_COUNTS_OWNS_CONTEXT
 #undef DEEPEP_LL_STREAM_DEVICE_CONTEXT
+#undef DEEPEP_LL_STREAM_COUNTS_OWNS_CONTEXT
+#endif
 
 namespace DispatchDedup::Cb59Stream {
 using namespace AscendC;

@@ -161,7 +161,7 @@ def analyze_samples(samples):
         for row in report['records']:
             initial_role=row.get('initial_role',row['role'])
             key=(op,rank,row['core'],initial_role,row['stage'])
-            if report['schema'] in (7,9,10,11,12,13,14,15):
+            if report['schema'] in (7,9,10,11,12,13,14,15,16):
                 worker_roles.setdefault((op,rank,row['core']),set()).add(row['role'])
             duration=row['total_us'] if unit=='us' else row['total_ticks']
             groups.setdefault(key,[]).append((duration,row['calls']))
@@ -199,8 +199,8 @@ def analyze_samples(samples):
                 relay_timing=relay_timing.report(wait_samples),
                 per_rank_stage_max=[dict(operation=op,rank=rank,stage=stage,unit=unit,**stats(list(values.values())))
                                     for (op,rank,stage),values in sorted(stage_max.items())],
-                note=('Same-core first milestone endpoint spans; overlapping spans cannot be added. No packet totals or cross-rank timestamp subtraction.' if identity[9]==15 else 'Per-call diagnostic stage totals; nested/parallel stages cannot be added. No cross-rank timestamp subtraction.'))
-    if identity[9] == 15:
+                note=('Same-core first milestone endpoint spans; overlapping spans cannot be added. No packet totals or cross-rank timestamp subtraction.' if identity[9] in (15,16) else 'Per-call diagnostic stage totals; nested/parallel stages cannot be added. No cross-rank timestamp subtraction.'))
+    if identity[9] in (15,16):
         result['communication'].update(status='not_collected_sparse_milestones', unsupported_samples=0,
             note='Sparse capture records only first milestones. Packet counters, bandwidth, repeated waits and ready/probe ratios were not collected.')
         result['overlap_receive'] = []
@@ -243,7 +243,7 @@ def expert_reports(paths, frequency_hz):
         if payload['experts'] != meta['config'].get('num_experts',payload['experts']):
             raise ValueError('Expert count differs from case configuration')
         header=saved['raw'][0][0]
-        if header[1] in (7,9,10,11,12,13,14,15): raise ValueError('Segment capture cannot contain legacy expert instrumentation')
+        if header[1] in (7,9,10,11,12,13,14,15,16): raise ValueError('Segment capture cannot contain legacy expert instrumentation')
         expected_send=header[5] >> 8 if header[1] in (5,6) else len(saved['raw'])//2
         if (header[1] in (5,6) and 'send_cores' not in payload) or payload.get('send_cores',expected_send)!=expected_send:
             raise ValueError('Expert/stage core split mismatch')
@@ -297,7 +297,7 @@ def process_directory(source, output, frequency_hz, trace_iteration, lane_layout
     (output/'summary.json').write_text(json.dumps(report, indent=2))
     wait_report=report['input_wait_bottleneck']
     relay_report=report['relay_timing']
-    if report['schema'] != 15:
+    if report['schema'] not in (15,16):
         comm=report['communication']
         (output/'communication_bottleneck.md').write_text(communication_report.markdown(comm),encoding='utf-8')
         for name,rows in (('communication_samples',comm['samples']),('communication_costs',comm['costs']),('communication_per_core',comm['per_core'])):
@@ -334,7 +334,7 @@ def process_directory(source, output, frequency_hz, trace_iteration, lane_layout
     (output/'trace.json').write_text(json.dumps(trace))
     segment_metrics, segment_intervals, segment_cores, milestones = [], [], [], []
     for meta,decoded in decoded_samples:
-        if decoded['schema'] not in (7,9,10,11,12,13,14,timer.SCHEMA): continue
+        if decoded['schema'] not in timer.CURRENT_SCHEMAS: continue
         shared=dict(operation=decoded['operation'],rank=meta['rank'],iteration=meta['iteration'])
         segment_metrics.extend(dict(**shared,**row) for row in decoded['records'])
         segment_intervals.extend(dict(**shared,**row) for row in decoded['intervals'])

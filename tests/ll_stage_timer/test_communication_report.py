@@ -47,7 +47,7 @@ def test_new_layout_names_and_end_to_end_units():
     import re
     names=re.findall(r'"([A-Z_]+)"',re.search(r'kNames\[\] = \{(.*?)\};',header,re.S).group(1))
     assert names==list(timer.STAGES)
-    assert timer.SCHEMA==15 and timer.SLOTS==8 and timer.METRICS==136
+    assert timer.SCHEMA==16 and timer.SLOTS==8 and timer.METRICS==136
     assert timer.SCHEMA_SLOTS[13]==80 and timer.SCHEMA_METRICS[13]==108
     decoded=timer.parse_records(raw(),'dispatch',1e9)
     r=comm.report([(dict(rank=0,iteration=0),decoded)])

@@ -71,8 +71,8 @@ def validate_dispatch_algorithm_capability(capability, world):
 def validate_stage_timer_capability(capability):
     if not capability["stage_timer"]:
         raise RuntimeError("All ranks must install a DEEPEP_LL_STAGE_TIMER=ON wheel")
-    if capability['stage_timer_schema'] != 15:
-        raise RuntimeError('Sparse LL diagnostics require timer schema 15; '
+    if capability['stage_timer_schema'] != 16:
+        raise RuntimeError('Sparse LL diagnostics require timer schema 16; '
                            f'got {capability["stage_timer_schema"]}; '
                            'rebuild/install the matching wheel on every rank')
     expected = dict(timer_profile='sparse', timer_profile_id=6,
@@ -194,7 +194,7 @@ def comparison_metadata(args, world, m):
     prefix = runtime.get('small_b_prefix_cores')
     effective_prefix = None
     if prefix is not None and m <= 32 and args.num_tokens <= 32:
-        effective_prefix = runtime.get('recv_cores') if runtime.get('dispatch_impl') in ('cb59', 'cb59-stream') else (
+        effective_prefix = runtime.get('recv_cores') if runtime.get('dispatch_impl') in ('cb59', 'cb59-stream', 'cb59-pair', 'cb59-small') else (
             (prefix or runtime.get('recv_cores')) if world == 16 else runtime.get('recv_cores'))
     path_identity = {}
     if runtime.get('dispatch_impl') is not None:
@@ -609,6 +609,7 @@ def validate_args(args, world):
     m = args.num_tokens if args.num_max_tokens_per_rank is None else args.num_max_tokens_per_rank
     if not 0 < args.num_tokens <= m <= 256:
         raise ValueError("LL ST requires 0 < actual B <= M <= 256")
+    _DISPATCH['effective_dispatch_implementation'](_DISPATCH['dispatch_implementation'](), world, args.num_tokens, m)
     if not 4 <= args.hidden <= 2147483647:
         raise ValueError("H must be >=4 for ST row identifiers and fit native int; native layout checks apply")
     if not 1 <= args.num_topk <= 16 or not world <= args.num_experts <= 1024 or args.num_experts % world:
@@ -1343,7 +1344,7 @@ def worker(local_rank, args):
         validate_matching_capabilities(capabilities)
         validate_dispatch_algorithm_capability(capability, world)
         validate_core_split_capability(capability)
-        if capability['implementation'] not in ('ndr-hns1825','configurable-groups','g4-shared-recv','g4-overlap-recv','g4-r0-prefix','g4-small-b','g4-small-b-parallel-prefix','cb59-replay','cb59-stream-recv'):
+        if capability['implementation'] not in ('ndr-hns1825','configurable-groups','g4-shared-recv','g4-overlap-recv','g4-r0-prefix','g4-small-b','g4-small-b-parallel-prefix','cb59-replay','cb59-stream-recv','cb59-pair-recv','cb59-small-direct'):
             raise RuntimeError('Rebuild the wheel with the shared experiment implementation identity')
         validate_overlap_stage_capability(capability)
         requested_impl=os.environ.get('DEEPEP_LL_EXPECT_IMPLEMENTATION')

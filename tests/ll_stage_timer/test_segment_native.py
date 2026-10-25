@@ -1,5 +1,7 @@
 """Compile the actual sparse recorder with a minimal Ascend API mock when C++ is available."""
 from pathlib import Path
+import os
+import shlex
 import shutil
 import subprocess
 import pytest
@@ -7,8 +9,11 @@ ROOT=Path(__file__).resolve().parents[2]
 
 @pytest.mark.parametrize('enabled',[False,True])
 def test_actual_recorder_is_sparse_bounded_and_delays_gm_export(tmp_path,enabled):
-    compiler=shutil.which('g++')
-    if compiler is None:pytest.skip('C++ compiler unavailable; target native mock remains required')
+    compiler=shlex.split(os.environ.get('CXX',''))
+    if not compiler:
+        found=shutil.which('g++') or shutil.which('clang++')
+        if found is None:pytest.skip('C++ compiler unavailable; target native mock remains required')
+        compiler=[found]
     (tmp_path/'kernel_operator.h').write_text(r'''
 #pragma once
 #include <cstdint>
@@ -38,7 +43,7 @@ template<class T,CacheLine C,DcciDst D>void DataCacheCleanAndInvalid(GlobalTenso
 #include "csrc/kernels/dispatch/low_latency/common/ll_stage_timer_device.h"
 int main(){
  using namespace LlStageTimer;
- static_assert(kSchema==15 && kWordsPerCore*8==512 && kPointCount==14 && kExportWords==24);
+ static_assert(kSchema==16 && kWordsPerCore*8==512 && kPointCount==18 && kExportWords==32);
  std::vector<uint64_t> words(56*kWordsPerCore+64,0);
  std::fill(words.end()-64,words.end(),0x12345678ULL);
  AscendC::core=55;
@@ -51,6 +56,7 @@ int main(){
  LL_SEG_FIRST(BEFORE_FIRST_SEND);
  assert(sideEffects==0 && AscendC::clock==clock);
  timer.MarkAt<ENTRY>(clock);
+ timer.Mark<TILING_DONE>();timer.Mark<PIPE_READY>();timer.Mark<OBJECT_READY>();timer.Mark<MAGIC_DONE>();
  timer.Mark<INIT_DONE>();
  timer.MarkIfSeen<FIRST_SEND,SEND_DONE>();
  LL_SPARSE_MARK(FIRST_SEND);
@@ -63,17 +69,19 @@ int main(){
  assert(AscendC::flushes==0);
  timer.Flush();
 #ifdef DEEPEP_LL_STAGE_TIMER
- assert(AscendC::clock==clock+4);
- assert(AscendC::flushes==3);
+ assert(AscendC::clock==clock+8);
+ assert(AscendC::flushes==4);
  auto* data=words.data()+55*kWordsPerCore;
  assert(((data[5]>>24)&255)==6);
- assert(data[0]==kMagic && data[1]==15 && data[7]==0);
- assert(data[6]==((1ULL<<ENTRY)|(1ULL<<INIT_DONE)|(1ULL<<FIRST_SEND)|(1ULL<<SEND_DONE)|(1ULL<<WORK_DONE)));
+ assert(data[0]==kMagic && data[1]==16 && data[7]==0);
+ assert(data[6]==((1ULL<<ENTRY)|(1ULL<<INIT_DONE)|(1ULL<<FIRST_SEND)|(1ULL<<SEND_DONE)|(1ULL<<WORK_DONE)|
+                 (1ULL<<TILING_DONE)|(1ULL<<PIPE_READY)|(1ULL<<OBJECT_READY)|(1ULL<<MAGIC_DONE)));
  assert(data[8+ENTRY]<=data[8+INIT_DONE] && data[8+INIT_DONE]<data[8+FIRST_SEND]);
  assert(data[8+FIRST_SEND]<data[8+WORK_DONE]);
- assert(data[8+RECV_DONE]==0 && data[22]==0 && data[23]==0);
+ assert(data[8+RECV_DONE]==0);
+ assert(std::all_of(data+26,data+32,[](auto value){return value==0;}));
  assert(std::all_of(words.begin(),words.begin()+55*kWordsPerCore,[](auto value){return value==0;}));
- assert(std::all_of(data+24,data+kWordsPerCore,[](auto value){return value==0;}));
+ assert(std::all_of(data+32,data+kWordsPerCore,[](auto value){return value==0;}));
 #else
  (void)timer_;
  assert(AscendC::flushes==0 && AscendC::clock==clock);
@@ -97,7 +105,7 @@ int main(){
 #endif
 }
 ''')
-    executable=tmp_path/'check'
-    subprocess.run([compiler,'-std=c++17','-Wall','-Wextra','-Werror',
-                    *(['-DDEEPEP_LL_STAGE_TIMER=1'] if enabled else []),'-DDEEPEP_LL_TIMER_PROFILE_ID=6',f'-I{tmp_path}',f'-I{ROOT}',str(source),'-o',str(executable)],check=True)
+    executable=tmp_path/('check.exe' if os.name=='nt' else 'check')
+    subprocess.run([*compiler,'-std=c++17','-Wall','-Wextra','-Werror',
+                    *(['-DDEEPEP_LL_STAGE_TIMER=1'] if enabled else []),'-DDEEPEP_LL_TIMER_PROFILE_ID=6',f'-I{tmp_path}','-iquote',str(ROOT),str(source),'-o',str(executable)],check=True)
     subprocess.run([str(executable)],check=True,timeout=30)

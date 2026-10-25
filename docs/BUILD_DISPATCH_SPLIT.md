@@ -1,5 +1,42 @@
 # LL dispatch compile partition
 
+## Pair receive and small-direct startup experiment (2026-10-25)
+
+The user requested further count/payload ownership separation and explicitly
+authorized a temporary build excluding B>32 to investigate the migration gap.
+`cb59-pair` adds adjacent two-owner payload balancing, using one packed handoff
+buffer for a total of16 persistent TBufs. `cb59-small` admits only
+1<=B<=M<=32 and compiles dedup/relay off and all-core count participation on.
+The general implementations and all seven dtype TUs remain available; neither
+candidate merges TUs, changes O2, changes SDK or becomes the default.
+
+New sparse schema16 adds four one-time initialization points. The512B carrier
+is unchanged and256B is exported per core. The native link suffix is sparse16;
+schema15 still parses offline with its original14 points. No timing barrier
+was added. Complete OFF task timing remains the performance comparison.
+
+- Integrated CPU suite: **1064 passed,92 environment skips,8 existing
+  Windows/POSIX compiler cases deselected,35.92s**; log
+  `.tmp/cb59-pair-small-integrated-001.log`.
+- Separate local Zig native suite: **23 passed**, including five selectors
+  OFF/ON across all seven Host launch modes, old-link rejection, schema16
+  record export, and stream/pair resource admission.
+- The real PairHandoff and BuildPair headers passed50 cases with28 CPU
+  threads plus24 intervening stream calls on the same two banks. Reference
+  checks cover empty-owner borrowing, split q ranges, aligned prefix bias,
+  exact output/metadata and mailbox cleanup. Independent pair/model checks
+  total27 passes.
+- The small generator's10 checks include two native constant-branch proofs;
+  all inverse-normalized business tokens and synchronization sequences match
+  the archived cb59 reference. Both generators pass exact `--check`.
+
+No SSH, CANN compilation or NPU run was performed. These CPU results do not
+measure device launch/prologue, register allocation, cache coherence, DMA
+timing, cold CANN compilation or performance. Build both A/B groups fully
+before sampling. Target commands and interpretation boundaries are in
+[CB59_PAIR.md](../tests/ll_stage_timer/CB59_PAIR.md) and
+[CB59_SMALL.md](../tests/ll_stage_timer/CB59_SMALL.md).
+
 ## cb59-stream local validation (2026-10-25)
 
 The candidate adds one compile selection, not a mode/template dimension:

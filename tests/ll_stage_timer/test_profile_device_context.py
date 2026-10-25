@@ -27,8 +27,8 @@ def test_plain_host_can_use_sparse_metadata(tmp_path):
     source=tmp_path/'host.cpp'
     source.write_text('#include "'+COMMON+'ll_stage_timer_profile.h"\n'
         'int main(){using namespace LlStageTimer;\n'
-        'static_assert(kProfileId==6 && kPointCount==14 && kSchema==15);\n'
-        'static_assert(kSlots==8 && kFields==8 && kExportWords==24); }\n')
+        'static_assert(kProfileId==6 && kPointCount==18 && kSchema==16);\n'
+        'static_assert(kSlots==8 && kFields==8 && kExportWords==32); }\n')
     exe=tmp_path/'host'
     subprocess.run([compiler,'-std=c++17','-Wall','-Wextra','-Werror','-I',str(ROOT),str(source),'-o',str(exe)],check=True)
     subprocess.run([str(exe)],check=True,timeout=30)

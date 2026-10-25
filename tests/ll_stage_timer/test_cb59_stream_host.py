@@ -23,3 +23,18 @@ def test_stream_host_admission_preserves_fallback_and_rejects_selected_overflow(
         '-o',str(executable)],capture_output=True,text=True,errors='replace',timeout=180)
     assert result.returncode==0,result.stderr[-6000:]
     subprocess.run([str(executable)],check=True,timeout=30)
+
+
+def test_pair_host_admission_uses_pair_rows_and_mailbox_without_changing_fallback(tmp_path):
+    cc=shlex.split(os.environ.get('CXX',''))
+    if not cc:
+        found=shutil.which('g++') or shutil.which('clang++')
+        if not found:pytest.skip('Host C++ compiler required for pair admission')
+        cc=[found]
+    executable=tmp_path/('pair_host.exe' if os.name=='nt' else 'pair_host')
+    result=subprocess.run([*cc,'-std=c++17','-O2','-UNDEBUG','-Werror=unused-parameter',
+        '-DDEEPEP_LL_DISPATCH_CB59=3','-DDEEPEP_LL_SEND_CORES=28','-DDEEPEP_LL_RECV_CORES=28',
+        '-iquote',str(ROOT),str(Path(__file__).with_name('fixtures')/'cb59_pair_host.cpp'),
+        '-o',str(executable)],capture_output=True,text=True,errors='replace',timeout=180)
+    assert result.returncode==0,result.stderr[-6000:]
+    subprocess.run([str(executable)],check=True,timeout=30)

@@ -31,6 +31,7 @@ public:
         sendCores_ = AscendC::GetBlockNum() / 2U;
         stream_ = !enableDedup && LlUseStreamReceive(uint32_t(args->rankSize), bs, 32U);
         const uint32_t magic = RotateDispatchServerDedupMagic(args, core_, pipe);
+        LL_SPARSE_MARK(MAGIC_DONE);
         counts_.Init(commArgs, expertIds, expertTokenNumsOut, sendCountsOut, bs, topK, experts,
                      expertTokenNumsType, magic, pipe);
         counts_.SetTimer(timer_);

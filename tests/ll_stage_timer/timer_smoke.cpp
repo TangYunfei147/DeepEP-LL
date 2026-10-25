@@ -6,6 +6,10 @@ extern "C" [[bisheng::core_ratio(0, 1)]] __global__ __aicore__ void ll_timer_smo
     LlStageTimer::DeviceTimer timer;
     timer.Init(output, 1U, mode);
     timer.Mark<LlStageTimer::ENTRY>();
+    timer.Mark<LlStageTimer::TILING_DONE>();
+    timer.Mark<LlStageTimer::PIPE_READY>();
+    timer.Mark<LlStageTimer::OBJECT_READY>();
+    timer.Mark<LlStageTimer::MAGIC_DONE>();
     timer.Mark<LlStageTimer::INIT_DONE>();
     for (uint32_t i=0;i<3;++i) {
         timer.Mark<LlStageTimer::FIRST_RECV_PROBE>();

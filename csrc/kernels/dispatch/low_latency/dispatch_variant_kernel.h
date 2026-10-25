@@ -12,7 +12,11 @@
 #if CATLASS_ARCH == 3510
 #include "common/ll_dispatch_variant.h"
 #include "launch.hpp"
-#if DEEPEP_LL_DISPATCH_CB59 == 2
+#if DEEPEP_LL_DISPATCH_CB59 == 4
+#include "cb59_small/dispatch_server_dedup_kernel.h"
+#elif DEEPEP_LL_DISPATCH_CB59 == 3
+#include "cb59_pair/kernel.h"
+#elif DEEPEP_LL_DISPATCH_CB59 == 2
 #include "cb59_stream/kernel.h"
 #elif DEEPEP_LL_DISPATCH_CB59
 #include "cb59/dispatch_server_dedup_kernel.h"
@@ -25,7 +29,7 @@
 #define LL_VARIANT_JOIN_(a,b) a##b
 #define LL_VARIANT_JOIN(a,b) LL_VARIANT_JOIN_(a,b)
 #define LL_VARIANT_KERNEL LL_VARIANT_JOIN(dispatch_server_dedup_kernel_,DEEPEP_LL_VARIANT_NAME)
-#define LL_VARIANT_LAUNCH LL_VARIANT_JOIN(dispatch_server_dedup_launch_sparse15_,DEEPEP_LL_VARIANT_NAME)
+#define LL_VARIANT_LAUNCH LL_VARIANT_JOIN(dispatch_server_dedup_launch_sparse16_,DEEPEP_LL_VARIANT_NAME)
 namespace {
 #if DEEPEP_LL_VARIANT_MODE == 0
 using LlVariantInput = uint8_t;
@@ -55,7 +59,7 @@ constexpr bool kWireFp8 = true, kE4M3 = false, kPrequantized = false;
 
 // One specialization per translation unit; unchanged algorithm and timers.
 // 调用链：ElasticBuffer._dispatch_low_latency → csrc/ops/low_latency.cpp
-// → dispatch_server_dedup_kernel_do_sparse15 → 本设备入口 → DispatchMemoryServerDedupKernel。
+// → dispatch_server_dedup_kernel_do_sparse16 → 本设备入口 → DispatchMemoryServerDedupKernel。
 // profiler匹配本入口任务名；下层计数/发送/接收是同一kernel内的阶段，不是独立task。
 // Host selects one pure-AIV entry; the configured S/R split is unchanged.
 extern "C" [[bisheng::core_ratio(0, 1)]] __global__ __aicore__ void LL_VARIANT_KERNEL(
@@ -77,7 +81,8 @@ extern "C" [[bisheng::core_ratio(0, 1)]] __global__ __aicore__ void LL_VARIANT_K
     const auto* tiling = reinterpret_cast<const __gm__ DispatchDedup::EpServerDedupTilingData*>(tilingData);
     const uint32_t bs = tiling->bs;
     const uint32_t h = tiling->h;
-    const bool enableDedup = DispatchDedup::EpServerDedupEnabled(tiling->numMaxTokensPerRank);
+    const uint32_t maxTokens = tiling->numMaxTokensPerRank;
+    const bool enableDedup = DispatchDedup::EpServerDedupEnabled(maxTokens);
     const uint32_t topK = tiling->topK;
     const uint32_t moeExpertNum = tiling->moeExpertNum;
     (void)expertTimer; // Native host rejects legacy per-expert instrumentation.
@@ -90,9 +95,22 @@ extern "C" [[bisheng::core_ratio(0, 1)]] __global__ __aicore__ void LL_VARIANT_K
             static_cast<uint8_t>(inputMode)) != DEEPEP_LL_VARIANT_MODE) {
         AscendC::Trap(); return;
     }
+#if DEEPEP_LL_DISPATCH_CB59 == 4
+    // Temporary small-only experiment: reject excluded modes instead of
+    // interpreting a large-call tiling through the compiled direct path.
+    if (bs == 0U || bs > 32U || maxTokens < bs || maxTokens > 32U) {
+        AscendC::Trap(); return;
+    }
+#endif
+    timer.Mark<LlStageTimer::TILING_DONE>();
     AscendC::TPipe pipe;
+    timer.Mark<LlStageTimer::PIPE_READY>();
     {
-#if DEEPEP_LL_DISPATCH_CB59 == 2
+#if DEEPEP_LL_DISPATCH_CB59 == 4
+        namespace Algorithm = DispatchDedup::Cb59Small;
+#elif DEEPEP_LL_DISPATCH_CB59 == 3
+        namespace Algorithm = DispatchDedup::Cb59Pair;
+#elif DEEPEP_LL_DISPATCH_CB59 == 2
         namespace Algorithm = DispatchDedup::Cb59Stream;
 #elif DEEPEP_LL_DISPATCH_CB59
         namespace Algorithm = DispatchDedup::Cb59Replay;
@@ -100,6 +118,7 @@ extern "C" [[bisheng::core_ratio(0, 1)]] __global__ __aicore__ void LL_VARIANT_K
         namespace Algorithm = DispatchDedup;
 #endif
         Algorithm::DispatchMemoryServerDedupKernel<LlVariantInput,kWireFp8,kE4M3,kPrequantized> kernel;
+        timer.Mark<LlStageTimer::OBJECT_READY>();
         kernel.Init(commArgs,x,expertIds,expertScales,expandXOut,dynamicScalesOut,expertTokenNumsOut,sendCountsOut,
                     tokenTypeOut,destinationIndexOut,relayReadIndexOut,sourceMaskOut,expertScalesOut,bs,h,topK,
                     moeExpertNum,expertTokenNumsType,&pipe,inputScales,enableDedup,

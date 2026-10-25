@@ -40,6 +40,7 @@ public:
         receiver_.ConfigureOverlap(overlap_);
         LL_SEG_BEGIN(magicBegin, INIT_MAGIC);
         const uint32_t magic = RotateDispatchServerDedupMagic(args_, core_, pipe);
+        LL_SPARSE_MARK(MAGIC_DONE);
         LL_SEG_END(magicBegin, INIT_MAGIC);
         { LL_SEG_SCOPE(INIT_COUNTS);
         counts_.Init(commArgs, expertIds, expertTokenNumsOut, sendCountsOut, bs, topK, experts, expertTokenNumsType,

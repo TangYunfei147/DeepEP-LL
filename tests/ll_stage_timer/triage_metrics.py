@@ -201,7 +201,7 @@ def summarize_case(context, samples):
                                   ('KERNEL', 'entry_to_kernel_end')):
                 raw_spans[label] = _entry_span(interval_by_core[core], target)
                 spans[label] = _us(raw_spans[label], frequency)
-            if identity['schema'] == 15:
+            if identity['schema'] in (15,16):
                 points = milestones_by_core[core]
                 if 'ENTRY' in points and 'PREFIX_READY' in points:
                     ticks = points['PREFIX_READY'] - points['ENTRY']
@@ -236,7 +236,7 @@ def summarize_case(context, samples):
             stage_maxima[key].append(max(values))
         for key, values in per_latency.items():
             latency_maxima[key].append(max(values))
-        if identity['schema'] == 15 and identity['operation'] == 'dispatch':
+        if identity['schema'] in (15,16) and identity['operation'] == 'dispatch':
             for group in ('S', 'R', 'all'):
                 observed_cores = [core for core in present_kernel if group == 'all' or _group(core, identity) == group]
                 for point, label in (('FIRST_SEND', 'first_send_cores'), ('FIRST_RECV_PROBE', 'first_probe_cores'), ('FIRST_RECV_READY', 'first_ready_cores')):

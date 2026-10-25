@@ -1,6 +1,6 @@
 """Sparse first-occurrence milestones; prior segment formats remain read-only.
 
-Native schema15 uses a 512B-aligned per-core carrier and post-work export.
+Native schema16 uses a 512B-aligned per-core carrier; schema15 remains readable.
 Only original schema7 can export dc_seg format-5.
 """
 from contextlib import contextmanager
@@ -12,7 +12,7 @@ import struct
 import threading
 
 MAGIC = 0x4C4C5431
-SCHEMA, SLOTS, FIELDS = 15, 8, 8
+SCHEMA, SLOTS, FIELDS = 16, 8, 8
 TRACE_RECORDS, METRICS, RECORDS = 192, 136, 328
 SCHEMA_SLOTS = {7:72,9:72,10:72,11:72,12:72,13:80,14:88}
 SCHEMA_METRICS = {7:64,9:66,10:70,11:78,12:81,13:108,14:136}
@@ -32,14 +32,15 @@ sparse=importlib.util.module_from_spec(_sparse_spec);_sparse_spec.loader.exec_mo
 POINTS=sparse.POINTS
 SPARSE_POINTS=POINTS
 SEGMENT_SCHEMAS=(7,9,10,11,12,13,14)
-CURRENT_SCHEMAS=(*SEGMENT_SCHEMAS,SCHEMA)
+SPARSE_SCHEMAS=(15,16)
+CURRENT_SCHEMAS=(*SEGMENT_SCHEMAS,*SPARSE_SCHEMAS)
 
 
 def parse_records(raw, operation, frequency_hz=None):
     if not raw or not raw[0] or len(raw[0][0])!=8:
         raise ValueError('Missing timer header')
     schema=raw[0][0][1]
-    if schema == SCHEMA:
+    if schema in SPARSE_SCHEMAS:
         return sparse.parse_records(raw, operation, frequency_hz)
     if schema not in SEGMENT_SCHEMAS:
         return legacy.parse_records(raw,operation,frequency_hz)
@@ -184,7 +185,7 @@ def chrome_trace(saved_records, frequency_hz=None, lane_layout='core', show_repe
         frequency=frequency_hz if frequency_hz is not None else saved.get('frequency_hz')
         if frequency is None: raise ValueError('Chrome trace requires explicit frequency_hz')
         report=parse_records(saved['raw'],saved['operation'],frequency);meta=saved.get('metadata',{})
-        if report['schema']==15:
+        if report['schema'] in SPARSE_SCHEMAS:
             common = _sparse_capture_identity(report, meta)
             differences = _identity_differences(sparse_identity, common) if sparse_identity is not None else []
             if differences:
@@ -199,7 +200,7 @@ def chrome_trace(saved_records, frequency_hz=None, lane_layout='core', show_repe
         origin=min(row['first_tick'] for row in report['intervals'])
         lanes=set()
         for row in sorted(report['intervals'],key=lambda row:(row['core'],row['first_tick'],-row['last_tick'])):
-            stage_names = [p[0] for p in sparse.PAIRS] if report['schema']==15 else STAGES
+            stage_names = [p[0] for p in sparse.pairs_for_schema(report['schema'])] if report['schema'] in SPARSE_SCHEMAS else STAGES
             tid=row['core'] if lane_layout=='core' else row['core']*METRICS+stage_names.index(row['stage'])
             if tid not in lanes:
                 events.append(dict(ph='M',name='thread_name',pid=pid,tid=tid,args=dict(name=f"AIV {row['core']:02d} {row['role']}"+(f" / {row['stage']}" if lane_layout=='stage' else ''))))
@@ -220,9 +221,9 @@ def chrome_trace(saved_records, frequency_hz=None, lane_layout='core', show_repe
                          small_b_prefix_cores=(meta.get('comparison') or {}).get('small_b_prefix_cores'),
                          effective_small_b_prefix_cores=(meta.get('comparison') or {}).get('effective_small_b_prefix_cores'),
                          timer_profile=report['timer_profile'],timer_profile_id=report['timer_profile_id']))
-    return dict(traceEvents=events,metadata=dict(format='sparse milestones' if report['schema']==15 else 'dc_seg sampled intervals',sampled_calls_per_stage=None if report['schema']==15 else 2,
+    return dict(traceEvents=events,metadata=dict(format='sparse milestones' if report['schema'] in SPARSE_SCHEMAS else 'dc_seg sampled intervals',sampled_calls_per_stage=None if report['schema'] in SPARSE_SCHEMAS else 2,
                 timer_profile=report['timer_profile'],timer_profile_id=report['timer_profile_id'],
-                all_calls_in_metrics=report['schema']!=15,cores=info,clock='Rank-local origins; no cross-rank alignment'))
+                all_calls_in_metrics=report['schema'] not in SPARSE_SCHEMAS,cores=info,clock='Rank-local origins; no cross-rank alignment'))
 
 
 def reference_binary(raw,operation):

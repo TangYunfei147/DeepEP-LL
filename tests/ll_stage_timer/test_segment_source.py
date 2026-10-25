@@ -13,7 +13,7 @@ def normalize(s):
  s=re.sub(r'if \(timer.Enabled\(\)\) \{ AscendC::SyncAll<true>\(\); timer.Flush\(\); \}','',s)
  s=re.sub(r'#ifdef DEEPEP_LL_STAGE_TIMER\s*.*?#endif','',s,flags=re.S)
  s=re.sub(r'timer\.Mark(?:At)?<[^>]+>\([^;]*\);|timer\.Flush\(\);','',s)
- s=s.replace('combine_server_dedup_kernel_do_sparse15','combine_server_dedup_kernel_do')
+ s=re.sub(r'combine_server_dedup_kernel_do_sparse(?:15|16)','combine_server_dedup_kernel_do',s)
  s=re.sub(r'\bLL_SPARSE_(?:MARK|AFTER)\([^;]*?\);','',s)
  s=re.sub(r'\bLL_SEG_(?:BEGIN|END|COUNT|SCOPE|FIRST|RELAY_COMPLETION)\([^;]*?\);','',s)
  s=re.sub(r'\bLL_SPARSE_(?:MARK|AFTER)\([^;]*?\);','',s)

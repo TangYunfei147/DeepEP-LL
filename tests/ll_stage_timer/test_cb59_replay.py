@@ -108,7 +108,7 @@ def test_manifest_records_cross_implementation_point_difference() -> None:
     assert "current keeps its historical point after count-clear" in MANIFEST["milestone_contract"]["counts_received_current_difference"]
 
 
-def test_exactly_the_existing_fourteen_sparse_points_are_used() -> None:
+def test_sparse_business_and_initialization_points_are_explicit() -> None:
     observed = set()
     for relative in REPLAY.FILES:
         for call in re.findall(r'LL_SPARSE_(?:MARK|AFTER)\(([^)]*)\)', source(relative)):
@@ -116,7 +116,7 @@ def test_exactly_the_existing_fourteen_sparse_points_are_used() -> None:
     assert observed == {
         "COUNTS_SENT", "COUNTS_RECEIVED", "PREFIX_LOCAL_DONE", "PREFIX_READY",
         "SEND_PREPARED", "FIRST_SEND", "SEND_DONE", "RECV_PREPARED",
-        "FIRST_RECV_PROBE", "FIRST_RECV_READY", "RECV_DONE",
+        "FIRST_RECV_PROBE", "FIRST_RECV_READY", "RECV_DONE", "MAGIC_DONE",
     }
     # ENTRY / INIT_DONE / WORK_DONE stay in the common seven-TU wrapper. No
     # old scope, counter, hidden metric or additional clock read is introduced.

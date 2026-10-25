@@ -4,6 +4,12 @@ This is an independent candidate on `kernel/ll-g4-small-b-prefix`:
 `DEEPEP_LL_DISPATCH_IMPL=cb59-stream`. The immutable `cb59` replay remains the
 A/B reference. The current P1 implementation remains selectable as `current`.
 
+The recorded ae87d84 target A/B below used schema15. Current builds use
+schema16 with four additional initialization points and retain schema15 for
+offline parsing. The follow-up [pair experiment](CB59_PAIR.md) decouples
+adjacent count owners from payload consumers; the [small-only experiment](CB59_SMALL.md)
+investigates the migration gap without changing this stream algorithm.
+
 The user requested receive scheduling and routing protocol redesign before
 kernel initialization optimization. This change redesigns receive ownership
 and the local count/prefix handoff. It preserves the existing source-side
@@ -89,8 +95,9 @@ space. No observed uniform-route count is used to reduce the bound.
 
 ## What this experiment can establish
 
-Full OFF profiler task time remains the performance result. Sparse schema15
-and its 14 points remain available. For an effective stream case,
+Full OFF profiler task time remains the performance result. New capture uses
+sparse schema16 with18 points; historical schema15 captures remain readable.
+For an effective stream case,
 `PREFIX_READY` now means **this owner's dense output offset is ready**;
 it does not mean that the full-rank prefix is complete. The one-file summary
 includes this warning and the effective implementation. Cross-implementation

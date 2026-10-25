@@ -9,6 +9,7 @@ ROOT = Path(__file__).resolve().parents[2]
 LIMIT = 60000
 FORMAT = 'll-triage-report-v1'
 PROFILE_ORDER = ('sparse', 'overview', 'prepare', 'prefix', 'send', 'recv', 'full')
+INIT_DETAIL_STAGES = ('ENTRY_TO_TILING','TILING_TO_PIPE','PIPE_TO_OBJECT','OBJECT_TO_MAGIC','MAGIC_TO_INIT')
 ENVELOPES = frozenset(('KERNEL', 'INIT', 'TIMER_SETUP', 'BEFORE_FIRST_SEND',
     'BEFORE_FIRST_RECV_POLL', 'SEND_TOKENS', 'PREPARE_INPUT', 'SEND_COUNTS',
     'CAL_CUMSUM', 'BUILD_RECV_CUMSUM', 'WAIT_CUMSUM', 'PREFIX_COMPLETE',
@@ -48,6 +49,10 @@ def _lat(case, span, group):
 
 def _act(case, quantity, group):
     return next((row[2] for row in case['metrics']['activity'] if row[:2] == [group, quantity]), None)
+
+
+def _stage(case, name, group):
+    return next((row[3] for row in case['metrics']['stages'] if row[:2] == [name, group]), None)
 
 
 def collect(suite):
@@ -141,6 +146,8 @@ def _essential(data):
     if any(case.get('provenance', {}).get('implementation') == 'cb59-stream-recv'
            for case in data['cases']):
         lines.insert(-3, 'For effective cb59-stream cases, PREFIX_READY means this owner slice can receive; it is not full-rank prefix readiness. Other shapes retain cb59.')
+    if any(case.get('provenance', {}).get('implementation') == 'cb59-pair-recv' for case in data['cases']):
+        lines.insert(-3, 'For effective cb59-pair cases, PREFIX_READY follows the adjacent-pair range exchange; it is not full-rank prefix readiness. Other shapes retain cb59.')
     for row in data['off']:
         lines.append(f"{row['B']} | {row.get('route')} | {_num(row['us'])}")
     lines += ['', 'ACTIVE-CAPTURE PERTURBATION (same-source identity checked)',
@@ -166,7 +173,15 @@ def _essential(data):
             values = [_pair(_lat(case, name, group)) for name in (
                 'KERNEL', 'INIT', 'TIMER_SETUP', 'entry_to_first_send', 'entry_to_prefix_ready', 'entry_to_first_probe', 'entry_to_kernel_end')]
             lines.append(f"{case['id']}/{group} | "+' | '.join(values))
-    sparse_cases = [c for c in data['cases'] if c['metrics']['identity']['schema'] == 15]
+    init_cases = [c for c in data['cases'] if c['metrics']['identity']['schema'] == 16
+                  and c['metrics']['identity'].get('operation') == 'dispatch']
+    if init_cases:
+        lines += ['', 'DISPATCH INITIALIZATION DETAIL (schema16, same-core spans; maxima are not additive)',
+                  'id/group | ENTRY->TILING | TILING->PIPE | PIPE->OBJECT | OBJECT->MAGIC | MAGIC->INIT_DONE']
+        for case in init_cases:
+            for group in ('S','R'):
+                lines.append(case['id']+'/'+group+' | '+' | '.join(_pair(_stage(case,name,group)) for name in INIT_DETAIL_STAGES))
+    sparse_cases = [c for c in data['cases'] if c['metrics']['identity']['schema'] in (15,16)]
     if sparse_cases:
         lines += ['', 'SPARSE FIRST-OCCURRENCE ACTIVITY (cores per rank-round, p50/max[n])',
                   'id/group | first send cores | first probe cores | first ready cores | ENTRY->first ready us']
@@ -179,12 +194,12 @@ def _essential(data):
                   'id/group | span | us']
         for case in sparse_cases:
             for row in case['metrics']['stages']:
-                if row[0] not in ('INIT', 'KERNEL', 'BEFORE_FIRST_SEND', 'BEFORE_FIRST_RECV_POLL'):
+                if row[0] not in ('INIT', 'KERNEL', 'BEFORE_FIRST_SEND', 'BEFORE_FIRST_RECV_POLL', *INIT_DETAIL_STAGES):
                     lines.append(f"{case['id']}/{row[1]} | {row[0]} | {_pair(row[3])}")
     lines += ['', 'LEGACY OBSERVED WORK AND READY RATIO (p50/max[n])',
               'id | S TX cores | R RX cores | S TX packets | R RX packets | S max packets/core | R max packets/core | R ready/probed | R probes/ready']
     for case in data['cases']:
-        if case['metrics']['identity']['schema'] == 15:
+        if case['metrics']['identity']['schema'] in (15,16):
             continue
         values = [_pair(_act(case, name, group)) for name, group in (
             ('tx_active_observed', 'S'), ('rx_active_observed', 'R'), ('tx_packets_observed', 'S'),
