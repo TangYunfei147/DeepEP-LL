@@ -9,9 +9,9 @@ provider must attest that the library was built from the pinned commit.
 
 import argparse
 try:
-    from scripts.shmem_sdk_identity import validate_build_identity
+    from scripts.shmem_sdk_identity import sdk_artifacts, validate_build_identity, validate_sdk_hashes
 except ModuleNotFoundError:
-    from shmem_sdk_identity import validate_build_identity
+    from shmem_sdk_identity import sdk_artifacts, validate_build_identity, validate_sdk_hashes
 import hashlib
 import json
 from pathlib import Path
@@ -29,7 +29,7 @@ def record(sdk, revision, *, build_info=None):
         normalized = header.read_bytes().replace(b"\r\n", b"\n")
         if hashlib.sha256(normalized).hexdigest() != digest:
             raise ValueError(f"SDK public header mismatch: {relative}")
-    files = sorted((sdk / "include").rglob("*.h")) + [sdk / "lib/libshmem.so"]
+    files = sdk_artifacts(sdk)
     hashes = {}
     for path in files:
         if not path.resolve().is_relative_to(sdk) or not path.is_file():
@@ -58,16 +58,7 @@ def check(sdk):
         data = (sdk / "include" / relative).read_bytes().replace(b"\r\n", b"\n")
         if hashlib.sha256(data).hexdigest() != expected:
             raise ValueError(f"SDK public header mismatch: {relative}")
-    hashes = recorded.get("sha256", {})
-    required = {"lib/libshmem.so", *("include/" + name for name in lock["header_sha256_lf"])}
-    if not required.issubset(hashes):
-        raise ValueError("SDK manifest must cover the locked headers and libshmem.so")
-    for relative, expected in hashes.items():
-        path = (sdk / relative).resolve()
-        if not path.is_relative_to(sdk) or not path.is_file():
-            raise ValueError(f"Invalid SDK manifest path: {relative}")
-        if hashlib.sha256(path.read_bytes()).hexdigest() != expected:
-            raise ValueError(f"SDK checksum mismatch: {relative}")
+    validate_sdk_hashes(sdk, recorded.get("sha256"), lock["header_sha256_lf"])
     return manifest
 
 

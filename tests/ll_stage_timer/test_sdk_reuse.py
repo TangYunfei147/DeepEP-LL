@@ -76,3 +76,29 @@ def test_hns_source_edits_have_no_implicit_exemption():
     edited = {**BASE, "source_patches": [{"kind": "local-worktree", "sha256": "edited"}]}
     sdk = dict(revision="locked", build={**edited, "rdma_backend": "HNS_1825"})
     assert not mte_compatible(sdk, "locked", edited)
+
+
+def test_explicit_rebuild_preserves_old_outputs_outside_source(tmp_path):
+    import build_shmem
+    source = tmp_path / "third-party/shmem"
+    (source / "build").mkdir(parents=True)
+    (source / "install/shmem").mkdir(parents=True)
+    (source / "build/object.o").write_bytes(b"previous object")
+    (source / "install/shmem/deepep-sdk.json").write_bytes(b"previous identity")
+    archive = build_shmem.archive_rebuild_outputs(tmp_path, source)
+    assert archive.is_relative_to(tmp_path / ".cache/shmem-rebuild")
+    assert not archive.is_relative_to(source)
+    assert (archive / "build/object.o").read_bytes() == b"previous object"
+    assert (archive / "install/shmem/deepep-sdk.json").read_bytes() == b"previous identity"
+    assert not (source / "build").exists() and not (source / "install").exists()
+    assert build_shmem.archive_rebuild_outputs(tmp_path, source) is None
+
+
+def test_rebuild_archive_refuses_source_outside_project(tmp_path):
+    import build_shmem
+    root, outside = tmp_path / "project", tmp_path / "outside"
+    root.mkdir()
+    (outside / "install").mkdir(parents=True)
+    with pytest.raises(RuntimeError, match="inside the project"):
+        build_shmem.archive_rebuild_outputs(root, outside)
+    assert (outside / "install").exists()

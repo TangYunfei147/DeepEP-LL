@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: BSD-3-Clause
 #pragma once
+#include "../udma_raw_remote.hpp"
 
 // Private FM QP0: data RO never requests a CQE. Admission happens outside
 // descriptor construction/publication loops; only SO checkpoints retire SQ.
@@ -101,11 +102,12 @@ __aicore__ inline void PublishFmSourceReady(DeepepSecondaryState& s, uint32_t pe
     auto* wqe = scratch + kFmControlScratchOffset;
     auto* flag = GetPeerCompletionFlag(s.rank, GetGroupRankIndex(peer, s.world), 0U, s.sync);
     auto* value = GetPeerCompletionFlag(s.rank, GetGroupRankIndex(peer, s.world), kPeerCompletionValueSlot, s.sync);
-    auto* target = reinterpret_cast<__gm__ uint8_t*>(aclshmem_ptr(flag, peer));
+    auto* remote_mem = aclshmemi_udma_get_mem_info(info, slot, 0U);
+    auto* target = DeepepSymmetricRemoteMrAddr(flag, remote_mem);
     // Immediate SDK put requires CQE=1, so build the unsignaled SO explicitly.
-    aclshmemi_udma_fill_sqe_base_ctx<uint64_t, aclshmemi_udma_opcode_t::UDMA_OP_WRITE, __ubuf__ aclshmemi_sqe_ctx_t*,
+    DeepepFillSqeBaseRawRemoteAddr<uint64_t, aclshmemi_udma_opcode_t::UDMA_OP_WRITE, __ubuf__ aclshmemi_sqe_ctx_t*,
                                      kFmReadySoNoCqeConfig>(reinterpret_cast<__ubuf__ aclshmemi_sqe_ctx_t*>(wqe),
-                                                            target, aclshmemi_udma_get_mem_info(info, slot, 0U),
+                                                            target, remote_mem,
                                                             state->sq_head);
     aclshmemi_fill_sge_header_ctx(reinterpret_cast<__ubuf__ aclshmemi_sge_ctx_t*>(wqe + sizeof(aclshmemi_sqe_ctx_t)),
                                   sizeof(uint64_t), reinterpret_cast<uint64_t>(value));

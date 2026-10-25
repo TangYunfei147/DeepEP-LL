@@ -15,9 +15,23 @@ import pytest
 def lifecycle_binary(tmp_path_factory):
     root = Path(__file__).resolve().parents[2]
     compiler = shutil.which("g++")
-    if sys.platform != "linux" or compiler is None or not (root / "csrc").is_dir():
-        pytest.skip("Host lifecycle compilation requires Linux, g++ and source tree")
-    binary = tmp_path_factory.mktemp("native-lifecycle") / "lifecycle"
+    if compiler is None or not (root / "csrc").is_dir():
+        pytest.skip("Host lifecycle compilation requires a C++17 compiler and source tree")
+    temporary = tmp_path_factory.mktemp("native-lifecycle")
+    binary = temporary / ("lifecycle.exe" if sys.platform == "win32" else "lifecycle")
+    platform_flags = []
+    if sys.platform == "win32":
+        # The production target remains Linux. This CPU-only DLL lookup double
+        # models the mainline SDK with no legacy peer-mask symbol available.
+        (temporary / "dlfcn.h").write_text(
+            '#pragma once\n#define RTLD_DEFAULT nullptr\n'
+            'inline void* dlsym(void*, const char*) { return nullptr; }\n', encoding="utf-8")
+        (temporary / "environment.h").write_text(
+            '#pragma once\n#include <cstdlib>\n'
+            'inline int setenv(const char* name,const char* value,int overwrite) {\n'
+            ' if (!overwrite && std::getenv(name)) return 0;\n'
+            ' return _putenv_s(name,value);\n}\n', encoding="utf-8")
+        platform_flags = ['-I' + str(temporary), '-include', str(temporary / 'environment.h')]
     result = subprocess.run(
         [
             compiler,
@@ -26,6 +40,8 @@ def lifecycle_binary(tmp_path_factory):
             "-Wextra",
             "-Werror",
             "-O2",
+            "-UNDEBUG",
+            *platform_flags,
             "-I" + str(root / "tests/runtime/stubs"),
             "-I" + str(root / "csrc"),
             str(root / "csrc/runtime/session.cpp"),
@@ -55,6 +71,7 @@ def lifecycle_binary(tmp_path_factory):
         "udma",
         "megamoe",
         "low-latency",
+        "sparse-missing",
         "ll-rank-bias-16",
         "ll-rank-bias-32",
         "ll-rank-bias-64",

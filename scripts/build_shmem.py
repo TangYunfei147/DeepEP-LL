@@ -13,6 +13,7 @@ import shlex
 import shutil
 import subprocess
 import tempfile
+import uuid
 
 from record_shmem_sdk import record
 from shmem_sdk_reuse import mte_compatible
@@ -49,6 +50,27 @@ def source_patches(source):
             raise RuntimeError(f"Untracked SHMEM input must be a local regular file: {path}")
         digest.update(name + b"\0" + hashlib.sha256(path.read_bytes()).digest())
     return [{"kind": "local-worktree", "sha256": digest.hexdigest()}]
+
+
+def archive_rebuild_outputs(root, source):
+    """An explicit rebuild starts clean and preserves the old SDK/build tree."""
+    root, source = Path(root).resolve(), Path(source).resolve()
+    if not source.is_relative_to(root):
+        raise RuntimeError("SHMEM rebuild source must stay inside the project")
+    targets = [source / name for name in ("build", "install") if (source / name).exists()]
+    if not targets:
+        return None
+    parent = root / ".cache/shmem-rebuild"
+    if not parent.resolve().is_relative_to(root):
+        raise RuntimeError("SHMEM rebuild archive must stay inside the project")
+    if any(path.resolve() != path or not path.resolve().is_relative_to(source) for path in targets):
+        raise RuntimeError("Refuse to archive SHMEM outputs through a symlink")
+    archive = parent / uuid.uuid4().hex
+    archive.mkdir(parents=True, exist_ok=False)
+    for path in targets:
+        path.rename(archive / path.name)
+    print(f"[SHMEM] Preserved previous build/install: {archive}", flush=True)
+    return archive
 
 
 def prepare(root=ROOT, *, rebuild=False, if_needed=True, allow_local_changes=False):
@@ -115,6 +137,10 @@ def prepare(root=ROOT, *, rebuild=False, if_needed=True, allow_local_changes=Fal
             "SHMEM build/install already exists; reuse its SDK, or stop users of that SDK "
             "and pass --rebuild to regenerate it (then rebuild dependent wheels)"
         )
+    if rebuild:
+        # Current upstream native builds keep build/install by default. Leaving
+        # them in place would retain stale artifacts and the old SDK manifest.
+        archive_rebuild_outputs(root, source)
     print(f"[SHMEM] source={revision} CANN={version['Version']} target={lock['target']}", flush=True)
     if patches:
         print(f"[SHMEM] Building local source modifications: {json.dumps(patches)}", flush=True)

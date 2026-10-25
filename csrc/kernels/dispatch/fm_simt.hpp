@@ -1,6 +1,7 @@
 // Copyright (c) 2026, Lu Lu
 
 #pragma once
+#include "../udma_raw_remote.hpp"
 
 // Private FM QP0. Use the existing 8 KiB scratch: header [0,64),
 // 32 prebuilt WQEs [256,2304). No payload staging or extra workspace.
@@ -36,7 +37,7 @@ __aicore__ inline void IssueFmRows(DeepepSecondaryState& s, uint32_t peer, __ubu
             trap();
             return;
         }
-        aclshmemi_udma_fill_sqe_base_ctx<uint8_t, aclshmemi_udma_opcode_t::UDMA_OP_WRITE, __ubuf__ aclshmemi_sqe_ctx_t*,
+        DeepepFillSqeBaseRawRemoteAddr<uint8_t, aclshmemi_udma_opcode_t::UDMA_OP_WRITE, __ubuf__ aclshmemi_sqe_ctx_t*,
                                          kUdmaDataRoNoCqeConfig>(
             reinterpret_cast<__ubuf__ aclshmemi_sqe_ctx_t*>(header), target,
             aclshmemi_udma_get_mem_info(info, slot, 0U), 0U);

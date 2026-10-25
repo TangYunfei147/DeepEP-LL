@@ -1,5 +1,6 @@
 // Copyright (c) 2026, Lu Lu
 #pragma once
+#include "../udma_raw_remote.hpp"
 
 // A descriptor is {source VA, target VA, immutable header UB address, reserved}.
 // Prepare addresses once in route order; the SIMT loop contains no mode/peer
@@ -52,10 +53,11 @@ __aicore__ inline void CacheCombinePutHeader(__ubuf__ uint64_t* header, GM_ADDR 
 {
     auto* info = aclshmemi_udma_qp_info_fetch();
     const uint32_t slot = aclshmemi_udma_compute_slot(peer, static_cast<uint32_t>(-1));
-    auto* remote = reinterpret_cast<__gm__ uint8_t*>(aclshmem_ptr(workspace, peer));
-    aclshmemi_udma_fill_sqe_base_ctx<uint8_t, aclshmemi_udma_opcode_t::UDMA_OP_WRITE, __ubuf__ aclshmemi_sqe_ctx_t*,
+    auto* remote_mem = aclshmemi_udma_get_mem_info(info, slot, qp);
+    auto* remote = DeepepSymmetricRemoteMrAddr(workspace, remote_mem);
+    DeepepFillSqeBaseRawRemoteAddr<uint8_t, aclshmemi_udma_opcode_t::UDMA_OP_WRITE, __ubuf__ aclshmemi_sqe_ctx_t*,
                                      kPayloadRoNoCqeConfig>(reinterpret_cast<__ubuf__ aclshmemi_sqe_ctx_t*>(header),
-                                                            remote, aclshmemi_udma_get_mem_info(info, slot, qp), 0U);
+                                                            remote, remote_mem, 0U);
     header[7] = reinterpret_cast<uint64_t>(remote);
 }
 
@@ -86,7 +88,7 @@ struct LocalPutBatch {
         auto* tail_header = reinterpret_cast<__ubuf__ uint64_t*>(scratch + kLocalHeaderOffset + 64U);
         // Match the SDK aggregate contract: only the final RO requests a CQE,
         // and the SDK remains responsible for SQ admission/CQ accounting.
-        aclshmemi_udma_fill_sqe_base_ctx<uint8_t, aclshmemi_udma_opcode_t::UDMA_OP_WRITE, __ubuf__ aclshmemi_sqe_ctx_t*,
+        DeepepFillSqeBaseRawRemoteAddr<uint8_t, aclshmemi_udma_opcode_t::UDMA_OP_WRITE, __ubuf__ aclshmemi_sqe_ctx_t*,
                                          kPayloadRoConfig>(
             reinterpret_cast<__ubuf__ aclshmemi_sqe_ctx_t*>(tail_header),
             reinterpret_cast<__gm__ uint8_t*>(rows[(count - 1U) * 4U + 1U]),
