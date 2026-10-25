@@ -1,5 +1,8 @@
 # HNS_1825 混合 MTE / NDR LL（核心协议8）
 
+两机各一条命令的构建/测试/本机解析入口见 [ONE_CLICK.md](ONE_CLICK.md)：
+`bash tests/ll_rdma/one_click.sh NODE_RANK MASTER_IP RUN_NAME`，默认ON诊断，`--mode perf`为OFF性能。
+
 2026-10-25：SHMEM更新到官方master固定提交8e3fc610，必须重建匹配SDK和wheel，
 具体兼容与部署见 [SHMEM_MASTER_UPDATE.md](SHMEM_MASTER_UPDATE.md)。
 每卡3 fullmesh + 4 Clos + 1跨机网口的消息合并、首跳策略及A/B方法见
