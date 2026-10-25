@@ -1,5 +1,7 @@
 # 泛化分支生产LL路径
 
+当前新增cb59算法对照：DEEPEP_LL_DISPATCH_IMPL选择current或cb59，公共七模式入口dispatch_variant_kernel.h只包含所选算法。cb59六算法在low_latency/cb59/，由scripts/generate_cb59_replay.py固定提取；count_layout.h/host_layout.h保留旧私有布局和190KiB预算。公共Host、packet格式、combine及当前SDK共用。配置与测试见../ll_stage_timer/CB59_REPLAY.md。
+
 该分支保留MTE传输和DEEPEP_LL_RANKS_PER_GROUP静态可配置分组，默认4。
 不要复制NDR的Session、ll_transport或tiling-key策略来替代这里的实现。
 

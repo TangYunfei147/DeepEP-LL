@@ -16,8 +16,9 @@ extern "C" void dispatch_server_dedup_launch_sparse15_bf16(void*,const deepep::E
 extern "C" void dispatch_server_dedup_launch_sparse15_bf16_e4m3(void*,const deepep::EpServerDedupKernelArgs*);
 extern "C" void dispatch_server_dedup_launch_sparse15_bf16_e5m2(void*,const deepep::EpServerDedupKernelArgs*);
 extern "C" DEEPEP_EXPORT uint32_t deepep_ll_overlap_stage() {
-    return DispatchDedup::kLlOverlapExperimentStage;
+    return DispatchDedup::kLlCb59Replay ? 0U : DispatchDedup::kLlOverlapExperimentStage;
 }
+extern "C" DEEPEP_EXPORT uint32_t deepep_ll_dispatch_implementation() { return DispatchDedup::kLlDispatchImplementationId; }
 extern "C" DEEPEP_EXPORT uint32_t deepep_ll_stage_timer_schema() { return LlStageTimer::kSchema; }
 extern "C" DEEPEP_EXPORT uint32_t deepep_ll_stage_timer_profile_id() { return LlStageTimer::kProfileId; }
 extern "C" DEEPEP_EXPORT uint32_t deepep_ll_small_b_prefix_cores() { return DispatchDedup::kLlSmallBPrefixCores; }

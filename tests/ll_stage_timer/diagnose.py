@@ -16,6 +16,7 @@ import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parents[2]
+_DISPATCH = runpy.run_path(str(ROOT / 'scripts/ll_dispatch_implementation.py'))
 PROFILES = ('sparse',)
 LIMIT = 60000
 CONTROLLED = {'--output-dir', '--output', '--run-name', '--num-tokens',
@@ -138,6 +139,8 @@ def make_plan(args, forwarded, root=ROOT, python=sys.executable):
     if not re.fullmatch(r'0|[1-9][0-9]?', prefix_text) or int(prefix_text) > recv:
         raise ValueError('DEEPEP_LL_SMALL_B_PREFIX_CORES must be 0 or an integer in [1, RECV_CORES]')
     prefix = int(prefix_text)
+    dispatch_impl = _DISPATCH['dispatch_implementation']()
+    identity = _DISPATCH['dispatch_configuration'](dispatch_impl, send, recv, prefix)
     suite = _within_project(Path(args.output_root) / args.run_name, root)
     node_dir = suite / f'node_{node:03d}'
     venv = node_dir / 'venv'
@@ -174,6 +177,9 @@ def make_plan(args, forwarded, root=ROOT, python=sys.executable):
                 device_visibility=None if args.build_only else devices,
                 core_split=dict(send=send, recv=recv),
                 small_b_prefix_cores=prefix,
+                dispatch_impl=dispatch_impl, implementation=identity['implementation'],
+                default_logical_group=identity['logical_group'],
+                required_logical_group=identity['fixed_logical_group'], core_protocol=identity['core_protocol'],
                 matrix=dict(B=args.bs, M=args.m, H=args.hidden, K=args.topk,
                                                        E=args.experts, dtype=args.dtype, cpu_sync=args.cpu_sync),
                 stages=stages, skip_build=args.skip_build, wheel_map=str(args.wheel_map) if args.wheel_map else None,
@@ -205,6 +211,7 @@ def _environment(plan, stage=None):
         env['DEEPEP_LL_SEND_CORES'] = str(plan['core_split']['send'])
         env['DEEPEP_LL_RECV_CORES'] = str(plan['core_split']['recv'])
     env['DEEPEP_LL_SMALL_B_PREFIX_CORES'] = str(plan.get('small_b_prefix_cores', 0))
+    env['DEEPEP_LL_DISPATCH_IMPL'] = plan.get('dispatch_impl', 'current')
     env.pop('SHMEM_ROOT', None)
     env.pop('CATLASS_ROOT', None)
     library = str(Path(plan['root']) / 'third-party/shmem/install/shmem/lib')
@@ -243,14 +250,16 @@ def _wheel_map(plan):
     return result
 
 
-def _verify_code(stage, implementation, core_split=None, small_b_prefix_cores=0):
+def _verify_code(stage, implementation, core_split=None, small_b_prefix_cores=0, dispatch_impl='current'):
     # The installed-wheel helper prevents checkout PYTHONPATH shadowing.
     if stage['profile'] != 'sparse':
         raise ValueError('New captures require sparse milestone wheels; legacy profiles are offline-analysis only')
     profile_id = 6
+    identity = _DISPATCH['dispatch_configuration'](dispatch_impl,
+        (core_split or {}).get('send', 28), (core_split or {}).get('recv', 28), small_b_prefix_cores)
     core_checks = '' if core_split is None else f"""
 require(info.get('ll_send_cores') == {core_split['send']!r} and info.get('ll_recv_cores') == {core_split['recv']!r}, 'wheel S/R differs from requested build configuration')
-require(native.low_latency_core_protocol == {19000 + core_split['send']!r}, 'native core protocol differs from requested S/R')
+require(native.low_latency_core_protocol == {identity['core_protocol']!r}, 'native core protocol differs from requested implementation/S/R')
 """
     return f"""import json
 import runpy
@@ -262,6 +271,12 @@ def require(condition, message):
     if not condition:
         raise RuntimeError(message)
 require(native.low_latency_implementation == {implementation!r}, 'wrong implementation')
+require(getattr(native, 'low_latency_dispatch_impl', None) == {dispatch_impl!r}, 'native dispatch selection differs from requested build configuration')
+group = native.low_latency_ranks_per_group
+required_group = {identity['fixed_logical_group']!r}
+require(type(group) is int and 1 <= group <= 16 and (required_group is None or group == required_group), 'native logical group differs from requested implementation')
+require(native.low_latency_overlap_stage == {identity['overlap_stage']!r}, 'native overlap stage differs from requested implementation')
+require(bool(native.low_latency_q_table_enabled) is {identity['local_q_table']!r} and bool(native.low_latency_q_seed_vf) is {identity['local_q_seed_vf']!r}, 'native q preparation differs from requested implementation')
 require(bool(native.low_latency_stage_timer_enabled) is {stage['timer']!r}, 'wrong timer ON/OFF wheel')
 require(native.low_latency_stage_timer_profile == {stage['profile']!r}, 'wrong timer profile')
 require(native.low_latency_stage_timer_profile_id == {profile_id!r}, 'wrong timer profile id')
@@ -270,6 +285,7 @@ require(layout.get('timer_profile') == {stage['profile']!r} and layout.get('time
 runpy.run_path('tests/elastic/test_ep_low_latency.py')['validate_sparse_timer_layout'](layout)
 info_path = Path(package.__file__).resolve().parent / '_build_info.json'
 info = json.loads(info_path.read_text(encoding='utf-8'))
+require(info.get('ll_dispatch_impl') == {dispatch_impl!r}, 'wheel dispatch selection differs from requested build configuration')
 require(info.get('ll_stage_timer') is {stage['timer']!r} and info.get('ll_timer_profile') == {stage['profile']!r}, 'wheel build metadata differs from requested timer configuration')
 require(type(info.get('ll_small_b_prefix_cores')) is int and info.get('ll_small_b_prefix_cores') == {small_b_prefix_cores!r}, 'wheel P differs from requested build configuration')
 require(type(getattr(native, 'low_latency_small_b_prefix_cores', None)) is int and native.low_latency_small_b_prefix_cores == {small_b_prefix_cores!r}, 'native P differs from requested build configuration')
@@ -307,7 +323,7 @@ def _performance_rows(suite):
     baselines = {key(row['config'], row['route']): row for row in off.get('results', []) if 'dispatch' in row}
     identity_fields = ('implementation', 'transport', 'logical_group', 'active_aiv',
                        'send_cores', 'recv_cores', 'core_protocol', 'source_revision', 'source_sha256')
-    optional_identity_fields = ('small_b_prefix_cores', 'effective_small_b_prefix_cores',
+    optional_identity_fields = ('dispatch_impl', 'small_b_prefix_cores', 'effective_small_b_prefix_cores',
                                 'session_transport', 'shmem_revision')
     rows = []
     for path in sorted((suite / 'runs').glob('*/case_*/*/active_capture_dispatch.json')):
@@ -449,7 +465,7 @@ def execute(plan, *, receipt=None):
     logs = node / 'logs'
     logs.mkdir(exist_ok=True)
     _command(plan['create_venv'], plan, env, logs / 'venv.log')
-    implementation = json.loads((root / 'tests/ll_stage_timer/branch.json').read_text())['implementation']
+    implementation = plan.get('implementation', json.loads((root / 'tests/ll_stage_timer/branch.json').read_text())['implementation'])
     # Do not interleave build and device sampling. A later variant's compiler or
     # identity failure must be observable before the first OFF launch.
     for stage in plan['stages']:
@@ -468,7 +484,7 @@ def execute(plan, *, receipt=None):
         profile = stage['name']
         command = [wheels[profile] if value == '{wheel}' else value for value in stage['install']]
         _command(command, plan, env, logs / f'{profile}-install.log')
-        _command([plan['venv_python'], '-c', _verify_code(stage, implementation, plan.get('core_split'), plan.get('small_b_prefix_cores', 0))],
+        _command([plan['venv_python'], '-c', _verify_code(stage, implementation, plan.get('core_split'), plan.get('small_b_prefix_cores', 0), plan.get('dispatch_impl', 'current'))],
                  plan, env, logs / f'{profile}-identity.log')
     wheel_map = _publish_wheel_map(plan, wheels)
     if plan.get('build_only', False):
@@ -480,7 +496,7 @@ def execute(plan, *, receipt=None):
         # wheel before each stage and recheck it without opening an NPU context.
         command = [wheels[profile] if value == '{wheel}' else value for value in stage['install']]
         _command(command, plan, env, logs / f'{profile}-run-install.log')
-        _command([plan['venv_python'], '-c', _verify_code(stage, implementation, plan.get('core_split'), plan.get('small_b_prefix_cores', 0))],
+        _command([plan['venv_python'], '-c', _verify_code(stage, implementation, plan.get('core_split'), plan.get('small_b_prefix_cores', 0), plan.get('dispatch_impl', 'current'))],
                  plan, env, logs / f'{profile}-run-identity.log')
         _command(stage['run'], plan, env, logs / f'{profile}-run.log')
         if stage['timer'] and plan['node'] == 0 and not plan['defer_analysis']:

@@ -82,7 +82,8 @@ def test_perf_and_expert_comparison_keep_group_as_variable():
 @pytest.mark.parametrize('implementation,rdma',[('configurable-groups',False),('ndr-hns1825',True)])
 def test_portable_launcher_plan_and_backend_guard(tmp_path,implementation,rdma):
     moved=tmp_path/'checkout with spaces'
-    for path in ('tests/ll_stage_timer/run.py','tests/elastic/test_ep_low_latency.py'):
+    for path in ('tests/ll_stage_timer/run.py','tests/elastic/test_ep_low_latency.py',
+                 'scripts/ll_dispatch_implementation.py'):
         target=moved/path;target.parent.mkdir(parents=True,exist_ok=True);shutil.copyfile(ROOT/path,target)
     (moved/'tests/ll_stage_timer/branch.json').write_text(json.dumps(dict(implementation=implementation,rdma=rdma)))
     env=dict(os.environ)

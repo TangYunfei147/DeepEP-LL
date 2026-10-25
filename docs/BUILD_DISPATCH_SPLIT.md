@@ -800,3 +800,69 @@ No27 connection, CANN rebuild or NPU test was performed for this correction,
 per the current user workflow. The prior CANN evidence above remains evidence
 for the unchanged native kernel code, not a new target build qualification.
 Use the SDK recovery and new A/B commands in `tests/ll_stage_timer/P1_COUNT_VF.md`.
+
+## 2026-10-25 cb59 algorithm replay in the current branch
+
+The user located the faster reference
+`cb59bff99ecd39d27ef57788c5e6fd0009e4e636` and requested a port with shared
+diagnostics. `DEEPEP_LL_DISPATCH_IMPL=current|cb59` now selects one implementation
+at compile time, default current. There are still seven mode TUs; each TU
+includes and instantiates only its selected kernel. O2, all input modes, native
+launch arguments and public packet/metadata formats are retained. Host/device
+selection and protocol checks reject mismatches. The current combine remains
+available; the old dispatch private control region does not overlap its state.
+
+Replay copies six old algorithm files into an isolated namespace. Its full-AIV
+count production, distributed prefix, R copies/R×R control matrices, Scalar
+local work, receiver task scheduling and synchronization order are preserved.
+It uses190KiB and old UB/GM admission formulas, with56 cores split28/28, G16,
+P0 and protocol21028. The original cb59 queried AIV count dynamically and did
+not support an independently configured40/16 split. Current defaults remain
+G4 and protocol19000+S, including explicit legal G overrides.
+
+The old Start/End recorder is removed from the extracted code. Both algorithms
+use the present14-point sparse schema15/512B carrier and delayed export with no
+added barriers. Raw dedicated-sender roles are decoded separately and cannot
+be mixed within one capture. COUNT_RECEIVED boundary differences are documented;
+cross-algorithm per-core stage speed ratios are withheld. Full OFF tasks and
+same-core entry-to-handoff/completion spans remain the useful observations.
+
+This is a controlled algorithm replay under current SDK8e3fc61/MTE/ordinary
+pages and specialized entry compilation. Original cb59 used SDK4dd80e2,
+default1GiB pages and a monolithic entry; the replay is not an assertion of
+binary equivalence or reproduction of the user's17–22us measurements.
+
+Local validation:
+
+- `generate_cb59_replay.py --check` verifies all six files against the immutable
+  Git reference, exact generated text, complete normalized business-token
+  sequences and ordered synchronization calls. The committed token fixture
+  also supports source checks without Git history. Negative mutation tests
+  prove that changed business instructions/synchronization are rejected.
+- Full combined stage/ST/build/SDK Python suite:916passed,64environment skips,
+ 8existing Windows/POSIX compiler tests deselected in30.21s;
+ `.tmp/cb59-integrated-final-001.log`. Skips include CANN, CMake and missing
+ default C++ executables; native checks below were run separately.
+- Actual portable-Zig native checks plus parser role checks:12passed in3.06s,
+ `.tmp/cb59-native-final-003.log`. They compile both Host selector algorithms
+ OFF/ON and exercise all seven launch choices; execute the actual recorder's
+ role headers; compare old/reference control, UB, public metadata and combine
+ admission across a shape matrix; reject a replay G4 override; and decode
+ dedicated sender roles with invalid mixed-role/receive-point rejection.
+- An initial local native test used `-I<repo>` on case-insensitive Windows,
+  causing standard `<version>` to resolve to the repository VERSION file. The
+  fixture was corrected to use `-iquote<repo>`; production sources did not
+  change for that test-environment failure.
+- Both pure-CPU plans select matching OFF/sparse builds and no device run in
+  build-only mode. Config tests cover missing/incorrect installed selection,
+  same-source different-algorithm cache keys, plan/environment freezing,
+  explicit current G16, cross-rank identity, moved checkout/map paths and
+  build-all-before-run failure behavior.
+- Independent final source review checked include/namespace boundaries,
+  old190KiB lookup, Host/device layout, combine compatibility and identities.
+
+Per the user's latest workflow, **no SSH/27, CANN compilation or NPU execution**
+was performed for this port. The native tests are CPU mocks/formula checks,
+not device correctness proof. New full OFF/ON target builds and correctness
+checks remain required. Commands and interpretation are in
+`tests/ll_stage_timer/CB59_REPLAY.md`; first return only two bounded summaries.

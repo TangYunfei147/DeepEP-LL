@@ -34,6 +34,20 @@ def test_unchanged_dedup_and_protocol_regions():
         if entry.get('begin'):
             start=text.index(entry['begin'])
             text=text[start:text.index(entry['end'],start)]
+        if entry['path'].endswith('/ll_core_config.h'):
+            # Restore only the explicit current/cb59 selector to its current
+            # branch. Keep the original default-protocol digest unchanged;
+            # test_cb59_native_identity executes both compiled alternatives.
+            switches={
+                '#include "ll_dispatch_implementation.h"\n':'',
+                'static_assert(!kLlCb59Replay || (DEEPEP_LL_SEND_CORES == 28 && DEEPEP_LL_RECV_CORES == 28),\n'
+                '              "cb59 replay requires the original 1:1 split on the fixed 56-core comparison launch");\n':'',
+                'kLlCb59Replay ? kLlRecvCoreNum : kLlActiveCoreNum':'kLlActiveCoreNum',
+                '(kLlCb59Replay ? 21000U : 19000U) + kLlSendCoreNum':'19000U + kLlSendCoreNum',
+            }
+            for selected,current in switches.items():
+                assert text.count(selected)==1
+                text=text.replace(selected,current)
         if entry['path'].endswith('/ll_overlap_layout.h'):
             # P-only deliberately changes the small-direct budget branch. The
             # historical digest/restoration is kept; all dedup code outside

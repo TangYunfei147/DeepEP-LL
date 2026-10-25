@@ -12,7 +12,11 @@
 #if CATLASS_ARCH == 3510
 #include "common/ll_dispatch_variant.h"
 #include "launch.hpp"
+#if DEEPEP_LL_DISPATCH_CB59
+#include "cb59/dispatch_server_dedup_kernel.h"
+#else
 #include "dispatch_server_dedup_kernel.h"
+#endif
 #include "common/dispatch_dedup_types.h"
 #include "common/ep_memory_server_dedup_tiling.h"
 
@@ -86,7 +90,12 @@ extern "C" [[bisheng::core_ratio(0, 1)]] __global__ __aicore__ void LL_VARIANT_K
     }
     AscendC::TPipe pipe;
     {
-        DispatchDedup::DispatchMemoryServerDedupKernel<LlVariantInput,kWireFp8,kE4M3,kPrequantized> kernel;
+#if DEEPEP_LL_DISPATCH_CB59
+        namespace Algorithm = DispatchDedup::Cb59Replay;
+#else
+        namespace Algorithm = DispatchDedup;
+#endif
+        Algorithm::DispatchMemoryServerDedupKernel<LlVariantInput,kWireFp8,kE4M3,kPrequantized> kernel;
         kernel.Init(commArgs,x,expertIds,expertScales,expandXOut,dynamicScalesOut,expertTokenNumsOut,sendCountsOut,
                     tokenTypeOut,destinationIndexOut,relayReadIndexOut,sourceMaskOut,expertScalesOut,bs,h,topK,
                     moeExpertNum,expertTokenNumsType,&pipe,inputScales,enableDedup,

@@ -25,13 +25,19 @@ from datetime import datetime, timedelta
 
 __test__ = False
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+_DISPATCH = runpy.run_path(str(PROJECT_ROOT / 'scripts/ll_dispatch_implementation.py'))
 
 
 def validate_core_split_capability(capability):
     send, recv = capability.get("send_cores"), capability.get("recv_cores")
+    choice = capability.get('dispatch_impl', 'current')
+    try:
+        identity = _DISPATCH['dispatch_configuration'](choice, send, recv, capability.get('small_b_prefix_cores', 0))
+    except ValueError as error:
+        raise RuntimeError(f'Rebuild/install the matching configured 56-core split wheel: {error}') from error
     if (type(send) is not int or type(recv) is not int or send <= 0 or recv <= 0
             or send + recv != 56 or capability.get("active_aiv") != 56
-            or capability.get("core_protocol") != 19000 + send):
+            or capability.get("core_protocol") != identity['core_protocol']):
         raise RuntimeError("Rebuild/install the matching configured 56-core split wheel on every rank")
 
 
@@ -43,10 +49,23 @@ def expected_overlap_stage():
 
 
 def validate_overlap_stage_capability(capability):
-    expected=expected_overlap_stage()
-    implementation=json.loads((PROJECT_ROOT/'tests/ll_stage_timer/branch.json').read_text())['implementation']
+    choice=capability.get('dispatch_impl','current')
+    if choice not in _DISPATCH['IMPLEMENTATIONS']:
+        raise RuntimeError('Unknown compiled LL dispatch implementation')
+    identity=_DISPATCH['IMPLEMENTATIONS'][choice]
+    expected=expected_overlap_stage() if choice=='current' else identity['overlap_stage']
+    implementation=identity['implementation']
     if capability.get('implementation')!=implementation or capability.get('overlap_stage')!=expected:
         raise RuntimeError(f'Rebuild/install overlap A/B stage {expected} from this checkout on every rank')
+
+
+def validate_dispatch_algorithm_capability(capability, world):
+    choice = capability.get('dispatch_impl')
+    selected = _DISPATCH['IMPLEMENTATIONS'].get(choice)
+    if (selected is None or capability.get('local_q_table') != selected['local_q_table']
+            or capability.get('local_q_seed_vf') != selected['local_q_seed_vf']
+            or not _DISPATCH['dispatch_group_valid'](choice, capability.get('logical_group'), world)):
+        raise RuntimeError('Install the matching dispatch algorithm/group/q configuration from this checkout')
 
 
 def validate_stage_timer_capability(capability):
@@ -105,6 +124,21 @@ def installed_prefix_identity(package, native, recv_cores, environment=None):
     return dict(small_b_prefix_cores=prefix, shmem_revision=revision)
 
 
+def installed_dispatch_identity(package, native, environment=None):
+    """A source hash alone cannot distinguish two builds of the same checkout."""
+    info = json.loads((Path(package.__file__).resolve().parent / '_build_info.json').read_text(encoding='utf-8'))
+    choice = getattr(native, 'low_latency_dispatch_impl', None)
+    if choice not in _DISPATCH['IMPLEMENTATIONS'] or info.get('ll_dispatch_impl') != choice:
+        raise RuntimeError('Installed wheel dispatch identity is missing or inconsistent; rebuild matching wheels')
+    try:
+        requested = _DISPATCH['dispatch_implementation'](environment)
+    except ValueError as error:
+        raise RuntimeError(str(error)) from error
+    if choice != requested:
+        raise RuntimeError('Installed wheel dispatch identity differs from DEEPEP_LL_DISPATCH_IMPL')
+    return dict(dispatch_impl=choice)
+
+
 def validate_matching_capabilities(capabilities):
     if not capabilities or any(item != capabilities[0] for item in capabilities):
         raise RuntimeError('LL AIV/group/protocol/timer/profile/source build differs across ranks')
@@ -157,7 +191,8 @@ def comparison_metadata(args, world, m):
     prefix = runtime.get('small_b_prefix_cores')
     effective_prefix = None
     if prefix is not None and m <= 32 and args.num_tokens <= 32:
-        effective_prefix = (prefix or runtime.get('recv_cores')) if world == 16 else runtime.get('recv_cores')
+        effective_prefix = runtime.get('recv_cores') if runtime.get('dispatch_impl') == 'cb59' else (
+            (prefix or runtime.get('recv_cores')) if world == 16 else runtime.get('recv_cores'))
     return dict(**runtime, effective_small_b_prefix_cores=effective_prefix,
                 comparison_schema=1, sampling_protocol='exp-reduce-stable-tail-v2',
                 perf_enabled=not args.skip_perf_test, world_size=world,
@@ -406,7 +441,7 @@ def write_reports(directory, report):
             perf = result[operation]
             identity=result.get('comparison') or {}
             base = {"case_id": result["case_id"], **result["config"], "route": result["route"], "operation": operation,
-                    **{key:identity.get(key) for key in ('implementation','transport','logical_group','active_aiv','send_cores','recv_cores','core_protocol','source_revision')}}
+                    **{key:identity.get(key) for key in ('implementation','dispatch_impl','transport','logical_group','active_aiv','send_cores','recv_cores','core_protocol','source_revision')}}
             summaries.append(
                 {
                     **base,
@@ -1276,6 +1311,7 @@ def worker(local_rank, args):
                       "logical_group": compiled_group(native,world),
                       "implementation": implementation,
                       "source_sha256": installed_source_fingerprint(deep_ep),
+                      **installed_dispatch_identity(deep_ep, native),
                       **installed_prefix_identity(deep_ep, native, core_config["recv_cores"]),
                       "local_q_table": bool(getattr(native,"low_latency_q_table_enabled",False)),
                       "local_q_seed_vf": bool(getattr(native,"low_latency_q_seed_vf",False)),
@@ -1294,12 +1330,9 @@ def worker(local_rank, args):
         capabilities = [None] * world
         dist.all_gather_object(capabilities, capability)
         validate_matching_capabilities(capabilities)
-        if not getattr(native,"low_latency_q_table_enabled",False):
-            raise RuntimeError("Install the local-q-table candidate wheel from this checkout")
-        if not getattr(native,"low_latency_q_seed_vf",False):
-            raise RuntimeError("Install the VF-seeded q-table candidate wheel from this checkout")
+        validate_dispatch_algorithm_capability(capability, world)
         validate_core_split_capability(capability)
-        if capability['implementation'] not in ('ndr-hns1825','configurable-groups','g4-shared-recv','g4-overlap-recv','g4-r0-prefix','g4-small-b','g4-small-b-parallel-prefix'):
+        if capability['implementation'] not in ('ndr-hns1825','configurable-groups','g4-shared-recv','g4-overlap-recv','g4-r0-prefix','g4-small-b','g4-small-b-parallel-prefix','cb59-replay'):
             raise RuntimeError('Rebuild the wheel with the shared experiment implementation identity')
         validate_overlap_stage_capability(capability)
         requested_impl=os.environ.get('DEEPEP_LL_EXPECT_IMPLEMENTATION')

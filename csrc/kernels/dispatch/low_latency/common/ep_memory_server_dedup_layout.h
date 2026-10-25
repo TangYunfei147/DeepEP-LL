@@ -58,6 +58,9 @@ int ValidateDispatchServerDedupAllocations(const EpServerDedupAllocation* alloca
 #include "ep_memory_server_dedup_protocol.h"
 #include "ep_memory_server_dedup_count_layout.h"
 #include "dispatch_dedup_types.h"
+#if DEEPEP_LL_DISPATCH_CB59
+#include "../cb59/host_layout.h"
+#endif
 
 namespace DispatchDedup {
 namespace {
@@ -89,8 +92,13 @@ inline int BuildDispatchServerDedupLayout(int64_t rankSize, int64_t bs, int64_t 
         return DispatchDedup::DISPATCH_DEDUP_ERROR_PARA_CHECK_FAIL;
     }
 
+#if DEEPEP_LL_DISPATCH_CB59
+    if (!Cb59Replay::CountSendUbFits(uint64_t(bs) * topK, uint32_t(bs), uint32_t(moeExpertNum), coreNum))
+        return DispatchDedup::DISPATCH_DEDUP_ERROR_PARA_CHECK_FAIL;
+#else
     if (DispatchGroupLocalCountSendUbBytes(uint64_t(bs)*topK,uint32_t(moeExpertNum),uint32_t(rankSize))>
         kEpServerDedupCountUbBytes) return DispatchDedup::DISPATCH_DEDUP_ERROR_PARA_CHECK_FAIL;
+#endif
 
     const bool wireFp8 = mode != EpServerDedupInputMode::Plain16;
     const bool prequantized = mode == EpServerDedupInputMode::PrequantizedFp8Packs;
@@ -98,7 +106,11 @@ inline int BuildDispatchServerDedupLayout(int64_t rankSize, int64_t bs, int64_t 
     next.inputMode = mode;
     next.globalBs = static_cast<uint64_t>(rankSize * bs);
     next.localExpertNum = static_cast<uint64_t>(moeExpertNum / rankSize);
+#if DEEPEP_LL_DISPATCH_CB59
+    next.countStateBytes = Cb59Replay::DispatchServerDedupCountLayout(uint32_t(moeExpertNum), coreNum).stateBytes;
+#else
     next.countStateBytes = DispatchServerDedupCountLayout(uint32_t(moeExpertNum), coreNum).stateBytes;
+#endif
     next.data = DispatchServerDedupDataLayout(uint32_t(bs), uint32_t(h), uint32_t(topK), uint32_t(moeExpertNum), mode);
     if (next.countStateBytes > kEpServerDedupControlBytes ||
         next.data.requiredBytes > kEpServerDedupWindowUsableBytes) {
@@ -169,6 +181,10 @@ namespace DispatchDedup {
 inline bool DispatchDedupPacketUbFits(const EpMemoryServerDedupLayout& layout, int64_t b, int64_t k,
                                       int64_t num_experts, int64_t world_size, uint32_t coreNum = kLlDefaultPlanCoreNum, bool enableDedup=true)
 {
+#if DEEPEP_LL_DISPATCH_CB59
+    (void)enableDedup;  // cb59 uses its original S/R ownership in both modes.
+    return Cb59Replay::PacketUbFits(layout, b, k, num_experts, world_size, coreNum);
+#else
     if (!LlCoreCountValid(coreNum)) return false;
     const auto align = [](uint64_t n, uint64_t a) { return (n + a - 1) / a * a; };
     const uint64_t reserved=align(LlGroupCountMaxRecords(uint32_t(num_experts),uint32_t(world_size),false),8U)*32U;
@@ -204,6 +220,7 @@ inline bool DispatchDedupPacketUbFits(const EpMemoryServerDedupLayout& layout, i
            sender + serverStateExtra <= kEpServerDedupCountUbBytes &&
            localSender <= kEpServerDedupCountUbBytes && receiver <= kEpServerDedupCountUbBytes &&
            localReserved+countScratch+countStage<=kEpServerDedupCountUbBytes;
+#endif
 }
 }  // namespace DispatchDedup
 

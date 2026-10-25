@@ -1,5 +1,14 @@
 # LL 编译维护约束
 
+## 当前 cb59 对照移植（2026-10-25）
+
+- 用户要求把快基线cb59bff99ecd39d27ef57788c5e6fd0009e4e636移植当前分支并用打点定位差距。编译选择DEEPEP_LL_DISPATCH_IMPL=current|cb59，默认current；每个模式TU只编入一个算法，仍保留全部七种模式。
+- cb59六份算法由scripts/generate_cb59_replay.py从固定Git对象生成，目录csrc/kernels/dispatch/low_latency/cb59下的算法文件不得直接编辑；修改提取脚本再生成。参考fixture保留完整业务token和同步调用序列，不以更新hash冒充等价。Host私有布局/UB helper独立维护。
+- cb59移植保留全核count、R分片前缀、R份副本/R×R控制、按角色初始化、190KiB UB及原同步/缓存行为；不搬当前P1/VF/overlap。移植固定56核28/28、G16、P0（实际28生产者），协议21028/identity cb59-replay。current保留可配S/R、P及G默认4/协议19000+S。源码同一份但构建选择不同，必须核验plan/build_info/native/allrank的dispatch_impl。
+- 两实现都用当前SHMEM8e3fc61、MTE Session、普通页、相同FP8与10/100/尾50采样。它是受控环境下的旧算法，不是旧SDK4dd80e2/1GiB页/动态1:1/单入口原二进制复现；不预言恢复17–22us。
+- 共用schema15稀疏载体，不新增同步。cb59发送核role=send，current保留原能力role；解析拒绝同轮混角色。旧COUNTS_RECEIVED在提取/Sum后、前缀与clear前，current在clear下发后，禁止跨实现逐核阶段加速比；主要比较OFF完整task及ENTRY到prefix/probe/workdone。构建全部四wheel后再串行执行，首次仅两份SEND_FIRST。指南tests/ll_stage_timer/CB59_REPLAY.md。
+- 本次仅本地CPU/原生mock验证，无27/CANN/NPU运行。完整证据见docs/BUILD_DISPATCH_SPLIT.md。
+
 ## 当前交付方式（2026-10-25，优先于历史远端验收要求）
 
 - 用户要求后续不再使用27（177.22.27.1）验证编译；27隔离编译授权已结束，不再为此连接、构建SDK/wheel或执行Host导入，也不擅自换其他远端主机。

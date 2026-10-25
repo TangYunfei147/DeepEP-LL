@@ -8,18 +8,24 @@ for name in ('CUDA_VISIBLE_DEVICES','ASCEND_RT_VISIBLE_DEVICES','ASCEND_VISIBLE_
         raise RuntimeError('A5-only schema validation requires all device visibility variables fixed to 0,1')
 ROOT=Path(__file__).resolve().parents[2]
 helpers=runpy.run_path(str(ROOT/'tests/elastic/test_dispatch.py'))
-helpers['_import_installed_deep_ep']()
+package=helpers['_import_installed_deep_ep']()
 import torch
 import torch_npu
 from deep_ep._native import require_native
 from deep_ep.utils.ll_stage_timer import StageTrace, SLOTS, FIELDS
 torch.npu.set_device(0)
 native=require_native('LL timer schema validation')
-assert native.low_latency_implementation==json.loads((ROOT/'tests/ll_stage_timer/branch.json').read_text())['implementation']
-assert native.low_latency_overlap_stage==3
+st=runpy.run_path(str(ROOT/'tests/elastic/test_ep_low_latency.py'))
+selection=st['installed_dispatch_identity'](package,native)['dispatch_impl']
+registry=runpy.run_path(str(ROOT/'scripts/ll_dispatch_implementation.py'))
 cfg=native.low_latency_core_config()
+prefix=st['installed_prefix_identity'](package,native,cfg['recv_cores'])['small_b_prefix_cores']
+identity=registry['dispatch_configuration'](selection,cfg['send_cores'],cfg['recv_cores'],prefix)
+assert native.low_latency_implementation==identity['implementation']
+assert native.low_latency_overlap_stage==identity['overlap_stage']
+assert registry['dispatch_group_valid'](selection,native.low_latency_ranks_per_group)
 assert native.low_latency_stage_timer_enabled
-assert native.low_latency_core_protocol==19000+cfg["send_cores"]
+assert native.low_latency_core_protocol==identity['core_protocol']
 runpy.run_path(str(ROOT/'tests/elastic/test_ep_low_latency.py'))['validate_sparse_timer_layout'](
     native.low_latency_stage_timer_layout())
 trace=StageTrace(object(),'dispatch')

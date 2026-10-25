@@ -55,7 +55,7 @@ public:
         if (!address_) return;
         const uint32_t core=AscendC::GetBlockIdx();
         auto* words=reinterpret_cast<__gm__ uint64_t*>(address_)+core*kWordsPerCore;
-        const uint32_t role=operation_==1U ? (core<DispatchDedup::kLlSendCoreNum ? 3U:2U)
+        const uint32_t role=operation_==1U ? (core<DispatchDedup::kLlSendCoreNum ? (DispatchDedup::kLlCb59Replay ? 1U:3U):2U)
                                           : (core<DispatchDedup::kLlSendCoreNum ? 1U:4U);
         words[0]=kMagic; words[1]=kSchema; words[2]=operation_; words[3]=AscendC::GetBlockNum();
         words[4]=core; words[5]=1U | (uint64_t(DispatchDedup::kLlSendCoreNum)<<8U) |

@@ -3,16 +3,26 @@ import argparse
 import csv
 import json
 from pathlib import Path
+import runpy
 
 ROOT=Path(__file__).resolve().parents[2]
+_DISPATCH=runpy.run_path(str(ROOT/'scripts/ll_dispatch_implementation.py'))
 # Cross-algorithm A/B may intentionally change source. Within one staged
 # diagnosis, diagnose.py separately requires source_sha256 equality for OFF/ON.
 PREFIX_FIELDS=('small_b_prefix_cores','effective_small_b_prefix_cores')
-DIFFERENCES={'implementation','transport','rdma_compiled','source_revision','source_dirty','source_sha256','logical_group','overlap_stage',*PREFIX_FIELDS}
+DIFFERENCES={'implementation','dispatch_impl','transport','rdma_compiled','source_revision','source_dirty','source_sha256','logical_group','overlap_stage',*PREFIX_FIELDS}
 REQUIRED={'implementation','transport','world_size','logical_group','active_aiv','core_protocol',
           'case','warmup','num_iters','perf_tail','delay_rows','delay_cols','stage_capture','expert_capture',
           'timer_mode','stage_timer','stage_timer_schema','frequency_hz','seed','route','use_1g_huge_pages',
           'comparison_schema','sampling_protocol','perf_enabled'}
+
+
+def dispatch_selection(identity):
+    """Historical reports remain readable, without inventing a recorded knob."""
+    choice=identity.get('dispatch_impl')
+    if choice is not None:
+        return choice
+    return {'g4-small-b-parallel-prefix':'current', 'cb59-replay':'cb59'}.get(identity.get('implementation'))
 
 
 def check_identity(left,right):
@@ -29,10 +39,23 @@ def check_identity(left,right):
                 raise ValueError('Invalid prefix producer identity')
         if item.get('effective_small_b_prefix_cores') is not None and item.get('small_b_prefix_cores') is None:
             raise ValueError('Effective prefix producer identity lacks its recorded build setting')
+        choice=item.get('dispatch_impl')
+        if choice is not None:
+            expected=_DISPATCH['dispatch_configuration'](choice,item.get('send_cores'),item.get('recv_cores'),
+                                                        item.get('small_b_prefix_cores',0))
+            if (item['implementation']!=expected['implementation']
+                    or not _DISPATCH['dispatch_group_valid'](choice,item['logical_group'],item['world_size'])
+                    or item['core_protocol']!=expected['core_protocol']):
+                raise ValueError('Invalid dispatch implementation identity')
+        elif item['implementation']=='cb59-replay' or 21001<=item['core_protocol']<=21055:
+            raise ValueError('Missing cb59 dispatch implementation identity')
     if any(isinstance(s,int) and s>=13 for s in (left['stage_timer_schema'],right['stage_timer_schema'])) and left['stage_timer_schema']!=right['stage_timer_schema'] and any(
         item['stage_timer'] or item['stage_capture'] or item['expert_capture'] for item in (left,right)):
         raise ValueError('Incomparable diagnostic semantics: different stage schemas')
     differences=set(DIFFERENCES)
+    selections=[dispatch_selection(item) for item in (left,right)]
+    if None not in selections and selections[0]!=selections[1]:
+        differences.update(('local_q_table','local_q_seed_vf'))
     # When both binaries and launches have timers OFF, timer layout/profile
     # metadata describes an unused capability, not a measured difference.
     inactive=all(not any(item.get(key,False) for key in ('stage_timer','stage_capture','expert_capture','profile_capture','profile_capture_requested','expert_timer_requested')) for item in (left,right))
@@ -40,10 +63,12 @@ def check_identity(left,right):
         differences.update(('stage_timer_schema','stage_timer_slots','stage_timer_fields',
                             'stage_timer_points','stage_timer_recording','timer_profile','timer_profile_id',
                             'profile_capture','profile_capture_requested','expert_timer_requested'))
-    if all(19001<=item['core_protocol']<=19055 for item in (left,right)):
+    if all(19001<=item['core_protocol']<=19055 or 21001<=item['core_protocol']<=21055 for item in (left,right)):
         for item in (left,right):
             send=item.get('send_cores',0);recv=item.get('recv_cores',0)
-            if send+recv!=56 or min(send,recv)<=0 or item['core_protocol']!=19000+send or item['active_aiv']!=56:
+            base=21000 if 21001<=item['core_protocol']<=21055 else 19000
+            if (send+recv!=56 or min(send,recv)<=0 or item['core_protocol']!=base+send or item['active_aiv']!=56
+                    or (base==21000 and (send,recv)!=(28,28))):
                 raise ValueError('Invalid configured core split identity')
         differences.update(('send_cores','recv_cores','dispatch_recv_cores','core_protocol','stage_timer_schema'))
 
@@ -132,6 +157,9 @@ def compare(left,right,kind):
                                   or (l[key][1]['core_protocol']//1000==10)!=(r[key][1]['core_protocol']//1000==10)))
         prefix_status = (prefix_partition_status(l[key][1],r[key][1])
                          if kind=='stage' and key[0]=='dispatch' and key in l and key in r else None)
+        algorithm_changed = (kind!='perf' and key in l and key in r
+                             and dispatch_selection(l[key][1])!=dispatch_selection(r[key][1])
+                             and 'cb59' in (dispatch_selection(l[key][1]),dispatch_selection(r[key][1])))
         rows.append(dict(key=json.dumps(key),baseline_mean_us=a,candidate_mean_us=b,
                          baseline_send_cores=l[key][1].get("send_cores") if key in l else None,
                          candidate_send_cores=r[key][1].get("send_cores") if key in r else None,
@@ -143,8 +171,8 @@ def compare(left,right,kind):
                          candidate_effective_small_b_prefix_cores=r[key][1].get('effective_small_b_prefix_cores') if key in r else None,
                          baseline_group=l[key][1]['logical_group'] if key in l else None,
                          candidate_group=r[key][1]['logical_group'] if key in r else None,
-                         candidate_over_baseline=b/a if a is not None and a>0 and b is not None and not role_changed and not partition_changed and not prefix_status else None,
-                         status=prefix_status or ('work_partition_changed' if partition_changed else 'role_changed' if role_changed else ('matched' if key in l and key in r else 'missing_on_one_side'))))
+                         candidate_over_baseline=b/a if a is not None and a>0 and b is not None and not role_changed and not partition_changed and not prefix_status and not algorithm_changed else None,
+                         status='dispatch_algorithm_changed' if algorithm_changed else prefix_status or ('work_partition_changed' if partition_changed else 'role_changed' if role_changed else ('matched' if key in l and key in r else 'missing_on_one_side'))))
     return rows
 
 

@@ -8,6 +8,7 @@ import subprocess
 import sys
 
 ROOT=Path(__file__).resolve().parents[2]
+_DISPATCH=runpy.run_path(str(ROOT/'scripts/ll_dispatch_implementation.py'))
 VISIBILITY=('CUDA_VISIBLE_DEVICES','ASCEND_RT_VISIBLE_DEVICES','ASCEND_VISIBLE_DEVICES','PROBE_VISIBLE_DEVICES')
 
 
@@ -45,7 +46,12 @@ def main():
     if any(not p.isdecimal() for p in pieces) or len({int(p) for p in pieces})!=len(pieces):
         parser.error('Supply distinct explicit --devices numbers')
     env=environment(args.devices)
-    env['DEEPEP_LL_EXPECT_IMPLEMENTATION']=descriptor['implementation']
+    try:
+        dispatch_impl=_DISPATCH['dispatch_implementation'](env)
+    except ValueError as error:
+        parser.error(str(error))
+    env['DEEPEP_LL_DISPATCH_IMPL']=dispatch_impl
+    env['DEEPEP_LL_EXPECT_IMPLEMENTATION']=_DISPATCH['IMPLEMENTATIONS'][dispatch_impl]['implementation']
     for key,command in [('DEEPEP_LL_RUN_REVISION',['rev-parse','HEAD']),('DEEPEP_LL_RUN_DIRTY',['status','--porcelain'])]:
         result=subprocess.run(['git','-C',str(ROOT),*command],capture_output=True,text=True)
         env[key]=(result.stdout.strip() if key.endswith('REVISION') else str(bool(result.stdout.strip()))) if result.returncode==0 else 'unknown'

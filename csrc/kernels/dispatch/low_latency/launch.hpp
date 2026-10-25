@@ -57,5 +57,6 @@ extern "C" uint32_t deepep_ll_stage_timer_enabled();
 extern "C" uint32_t deepep_ll_stage_timer_schema();
 extern "C" uint32_t deepep_ll_stage_timer_profile_id();
 extern "C" uint32_t deepep_ll_small_b_prefix_cores();
+extern "C" uint32_t deepep_ll_dispatch_implementation();
 
 extern "C" uint32_t deepep_ll_overlap_stage();

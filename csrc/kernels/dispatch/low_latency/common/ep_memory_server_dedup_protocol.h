@@ -6,14 +6,20 @@
 
 #include <cstddef>
 #include <cstdint>
+#include "ll_dispatch_implementation.h"
 
 namespace DispatchDedup {
 // Logical contiguous-rank routing group; independent of physical host/device count.
 // Edit this default and rebuild the complete wheel AND experimental snapshots.
 #ifndef DEEPEP_LL_RANKS_PER_GROUP
+#if DEEPEP_LL_DISPATCH_CB59
+#define DEEPEP_LL_RANKS_PER_GROUP 16
+#else
 #define DEEPEP_LL_RANKS_PER_GROUP 4
 #endif
+#endif
 constexpr uint32_t kLlRanksPerGroup = DEEPEP_LL_RANKS_PER_GROUP;
+static_assert(!kLlCb59Replay || kLlRanksPerGroup == 16U, "cb59 replay preserves its default G16");
 static_assert(kLlRanksPerGroup >= 1U && kLlRanksPerGroup <= 16U,
               "LL logical group must be in [1, 16]");
 constexpr uint32_t kEpServerDedupAlignmentBytes = 32U;

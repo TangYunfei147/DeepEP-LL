@@ -5,9 +5,11 @@ import json
 import os
 from pathlib import Path
 import re
+import runpy
 import subprocess
 import time
 ROOT=Path(__file__).resolve().parents[2]
+_DISPATCH=runpy.run_path(str(ROOT/'scripts/ll_dispatch_implementation.py'))
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output',required=True)
@@ -23,6 +25,11 @@ def main():
     prefix=os.environ.get('DEEPEP_LL_SMALL_B_PREFIX_CORES','0')
     if not re.fullmatch(r'0|[1-9][0-9]?',prefix) or int(prefix)>recv:
         parser.error('DEEPEP_LL_SMALL_B_PREFIX_CORES must be 0 or an integer in [1, RECV_CORES]')
+    try:
+        dispatch_impl=_DISPATCH['dispatch_implementation']()
+        identity=_DISPATCH['dispatch_configuration'](dispatch_impl,send,recv,int(prefix))
+    except ValueError as error:
+        parser.error(str(error))
     out=Path(args.output);out=out if out.is_absolute() else ROOT/out
     out.mkdir(parents=True,exist_ok=False)
     cann=Path(os.environ['ASCEND_HOME_PATH']);sdk=ROOT/('third-party/shmem' if args.source_headers else 'third-party/shmem/install/shmem')
@@ -30,7 +37,8 @@ def main():
            '-DCATLASS_ARCH=3510','-DUSE_SIMT','-DL2_CACHE_HINT',
            '-DDEEPEP_LL_SEND_CORES='+str(send),
            '-DDEEPEP_LL_RECV_CORES='+str(recv),
-           '-DDEEPEP_LL_SMALL_B_PREFIX_CORES='+prefix]
+           '-DDEEPEP_LL_SMALL_B_PREFIX_CORES='+prefix,
+           '-DDEEPEP_LL_DISPATCH_CB59='+str(identity['cb59'])]
     flags.append('-DDEEPEP_LL_TIMER_PROFILE_ID=6')
     if args.timer=='ON':flags.append('-DDEEPEP_LL_STAGE_TIMER=1')
     for path in [cann/'include',cann/'asc/include',sdk/'include',sdk/'src',sdk/'src/device',sdk/'src/device_simt']:
@@ -47,7 +55,7 @@ def main():
         return row
     start=time.perf_counter()
     with ThreadPoolExecutor(max_workers=args.jobs) as pool: rows=list(pool.map(compile_one,sources))
-    report=dict(timer=args.timer,profile='sparse',source_headers=args.source_headers,jobs=args.jobs,seconds=time.perf_counter()-start,flags=flags,
+    report=dict(timer=args.timer,profile='sparse',dispatch_impl=dispatch_impl,source_headers=args.source_headers,jobs=args.jobs,seconds=time.perf_counter()-start,flags=flags,
         revision=subprocess.check_output(['git','-C',str(ROOT),'rev-parse','HEAD'],text=True).strip(),units=rows)
     (out/'timing.json').write_text(json.dumps(report,indent=2))
     print('COMPILE_RESULT '+json.dumps(report),flush=True)

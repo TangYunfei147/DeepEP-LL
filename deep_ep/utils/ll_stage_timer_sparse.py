@@ -32,6 +32,7 @@ def parse_records(raw, operation, frequency_hz=None):
         raise ValueError('Sparse capture requires 56 AIV')
     op = 1 if operation == 'dispatch' else 2
     records, intervals, milestones, cores, splits = [], [], [], [], set()
+    dispatch_sender_roles = set()
     for core, rows in enumerate(raw):
         if len(rows) != 8 or any(len(row) != 8 for row in rows):
             raise ValueError('Sparse timer shape mismatch')
@@ -42,9 +43,13 @@ def parse_records(raw, operation, frequency_hz=None):
         mode, send, role, profile = (h[5] >> shift & 255 for shift in (0, 8, 16, 24))
         if h[:5] != [MAGIC, 15, op, 56, core] or h[5] >> 32 or mode != 1 or profile != 6 or not 0 < send < 56:
             raise ValueError('Incomplete or mismatched sparse header')
-        expected_role = (3 if core < send else 2) if op == 1 else (1 if core < send else 4)
-        if role != expected_role:
+        allowed_roles = ({1,3} if core < send else {2}) if op == 1 else ({1} if core < send else {4})
+        if role not in allowed_roles:
             raise ValueError('Unexpected sparse core role')
+        if op == 1 and core < send:
+            dispatch_sender_roles.add(role)
+            if len(dispatch_sender_roles) != 1:
+                raise ValueError('Mixed sparse dispatch sender roles')
         if h[7] or h[6] >> len(POINTS) or any(words[8+len(POINTS):24]):
             raise ValueError('Invalid sparse bitmap or reserved words')
         points = {}
@@ -55,6 +60,10 @@ def parse_records(raw, operation, frequency_hz=None):
                 raise ValueError('Timestamp without valid milestone bit')
         if not {'ENTRY', 'INIT_DONE', 'WORK_DONE'} <= points.keys():
             raise ValueError('Missing required sparse milestones')
+        if op == 1 and role == 1 and any(name in points for name in
+                ('COUNTS_RECEIVED','PREFIX_LOCAL_DONE','PREFIX_READY','RECV_PREPARED',
+                 'FIRST_RECV_PROBE','FIRST_RECV_READY','RECV_DONE')):
+            raise ValueError('Dedicated sparse sender cannot report reception milestones')
         if not points['ENTRY'] <= points['INIT_DONE'] <= points['WORK_DONE']:
             raise ValueError('Invalid sparse timestamp order')
         if any(not points['INIT_DONE'] <= tick <= points['WORK_DONE'] for name, tick in points.items() if name != 'ENTRY'):

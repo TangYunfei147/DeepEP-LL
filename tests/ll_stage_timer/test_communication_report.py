@@ -100,7 +100,9 @@ def test_analyze_exports_new_report(tmp_path):
 def test_launcher_identity_matches_current_host():
     descriptor=json.loads((ROOT/'tests/ll_stage_timer/branch.json').read_text())
     host=(ROOT/'csrc/ops/low_latency.cpp').read_text()
-    assert f'module.attr("low_latency_implementation") = "{descriptor["implementation"]}"' in host
+    selection=(ROOT/'csrc/kernels/dispatch/low_latency/common/ll_dispatch_implementation.h').read_text()
+    assert 'module.attr("low_latency_implementation") = DispatchDedup::kLlImplementationName' in host
+    assert f'kLlCb59Replay ? "cb59-replay" : "{descriptor["implementation"]}"' in selection
 
 def test_mixed_diagnostic_schemas_rejected_for_current_protocol():
     parity=load('comm_parity','tests/ll_stage_timer/test_parity.py')

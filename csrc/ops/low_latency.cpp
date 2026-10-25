@@ -130,14 +130,17 @@ void bind_low_latency(py::module_& module)
         throw std::runtime_error("LL Host/device core protocol mismatch; rebuild and reinstall the complete wheel");
     if (deepep_ll_small_b_prefix_cores()!=DispatchDedup::kLlSmallBPrefixCores)
         throw std::runtime_error("LL Host/device small-B prefix producer count mismatch; rebuild the complete wheel");
-    if (deepep_ll_overlap_stage()!=DispatchDedup::kLlOverlapExperimentStage)
+    if (deepep_ll_dispatch_implementation()!=DispatchDedup::kLlDispatchImplementationId)
+        throw std::runtime_error("LL Host/device dispatch implementation mismatch; rebuild the complete wheel");
+    if (deepep_ll_overlap_stage()!=(DispatchDedup::kLlCb59Replay ? 0U : DispatchDedup::kLlOverlapExperimentStage))
         throw std::runtime_error("LL A/B stage differs between Host and device library");
-    module.attr("low_latency_overlap_stage")=DispatchDedup::kLlOverlapExperimentStage;
+    module.attr("low_latency_overlap_stage")=DispatchDedup::kLlCb59Replay ? 0U : DispatchDedup::kLlOverlapExperimentStage;
+    module.attr("low_latency_dispatch_impl")=DispatchDedup::kLlDispatchImplementation;
     module.attr("low_latency_core_protocol") = DispatchDedup::kLlCoreProtocolVersion;
     module.attr("low_latency_small_b_prefix_cores") = DispatchDedup::kLlSmallBPrefixCores;
-    module.attr("low_latency_q_table_enabled") = true;
-    module.attr("low_latency_q_seed_vf") = true;
-    module.attr("low_latency_implementation") = "g4-small-b-parallel-prefix";
+    module.attr("low_latency_q_table_enabled") = !DispatchDedup::kLlCb59Replay;
+    module.attr("low_latency_q_seed_vf") = !DispatchDedup::kLlCb59Replay;
+    module.attr("low_latency_implementation") = DispatchDedup::kLlImplementationName;
     module.attr("low_latency_rdma_enabled") = false;
     module.attr("low_latency_expert_timer_enabled") = false;
     module.attr("low_latency_stage_timer_enabled") = bool(deepep_ll_stage_timer_enabled());
@@ -170,6 +173,8 @@ void bind_low_latency(py::module_& module)
         return result;
     });
     module.def("low_latency_overlap_layout", [](int64_t ranks,int64_t bs,int64_t h,int64_t k,int64_t experts,bool fp8) {
+        if (DispatchDedup::kLlCb59Replay)
+            throw std::invalid_argument("cb59 replay does not use the current overlap UB planner");
         DispatchDedup::EpMemoryServerDedupLayout layout{};
         const auto mode=fp8 ? DispatchDedup::EpServerDedupInputMode::Quantize16 : DispatchDedup::EpServerDedupInputMode::Plain16;
         if (DispatchDedup::BuildDispatchServerDedupLayout(ranks,bs,h,k,experts,&layout,mode)!=0 ||

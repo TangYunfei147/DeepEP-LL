@@ -10,7 +10,9 @@ HEADER='kernels/dispatch/low_latency/common/ep_memory_server_dedup_protocol.h'
 
 def test_default_is_g4_with_explicit_override_retained():
     source=(ROOT/'csrc'/HEADER).read_text()
-    assert re.search(r'#ifndef DEEPEP_LL_RANKS_PER_GROUP\s+#define DEEPEP_LL_RANKS_PER_GROUP 4\s+#endif',source)
+    assert re.search(r'#ifndef DEEPEP_LL_RANKS_PER_GROUP\s+#if DEEPEP_LL_DISPATCH_CB59\s+'
+                     r'#define DEEPEP_LL_RANKS_PER_GROUP 16\s+#else\s+'
+                     r'#define DEEPEP_LL_RANKS_PER_GROUP 4\s+#endif\s+#endif',source)
     assert 'kLlRanksPerGroup = DEEPEP_LL_RANKS_PER_GROUP' in source
 
 @pytest.mark.parametrize('override',[None,16])

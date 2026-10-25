@@ -1,5 +1,7 @@
 # LL稀疏诊断：当前入口
 
+最新对照入口见[CB59_REPLAY.md](CB59_REPLAY.md)：同一当前分支用`DEEPEP_LL_DISPATCH_IMPL=current|cb59`分别构建OFF/ON，固定56核28/28；current用P1，cb59保留旧R=28前缀和G16。两版共用当前SDK/普通页及稀疏打点，先完成全部四份wheel再串行测试。本次仅本地验证，未执行CANN或NPU。
+
 当前分支是`kernel/ll-g4-small-b-prefix`，实现`g4-small-b-parallel-prefix`，**schema15 / sparse**。
 当前独立候选固定S30/R26/P1，将count ready检查与计数提取合并为一个VF；基线578d32b，完整A/B命令见[P1_COUNT_VF.md](P1_COUNT_VF.md)。已匹配的官方新SDK无需因本次VF修改重建，完整OFF/ON wheel需要重编。
 2026-10-25已升级官方SHMEM master，并增加EP16小B前缀生产核数P。先按[SDK升级说明](../../docs/SHMEM_MASTER_UPDATE.md)重建新SDK，再按[P26/6/1对照步骤](PARALLEL_PREFIX.md)构建全部wheel后串行采样。默认P=0沿用R；本次不改接收任务归属，不宣称已取得时延收益。
