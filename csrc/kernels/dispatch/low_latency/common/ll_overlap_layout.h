@@ -2,6 +2,7 @@
 #include "ep_memory_server_dedup_data_layout.h"
 #include "ll_overlap_stage.h"
 #include "ep_memory_server_dedup_count_layout.h"
+#include "ll_receive_probe_pipeline.h"
 namespace DispatchDedup {
 #if defined(__CCE__) && defined(__CCE_IS_AICORE__)
 #define LL_OVERLAP_INLINE __aicore__ inline
@@ -12,6 +13,7 @@ struct LlOverlapLayout {
     uint32_t sendBytes=0, countBytes=0, sendLanes=0, recvLanes=0;
     uint64_t totalBytes=0;
     bool enabled=false;
+    bool recvProbePrefetch=false;
     LL_OVERLAP_INLINE bool Async() const { return enabled && kLlOverlapExperimentStage>=3U; }
     LL_OVERLAP_INLINE bool Cooperative() const { return enabled && kLlOverlapExperimentStage>=4U; }
 };
@@ -54,6 +56,12 @@ LL_OVERLAP_INLINE LlOverlapLayout LlMakeOverlapLayout(const EpServerDedupDataLay
     const uint64_t send=LlOverlapMax(sendFixed+lanes*d.tokenStride,countScratch);
     p={uint32_t(send),uint32_t(countStage),uint32_t(lanes),uint32_t(lanes),
        fixed+send+lanes*(d.tokenStride+64),true};
+    // The original lane count is already fixed. Use only genuine spare UB for
+    // the second stable-ID snapshot; flag/reduction storage remains shared.
+    if (LlReceiveProbePrefetchFits(p.totalBytes,kEpServerDedupCountUbBytes)) {
+        p.recvProbePrefetch=true;
+        p.totalBytes+=kLlReceiveProbeExtraBytes;
+    }
     return p;
 }
 #undef LL_OVERLAP_INLINE

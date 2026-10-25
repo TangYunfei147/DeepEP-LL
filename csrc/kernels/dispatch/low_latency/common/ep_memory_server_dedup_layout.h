@@ -191,6 +191,9 @@ inline bool DispatchDedupPacketUbFits(const EpMemoryServerDedupLayout& layout, i
     const uint64_t localSender=localReserved+2U*inputBytes+align(b*k*4U,32U)+
                                (needQuantize ? quantWork+layout.data.packedPayloadBytes : 0U)+layout.data.tokenStride;
     const uint64_t receiveCores=enableDedup?kLlDispatchRecvCoreNum:kLlRecvCoreNum;
+    // This is the minimum serial-probe allocation. Optional cross-batch flag
+    // lookahead uses a checked spare 64B after choosing the same payload lanes;
+    // insufficient spare UB retains this path without rejecting the shape.
     const uint64_t receiver = align(num_experts * 4, 32) + 2 * align(((layout.capacityRows + receiveCores - 1U) / receiveCores) * 4, 32) +
                               16 * layout.data.blockCount * 32 + 256 +
                               16 * align((layout.data.blockCount + 7) / 8, 32) * 4 + 256 + 16 * 36 +
