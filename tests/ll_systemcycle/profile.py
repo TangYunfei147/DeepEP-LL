@@ -21,7 +21,7 @@ BASELINE_REFERENCE = '9027275b31a28608296b1b71c93fa6e2bb456db5'
 # Restored baseline business code plus SDK PI compatibility; diagnostic source is
 # frozen separately so OFF/ON use exactly the same code and dependency identity.
 STARTING_BASELINE = '78e9fb4d2686d73e8baf9dbdd633b9bf203fdd4d'
-DIAGNOSTIC_REVISION = 'HEAD'  # Frozen to the diagnostic implementation commit before delivery.
+DIAGNOSTIC_REVISION = '36e2d6a94a5c9a51d4785bf88dc2e833d141d9e3'
 STATE = Path('.tmp/ll-systemcycle-profile')
 
 

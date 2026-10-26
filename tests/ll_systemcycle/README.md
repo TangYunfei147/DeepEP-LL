@@ -5,6 +5,7 @@
 `9027275b31a28608296b1b71c93fa6e2bb456db5`，保留 SHMEM PI=0/1 身份兼容。
 不带入 shared-pull 或 Vector-tail 候选。诊断实现由 `profile.py` 的
 `DIAGNOSTIC_REVISION` 固定，完整 OFF/ON wheel 使用同一源码及 SDK。
+当前固定打点源码为 `36e2d6a94a5c9a51d4785bf88dc2e833d141d9e3`。
 
 ## 参考与适配
 
