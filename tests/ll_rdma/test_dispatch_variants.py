@@ -11,8 +11,10 @@ ROOT = Path(__file__).resolve().parents[2]
 
 def test_dispatch_variant_mapping_and_invalid_inputs(tmp_path):
     compiler = shutil.which("g++") or shutil.which("clang++")
-    if compiler is None:
+    zig = os.environ.get("DEEPEP_TEST_ZIG")
+    if compiler is None and not zig:
         pytest.skip("C++17 compiler required for the CPU dispatch selector fixture")
+    command = [zig, "c++"] if zig else [compiler]
     source = tmp_path / "dispatch_variants.cpp"
     source.write_text(r'''
 #include <cassert>
@@ -80,7 +82,7 @@ int main() {
 }
 ''', encoding="utf-8")
     executable = tmp_path / ("dispatch_variants.exe" if os.name == "nt" else "dispatch_variants")
-    subprocess.run([compiler, "-std=c++17", "-I", str(ROOT), str(source), "-o", str(executable)], check=True)
+    subprocess.run([*command, "-std=c++17", "-UNDEBUG", "-iquote", str(ROOT), str(source), "-o", str(executable)], check=True)
     subprocess.run([str(executable)], check=True)
 
 
@@ -97,8 +99,10 @@ def test_host_launch_uses_same_format_builder_as_tiling():
 @pytest.mark.parametrize("timer_enabled", [False, True])
 def test_real_dispatch_launch_routes_exactly_one_specialization(tmp_path, timer_enabled):
     compiler = shutil.which("g++") or shutil.which("clang++")
-    if compiler is None:
+    zig = os.environ.get("DEEPEP_TEST_ZIG")
+    if compiler is None and not zig:
         pytest.skip("C++17 compiler required for the real Host launch fixture")
+    command = [zig, "c++"] if zig else [compiler]
     source = tmp_path / "dispatch_launch.cpp"
     source.write_text(r'''
 #include <cassert>
@@ -175,7 +179,7 @@ int main() {
     if timer_enabled:
         flags.append("-DDEEPEP_LL_STAGE_TIMER=1")
     subprocess.run([
-        compiler, "-std=c++17", *flags, "-I", str(ROOT), str(source),
+        *command, "-std=c++17", "-UNDEBUG", *flags, "-iquote", str(ROOT), str(source),
         str(ROOT / "csrc/kernels/dispatch/low_latency.cpp"), "-o", str(executable),
     ], check=True)
     subprocess.run([str(executable)], check=True)

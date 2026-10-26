@@ -1,5 +1,6 @@
 """Native SDK capacity admission; CPU only, no CANN or device qualification."""
 from pathlib import Path
+import os
 import shutil
 import subprocess
 import pytest
@@ -20,7 +21,8 @@ def test_limit_precedes_initialization():
 
 def test_native_limit_boundary(tmp_path):
     compiler = shutil.which("g++") or shutil.which("clang++")
-    if compiler is None:
+    zig = os.environ.get("DEEPEP_TEST_ZIG")
+    if compiler is None and not zig:
         pytest.skip("C++ compiler required for executable capacity check")
     source = tmp_path / "qp_limit.cpp"
     source.write_text(r'''
@@ -42,5 +44,6 @@ int main() {
 }
 ''')
     binary = tmp_path / "qp_limit.exe"
-    subprocess.run([compiler, "-std=c++17", "-I" + str(ROOT / "csrc"), str(source), "-o", str(binary)], check=True)
+    command = [zig, "c++"] if zig else [compiler]
+    subprocess.run([*command, "-std=c++17", "-UNDEBUG", "-I" + str(ROOT / "csrc"), str(source), "-o", str(binary)], check=True)
     subprocess.run([str(binary)], check=True, timeout=30)
