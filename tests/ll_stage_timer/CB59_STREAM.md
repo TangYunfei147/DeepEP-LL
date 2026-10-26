@@ -1,5 +1,10 @@
 # cb59 record-owned receive candidate
 
+Current build policy (2026-10-26): the shared `build_ab.py` entry cleans and
+builds the SDK once and every wheel from fresh objects, without SDK validation.
+Use [CB59_PAIR.md](CB59_PAIR.md) for current build/run commands. The older
+commands below are retained as the historical ae87d84 experiment procedure.
+
 This is an independent candidate on `kernel/ll-g4-small-b-prefix`:
 `DEEPEP_LL_DISPATCH_IMPL=cb59-stream`. The immutable `cb59` replay remains the
 A/B reference. The current P1 implementation remains selectable as `current`.

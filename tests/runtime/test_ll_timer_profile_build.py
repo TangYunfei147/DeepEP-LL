@@ -54,10 +54,11 @@ def test_profile_reaches_cmake_and_installed_build_identity(build, monkeypatch, 
     configuration = dict(ll_stage_timer=True, ll_timer_profile=profile, build_type="Release",
                          cmake_path="cmake", compiler_path="c++", ASCEND_HOME_PATH="cann", SHMEM_ROOT="shmem")
     monkeypatch.setattr(build, "build_configuration", lambda: configuration)
+    monkeypatch.setattr(build, "ROOT", tmp_path)
     extension = Extension("deep_ep._C", sources=[])
     command = build.CMakeBuild(Distribution({"ext_modules": [extension]}))
     command.ensure_finalized()
-    command.build_temp = str(tmp_path / "temporary native build")
+    command.build_temp = str(tmp_path / "build/temporary native build")
     command.build_lib = str(tmp_path / "staged package")
     destination = Path(command.get_ext_fullpath(extension.name)).parent
     destination.mkdir(parents=True)

@@ -1,10 +1,15 @@
 # Copyright (c) 2026, Lu Lu
 # Modified by huangxiaolan 2026
 
-"""Explicitly build the pinned SHMEM submodule; pip/wheel never invokes this script."""
+"""Clean this project's SHMEM outputs and compile on every invocation.
+
+SDK manifests, source revisions, hashes and local source edits are not admission
+checks. Git submodule update selects the source; this script always builds the
+checked-out source and never reuses an installed SDK. Pip/wheel does not invoke
+this dependency build implicitly.
+"""
 
 import argparse
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -14,8 +19,10 @@ import shutil
 import subprocess
 import tempfile
 
-from record_shmem_sdk import record
-from shmem_sdk_reuse import mte_compatible
+try:
+    from scripts.clean_build_artifacts import assert_local_path, clean_artifacts
+except ModuleNotFoundError:
+    from clean_build_artifacts import assert_local_path, clean_artifacts
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -32,98 +39,55 @@ def cann_version(expected):
     return version
 
 
-def source_patches(source):
-    """Fingerprint tracked edits and untracked inputs without modifying Git."""
+def _revision_for_log(source):
+    try:
+        return subprocess.check_output(
+            ["git", "-C", str(source), "rev-parse", "HEAD"], text=True,
+            stderr=subprocess.DEVNULL, timeout=10,
+        ).strip() or "unknown"
+    except (OSError, subprocess.SubprocessError):
+        return "unknown"
 
-    def git(*args):
-        return subprocess.check_output(["git", "-C", str(source), *args])
 
-    if not git("status", "--porcelain", "--untracked-files=normal").strip():
-        return []
-    digest = hashlib.sha256(git("diff", "HEAD", "--binary", "--no-ext-diff", "--no-textconv"))
-    for name in sorted(git("ls-files", "--others", "--exclude-standard", "-z").split(b"\0")):
-        if not name:
-            continue
-        path = source / os.fsdecode(name)
-        if path.is_symlink() or not path.resolve().is_relative_to(source.resolve()):
-            raise RuntimeError(f"Untracked SHMEM input must be a local regular file: {path}")
-        digest.update(name + b"\0" + hashlib.sha256(path.read_bytes()).digest())
-    return [{"kind": "local-worktree", "sha256": digest.hexdigest()}]
+def _output_path(root, name, default):
+    value = os.environ.get(name)
+    return assert_local_path(root, Path(value) if value else default)
 
 
 def prepare(root=ROOT, *, rebuild=False, if_needed=True, allow_local_changes=False):
+    """Compatibility arguments are accepted; every call is a clean build."""
     if platform.system() != "Linux":
-        raise RuntimeError("SHMEM compilation requires Linux and the pinned CANN SDK")
-    root = Path(root).resolve()
+        raise RuntimeError("SHMEM compilation requires Linux and the CANN SDK")
+    root = assert_local_path(Path(root), Path(root))
     lock = json.loads((root / "dependencies.lock.json").read_text(encoding="utf-8"))
-    source = root / "third-party/shmem"
-    if not (source / ".git").exists() or not (source / "scripts/build.sh").is_file():
-        raise RuntimeError("Initialize dependencies first: git submodule update --init --recursive")
-    if source.resolve() != source or source.parent.resolve() != source.parent:
-        raise RuntimeError("SHMEM source must not be a symlink to another checkout")
-
-    def git(*args):
-        return subprocess.check_output(["git", "-C", str(source), *args], text=True).strip()
-
-    if Path(git("rev-parse", "--show-toplevel")).resolve() != source:
-        raise RuntimeError("third-party/shmem must be its own initialized Git submodule")
-    revision = git("rev-parse", "HEAD")
-    if revision != lock["shmem"]["revision"]:
-        raise RuntimeError("SHMEM revision differs from dependencies.lock.json; do not build a moving branch")
-    patches = source_patches(source)
-    if patches and not allow_local_changes:
-        raise RuntimeError(
-            "SHMEM has local changes; pass --allow-local-changes to build them explicitly "
-            "(cluster launcher: --allow-local-shmem)"
-        )
-
+    source = assert_local_path(root, root / "third-party/shmem")
+    script = assert_local_path(root, source / "scripts/build.sh")
+    if not script.is_file():
+        raise RuntimeError("Initialize dependencies first: git submodule update --init --recursive --depth 1")
+    # The upstream native build may download dependencies here; preserve them
+    # and reject redirects without treating this source cache as a clean target.
+    assert_local_path(root, source / "3rdparty")
     version = cann_version(lock["cann_version"])
     jobs = os.environ.get("CMAKE_BUILD_PARALLEL_LEVEL", "4")
     if not jobs.isdecimal() or not 1 <= int(jobs) <= 64:
         raise ValueError("CMAKE_BUILD_PARALLEL_LEVEL must be in [1, 64]")
-
-    # Mainline always recreates install/, but reuses build/ unless -clean is
-    # requested. Validate every upstream output root before either operation.
-    for name in ("build", "install", "ci", "3rdparty"):
-        path = source / name
-        if path.resolve() != path:
-            raise RuntimeError(f"Refusing SHMEM build through a symlink: {path}")
-    manifest = source / "install/shmem/deepep-sdk.json"
-    if not rebuild and manifest.is_file():
-        identity = json.loads(manifest.read_text(encoding="utf-8"))
-        expected_build = {
-            "cann_version": version["Version"],
-            "cann_timestamp": version.get("timestamp", "unknown"),
-            "target": lock["target"],
-            "source_patches": patches,
-        }
-        if not mte_compatible(identity, revision, expected_build):
-            raise RuntimeError(
-                "Existing SHMEM build identity changed; stop SDK users and rebuild explicitly "
-                "with --rebuild (cluster launcher: --rebuild-shmem)"
-            )
-        # 复用也校验全部头文件/库哈希，不把存在 manifest 当成构建成功。
-        import sys
-
-        sys.path.insert(0, str(ROOT))
-        from build_support import validate_shmem_sdk
-
-        validate_shmem_sdk(manifest.parent, lock["shmem"])
-        print(f"[SHMEM] Reusing validated SDK: {manifest.parent}", flush=True)
-        return manifest
-    if not rebuild and any((source / name).exists() for name in ("build", "install")):
-        raise FileExistsError(
-            "SHMEM build/install already exists; reuse its SDK, or stop users of that SDK "
-            "and pass --rebuild to regenerate it (then rebuild dependent wheels)"
-        )
-    print(f"[SHMEM] source={revision} CANN={version['Version']} target={lock['target']}", flush=True)
-    if patches:
-        print(f"[SHMEM] Building local source modifications: {json.dumps(patches)}", flush=True)
     git_executable = shutil.which("git")
     if git_executable is None:
         raise RuntimeError("Git is required to prepare SHMEM dependencies")
-    # 上游脚本会调用 Git 下载 json 等依赖；只隔离 Git 的库路径，保留编译器所需的 CANN 环境。
-    temporary_root = root / ".cache" / "tmp"
+    # A grouped run owns its cache/log locations. Honor only explicit project-
+    # local overrides, never the shell's ambient system TMP/TEMP directories.
+    temporary_root = _output_path(root, "TMPDIR", root / ".cache/tmp")
+    cache = _output_path(root, "XDG_CACHE_HOME", root / ".cache/shmem-build")
+    ascend_cache = _output_path(root, "ASCEND_CACHE_PATH", cache / "ascend")
+    default_logs = root / ".logs/shmem-build"
+    ascend_work = _output_path(root, "ASCEND_WORK_PATH", default_logs / "ascend")
+    ascend_logs = _output_path(root, "ASCEND_PROCESS_LOG_PATH", default_logs / "ascend")
+    shmem_logs = _output_path(root, "SHMEM_LOG_PATH", default_logs / "shmem")
+    revision = _revision_for_log(source)
+    print(f"[SHMEM] clean build; source={revision} CANN={version['Version']} target={lock['target']}", flush=True)
+    # No installed SDK, source/manifest identity validation or recording gate.
+    # Remove only verified build outputs, never the source submodule.
+    clean_artifacts(root, sdk=True)
     temporary_root.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="deepep-shmem-git-", dir=temporary_root) as git_dir:
         wrapper = Path(git_dir) / "git"
@@ -132,58 +96,30 @@ def prepare(root=ROOT, *, rebuild=False, if_needed=True, allow_local_changes=Fal
             f'exec {shlex.quote(str(Path(git_executable).resolve()))} "$@"\n'
         )
         wrapper.chmod(0o700)
-        cache = root / ".cache" / "shmem-build"
-        logs = root / ".logs" / "shmem-build"
-        for path in (cache, logs):
+        for path in (cache, ascend_cache, ascend_work, ascend_logs, shmem_logs):
             path.mkdir(parents=True, exist_ok=True)
         build_env = dict(os.environ, CMAKE_BUILD_PARALLEL_LEVEL=jobs,
-                         TMPDIR=git_dir, TMP=git_dir, TEMP=git_dir,
-                         XDG_CACHE_HOME=str(cache), ASCEND_CACHE_PATH=str(cache / "ascend"),
-                         ASCEND_WORK_PATH=str(logs / "ascend"),
-                         ASCEND_PROCESS_LOG_PATH=str(logs / "ascend"),
-                         SHMEM_LOG_PATH=str(logs / "shmem"))
+                         TMPDIR=str(temporary_root), TMP=str(temporary_root), TEMP=str(temporary_root),
+                         XDG_CACHE_HOME=str(cache), ASCEND_CACHE_PATH=str(ascend_cache),
+                         ASCEND_WORK_PATH=str(ascend_work),
+                         ASCEND_PROCESS_LOG_PATH=str(ascend_logs),
+                         SHMEM_LOG_PATH=str(shmem_logs), CCACHE_DISABLE="1")
         build_env["PATH"] = git_dir + os.pathsep + build_env.get("PATH", os.defpath)
-        command = ["bash", "-e", "scripts/build.sh", "-soc_type", lock["target"]]
-        if rebuild:
-            # Explicit rebuild is also a cold CMake configure. A previous
-            # revision's cache, options or object graph must not leak across it.
-            command.append("-clean")
-        # Do not request docs/examples/package modes: those can install Python
-        # tooling or build unrelated dependencies. The normal vendor build may
-        # fetch nlohmann-json under source/3rdparty unless preseeded there.
-        # -e 防止上游中间命令失败后继续打包，随后误登记旧库为成功产物。
-        subprocess.run(
-            command,
-            cwd=source,
-            env=build_env,
-            check=True,
-        )
+        # Safe Python cleanup already removed the exact upstream output roots.
+        # -e propagates any configure/build failure instead of producing success
+        # after an intermediate error. No docs/examples/package mode is enabled.
+        subprocess.run(["bash", "-e", "scripts/build.sh", "-soc_type", lock["target"]],
+                       cwd=source, env=build_env, check=True)
     sdk = source / "install/shmem"
-    if git("rev-parse", "HEAD") != revision or source_patches(source) != patches:
-        raise RuntimeError("SHMEM source changed during compilation; SDK identity was not recorded")
-    manifest = record(
-        sdk,
-        revision,
-        build_info={
-            "cann_version": version["Version"],
-            "cann_timestamp": version.get("timestamp", "unknown"),
-            "target": lock["target"],
-            "source_patches": patches,
-        },
-    )
-    print(f"[SHMEM] SDK identity: {manifest}", flush=True)
+    print(f"[SHMEM] Build command completed: {sdk}", flush=True)
     print("[SHMEM] Add third-party/shmem/install/shmem/lib to LD_LIBRARY_PATH before loading the wheel.")
-    return manifest
+    return sdk
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--rebuild", action="store_true", help="Clean this submodule's native build cache and regenerate its SDK; stop SDK users first")
-    parser.add_argument("--if-needed", action="store_true", help="Compatibility alias: verified SDK reuse is already the default")
-    parser.add_argument(
-        "--allow-local-changes",
-        action="store_true",
-        help="Build local edits on the pinned commit and record their source fingerprint",
-    )
+    parser.add_argument("--rebuild", action="store_true", help="Compatibility alias: every invocation already cleans and rebuilds")
+    parser.add_argument("--if-needed", action="store_true", help="Compatibility alias: every invocation cleans and rebuilds; no reuse")
+    parser.add_argument("--allow-local-changes", action="store_true", help="Compatibility alias: checked-out local source edits are always built")
     args = parser.parse_args()
     prepare(rebuild=args.rebuild, if_needed=args.if_needed, allow_local_changes=args.allow_local_changes)

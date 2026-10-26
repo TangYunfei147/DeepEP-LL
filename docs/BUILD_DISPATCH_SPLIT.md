@@ -954,3 +954,47 @@ was performed for this port. The native tests are CPU mocks/formula checks,
 not device correctness proof. New full OFF/ON target builds and correctness
 checks remain required. Commands and interpretation are in
 `tests/ll_stage_timer/CB59_REPLAY.md`; first return only two bounded summaries.
+
+## 2026-10-26 clean builds replace SHMEM validation
+
+The user explicitly replaced SDK validation/reuse with clean rebuilding for
+both small A/B and paired receive. This overrides the earlier SDK manifest,
+hash, revision, capability and optional-field admission rules recorded above.
+The policy is persisted in this repository's AGENTS.md and the workspace's
+AGENTS.md for this checkout and conversation.
+
+`tests/ll_stage_timer/build_ab.py --experiment all` cleans/builds project
+SHMEM once and then cleans project wheel products before each of eight
+OFF/sparse wheels. `small` and `pair` select one four-wheel group. The complete
+group index is written only after all wheels pass project Host identity
+checks. Subsequent `diagnose.py --skip-build` sampling consumes the saved maps
+without SDK validation, deletion or rebuilding. Standalone diagnose builds
+also rebuild the SDK once before their two wheels.
+
+The old SDK validators and recorder are removed. Build configuration, CMake,
+native loading and experiment preflight no longer gate on SDK metadata or
+hashes, including `hns_1825_pi_on_chip`. Required library/interface failures
+remain ordinary compiler, linker or loader errors. Project implementation,
+core split, ABI/schema, source and all-rank consistency checks are retained.
+No kernel, native protocol or timer schema changed for this policy update.
+
+Cleanup permits only project `build/` and SHMEM `build/install/ci` outputs,
+validates all targets before deletion and refuses symlinks, junctions and path
+escape. Source, dependency downloads, Git data, previous wheels, logs and
+performance runs are preserved. Compiler ccache reuse is disabled for these
+fresh builds. Only isolated test-fixture products were deleted locally.
+
+Local integrated CPU validation: 1122 passed, 96 environment skips and 8
+existing POSIX compiler tests deselected in 50.25 seconds, logged at
+`.tmp/clean-policy-integrated-003.log`. Coverage includes cleanup boundaries
+and actual Windows junction rejection, build/SDK failure propagation, one SDK
+build per group, fresh builds per wheel, pure read-only planning, output
+preservation, group cache/log locations and moved project paths containing
+spaces. Optional EP GMM package and historical-report SDK revision gates are
+also removed. Both generated cb59 source checks pass. Skips include missing
+CANN/CMake/C++ tools and four
+Windows symlink-creation cases; they are not device validation.
+
+No SSH, CANN build or NPU execution was performed. Current target commands are
+in `CB59_SMALL.md`, `CB59_PAIR.md` and `docs/SHMEM_MASTER_UPDATE.md`; the two A/B
+guides share one build block and use a fresh output group.

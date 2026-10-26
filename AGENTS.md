@@ -1,5 +1,13 @@
 # LL 编译维护约束
 
+## 清理重编替代 SHMEM 校验（2026-10-26，当前有效原则）
+
+- 用户明确要求 small A/B 与配对接收都移除 SHMEM 校验，每次脚本删除相关编译产物后重编。本条覆盖下方全部旧 SDK identity/manifest/hash/revision/capability/字段值域准入及默认复用规定。
+- `tests/ll_stage_timer/build_ab.py` 为分组构建入口：先清理并重编一次工程 SHMEM，然后每份 wheel 清理工程 build 后编译全部 OFF/ON，成功才发布 group index。`diagnose.py` 单独构建也采用相同原则；`--skip-build` 只用于后续采样本轮 wheel，不再删除 SDK。
+- 不用 SHMEM manifest/哈希决定构建和加载，不验证 hns_1825_pi_on_chip；编译器/链接器正常报告缺库或接口错误。保留本项目 native ABI、implementation、S/R/G、timer/schema、源码及全rank一致性校验。
+- 删除范围固定为工程 `build` 和工程 `third-party/shmem/{build,install,ci}`，检查真实路径及链接边界；保留源码/依赖下载/.git/历史结果与wheel。SDK builder默认clean，旧--rebuild/--if-needed参数不再启用复用；不新增任何隐式SDK校验开关。
+- 旧SDK验证工具和专属拒绝测试退役；新回归验证清理范围、空格路径迁移、SDK失败即停、每次重编及组内SDK只构建一次。当前流程见CB59_PAIR.md与CB59_SMALL.md，后续按此原则。
+
 ## SHMEM 可选字段与清单校验（2026-10-26）
 
 - 用户要求适配`hns_1825_pi_on_chip`所有值，覆盖旧仅int0/1并要求HNS标签的规则。此字段作为opaque JSON元数据，缺省及任意JSON值均原样接受，不强转bool、不推导RDMA能力；独立`rdma_backend`校验及require_rdma的HNS要求保留。

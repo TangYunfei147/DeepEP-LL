@@ -92,6 +92,8 @@ def test_legacy_execution_plan_rejected_before_sdk_or_device_work(tmp_path, monk
     (['--run-name', '../escape'], 'directory name'),
     (['--output-root', '../outside'], 'inside this checkout'),
     (['--output-root', 'tests/ll_stage_timer/results'], 'source-fingerprint trees'),
+    (['--output-root', 'build/results'], 'cleaned build-artifact'),
+    (['--output-root', 'third-party/shmem/install/results'], 'cleaned build-artifact'),
     (['--output-root', 'experiments/megamoe/results'], 'source-fingerprint trees'),
     (['--bs', '1', '64'], '1..32'),
     (['--bs', '1', '1'], 'distinct'),
@@ -158,10 +160,6 @@ def test_execute_build_install_verify_run_analyze_order_without_devices(tmp_path
     else:
         result['transfer_mode'] = transfer_mode
     root = tmp_path
-    sdk = root/'third-party/shmem/install/shmem'
-    (sdk/'include/host').mkdir(parents=True)
-    (sdk/'include/host/shmem_host_def.h').write_text('header')
-    (sdk/'deepep-sdk.json').write_text('{}')
     (root/'tests/ll_stage_timer').mkdir(parents=True)
     (root/'tests/ll_stage_timer/branch.json').write_text('{"implementation":"candidate"}')
     monkeypatch.setattr(diagnose.importlib.util, 'find_spec', lambda name: object())
@@ -186,7 +184,7 @@ def test_execute_build_install_verify_run_analyze_order_without_devices(tmp_path
     receipt = {}
     output = diagnose.execute(result, receipt=receipt)
     assert output == Path(result['suite']) / 'SEND_FIRST.txt'
-    assert seen == ['venv.log', 'off-build.log', 'sparse-build.log',
+    assert seen == ['sdk-build.log', 'venv.log', 'off-clean.log', 'off-build.log', 'sparse-clean.log', 'sparse-build.log',
                     'off-install.log', 'off-identity.log', 'sparse-install.log', 'sparse-identity.log',
                     'off-run-install.log', 'off-run-identity.log', 'off-run.log',
                     'sparse-run-install.log', 'sparse-run-identity.log', 'sparse-run.log'] + (['sparse-analyze.log'] if node == 0 else [])
@@ -199,11 +197,24 @@ def test_execute_build_install_verify_run_analyze_order_without_devices(tmp_path
         diagnose.execute(result)
 
 
-def test_missing_sdk_fails_before_creating_run(tmp_path):
-    result = plan(tmp_path)
-    with pytest.raises(ValueError, match='SDK'):
+def test_build_starts_sdk_without_manifest_or_header_precheck(tmp_path, monkeypatch):
+    args, forwarded = diagnose.parser().parse_known_args(['--run-name', 'fresh-sdk', '--build-only'])
+    result = diagnose.make_plan(args, forwarded, root=tmp_path)
+    seen = _mock_build_environment(tmp_path, monkeypatch)
+    assert not (tmp_path / 'third-party/shmem').exists()
+    diagnose.execute(result)
+    assert seen[:4] == ['sdk-build.log', 'venv.log', 'off-clean.log', 'off-build.log']
+
+
+def test_sdk_build_failure_preserves_logs_and_prevents_all_wheel_work(tmp_path, monkeypatch):
+    args, forwarded = diagnose.parser().parse_known_args(['--run-name', 'sdk-error', '--build-only'])
+    result = diagnose.make_plan(args, forwarded, root=tmp_path)
+    seen = _mock_build_environment(tmp_path, monkeypatch, fail_log='sdk-build.log')
+    with pytest.raises(RuntimeError, match='intentional'):
         diagnose.execute(result)
-    assert not Path(result['suite']).exists()
+    assert seen == ['sdk-build.log']
+    assert (Path(result['node_dir']) / 'plan.json').is_file()
+    assert not (Path(result['node_dir']) / 'wheel-map.json').exists()
 
 
 @pytest.mark.parametrize('operation', ['execute', 'write', 'analyze', 'plan'])
@@ -484,10 +495,6 @@ def test_missing_endpoint_fails_before_venv_and_build(tmp_path,monkeypatch):
 
 
 def _mock_build_environment(root, monkeypatch, *, fail_log=None):
-    sdk = root / 'third-party/shmem/install/shmem'
-    (sdk / 'include/host').mkdir(parents=True)
-    (sdk / 'include/host/shmem_host_def.h').write_text('header')
-    (sdk / 'deepep-sdk.json').write_text('{}')
     (root / 'tests/ll_stage_timer').mkdir(parents=True)
     (root / 'tests/ll_stage_timer/branch.json').write_text('{"implementation":"candidate"}')
     monkeypatch.setattr(diagnose.importlib.util, 'find_spec', lambda name: object())
@@ -531,7 +538,7 @@ def test_second_variant_build_failure_cannot_run_first_variant(tmp_path, monkeyp
     monkeypatch.setattr(diagnose, '_validate_launcher_before_build', lambda plan: None)
     with pytest.raises(RuntimeError, match='intentional'):
         diagnose.execute(result)
-    assert seen == ['venv.log', 'off-build.log', 'sparse-build.log']
+    assert seen == ['sdk-build.log', 'venv.log', 'off-clean.log', 'off-build.log', 'sparse-clean.log', 'sparse-build.log']
     assert not (Path(result['node_dir']) / 'wheel-map.json').exists()
 
 
@@ -554,7 +561,7 @@ def test_build_only_needs_no_devices_or_endpoints_and_preserves_visibility(tmp_p
     result_path = diagnose.execute(result, receipt=receipt)
     assert result_path == Path(result['node_dir']) / 'wheel-map.json'
     assert receipt == {}
-    assert seen == ['venv.log', 'off-build.log', 'sparse-build.log',
+    assert seen == ['sdk-build.log', 'venv.log', 'off-clean.log', 'off-build.log', 'sparse-clean.log', 'sparse-build.log',
                     'off-install.log', 'off-identity.log', 'sparse-install.log', 'sparse-identity.log']
     assert json.loads(result_path.read_text()) == dict(off='wheels/off/candidate.whl', sparse='wheels/sparse/candidate.whl')
     assert not (Path(result['suite']) / 'runs').exists()
@@ -621,3 +628,38 @@ def test_build_only_cannot_analyze_existing_or_skip_its_build(tmp_path, capsys):
         diagnose.main(['--build-only', '--analyze-existing', 'diagnostic-runs/existing'])
     assert error.value.code == 1
     assert '--build-only cannot be combined' in capsys.readouterr().err
+
+
+def test_skip_build_reads_only_prebuilt_wheels_and_has_no_sdk_steps(tmp_path, monkeypatch):
+    (tmp_path / 'off.whl').write_bytes(b'off')
+    (tmp_path / 'sparse.whl').write_bytes(b'sparse')
+    (tmp_path / 'input-map.json').write_text(json.dumps(dict(off='off.whl', sparse='sparse.whl')))
+    result = plan(tmp_path, '--skip-build', '--wheel-map', 'input-map.json', '--defer-analysis')
+    seen = _mock_build_environment(tmp_path, monkeypatch)
+    monkeypatch.setattr(diagnose, '_validate_launcher_before_build', lambda value: None)
+    monkeypatch.setattr(diagnose, 'write_send_first', lambda *args, **kwargs: None)
+    assert not (tmp_path / 'third-party/shmem').exists()
+    diagnose.execute(result)
+    assert result['sdk_build'] is None
+    assert all(stage['clean'] is None for stage in result['stages'])
+    assert seen[0] == 'venv.log'
+    assert not any('sdk' in log or '-build' in log or '-clean' in log for log in seen)
+    assert 'off-identity.log' in seen and 'sparse-run-identity.log' in seen
+
+
+def test_internal_prepared_sdk_reuses_same_process_build_only(tmp_path, monkeypatch):
+    args, forwarded = diagnose.parser().parse_known_args(['--run-name', 'shared-sdk', '--build-only'])
+    result = diagnose.make_plan(args, forwarded, root=tmp_path)
+    seen = _mock_build_environment(tmp_path, monkeypatch)
+    diagnose.execute(result, sdk_prepared=True)
+    assert seen[:3] == ['venv.log', 'off-clean.log', 'off-build.log']
+    assert 'sdk-build.log' not in seen
+    assert '--sdk-prepared' not in diagnose.parser().format_help()
+
+
+def test_plan_exposes_exact_clean_and_build_commands(tmp_path):
+    result = plan(tmp_path)
+    assert result['sdk_build'] == ['/existing/env/python', str(tmp_path / 'scripts/build_shmem.py')]
+    for stage in result['stages']:
+        assert stage['clean'] == [result['venv_python'], str(tmp_path / 'scripts/clean_build_artifacts.py'), '--wheel']
+    assert list(tmp_path.iterdir()) == []

@@ -10,7 +10,9 @@ _DISPATCH=runpy.run_path(str(ROOT/'scripts/ll_dispatch_implementation.py'))
 # Cross-algorithm A/B may intentionally change source. Within one staged
 # diagnosis, diagnose.py separately requires source_sha256 equality for OFF/ON.
 PREFIX_FIELDS=('small_b_prefix_cores','effective_small_b_prefix_cores')
-DIFFERENCES={'implementation','dispatch_impl','dispatch_capability','effective_dispatch_impl','transport','rdma_compiled','source_revision','source_dirty','source_sha256','logical_group','overlap_stage',*PREFIX_FIELDS}
+# Historical SDK revision annotations remain readable metadata. The current
+# clean-build policy does not validate or gate report comparison on SHMEM.
+DIFFERENCES={'implementation','dispatch_impl','dispatch_capability','effective_dispatch_impl','transport','rdma_compiled','source_revision','source_dirty','source_sha256','logical_group','overlap_stage','shmem_revision',*PREFIX_FIELDS}
 REQUIRED={'implementation','transport','world_size','logical_group','active_aiv','core_protocol',
           'case','warmup','num_iters','perf_tail','delay_rows','delay_cols','stage_capture','expert_capture',
           'timer_mode','stage_timer','stage_timer_schema','frequency_hz','seed','route','use_1g_huge_pages',

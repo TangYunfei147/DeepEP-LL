@@ -1,146 +1,94 @@
-# SHMEM official master update, 2026-10-25
+# SHMEM source and clean-build policy
 
-The submodule now pins official `master` at
-`8e3fc610f91ae9e5e8cf13748cfb74826b272c2a` (upstream commit date 2026-10-23).
-The official remote HEAD was checked on 2026-10-25. Gitlink, branch/ref metadata
-and six public-header hashes agree. No private patch was applied to SHMEM.
+## Current policy, 2026-10-26
 
-This is an SDK transition: rebuild the SDK and every OFF/ON wheel. An old
-installed SDK is rejected even when some public headers happen to match.
-The manifest and native cache cover all installed include/src/lib inputs,
-including device implementation `.hpp` and bootstrap/helper libraries.
+The user requires the small A/B and paired-receive experiments to delete SHMEM
+validation and rebuild from clean products on every build invocation. This
+supersedes the earlier manifest/reuse instructions in this project.
 
-## Compatibility changes
+- `build_ab.py` builds SHMEM once per experiment group, then builds every OFF
+  and sparse wheel from clean project build products.
+- `build_shmem.py` always removes the project submodule's `build`, `install`
+  and `ci` outputs before invoking its build script. Its old `--rebuild`,
+  `--if-needed` and `--allow-local-changes` arguments are compatibility aliases;
+  none enables SDK reuse. It builds checked-out source without resetting edits.
+- No build, CMake or native-loading step verifies `deepep-sdk.json`, SDK hashes,
+  source revision, capability fields or `hns_1825_pi_on_chip`. The retired SDK
+  validator/recorder/reuse utilities are removed. Missing or malformed optional
+  metadata does not block compilation. Library resolution, compilation and
+  loading still fail normally when required files or interfaces are unavailable.
+- Project implementation, S/R/G, ABI/schema, source and all-rank checks remain.
+  These ensure the correct experimental wheel is tested; they do not validate
+  the SDK. Compilation errors stop the sequence and retain the failed logs.
 
-- Shared jetty uses `init_attr.runtime_config.udma_shared_jetty`.
-- The old dev peer-mask extension is absent. Explicit UDMA users must opt into
-  `DEEPEP_SHMEM_DENSE_QPS=1`; there is no silent dense fallback.
-- LL ST explicitly requests an MTE-only Session and ordinary pages. It does not
-  initialize UDMA QPs. Public ElasticBuffer retains an explicit `transport`
-  choice; the new LL path does not infer transport from token count or topology.
-- Mainline UDMA connection polling has a fixed 120000 ms limit. The old
-  `SHMEM_UDMA_CONNECT_TIMEOUT_MS=600000` setting no longer changes it.
-- Private HT address helpers now distinguish local symmetric pointers, mapped
-  peer pointers and registered remote addresses. They pass the real local/peer
-  MR bases and reject out-of-range addresses.
-- Old HT Dispatch writes directly into ordinary framework peer output, whose
-  registration is not established by this interface. It is explicitly rejected
-  before Notify/launch. LL MTE remains available; symmetric control/workspace
-  and HT Combine are separate paths. Compilation and CPU address tests do not
-  establish full HT device compatibility.
+Cleanup is implemented in `scripts/clean_build_artifacts.py`. It permits only
+`build/` and `third-party/shmem/{build,install,ci}` beneath the script's project
+root, checks resolved paths, and refuses symlink/junction escape. It does not
+remove source files, `.git`, `3rdparty` downloads, old `diagnostic-runs`, saved
+wheels, logs or performance captures. Use a checkout whose SDK/build products
+are not currently used by another job. External SHMEM_ROOT directories are
+never deleted by these scripts.
 
-The topology's four Clos ports cannot be selected by the current LL MTE
-`aclshmem_ptr`/DataCopy API. QP count is not port count. This update makes no
-claim about striping traffic over four ports or multiplying measured bandwidth.
+## Build both A/B groups once
 
-## Target preparation
-
-Run from the project root in the target's existing Python/CANN environment.
-Use a fresh checkout if other jobs use the old SDK; otherwise stop its users
-before the explicit rebuild. Do not overwrite their SDK in place while running.
+Update this branch and initialize its submodules through Git. From the project
+root, load the existing Python/CANN environment and run:
 
 ```bash
-git fetch origin
-git switch kernel/ll-g4-small-b-prefix
-git merge --ff-only origin/kernel/ll-g4-small-b-prefix
-git submodule update --init --recursive --depth 1
+source /home/tyf/0env.sh
+export DEEPEP_LL_SEND_CORES=28 DEEPEP_LL_RECV_CORES=28
+export DEEPEP_LL_SMALL_B_PREFIX_CORES=0
 unset SHMEM_ROOT CATLASS_ROOT
-export DEEPEP_NPU_ARCH=Ascend950
-python scripts/build_shmem.py --rebuild
-export LD_LIBRARY_PATH="$PWD/third-party/shmem/install/shmem/lib:${LD_LIBRARY_PATH:-}"
-```
-
-The SDK builder uses upstream `-clean`, project-local temporary/cache/log
-directories, and records the installed SDK only after success. It never resets
-modified submodule sources. Build dependencies are listed in
-`requirements-build.txt`; prepare them in the project environment before
-`diagnose.py --build-only`, which does not download dependencies.
-
-For an offline first SDK build, preload the official nlohmann/json v3.11.3
-source at `third-party/shmem/3rdparty/json` (including
-`single_include/nlohmann/json.hpp` and its license). The source is an upstream
-build dependency, not a tracked vendor modification. Do not copy an old
-compiled SHMEM library under a new manifest.
-
-## Optional vendor metadata and incomplete manifests (2026-10-26)
-
-`build.hns_1825_pi_on_chip` is optional vendor metadata. This branch accepts
-every JSON value without coercion or a fixed enum: absent, null, bool, integer,
-float, string, array or object. It does not require `rdma_backend` merely
-because this field exists. An explicitly supplied backend must still be
-`HNS_1825`, and a consumer requiring RDMA must still have that backend recorded.
-The optional field itself never grants RDMA capability.
-
-MTE reuse compares the common revision/CANN/target/source-patch inputs while
-leaving the optional field untouched. SDK recording, the wheel build metadata
-and native cache retain the complete `build` object, including its original
-JSON types. Changing the recorded value isolates the native cache even when
-the SDK file hashes are unchanged. Other unknown build fields, mismatched
-source revision, modified inputs and incomplete file manifests remain errors.
-
-The error `manifest must cover all installed include/src/lib inputs` is
-independent of this optional field. It means some currently installed input
-files have no recorded hash: the manifest may be from an older partial recorder,
-or files may have been added after the identity was produced. The check now
-reports the total, per-directory counts and up to eight example paths. It does
-not modify the manifest or certify unrecorded binaries.
-
-For a read-only diagnostic, select the same SDK as the build:
-
-```bash
-python scripts/record_shmem_sdk.py \
-  --sdk "${SHMEM_ROOT:-$PWD/third-party/shmem/install/shmem}" --check
-```
-
-If only this optional field differed and full identity/file validation passes,
-reuse the SDK with the updated scripts; rebuilding it is unnecessary. If the
-manifest is incomplete, use an explicit build from the pinned source. The
-commands below rebuild the **project's** SDK, not an externally selected SDK.
-Stop users of that project SDK first, or use a separate checkout if it is in use.
-Do not delete its manifest and rehash the existing library as a shortcut.
-
-```bash
-prepare_checked_sdk() {
-  git submodule update --init --recursive --depth 1 || return $?
-  unset SHMEM_ROOT CATLASS_ROOT
-  export DEEPEP_NPU_ARCH=Ascend950
-  python scripts/build_shmem.py --rebuild || return $?
-  export LD_LIBRARY_PATH="$PWD/third-party/shmem/install/shmem/lib:${LD_LIBRARY_PATH:-}"
-  python scripts/record_shmem_sdk.py \
-    --sdk third-party/shmem/install/shmem --check || return $?
-}
-build_small_ab_after_sdk() {
-  local impl
-  export DEEPEP_LL_SEND_CORES=28 DEEPEP_LL_RECV_CORES=28
-  export DEEPEP_LL_SMALL_B_PREFIX_CORES=0
-  for impl in cb59 cb59-small; do
-    DEEPEP_LL_DISPATCH_IMPL="$impl" \
-      python tests/ll_stage_timer/diagnose.py --build-only \
-        --run-name "small_scope_${impl}_build_002" || return $?
-  done
-}
-if prepare_checked_sdk && build_small_ab_after_sdk; then
-  echo 'SDK checked and both complete OFF/ON builds finished.'
+AB_BUILD_NAME=ll_ab_clean_build_003
+AB_BUILD_DIR="diagnostic-runs/$AB_BUILD_NAME"
+AB_BUILD_OK=0
+if python tests/ll_stage_timer/build_ab.py --experiment all --run-name "$AB_BUILD_NAME"; then
+  AB_BUILD_OK=1
+  echo 'One SDK and all eight OFF/sparse wheels are ready.'
 else
-  echo 'Preparation or build stopped; preserve the logs. Terminal remains open.'
+  echo 'Build stopped; preserve logs. Terminal remains open.'
 fi
 ```
 
-Load the existing target Python/CANN environment first, and update this branch
-before using these commands. The `_002` names preserve the failed `_001`
-attempt; use new names again if `_002` already exists. Subsequent run commands
-must point to the successful `_002/node_000/wheel-map.json` paths. Both A/B
-variants must use that same validated SDK and the same source revision.
+`--experiment small` selects cb59/cb59-small; `pair` selects
+cb59-stream/cb59-pair. `all` builds both groups against the same fresh SDK.
+For a read-only preview, add `--plan`; no SDK build, cleanup, NPU import or
+output directory creation occurs. If the group already exists, use a new name.
 
-Use [the P experiment](../tests/ll_stage_timer/PARALLEL_PREFIX.md) to build all
-variants before sampling. Fix this SDK revision across the P=26/6/1 comparison;
-an old-SDK versus new-SDK comparison is a separate experiment.
+Successful maps are at:
 
-## Validation boundary
+```text
+diagnostic-runs/<group>/cb59/node_000/wheel-map.json
+diagnostic-runs/<group>/cb59-small/node_000/wheel-map.json
+diagnostic-runs/<group>/cb59-stream/node_000/wheel-map.json
+diagnostic-runs/<group>/cb59-pair/node_000/wheel-map.json
+```
 
-The official SDK and six complete P26/P6/P1 OFF/ON wheels compiled and linked
-on27 with CANN9.3.0. All six pass Host identity and actual loaded-SDK path/hash
-checks; the production SDK source remains clean. Linux Host/C++ follow-up has
-162 passing tests. No NPU was run, so communication correctness and performance
-remain untested. Full evidence, cold compile times and artifact locations are
-recorded in [BUILD_DISPATCH_SPLIT.md](BUILD_DISPATCH_SPLIT.md).
+The group `wheel-maps.json` is published only after all requested wheels pass
+project Host identity checks. SDK output is in `group/logs/sdk-build.log`;
+per-wheel cleanup, compile and identity logs are under each implementation's
+`node_000/logs`. A failed SDK build never starts wheel compilation or devices.
+
+Then follow [small A/B](../tests/ll_stage_timer/CB59_SMALL.md) and
+[pair A/B](../tests/ll_stage_timer/CB59_PAIR.md) from their run/check sections,
+retaining the same AB_BUILD_DIR and AB_BUILD_OK. Do not repeat the shared build
+block or rebuild SHMEM between those runs. `diagnose.py --skip-build` consumes
+these completed wheel maps without SDK checks or cleanup. This separates the
+fresh build phase from the subsequent serial sampling phase.
+
+## Source transition background
+
+The submodule was updated on 2026-10-25 to official master commit
+`8e3fc610f91ae9e5e8cf13748cfb74826b272c2a`. Git still selects the checked-in
+source; the builder no longer uses a manifest or source identity as admission.
+
+That transition changed shared-jetty configuration to
+`init_attr.runtime_config.udma_shared_jetty` and removed the old dev peer-mask
+extension. LL uses the explicit MTE Session and ordinary pages; UDMA transport
+choices remain separate. The full SDK needs its installed device sources and
+libraries for compilation, regardless of whether a manifest exists.
+
+Earlier SDK/complete-wheel builds on27 with CANN9.3.0 and their Host checks are
+historical evidence in BUILD_DISPATCH_SPLIT.md. They are not evidence of a new
+build or device test for this clean-build workflow. The assistant performed
+only local CPU workflow/path tests for this policy change.

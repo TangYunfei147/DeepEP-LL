@@ -39,6 +39,16 @@ def test_platform_and_architecture_rejected(build, monkeypatch):
         build.build_configuration({"DEEPEP_NPU_ARCH": "Ascend950"})
 
 
+def test_clean_native_commands_disable_ccache_without_mutating_callers(build, monkeypatch):
+    given = {'CCACHE_DISABLE': '0', 'KEEP': 'value'}
+    seen = []
+    monkeypatch.setattr(build.subprocess, 'run', lambda argv, **kwargs: seen.append((argv, kwargs)))
+    build.checked_run(['cmake', '--build', 'build/native'], env=given)
+    assert given == {'CCACHE_DISABLE': '0', 'KEEP': 'value'}
+    assert seen[0][1]['env'] == {'CCACHE_DISABLE': '1', 'KEEP': 'value'}
+    assert seen[0][1]['check'] is True
+
+
 @pytest.mark.parametrize("value", ["on", "yes", "1", ""])
 def test_beta_never_silently_enabled(build, value):
     with pytest.raises(RuntimeError, match="MegaMoE"):
@@ -71,9 +81,12 @@ def test_beta_requires_sdk_and_timer_requires_beta(build):
         "path",
         "missing_library",
         "missing_device_header",
+        "missing_public_header",
+        "unknown_fields",
+        "build_type",
     ],
 )
-def test_sdk_identity_is_required_for_every_native_wheel(build, monkeypatch, tmp_path, fault):
+def test_shmem_metadata_and_missing_inputs_do_not_block_compiler_execution(build, monkeypatch, tmp_path, fault):
     import hashlib
     import warnings
     from types import SimpleNamespace
@@ -122,6 +135,10 @@ def test_sdk_identity_is_required_for_every_native_wheel(build, monkeypatch, tmp
         identity["sha256"] = {}
     elif fault == "path":
         identity["sha256"]["../outside"] = "0" * 64
+    elif fault == "unknown_fields":
+        identity["build"].update(rdma_backend="future-vendor", hns_1825_pi_on_chip={"future": [2, None]}, unknown=True)
+    elif fault == "build_type":
+        identity["build"] = ["provider-owned", False]
     manifest = sdk / "deepep-sdk.json"
     if fault != "missing":
         manifest.write_text("invalid json" if fault == "json" else "[]" if fault == "list" else json.dumps(identity))
@@ -129,6 +146,9 @@ def test_sdk_identity_is_required_for_every_native_wheel(build, monkeypatch, tmp
         (sdk / "lib/libshmem.so").unlink()
     elif fault == "missing_device_header":
         (sdk / "src/device/gm2gm/shmemi_device_cc.h").unlink()
+    elif fault == "missing_public_header":
+        (sdk / "include/host/shmem_host_def.h").unlink()
+    before_manifest = manifest.read_bytes() if manifest.is_file() else None
     env = {
         "DEEPEP_NPU_ARCH": "Ascend950",
         "ASCEND_HOME_PATH": str(cann),
@@ -136,44 +156,40 @@ def test_sdk_identity_is_required_for_every_native_wheel(build, monkeypatch, tmp
     }
     with warnings.catch_warnings(record=True) as messages:
         warnings.simplefilter("always")
-        if fault is not None:
-            with pytest.raises(RuntimeError):
-                build.build_configuration(env)
-            assert not messages  # Do not continue with old or damaged SDK files.
-            return
         result = build.build_configuration(env)
     assert not messages
-    assert (
-        result["shmem"]["sha256"]["lib/libshmem.so"]
-        == hashlib.sha256((sdk / "lib/libshmem.so").read_bytes()).hexdigest()
-    )
+    assert "sha256" not in result["shmem"] and "shmem_device_headers" not in result
     assert result["shmem"]["revision"] == ("unknown" if fault in ("missing", "json", "list") else identity["revision"])
-    assert result["shmem"]["build"] == identity["build"]
+    assert result["shmem"]["build"] == (None if fault in ("missing", "json", "list") else identity["build"])
     assert manifest.exists() == (fault != "missing")
-    # A changed vendor value keeps its exact JSON type in the build artifact
-    # and isolates the native cache even when SDK file contents are unchanged.
-    identities = {build.build_cache_key(result)}
-    for value in (None, False, True, 0, 1, 2, -1, '0', '1', 'auto', 0.0, [], {'mode': [1, 2]}):
-        identity['build']['hns_1825_pi_on_chip'] = value
-        manifest.write_text(json.dumps(identity))
-        recorded_before = manifest.read_bytes()
-        configuration = build.build_configuration(env)
-        actual = configuration['shmem']['build']['hns_1825_pi_on_chip']
-        assert actual == value and type(actual) is type(value)
-        key = build.build_cache_key(configuration)
-        assert key not in identities
-        identities.add(key)
-        assert manifest.read_bytes() == recorded_before
-    before = build.build_cache_key(result)
-    result["shmem"]["sha256"]["lib/libshmem.so"] = "0" * 64
-    assert build.build_cache_key(result) != before
+    assert (manifest.read_bytes() if manifest.is_file() else None) == before_manifest
+
+
+@pytest.mark.parametrize('value', [None, False, True, 0, 1, 2, -1, '0', 'auto', 0.0, [], {'mode': [1, 2]}])
+def test_optional_sdk_notes_are_preserved_without_hashing_any_sdk_file(build,tmp_path,monkeypatch,value):
+    sdk=tmp_path/'sdk';sdk.mkdir()
+    metadata=dict(revision='provider-revision',build=dict(hns_1825_pi_on_chip=value,unknown_field='preserved'),
+                  sha256={'../outside':'untrusted-path','lib/libshmem.so':'obsolete'})
+    manifest=sdk/'deepep-sdk.json';manifest.write_text(json.dumps(metadata))
+    original=manifest.read_bytes()
+    monkeypatch.setattr(Path,'read_bytes',lambda path:pytest.fail('SDK input files must not be hashed'))
+    result=build.shmem_metadata(sdk)
+    assert result==dict(revision=metadata['revision'],build=metadata['build'])
+    assert type(result['build']['hns_1825_pi_on_chip']) is type(value)
+    assert manifest.read_text().encode()==original
+
+
+def test_unavailable_sdk_notes_are_optional(build,tmp_path,monkeypatch):
+    assert build.shmem_metadata(tmp_path)==dict(revision='unknown',build=None)
+    monkeypatch.setattr(Path,'read_text',lambda *a,**k:(_ for _ in ()).throw(PermissionError('unreadable optional notes')))
+    assert build.shmem_metadata(tmp_path)==dict(revision='unknown',build=None)
 
 
 def test_metadata_no_sdk_or_framework(tmp_path):
     # Query in a copy so egg metadata does not alter the checkout.
     import shutil
 
-    for name in ("setup.py", "build_support.py", "VERSION", "scripts/shmem_sdk_identity.py",
+    for name in ("setup.py", "build_support.py", "VERSION", "scripts/clean_build_artifacts.py",
                  "scripts/ll_dispatch_implementation.py"):
         (tmp_path / name).parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(ROOT / name, tmp_path / name)
@@ -294,7 +310,7 @@ def test_combined_elastic_megamoe_wheel_requires_both_payloads(tmp_path, missing
             validator.inspect_wheel(wheel)
 
 
-def test_cache_survives_source_edits_but_not_toolchain_changes(build):
+def test_native_product_identity_names_toolchain_configuration(build):
     configuration = {
         "source_sha256": "before",
         "source_version": "1",
@@ -305,7 +321,6 @@ def test_cache_survives_source_edits_but_not_toolchain_changes(build):
         "compiler_sha256": "host-1",
         "device_compiler_sha256": "device-1",
         "python_executable": "/python/bin/python",
-        "shmem_device_headers": {"header.h": "before"},
         "build_environment": {"CXXFLAGS": ""},
     }
     key = build.build_cache_key(configuration)
@@ -317,7 +332,6 @@ def test_cache_survives_source_edits_but_not_toolchain_changes(build):
         ("compiler_sha256", "host-2"),
         ("device_compiler_sha256", "device-2"),
         ("python_executable", "/new-python/bin/python"),
-        ("shmem_device_headers", {"header.h": "after"}),
         ("build_environment", {"CXXFLAGS": "-g"}),
     ):
         assert build.build_cache_key({**configuration, name: value}) != key
@@ -347,11 +361,12 @@ def test_packaging_uses_cmake_capabilities_and_removes_old_library(build, monkey
         "build_environment": {"CXXFLAGS": "-I/private/include"},
     }
     monkeypatch.setattr(build, "build_configuration", lambda: configuration)
+    monkeypatch.setattr(build, "ROOT", tmp_path)
     monkeypatch.setenv("CMAKE_BUILD_PARALLEL_LEVEL", "6")
     ext = Extension("deep_ep._C", sources=[])
     command = build.CMakeBuild(Distribution({"ext_modules": [ext]}))
     command.ensure_finalized()
-    command.build_temp = str(tmp_path / "temp")
+    command.build_temp = str(tmp_path / "build/temp")
     command.build_lib = str(tmp_path / "lib")
     destination = Path(command.get_ext_fullpath(ext.name)).parent
     destination.mkdir(parents=True)
@@ -363,11 +378,19 @@ def test_packaging_uses_cmake_capabilities_and_removes_old_library(build, monkey
         (destination / name).write_text("old module\n")
     calls = []
     capabilities = {"capabilities": ["test-built-target"], "communication_operations": []}
+    native_directory=Path(command.build_temp)/build.build_cache_key(configuration)
+    native_directory.mkdir(parents=True)
+    (native_directory/'stale.o').write_text('stale native object')
+    sibling=tmp_path/'build/other-variant';sibling.mkdir()
+    (sibling/'keep.o').write_text('another build variant')
+    history=tmp_path/'diagnostic-runs/old/wheel.whl';history.parent.mkdir(parents=True)
+    history.write_text('previous wheel')
 
     def run(argv):
         calls.append(list(map(str, argv)))
         if "-B" in argv:
             directory = Path(argv[argv.index("-B") + 1])
+            assert not (directory/'stale.o').exists()
             (directory / "compiler-info.json").write_text('{"id":"test","version":"1"}')
             (directory / "capabilities.json").write_text(json.dumps(capabilities))
         if "--install" in argv:
@@ -387,8 +410,55 @@ def test_packaging_uses_cmake_capabilities_and_removes_old_library(build, monkey
     assert info["capabilities"] == capabilities["capabilities"]
     assert info["source_sha256"] == "current"
     assert info["megamoe"] == {"enabled": beta, "timer": timer}
+    assert (sibling/'keep.o').read_text()=='another build variant'
+    assert history.read_text()=='previous wheel'
     assert "CATLASS_ROOT" not in info
     assert not {"cmake_path", "compiler_path", "python_executable", "build_environment"}.intersection(info)
+    # An identical second invocation still removes its old native products
+    # and enters configure/build/install; matching configuration is not reuse.
+    (native_directory/'stale.o').write_text('previous successful build')
+    command.build_extension(ext)
+    assert len(calls)==6 and calls[3]==calls[0]
+    assert not (native_directory/'stale.o').exists()
+
+
+@pytest.mark.parametrize('outside', [False,True])
+def test_native_clean_boundary_and_compiler_errors_stop_the_build(build,monkeypatch,tmp_path,outside):
+    from setuptools import Distribution, Extension
+    pybind11=ModuleType('pybind11');pybind11.get_cmake_dir=lambda:'pybind11'
+    monkeypatch.setitem(sys.modules,'pybind11',pybind11)
+    root=tmp_path/'project';root.mkdir()
+    monkeypatch.setattr(build,'ROOT',root)
+    configuration=dict(build_type='Release',cmake_path='cmake',compiler_path='c++',
+                       ASCEND_HOME_PATH='cann',SHMEM_ROOT='missing-sdk')
+    monkeypatch.setattr(build,'build_configuration',lambda:configuration)
+    ext=Extension('deep_ep._C',sources=[])
+    command=build.CMakeBuild(Distribution({'ext_modules':[ext]}));command.ensure_finalized()
+    command.build_temp=str(tmp_path/'external-build' if outside else root/'build/native')
+    command.build_lib=str(root/'build/staged')
+    native=Path(command.build_temp)/build.build_cache_key(configuration)
+    native.mkdir(parents=True);marker=native/'keep.o';marker.write_text('existing')
+    calls=[]
+    def fail(arguments):
+        calls.append(arguments)
+        raise subprocess.CalledProcessError(1,arguments,stderr='ordinary compiler missing-header failure')
+    monkeypatch.setattr(build,'checked_run',fail)
+    if outside:
+        with pytest.raises(ValueError,match='outside'):
+            command.build_extension(ext)
+        assert marker.read_text()=='existing' and not calls
+    else:
+        with pytest.raises(subprocess.CalledProcessError,match='non-zero exit status'):
+            command.build_extension(ext)
+        assert not marker.exists() and len(calls)==1
+
+
+def test_cmake_keeps_normal_library_resolution_without_shmem_attestation():
+    source=(ROOT/'cmake/Dependencies.cmake').read_text()
+    assert 'deepep-sdk.json' not in source and 'string(JSON' not in source
+    assert 'hns_1825_pi_on_chip' not in source and 'header_sha256' not in source
+    assert 'find_library(SHMEM_LIBRARY NAMES shmem' in source
+    assert 'find_library(ASCENDCL_LIBRARY' in source
 
 
 def test_compiler_symlink_keeps_invocation_name(build, monkeypatch, tmp_path):
@@ -407,7 +477,7 @@ def test_compiler_symlink_keeps_invocation_name(build, monkeypatch, tmp_path):
     for path, data in files.items():
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(data)
-    # Keep SDK validation enabled with a matching synthetic lock and manifest.
+    # Optional producer notes do not affect compiler-wrapper discovery.
     import hashlib
 
     lock = json.loads((ROOT / "dependencies.lock.json").read_text())

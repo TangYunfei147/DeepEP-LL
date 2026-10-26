@@ -2,8 +2,10 @@
 
 Load the target's Python/CANN environment first (for example, source
 /home/tyf/0env.sh), then invoke this file with explicit --devices and launcher
-topology arguments. No dependencies are downloaded, no shared Python is changed.
+topology arguments. No Python dependencies are downloaded; shared Python is unchanged.
 Use --build-only to prepare both wheels without device or launcher arguments.
+Each build starts by cleaning and building the project SDK, then cleans wheel
+build products before OFF and sparse. --skip-build consumes saved wheels only.
 """
 import argparse
 import importlib.util
@@ -66,6 +68,10 @@ def _within_project(value, root):
     # build_support.source_fingerprint traverses these source trees. Runtime
     # wheels/venvs/results there would alter the hash after the wheel was built.
     relative = path.relative_to(root)
+    if relative.parts[0] == 'build' or relative.parts[:3] in (
+            ('third-party', 'shmem', 'build'), ('third-party', 'shmem', 'install'),
+            ('third-party', 'shmem', 'ci')):
+        raise ValueError('Output paths must remain outside cleaned build-artifact directories')
     scanned = ('deep_ep', 'csrc', 'cmake', 'scripts', 'tests', 'benchmarks')
     if relative.parts[0] in scanned or relative.parts[:2] in (
             ('experiments', 'megamoe'), ('experiments', 'ep_gmm_fused')):
@@ -88,9 +94,10 @@ def _forward_value(argv, option, default=None):
     return values[0] if values else default
 
 
-def make_plan(args, forwarded, root=ROOT, python=sys.executable):
+def make_plan(args, forwarded, root=ROOT, python=sys.executable, *, environment=None):
     """Pure planning: no filesystem creation or subprocess/device operations."""
     _validate_transfer_mode(args.transfer_mode)
+    environment = os.environ if environment is None else environment
     root = Path(root).resolve()
     if not args.run_name or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,95}', args.run_name):
         raise ValueError('--run-name must be a fresh ASCII directory name (1..96 characters)')
@@ -113,7 +120,7 @@ def make_plan(args, forwarded, root=ROOT, python=sys.executable):
     processes = int(_forward_value(forwarded, '--num-processes', '16'))
     if nodes < 1 or not 0 <= node < nodes or processes != 16:
         raise ValueError('Require 16 local processes and 0 <= node-rank < num-nodes')
-    if any(key in os.environ for key in ('RANK', 'WORLD_SIZE', 'LOCAL_RANK', 'LOCAL_WORLD_SIZE')):
+    if any(key in environment for key in ('RANK', 'WORLD_SIZE', 'LOCAL_RANK', 'LOCAL_WORLD_SIZE')):
         raise ValueError('Run once per host, outside torchrun; unset inherited rank variables')
     if not args.bs or len(set(args.bs)) != len(args.bs) or any(not 1 <= b <= 32 for b in args.bs):
         raise ValueError('--bs must contain distinct values in 1..32')
@@ -131,15 +138,15 @@ def make_plan(args, forwarded, root=ROOT, python=sys.executable):
         raise ValueError('--skip-build and --wheel-map must be supplied together')
     if args.build_only and args.skip_build:
         raise ValueError('--build-only cannot be combined with --skip-build/--wheel-map')
-    send = int(os.environ.get('DEEPEP_LL_SEND_CORES', '28'))
-    recv = int(os.environ.get('DEEPEP_LL_RECV_CORES', '28'))
+    send = int(environment.get('DEEPEP_LL_SEND_CORES', '28'))
+    recv = int(environment.get('DEEPEP_LL_RECV_CORES', '28'))
     if send <= 0 or recv <= 0 or send + recv != 56:
         raise ValueError('DEEPEP_LL_SEND_CORES and DEEPEP_LL_RECV_CORES must be positive and sum to 56')
-    prefix_text = os.environ.get('DEEPEP_LL_SMALL_B_PREFIX_CORES', '0')
+    prefix_text = environment.get('DEEPEP_LL_SMALL_B_PREFIX_CORES', '0')
     if not re.fullmatch(r'0|[1-9][0-9]?', prefix_text) or int(prefix_text) > recv:
         raise ValueError('DEEPEP_LL_SMALL_B_PREFIX_CORES must be 0 or an integer in [1, RECV_CORES]')
     prefix = int(prefix_text)
-    dispatch_impl = _DISPATCH['dispatch_implementation']()
+    dispatch_impl = _DISPATCH['dispatch_implementation'](environment)
     identity = _DISPATCH['dispatch_configuration'](dispatch_impl, send, recv, prefix)
     suite = _within_project(Path(args.output_root) / args.run_name, root)
     node_dir = suite / f'node_{node:03d}'
@@ -165,6 +172,7 @@ def make_plan(args, forwarded, root=ROOT, python=sys.executable):
             run += ['--perf-tail', str(args.perf_tail)]
         stages.append(dict(name=profile, timer=timer, profile='sparse',
                            wheel_dir=str(wheel_dir), results=str(results),
+                           clean=None if args.skip_build else [str(executable), str(root / 'scripts/clean_build_artifacts.py'), '--wheel'],
                            build=[str(executable), '-m', 'build', '--wheel', '--no-isolation',
                                   '--outdir', str(wheel_dir)],
                            install=[str(executable), '-m', 'pip', 'install', '--no-index', '--no-deps',
@@ -174,6 +182,7 @@ def make_plan(args, forwarded, root=ROOT, python=sys.executable):
     return dict(format='ll-staged-diagnosis-v1', root=str(root), suite=str(suite), node=node, nodes=nodes,
                 python=python, venv=str(venv), venv_python=str(executable), node_dir=str(node_dir),
                 create_venv=[python, '-m', 'venv', '--system-site-packages', str(venv)],
+                sdk_build=None if args.skip_build else [python, str(root / 'scripts/build_shmem.py')],
                 device_visibility=None if args.build_only else devices,
                 core_split=dict(send=send, recv=recv),
                 small_b_prefix_cores=prefix,
@@ -186,7 +195,9 @@ def make_plan(args, forwarded, root=ROOT, python=sys.executable):
                 stages=stages, skip_build=args.skip_build, wheel_map=str(args.wheel_map) if args.wheel_map else None,
                 build_only=args.build_only, wheel_map_output=str(node_dir / 'wheel-map.json'),
                 defer_analysis=args.defer_analysis, transfer_mode=args.transfer_mode,
-                note='Build all variants, then install and Host-verify every wheel before any device run. '
+                note='Build the SDK once, then clean wheel build products before each OFF/sparse build; '
+                     'skip-build only consumes existing wheels and performs no SDK verification or rebuild. '
+                     'Build all variants, then install and Host-verify every wheel before any device run. '
                      'Build-only stops after writing the relative-path wheel map; it never launches NPU work. '
                      'Run OFF then sparse sequentially in the same matrix order on all hosts; device runs never overlap. '
                      'The same sparse capture supports initialization/count/prefix/send/receive analysis together. '
@@ -207,7 +218,7 @@ def _environment(plan, stage=None):
         for name in ('CUDA_VISIBLE_DEVICES', 'ASCEND_RT_VISIBLE_DEVICES', 'ASCEND_VISIBLE_DEVICES', 'PROBE_VISIBLE_DEVICES'):
             env[name] = plan['device_visibility']
     env.update(PIP_NO_INDEX='1', PIP_DISABLE_PIP_VERSION_CHECK='1', PYTHONDONTWRITEBYTECODE='1',
-               DEEPEP_NPU_ARCH='Ascend950')
+               DEEPEP_NPU_ARCH='Ascend950', CCACHE_DISABLE='1')
     if 'core_split' in plan:
         env['DEEPEP_LL_SEND_CORES'] = str(plan['core_split']['send'])
         env['DEEPEP_LL_RECV_CORES'] = str(plan['core_split']['recv'])
@@ -326,7 +337,7 @@ def _performance_rows(suite):
     identity_fields = ('implementation', 'transport', 'logical_group', 'active_aiv',
                        'send_cores', 'recv_cores', 'core_protocol', 'source_revision', 'source_sha256')
     optional_identity_fields = ('dispatch_impl', 'dispatch_capability', 'effective_dispatch_impl', 'small_b_prefix_cores', 'effective_small_b_prefix_cores',
-                                'session_transport', 'shmem_revision')
+                                'session_transport')
     rows = []
     for path in sorted((suite / 'runs').glob('*/case_*/*/active_capture_dispatch.json')):
         data = json.loads(path.read_text(encoding='utf-8'))
@@ -438,7 +449,7 @@ def _validate_launcher_before_build(plan):
     st['configure_endpoints'](options, environment)
 
 
-def execute(plan, *, receipt=None):
+def execute(plan, *, receipt=None, sdk_prepared=False):
     # Older archive plans must fail before any build, device work or directory
     # creation. analyze_existing still defaults their saved results to summary.
     _validate_transfer_mode(plan.get('transfer_mode', 'summary'))
@@ -451,9 +462,6 @@ def execute(plan, *, receipt=None):
     suite, node = Path(plan['suite']), Path(plan['node_dir'])
     if node.exists() or (suite.exists() and plan['nodes'] == 1):
         raise ValueError('Run directory already exists; choose a new --run-name')
-    sdk = root / 'third-party/shmem/install/shmem'
-    if not (sdk / 'deepep-sdk.json').is_file() or not (sdk / 'include/host/shmem_host_def.h').is_file():
-        raise ValueError('Prepare the locked project-local SHMEM SDK first; diagnose never downloads or rebuilds it')
     if not plan.get('build_only', False):
         _validate_launcher_before_build(plan)
     wheels = _wheel_map(plan)
@@ -466,8 +474,13 @@ def execute(plan, *, receipt=None):
     env = _environment(plan)
     logs = node / 'logs'
     logs.mkdir(exist_ok=True)
+    if not plan['skip_build'] and not sdk_prepared:
+        _command(plan.get('sdk_build') or [plan['python'], str(root / 'scripts/build_shmem.py')],
+                 plan, env, logs / 'sdk-build.log')
     _command(plan['create_venv'], plan, env, logs / 'venv.log')
-    implementation = plan.get('implementation', json.loads((root / 'tests/ll_stage_timer/branch.json').read_text())['implementation'])
+    implementation = plan.get('implementation')
+    if implementation is None:
+        implementation = json.loads((root / 'tests/ll_stage_timer/branch.json').read_text())['implementation']
     # Do not interleave build and device sampling. A later variant's compiler or
     # identity failure must be observable before the first OFF launch.
     for stage in plan['stages']:
@@ -476,6 +489,8 @@ def execute(plan, *, receipt=None):
         if not plan['skip_build']:
             wheel_dir = Path(stage['wheel_dir'])
             wheel_dir.mkdir(parents=True, exist_ok=False)
+            clean = stage.get('clean') or [plan['venv_python'], str(root / 'scripts/clean_build_artifacts.py'), '--wheel']
+            _command(clean, plan, env, logs / f'{profile}-clean.log')
             _command(stage['build'], plan, env, logs / f'{profile}-build.log')
             candidates = list(wheel_dir.glob('*.whl'))
             if len(candidates) != 1:

@@ -105,13 +105,18 @@ and hotspot cases separate. Use matched same-core ON intervals to locate work,
 report ON/OFF perturbation, and do not sum group maxima or subtract separate
 percentiles. Initialization points are described in [CB59_SMALL.md](CB59_SMALL.md).
 
-## Target procedure: build all four wheels first
+## Target procedure: clean build both experiments before sampling
 
-Update to the delivered source revision and work from the project root in the
-existing target Python/CANN environment. Reuse the validated project SHMEM SDK.
-**Rebuild both implementations' OFF and schema16 sparse wheels from this same
-source revision. Do not reuse earlier schema15 wheel maps.** Fresh names below
-preserve previous results; change the `001` suffix consistently if it exists.
+Use the delivered source revision and an exclusively allocated project checkout
+in the existing target Python/CANN environment. SHMEM manifest/hash/field checks
+have been removed. The shared build cleans and rebuilds the SDK once, then
+cleans project wheel products before each of the eight OFF/schema16 wheels for
+small and pair. It preserves sources, downloads and earlier results.
+
+This is the same build block as CB59_SMALL.md: **execute it only once**. If it
+already succeeded in this terminal, retain AB_BUILD_DIR/AB_BUILD_OK and proceed
+directly to the correctness section below. Sampling never cleans/rebuilds the
+SDK. Use a fresh build group/run suffix if these paths already exist.
 
 ```bash
 source /home/tyf/0env.sh
@@ -120,18 +125,12 @@ export DEEPEP_LL_SMALL_B_PREFIX_CORES=0
 unset SHMEM_ROOT CATLASS_ROOT
 export LD_LIBRARY_PATH="$PWD/third-party/shmem/install/shmem/lib:${LD_LIBRARY_PATH:-}"
 
-build_pair_ab() {
-  local impl
-  for impl in cb59-stream cb59-pair; do
-    DEEPEP_LL_DISPATCH_IMPL="$impl" \
-      python tests/ll_stage_timer/diagnose.py --build-only \
-        --run-name "pair_ab_${impl}_build_001" || return $?
-  done
-}
-PAIR_BUILD_OK=0
-if build_pair_ab; then
-  PAIR_BUILD_OK=1
-  echo 'Both implementations: four fresh OFF/schema16 wheels are ready.'
+AB_BUILD_NAME=ll_ab_clean_build_003
+AB_BUILD_DIR="diagnostic-runs/$AB_BUILD_NAME"
+AB_BUILD_OK=0
+if python tests/ll_stage_timer/build_ab.py --experiment all --run-name "$AB_BUILD_NAME"; then
+  AB_BUILD_OK=1
+  echo 'One fresh SDK and all eight OFF/schema16 wheels are ready.'
 else
   echo 'Build stopped; preserve logs. Terminal remains open.'
 fi
@@ -152,7 +151,7 @@ check_pair_combine() {
     echo 'Set MASTER_ADDR, MASTER_PORT and SHMEM_PORT for this job first.'
     return 1
   fi
-  node=diagnostic-runs/pair_ab_cb59-pair_build_001/node_000
+  node="${AB_BUILD_DIR}/cb59-pair/node_000"
   py="$node/venv/bin/python"
   wheel=$("$py" -c 'import json,sys; from pathlib import Path; p=Path(sys.argv[1]); w=Path(json.loads(p.read_text())["off"]); print(w if w.is_absolute() else p.parent/w)' "$node/wheel-map.json") || return $?
   "$py" -m pip install --no-index --no-deps --force-reinstall "$wheel" || return $?
@@ -166,11 +165,11 @@ check_pair_combine() {
       --route "$route" --skip-perf-test --warmup 1 --num-iters 1 \
       --correctness-repeats 6 --repeat-combine 2 \
       --output-dir diagnostic-runs/pair_ab_combine_checks \
-      --run-name "${route}_001" || return $?
+      --run-name "${route}_003" || return $?
   done
 }
 PAIR_CHECK_OK=0
-if [ "${PAIR_BUILD_OK:-0}" = 1 ] && check_pair_combine; then
+if [ "${AB_BUILD_OK:-0}" = 1 ] && check_pair_combine; then
   PAIR_CHECK_OK=1
   echo 'Normal and hotspot dispatch/combine checks passed.'
 else
@@ -191,8 +190,8 @@ run_pair_ab() {
     for impl in cb59-stream cb59-pair; do
       DEEPEP_LL_DISPATCH_IMPL="$impl" \
         python tests/ll_stage_timer/diagnose.py --skip-build \
-          --wheel-map "diagnostic-runs/pair_ab_${impl}_build_001/node_000/wheel-map.json" \
-          --run-name "pair_ab_${impl}_${route}_run_001" \
+          --wheel-map "${AB_BUILD_DIR}/${impl}/node_000/wheel-map.json" \
+          --run-name "pair_ab_${impl}_${route}_run_003" \
           --bs 1 2 4 8 16 24 32 --m 32 \
           --hidden 3584 --topk 8 --experts 384 --dtype fp8 --cpu-sync 0 --route "$route" \
           --devices 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 \
@@ -215,7 +214,7 @@ this read-only command confirms the actual byte counts and four-file limit:
 ```bash
 python - <<'PY'
 from pathlib import Path
-reports = [Path(f"diagnostic-runs/pair_ab_{impl}_{route}_run_001/SEND_FIRST.txt")
+reports = [Path(f"diagnostic-runs/pair_ab_{impl}_{route}_run_003/SEND_FIRST.txt")
            for route in ("normal", "hotspot") for impl in ("cb59-stream", "cb59-pair")]
 assert len(reports) <= 10
 for report in reports:

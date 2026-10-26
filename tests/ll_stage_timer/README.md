@@ -1,6 +1,8 @@
 # LL稀疏诊断：当前入口
 
-最新两组实验：[配对接收CB59_PAIR.md](CB59_PAIR.md)比较`cb59-stream`/`cb59-pair`；[小场景启动诊断CB59_SMALL.md](CB59_SMALL.md)比较`cb59`/`cb59-small`。新采集为schema16，增加tiling、TPipe、对象及magic四点；仍每核512B，无新打点屏障。两组全部构建完成（四实现共八份OFF/ON wheel）后再串行测试，SDK可复用；历史schema15报告可离线读取，旧wheel不能混用。
+最新两组实验：[配对接收CB59_PAIR.md](CB59_PAIR.md)比较`cb59-stream`/`cb59-pair`；[小场景启动诊断CB59_SMALL.md](CB59_SMALL.md)比较`cb59`/`cb59-small`。统一先运行`python tests/ll_stage_timer/build_ab.py --experiment all --run-name ll_ab_clean_build_003`：清理并重编工程SDK一次，再清理并编译四实现共八份OFF/ON wheel，全部成功后串行采样。已删除SHMEM清单、字段、版本、哈希校验，不再复用旧SDK/对象；源码、依赖下载、历史wheel和数据保留。详细清理边界见[SDK构建原则](../../docs/SHMEM_MASTER_UPDATE.md)。新采集schema16、每核512B，历史schema15只离线读取。
+
+2026-10-26的清理重编原则覆盖下方历史实验中的SDK复用/验证说明。`--skip-build --wheel-map`仅用于采样本轮已完成构建的wheel，采样阶段不再清理SDK。项目自身的implementation、S/R/G、ABI/schema、源码和全rank一致性保护保留。
 
 新增接收调度候选见[CB59_STREAM.md](CB59_STREAM.md)：`cb59-stream`与原`cb59`独立A/B，固定G16/S28R28/P0，EP16小direct按count记录分片接收，协议22028。先构建四份OFF/ON wheel，再验证dispatch/combine并串行采normal/hotspot。当前仅本地CPU/原生模拟通过，尚无目标性能结论。
 

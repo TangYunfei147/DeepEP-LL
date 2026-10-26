@@ -1,5 +1,10 @@
 # cb59 dispatch replay with current sparse capture
 
+Current build policy (2026-10-26): SDK checks/reuse have been removed. Use the
+grouped clean build in [CB59_SMALL.md](CB59_SMALL.md) and [CB59_PAIR.md](CB59_PAIR.md).
+The older build commands below document the historical experiment; do not use
+them to rebuild the SDK separately between variants of a new grouped A/B.
+
 Reference: `cb59bff99ecd39d27ef57788c5e6fd0009e4e636` from
 `kernel/ll-configurable-groups`. Select `DEEPEP_LL_DISPATCH_IMPL=cb59` or
 `current` when building and running. The default remains `current`.

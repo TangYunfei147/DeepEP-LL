@@ -13,7 +13,7 @@ import subprocess
 import sys
 import sysconfig
 import warnings
-from scripts.shmem_sdk_identity import validate_build_identity
+from scripts.clean_build_artifacts import clean_directory
 from scripts.ll_dispatch_implementation import dispatch_implementation, dispatch_configuration, dispatch_capability
 
 from setuptools.command.build_ext import build_ext
@@ -145,40 +145,29 @@ def source_fingerprint():
 
 
 def checked_run(argv, **kwargs):
+    # A clean experimental build must not restore objects through a ccache
+    # compiler wrapper after its CMake/setuptools directories were removed.
+    kwargs["env"] = dict(kwargs.get("env", os.environ), CCACHE_DISABLE="1")
     subprocess.run([str(arg) for arg in argv], check=True, timeout=1800, **kwargs)
 
 
-def validate_shmem_sdk(root, expected):
-    from scripts.record_shmem_sdk import require_manifest_coverage
-    manifest = Path(root) / "deepep-sdk.json"
-    if not manifest.is_file():
-        raise RuntimeError("SHMEM SDK needs deepep-sdk.json; see scripts/record_shmem_sdk.py")
-    sdk = json.loads(manifest.read_text(encoding="utf-8"))
-    validate_build_identity(sdk.get("build") if isinstance(sdk, dict) else None)
-    if sdk.get("revision") != expected["revision"]:
-        raise RuntimeError("SHMEM SDK source revision differs from dependencies.lock.json")
-    for relative, digest in expected["header_sha256_lf"].items():
-        data = (manifest.parent / "include" / relative).read_bytes().replace(b"\r\n", b"\n")
-        if hashlib.sha256(data).hexdigest() != digest:
-            raise RuntimeError(f"SHMEM public API differs from the pinned SDK: {relative}")
-    hashes = sdk.get("sha256")
-    if not isinstance(hashes, dict):
-        raise RuntimeError("Invalid SHMEM SDK manifest checksums")
+def shmem_metadata(root):
+    """Optional producer notes only; they never admit or reject a build.
+
+    Fresh SDK/native builds replace SHMEM attestation and reuse checks. Do not
+    hash the SDK installation or read files named by a provider manifest.
+    """
     try:
-        require_manifest_coverage(manifest.parent, hashes)
-    except ValueError as error:
-        raise RuntimeError(str(error)) from error
-    for relative, digest in hashes.items():
-        path = (manifest.parent / relative).resolve()
-        if not path.is_relative_to(manifest.parent.resolve()) or not path.is_file():
-            raise RuntimeError("Invalid SHMEM SDK manifest path")
-        if hashlib.sha256(path.read_bytes()).hexdigest() != digest:
-            raise RuntimeError(f"SHMEM SDK checksum mismatch: {relative}")
-    return sdk
+        metadata = json.loads((Path(root) / "deepep-sdk.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError, RecursionError):
+        metadata = {}
+    if not isinstance(metadata, dict):
+        metadata = {}
+    return {"revision": metadata.get("revision", "unknown"), "build": metadata.get("build")}
 
 
 def build_cache_key(configuration):
-    """Keep object files across source edits; isolate incompatible toolchains."""
+    """Name the native product directory; it is cleaned before every build."""
     identity = {key: value for key, value in configuration.items() if key not in {"source_sha256", "source_version"}}
     if "ll_timer_profile" in identity and not identity.get("ll_stage_timer", False):
         identity["ll_timer_profile"] = "sparse"
@@ -245,44 +234,13 @@ def build_configuration(environment=None):
     result["build_type"] = env.get("DEEPEP_BUILD_TYPE", "RelWithDebInfo" if lineinfo else "Release")
     if result["build_type"] not in {"Release", "RelWithDebInfo", "Debug"}:
         raise RuntimeError("DEEPEP_BUILD_TYPE must be Release, RelWithDebInfo or Debug")
-    for name, header in (
-        ("ASCEND_HOME_PATH", "include/acl/acl.h"),
-        ("SHMEM_ROOT", "include/host/shmem_host_def.h"),
-    ):
-        value = env.get(name, str(default_shmem) if name == "SHMEM_ROOT" else None)
-        if not value or not (Path(value) / header).is_file():
-            hint = "; for bundled SHMEM run python scripts/build_shmem.py first" if name == "SHMEM_ROOT" else ""
-            raise RuntimeError(f"{name} must name an installed SDK containing {header}{hint}")
-        result[name] = str(Path(value).resolve())
-    manifest = Path(result["SHMEM_ROOT"]) / "deepep-sdk.json"
+    cann_path = env.get("ASCEND_HOME_PATH")
+    if not cann_path or not (Path(cann_path) / "include/acl/acl.h").is_file():
+        raise RuntimeError("ASCEND_HOME_PATH must name an installed SDK containing include/acl/acl.h")
+    result["ASCEND_HOME_PATH"] = str(Path(cann_path).resolve())
+    result["SHMEM_ROOT"] = str(Path(env.get("SHMEM_ROOT") or default_shmem).resolve())
     lock = json.loads((ROOT / "dependencies.lock.json").read_text(encoding="utf-8"))
-    sdk = {}
-    try:
-        sdk = validate_shmem_sdk(manifest.parent, lock["shmem"])
-    except (OSError, ValueError, TypeError, RuntimeError) as exc:
-        # LL and HT both consume SDK internals. A moving/incompatible SDK must
-        # not silently build against the old revision after a submodule update.
-        raise RuntimeError(
-            f"Invalid SHMEM SDK identity: {exc}; initialize the pinned submodule "
-            "and explicitly rebuild the project SDK before building the wheel"
-        ) from exc
-    library = manifest.parent / "lib/libshmem.so"
-    validate_build_identity(sdk.get("build") if isinstance(sdk, dict) else None)
-    if not library.is_file():
-        raise RuntimeError(f"SHMEM SDK is missing {library}")
-    from scripts.record_shmem_sdk import sdk_input_files
-    files = sdk_input_files(manifest.parent)
-    # Record actual inputs so replacing an unpinned SDK invalidates the build cache.
-    result["shmem"] = {
-        "revision": sdk.get("revision", "unknown") if isinstance(sdk, dict) else "unknown",
-        # Preserve every optional vendor value and include it in the native
-        # cache identity; admission compatibility must not erase provenance.
-        "build": sdk["build"],
-        "sha256": {
-            path.relative_to(manifest.parent).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
-            for path in files
-        },
-    }
+    result["shmem"] = shmem_metadata(result["SHMEM_ROOT"])
     result["pybind11"] = __import__("pybind11").__version__
     if result["pybind11"] != lock["python_build"]["pybind11"]:
         raise RuntimeError("pybind11 version differs from dependencies.lock.json")
@@ -343,15 +301,6 @@ def build_configuration(environment=None):
     if not device_compiler.is_file():
         raise RuntimeError("Device kernels require CANN Bisheng with -xasc support")
     result["device_compiler_sha256"] = hashlib.sha256(device_compiler.read_bytes()).hexdigest()
-    sdk_root = Path(result["SHMEM_ROOT"])
-    for relative in ("include/shmem.h", "src/device/gm2gm/shmemi_device_cc.h"):
-        if not (sdk_root / relative).is_file():
-            raise RuntimeError(f"Kernels require the full installed SHMEM Device SDK: missing {relative}")
-    result["shmem_device_headers"] = {
-        p.relative_to(sdk_root).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest()
-        for p in sorted((sdk_root / "src").rglob("*"))
-        if p.is_file() and p.suffix in {".h", ".hpp"}
-    }
     result["ep_gmm_fused"] = {
         "enabled": ep_gmm_fused,
         "lineinfo": lineinfo,
@@ -364,7 +313,7 @@ def build_configuration(environment=None):
             torch=torch.__version__,
             torch_npu=torch_npu.__version__,
             torch_cxx11_abi=bool(torch._C._GLIBCXX_USE_CXX11_ABI),
-            shmem_revision=lock["shmem"]["revision"],
+            shmem_revision=result["shmem"].get("revision", "unknown"),
         )
         source = Path(env.get("SHMEM_SOURCE_PATH", ROOT / "third-party/shmem"))
         result["ep_gmm_fused_paths"] = {
@@ -405,13 +354,18 @@ class CMakeBuild(build_ext):
         megamoe = configuration.get("megamoe", {})
         ep_gmm_fused = configuration.get("ep_gmm_fused", {}).get("enabled", False)
         fingerprint = build_cache_key(configuration)
-        directory = Path(self.build_temp).resolve() / fingerprint
+        temporary = Path(self.build_temp)
+        directory = (temporary if temporary.is_absolute() else ROOT / temporary) / fingerprint
         destination = Path(self.get_ext_fullpath(ext.name)).resolve().parent
         default_jobs = os.environ.get("MAX_JOBS", "4") if ep_gmm_fused else "4"
         jobs = os.environ.get("CMAKE_BUILD_PARALLEL_LEVEL", default_jobs)
         if not jobs.isdecimal() or not 1 <= int(jobs) <= 64:
             raise RuntimeError("CMAKE_BUILD_PARALLEL_LEVEL must be in [1, 64]")
         cmake = configuration["cmake_path"]
+        # Each invocation configures from empty native products. Only this
+        # checkout's build/ tree is eligible; external/custom directories fail
+        # closed instead of deleting a user's unrelated files.
+        clean_directory(ROOT, directory, permitted_root=ROOT / "build")
         directory.mkdir(parents=True, exist_ok=True)
         arguments = [
             cmake,

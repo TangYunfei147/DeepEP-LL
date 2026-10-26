@@ -117,11 +117,7 @@ def installed_prefix_identity(package, native, recv_cores, environment=None):
     requested = env.get('DEEPEP_LL_SMALL_B_PREFIX_CORES')
     if requested is not None and (not re.fullmatch(r'0|[1-9][0-9]?', requested) or int(requested) != prefix):
         raise RuntimeError('Installed wheel P differs from DEEPEP_LL_SMALL_B_PREFIX_CORES')
-    shmem = info.get('shmem')
-    revision = shmem.get('revision') if isinstance(shmem, dict) else None
-    if not isinstance(revision, str) or not re.fullmatch(r'[0-9a-f]{40}', revision):
-        raise RuntimeError('Installed wheel has no valid SHMEM revision build identity; rebuild matching wheels')
-    return dict(small_b_prefix_cores=prefix, shmem_revision=revision)
+    return dict(small_b_prefix_cores=prefix)
 
 
 def installed_dispatch_identity(package, native, environment=None):
@@ -1148,11 +1144,9 @@ def run_case(buffer, args, rank, world, m, mode):
     classes = [
         [p for p in mapped if "/deep_ep/_C." in p and p.endswith(".so")],
         [p for p in mapped if p.endswith("/libdeepep_kernels.so")],
-        [p for p in mapped if p.endswith("/libshmem.so")],
-        [p for p in mapped if p.endswith("/aclshmem_bootstrap_config_store.so")],
     ]
     if not all(len(paths) == 1 for paths in classes):
-        raise AssertionError(f"Cannot audit native/SDK mappings: {classes}")
+        raise AssertionError(f"Cannot audit project native mappings: {classes}")
     libraries = {paths[0]: hashlib.sha256(Path(paths[0]).read_bytes()).hexdigest() for paths in classes}
     live = {"pid": os.getpid(), "session": os.getsid(0), "rank": rank, "libraries": libraries}
     (Path(args.run_directory) / f"loaded_rank_{rank:03d}.json").write_text(json.dumps(live))

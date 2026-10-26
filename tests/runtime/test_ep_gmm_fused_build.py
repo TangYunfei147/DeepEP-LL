@@ -34,7 +34,8 @@ def test_source_metadata_location_follows_component_flag(tmp_path, monkeypatch, 
         monkeypatch.delenv("DEEPEP_BUILD_EP_GMM_FUSED", raising=False)
     else:
         monkeypatch.setenv("DEEPEP_BUILD_EP_GMM_FUSED", ep_gmm_fused)
-    for name in ("setup.py", "build_support.py", "VERSION", "scripts/shmem_sdk_identity.py"):
+    for name in ("setup.py", "build_support.py", "VERSION", "scripts/clean_build_artifacts.py",
+                 "scripts/ll_dispatch_implementation.py"):
         (tmp_path / name).parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(ROOT / name, tmp_path / name)
     packages = ["deep_ep"]
@@ -113,9 +114,14 @@ def test_packaging_uses_cmake_capabilities_and_removes_old_library(
     else:
         monkeypatch.setenv("CMAKE_BUILD_PARALLEL_LEVEL", cmake_jobs)
     ext = Extension("deep_ep._C", sources=[])
+    for name in ("NOTICE.md", "upstream.json"):
+        copied = tmp_path / "experiments/ep_gmm_fused" / name
+        copied.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ROOT / "experiments/ep_gmm_fused" / name, copied)
+    monkeypatch.setattr(build, "ROOT", tmp_path)
     command = build.CMakeBuild(Distribution({"ext_modules": [ext]}))
     command.ensure_finalized()
-    command.build_temp = str(tmp_path / "temp")
+    command.build_temp = str(tmp_path / "build/temp")
     command.build_lib = str(tmp_path / "lib")
     destination = Path(command.get_ext_fullpath(ext.name)).parent
     destination.mkdir(parents=True)
@@ -220,7 +226,8 @@ def test_build_directories_preserve_core_defaults_and_explicit_paths(build, monk
 
 @pytest.fixture
 def packaging_source(tmp_path):
-    for name in ("setup.py", "build_support.py", "VERSION", "pyproject.toml", "scripts/shmem_sdk_identity.py"):
+    for name in ("setup.py", "build_support.py", "VERSION", "pyproject.toml", "scripts/clean_build_artifacts.py",
+                 "scripts/ll_dispatch_implementation.py"):
         (tmp_path / name).parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(ROOT / name, tmp_path / name)
     for directory in ("deep_ep", "experiments/ep_gmm_fused/python"):
@@ -371,3 +378,33 @@ def test_disabled_component_check_leaves_other_experiments_alone(tmp_path, compo
             validator.inspect_wheel(wheel)
     else:
         validator.inspect_wheel(wheel)
+
+
+@pytest.mark.parametrize('core_revision,component_revision', [
+    (None,None),('core-revision','other-revision'),('',{'vendor':[2,None]}),(['provider'],False)])
+def test_component_packaging_does_not_compare_optional_shmem_notes(tmp_path,core_revision,component_revision):
+    validator=load(ROOT/'scripts/validate_package.py')
+    component='deep_ep_experimental/ep_gmm_fused/'
+    info=dict(communication_operations=[],ep_gmm_fused=dict(enabled=True))
+    if core_revision is not None:info['shmem']=dict(revision=core_revision)
+    component_info={} if component_revision is None else dict(shmem_revision=component_revision)
+    wheel=tmp_path/'component.whl'
+    with zipfile.ZipFile(wheel,'w') as archive:
+        archive.writestr('deep_ep/_C.fake.so',b'native')
+        archive.writestr('deep_ep/deepseek-deepep.LICENSE',b'license')
+        archive.writestr('deep_ep/_build_info.json',json.dumps(info))
+        for name in ('__init__.py','_C.fake.so','NOTICE.md','upstream.json',
+                     'licenses/shmem/LICENSE','licenses/catccos/LICENSE','licenses/catlass/LICENSE'):
+            archive.writestr(component+name,b'fixture')
+        archive.writestr(component+'_build_info.json',json.dumps(component_info))
+    assert validator.inspect_wheel(wheel)==info
+
+
+def test_component_cmake_preserves_other_dependency_guards_without_shmem_git_attestation():
+    source=(ROOT/'cmake/EpGmmFusedDependencies.cmake').read_text()
+    assert 'CATCCOS_TAG_ID' in source and 'CATCCOS_DIRTY' in source and 'SUBMODULE_STATUS' in source
+    assert 'find_package(Torch REQUIRED)' in source
+    assert 'include/shmem.h was not found' in source
+    assert 'SHMEM_TAG_ID' not in source and 'SHMEM_ACTUAL_REVISION' not in source
+    assert 'SHMEM_WORKTREE_STATUS' not in source
+    assert 'WORKING_DIRECTORY "${SHMEM_SOURCE_PATH}"' not in source

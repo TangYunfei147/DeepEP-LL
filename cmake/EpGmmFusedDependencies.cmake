@@ -38,9 +38,8 @@ if(NOT EXISTS "${CATCCOS_CATLASS_INCLUDE_DIR}/catlass/catlass.hpp")
 endif()
 
 set(ASCEND_HOME "${ASCEND_HOME_PATH}")
-# Device implementation headers must match the core runtime's external SDK.
-file(READ "${PROJECT_SOURCE_DIR}/dependencies.lock.json" DEEPEP_DEPENDENCY_LOCK)
-string(JSON SHMEM_TAG_ID GET "${DEEPEP_DEPENDENCY_LOCK}" shmem revision)
+# SHMEM is rebuilt from the selected source before this component. Its Git
+# revision and worktree metadata do not gate configuration.
 if(SHMEM_SOURCE_PATH)
     get_filename_component(SHMEM_SOURCE_PATH "${SHMEM_SOURCE_PATH}" REALPATH)
 elseif(DEFINED ENV{SHMEM_SOURCE_PATH} AND IS_DIRECTORY "$ENV{SHMEM_SOURCE_PATH}")
@@ -49,33 +48,9 @@ elseif(IS_DIRECTORY "${PROJECT_SOURCE_DIR}/third-party/shmem")
     get_filename_component(SHMEM_SOURCE_PATH "${PROJECT_SOURCE_DIR}/third-party/shmem" REALPATH)
 else()
     message(FATAL_ERROR
-        "The SHMEM checkout matching dependencies.lock.json was not found. "
+        "The selected SHMEM source checkout was not found. "
         "Run scripts/prepare_ep_gmm_fused_dependencies.sh first.")
 endif()
 if(NOT EXISTS "${SHMEM_SOURCE_PATH}/include/shmem.h")
     message(FATAL_ERROR "Invalid SHMEM_SOURCE_PATH=${SHMEM_SOURCE_PATH}: include/shmem.h was not found")
-endif()
-execute_process(
-    COMMAND "${GIT_EXECUTABLE}" rev-parse HEAD
-    WORKING_DIRECTORY "${SHMEM_SOURCE_PATH}"
-    OUTPUT_VARIABLE SHMEM_ACTUAL_REVISION
-    OUTPUT_STRIP_TRAILING_WHITESPACE
-    RESULT_VARIABLE SHMEM_REVISION_STATUS
-)
-if(NOT SHMEM_REVISION_STATUS EQUAL 0 OR NOT SHMEM_ACTUAL_REVISION STREQUAL SHMEM_TAG_ID)
-    message(FATAL_ERROR
-        "SHMEM revision mismatch: expected locked revision ${SHMEM_TAG_ID}, "
-        "got ${SHMEM_ACTUAL_REVISION}")
-endif()
-execute_process(
-    COMMAND "${GIT_EXECUTABLE}" status --porcelain --untracked-files=normal
-    WORKING_DIRECTORY "${SHMEM_SOURCE_PATH}"
-    OUTPUT_VARIABLE SHMEM_WORKTREE_STATUS
-    OUTPUT_STRIP_TRAILING_WHITESPACE
-    RESULT_VARIABLE SHMEM_WORKTREE_CHECK_STATUS
-)
-if(NOT SHMEM_WORKTREE_CHECK_STATUS EQUAL 0 OR NOT SHMEM_WORKTREE_STATUS STREQUAL "")
-    message(FATAL_ERROR
-        "SHMEM source has local changes or cannot be inspected; its headers must match the pinned library. "
-        "${SHMEM_WORKTREE_STATUS}")
 endif()

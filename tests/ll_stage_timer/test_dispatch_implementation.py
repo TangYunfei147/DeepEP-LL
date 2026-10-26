@@ -82,10 +82,11 @@ def test_cmake_and_build_info_receive_selection(tmp_path, monkeypatch, choice):
                   ll_send_cores=28,ll_recv_cores=28,ll_small_b_prefix_cores=0,cmake_path='cmake',
                   compiler_path='c++',ASCEND_HOME_PATH='cann',SHMEM_ROOT='shmem')
     monkeypatch.setattr(build,'build_configuration',lambda:config)
+    monkeypatch.setattr(build,'ROOT',tmp_path)
     ext=Extension('deep_ep._C',sources=[])
     command=build.CMakeBuild(Distribution({'ext_modules':[ext]}))
     command.ensure_finalized()
-    command.build_temp=str(tmp_path/'native cache')
+    command.build_temp=str(tmp_path/'build/native cache')
     command.build_lib=str(tmp_path/'package')
     destination=Path(command.get_ext_fullpath(ext.name)).parent
     destination.mkdir(parents=True)
@@ -194,9 +195,18 @@ def test_same_carrier_does_not_turn_different_algorithms_into_stage_speedup(left
             dict(operation='dispatch',rank=0,core=28,stage='ENTRY_TO_PREFIX_READY',unit='us',mean=mean)])
     row=comparison.compare(stage(left,30),stage(right,18),'stage')[0]
     assert row['status']=='dispatch_algorithm_changed' and row['candidate_over_baseline'] is None
-    for field,value in [('shmem_revision','c'*40),('session_transport','udma'),('use_1g_huge_pages',True),('num_iters',50)]:
+    for field,value in [('session_transport','udma'),('use_1g_huge_pages',True),('num_iters',50)]:
         with pytest.raises(ValueError,match='Incomparable'):
             comparison.check_identity(left,dict(right,**{field:value}))
+
+
+@pytest.mark.parametrize('revision', ['c' * 40, 'unknown', None])
+def test_report_comparison_does_not_gate_on_historical_shmem_metadata(revision):
+    left, right = recorded_identity('cb59'), recorded_identity('cb59-small')
+    comparison.check_identity(left, dict(right, shmem_revision=revision))
+    right.pop('shmem_revision', None)
+    comparison.check_identity(left, right)
+    comparison.check_identity(right, left)
 
 
 @pytest.mark.parametrize('choice', ['cb59','cb59-stream','cb59-pair','cb59-small'])

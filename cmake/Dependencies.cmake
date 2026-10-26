@@ -2,38 +2,11 @@ include("${CMAKE_CURRENT_LIST_DIR}/CoreSplit.cmake")
 # Copyright (c) 2026, Lu Lu
 # Modified by lishaoxun 2026
 
-foreach(sdk ASCEND_HOME_PATH SHMEM_ROOT)
-    if(NOT IS_DIRECTORY "${${sdk}}")
-        message(FATAL_ERROR "${sdk} must identify an installed SDK")
-    endif()
-endforeach()
-set(_sdk_manifest "${SHMEM_ROOT}/deepep-sdk.json")
-if(NOT EXISTS "${_sdk_manifest}")
-    message(FATAL_ERROR "Require an identified native SHMEM SDK")
+if(NOT IS_DIRECTORY "${ASCEND_HOME_PATH}")
+    message(FATAL_ERROR "ASCEND_HOME_PATH must identify an installed SDK")
 endif()
-file(READ "${_sdk_manifest}" _sdk_identity)
-string(JSON _field_count ERROR_VARIABLE _fields_error LENGTH "${_sdk_identity}" build)
-string(JSON _patches_type ERROR_VARIABLE _type_error TYPE "${_sdk_identity}" build source_patches)
-string(JSON _patches_count ERROR_VARIABLE _count_error LENGTH "${_sdk_identity}" build source_patches)
-string(JSON _target ERROR_VARIABLE _target_error GET "${_sdk_identity}" build target)
-if(_fields_error OR _type_error OR _count_error OR _target_error
-   OR NOT _patches_type STREQUAL "ARRAY" OR NOT _target STREQUAL "Ascend950"
-   OR _field_count LESS 4 OR _field_count GREATER 5)
-    message(FATAL_ERROR "Require a current native SHMEM SDK identity; stop SDK users and rebuild explicitly")
-endif()
-foreach(_identity_key cann_version cann_timestamp target)
-    string(JSON _identity_type ERROR_VARIABLE _identity_error TYPE "${_sdk_identity}" build ${_identity_key})
-    string(JSON _identity_value ERROR_VARIABLE _value_error GET "${_sdk_identity}" build ${_identity_key})
-    if(_identity_error OR _value_error OR NOT _identity_type STREQUAL "STRING" OR _identity_value STREQUAL "")
-        message(FATAL_ERROR "Incomplete native SHMEM SDK build identity")
-    endif()
-endforeach()
-if(_field_count EQUAL 5)
-    string(JSON _rdma_backend ERROR_VARIABLE _rdma_error GET "${_sdk_identity}" build rdma_backend)
-    if(_rdma_error OR NOT _rdma_backend STREQUAL "HNS_1825")
-        message(FATAL_ERROR "Unknown SHMEM SDK capability or build identity field")
-    endif()
-endif()
+# SHMEM metadata is not a build gate. Missing headers/libraries surface through
+# normal compiler and linker dependency resolution after the fresh SDK build.
 # Resolve from the selected SDK on every configure, including direct CMake use.
 unset(ASCENDCL_LIBRARY CACHE)
 unset(ASCEND_RUNTIME_LIBRARY CACHE)

@@ -100,18 +100,17 @@ but its optimized argument use and prologue need not match a full dispatch.
 
 ## Target A/B: build both implementations before running
 
-Update this branch and run from the project root in the existing target
-Python/CANN environment. Keep the validated SDK. Use fresh run names if these
-already exist. These functions return failure without closing the terminal.
+Update this branch and use an exclusively allocated project checkout in the
+existing target Python/CANN environment. The current policy removes SHMEM
+manifest, hash and field checks: rebuild it cleanly instead. The common command
+below builds the SDK once, then all eight wheels for **both** small and pair
+experiments. Run this build block only once; the pair guide uses the same
+AB_BUILD_DIR and starts from its correctness/run sections afterwards.
 
-If wheel preparation reports an incomplete `include/src/lib` manifest, follow
-the [SDK recovery steps](../../docs/SHMEM_MASTER_UPDATE.md#optional-vendor-metadata-and-incomplete-manifests-2026-10-26)
-first. Optional `hns_1825_pi_on_chip` values are accepted unchanged, but cannot
-repair missing file hashes. Preserve failed run directories and use new build
-names/wheel maps after the explicit SDK rebuild.
-Build both `cb59` and `cb59-small` again from this same source revision: four
-fresh wheels in total, each implementation's OFF and schema16 sparse variant.
-Do not reuse the historical cb59 or schema15 wheel maps for this comparison.
+Each wheel gets a clean project build tree. Source, dependency downloads,
+historical runs and wheels remain intact. Choose a new group name if this one
+exists. `--skip-build` below is the sampling phase of this completed build,
+not an SDK reuse check. Do not rebuild the SDK while testing these wheels.
 
 ```bash
 source /home/tyf/0env.sh
@@ -120,18 +119,12 @@ export DEEPEP_LL_SMALL_B_PREFIX_CORES=0
 unset SHMEM_ROOT CATLASS_ROOT
 export LD_LIBRARY_PATH="$PWD/third-party/shmem/install/shmem/lib:${LD_LIBRARY_PATH:-}"
 
-build_small_ab() {
-  local impl
-  for impl in cb59 cb59-small; do
-    DEEPEP_LL_DISPATCH_IMPL="$impl" \
-      python tests/ll_stage_timer/diagnose.py --build-only \
-        --run-name "small_scope_${impl}_build_001" || return $?
-  done
-}
-SMALL_BUILD_OK=0
-if build_small_ab; then
-  SMALL_BUILD_OK=1
-  echo 'Both complete OFF/ON builds finished.'
+AB_BUILD_NAME=ll_ab_clean_build_003
+AB_BUILD_DIR="diagnostic-runs/$AB_BUILD_NAME"
+AB_BUILD_OK=0
+if python tests/ll_stage_timer/build_ab.py --experiment all --run-name "$AB_BUILD_NAME"; then
+  AB_BUILD_OK=1
+  echo 'One fresh SDK and all eight OFF/ON wheels are ready.'
 else
   echo 'Build stopped; terminal and logs remain available.'
 fi
@@ -149,8 +142,8 @@ run_small_ab() {
   for impl in cb59 cb59-small; do
     DEEPEP_LL_DISPATCH_IMPL="$impl" \
       python tests/ll_stage_timer/diagnose.py --skip-build \
-        --wheel-map "diagnostic-runs/small_scope_${impl}_build_001/node_000/wheel-map.json" \
-        --run-name "small_scope_${impl}_run_001" \
+        --wheel-map "${AB_BUILD_DIR}/${impl}/node_000/wheel-map.json" \
+        --run-name "small_scope_${impl}_run_003" \
         --bs 1 2 4 8 16 24 32 --m 32 \
         --hidden 3584 --topk 8 --experts 384 --dtype fp8 --cpu-sync 0 \
         --devices 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 \
@@ -159,7 +152,7 @@ run_small_ab() {
         --shmem-port "$SHMEM_PORT" || return $?
   done
 }
-if [ "${SMALL_BUILD_OK:-0}" = 1 ] && run_small_ab; then
+if [ "${AB_BUILD_OK:-0}" = 1 ] && run_small_ab; then
   echo 'Both A/B runs finished.'
 else
   echo 'Build incomplete or test stopped; terminal remains open.'

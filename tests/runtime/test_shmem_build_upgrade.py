@@ -1,4 +1,4 @@
-"""SHMEM upgrades explicitly discard the old native cache before recording an SDK."""
+"""Every SHMEM invocation cleans only build outputs, then propagates compiler errors."""
 import json
 from pathlib import Path
 import subprocess
@@ -13,77 +13,155 @@ import build_shmem
 
 @pytest.fixture
 def project(tmp_path, monkeypatch):
-    source = tmp_path / "third-party/shmem"
+    root = tmp_path / "project with spaces"
+    source = root / "third-party/shmem"
     (source / "scripts").mkdir(parents=True)
     (source / ".git").mkdir()
     (source / "scripts/build.sh").write_text("vendor build placeholder")
-    (tmp_path / "dependencies.lock.json").write_text(json.dumps(dict(
-        shmem=dict(revision="new-mainline"), cann_version="9.3.0", target="Ascend950")))
+    (source / "source.cpp").write_text("user local edits")
+    (source / "3rdparty/json").mkdir(parents=True)
+    (source / "3rdparty/json/source.hpp").write_text("keep dependency source")
+    (root / "diagnostic-runs/old/wheels").mkdir(parents=True)
+    (root / "diagnostic-runs/old/wheels/keep.whl").write_text("keep result")
+    (root / "dependencies.lock.json").write_text(json.dumps(dict(
+        shmem=dict(revision="different-locked-revision"), cann_version="9.3.0", target="Ascend950")))
     monkeypatch.setattr(build_shmem.platform, "system", lambda: "Linux")
-    monkeypatch.setattr(build_shmem, "source_patches", lambda _: [])
     monkeypatch.setattr(build_shmem, "cann_version", lambda _: dict(Version="9.3.0", timestamp="test"))
-    monkeypatch.setattr(build_shmem.subprocess, "check_output", lambda args, **kw:
-                        str(source) if args[-1] == "--show-toplevel" else "new-mainline")
+    monkeypatch.setattr(build_shmem.subprocess, "check_output", lambda args, **kw: "arbitrary-local-revision")
     monkeypatch.setattr(build_shmem.shutil, "which", lambda name: sys.executable)
     monkeypatch.setenv("CMAKE_BUILD_PARALLEL_LEVEL", "4")
-    return tmp_path, source
+    for key in ("TMPDIR", "XDG_CACHE_HOME", "ASCEND_CACHE_PATH", "ASCEND_WORK_PATH",
+                "ASCEND_PROCESS_LOG_PATH", "SHMEM_LOG_PATH"):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.chdir(tmp_path)  # Neither cleanup nor build depends on caller cwd.
+    return root, source
 
 
-@pytest.mark.parametrize("rebuild", [False, True])
-def test_new_build_and_explicit_rebuild_have_local_outputs(project, monkeypatch, rebuild):
+def populate_old_outputs(source):
+    for name in ("build", "install", "ci"):
+        (source / name).mkdir(exist_ok=True)
+        (source / name / "old.bin").write_text("stale generated data")
+    manifest = source / "install/shmem/deepep-sdk.json"
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    manifest.write_text("not even valid JSON; must not be read")
+
+
+@pytest.mark.parametrize("options", [dict(), dict(rebuild=True), dict(if_needed=True),
+                                     dict(if_needed=False), dict(allow_local_changes=True)])
+def test_every_call_cleans_and_builds_regardless_of_old_options(project, monkeypatch, options):
     root, source = project
-    if rebuild:
-        (source / "build").mkdir()
-        (source / "build/CMakeCache.txt").write_text("old revision cache")
-        old = source / "install/shmem/deepep-sdk.json"
-        old.parent.mkdir(parents=True)
-        old.write_text(json.dumps(dict(revision="old-revision")))
-    commands, records = [], []
+    commands = []
     def run(argv, *, cwd, env, check):
         commands.append(argv)
         assert cwd == source and check is True
-        assert ("-clean" in argv) is rebuild
-        assert argv[:5] == ["bash", "-e", "scripts/build.sh", "-soc_type", "Ascend950"]
-        assert not any(mode in argv for mode in ("-full", "-gendoc", "-onlygendoc", "-examples", "-package"))
+        assert argv == ["bash", "-e", "scripts/build.sh", "-soc_type", "Ascend950"]
+        assert all(not (source / name).exists() for name in ("build", "install", "ci"))
+        assert env["CCACHE_DISABLE"] == "1"
         for key in ("TMPDIR", "TMP", "TEMP", "XDG_CACHE_HOME", "ASCEND_CACHE_PATH",
                     "ASCEND_WORK_PATH", "ASCEND_PROCESS_LOG_PATH", "SHMEM_LOG_PATH"):
             assert Path(env[key]).resolve().is_relative_to(root.resolve())
-        # The vendor always recreates install/; mimic only its manifest removal.
-        manifest = source / "install/shmem/deepep-sdk.json"
-        if manifest.exists():
-            manifest.unlink()
-        manifest.parent.mkdir(parents=True, exist_ok=True)
+        (source / "install/shmem/lib").mkdir(parents=True)
+        (source / "install/shmem/lib/libshmem.so").write_text("fresh SDK")
     monkeypatch.setattr(build_shmem.subprocess, "run", run)
-    def record(sdk, revision, *, build_info):
-        assert commands and revision == "new-mainline" and build_info["source_patches"] == []
-        assert not (sdk / "deepep-sdk.json").exists()
-        records.append((sdk, revision))
-        path = sdk / "deepep-sdk.json"
-        path.write_text(json.dumps(dict(revision=revision, build=build_info)))
-        return path
-    monkeypatch.setattr(build_shmem, "record", record)
-    assert build_shmem.prepare(root, rebuild=rebuild) == source / "install/shmem/deepep-sdk.json"
-    assert records == [(source / "install/shmem", "new-mainline")]
-    assert len(commands) == 1
+    for _ in range(2):
+        populate_old_outputs(source)
+        assert build_shmem.prepare(root, **options) == source / "install/shmem"
+        assert not (source / "install/shmem/deepep-sdk.json").exists()
+        assert (source / "source.cpp").read_text() == "user local edits"
+        assert (source / "3rdparty/json/source.hpp").exists()
+        assert (source / ".git").is_dir()
+        assert (root / "diagnostic-runs/old/wheels/keep.whl").exists()
+    assert len(commands) == 2
 
 
-def test_old_sdk_requires_explicit_rebuild_without_mutation(project, monkeypatch):
+@pytest.mark.parametrize("error", [OSError("no git metadata"), subprocess.CalledProcessError(128, "git"),
+                                   subprocess.TimeoutExpired("git", 10)])
+def test_git_revision_is_only_best_effort_log(project, monkeypatch, error):
     root, source = project
-    manifest = source / "install/shmem/deepep-sdk.json"
-    manifest.parent.mkdir(parents=True)
-    original = json.dumps(dict(revision="old-revision", build={})).encode()
-    manifest.write_bytes(original)
-    monkeypatch.setattr(build_shmem.subprocess, "run", lambda *a, **k: pytest.fail("unexpected build"))
-    with pytest.raises(RuntimeError, match="identity changed"):
-        build_shmem.prepare(root)
-    assert manifest.read_bytes() == original
-
-
-def test_failed_vendor_build_never_records_a_new_identity(project, monkeypatch):
-    root, _ = project
     def fail(*args, **kwargs):
-        raise subprocess.CalledProcessError(1, args[0])
+        raise error
+    monkeypatch.setattr(build_shmem.subprocess, "check_output", fail)
+    called = []
+    monkeypatch.setattr(build_shmem.subprocess, "run", lambda *args, **kwargs: called.append(args[0]))
+    assert build_shmem.prepare(root) == source / "install/shmem"
+    assert len(called) == 1
+
+
+def test_failed_vendor_build_stops_without_manifest_or_retry(project, monkeypatch):
+    root, source = project
+    populate_old_outputs(source)
+    attempts = []
+    def fail(argv, **kwargs):
+        attempts.append(argv)
+        assert all(not (source / name).exists() for name in ("build", "install", "ci"))
+        (source / "build").mkdir()
+        (source / "build/error.log").write_text("compiler failed")
+        raise subprocess.CalledProcessError(7, argv)
     monkeypatch.setattr(build_shmem.subprocess, "run", fail)
-    monkeypatch.setattr(build_shmem, "record", lambda *a, **k: pytest.fail("failed build was recorded"))
-    with pytest.raises(subprocess.CalledProcessError):
-        build_shmem.prepare(root, rebuild=True)
+    with pytest.raises(subprocess.CalledProcessError) as error:
+        build_shmem.prepare(root)
+    assert error.value.returncode == 7 and len(attempts) == 1
+    assert (source / "build/error.log").read_text() == "compiler failed"
+    assert not (source / "install/shmem/deepep-sdk.json").exists()
+
+
+def test_failed_prerequisite_does_not_clean_existing_outputs(project, monkeypatch):
+    root, source = project
+    populate_old_outputs(source)
+    def fail(_):
+        raise RuntimeError("load CANN")
+    monkeypatch.setattr(build_shmem, "cann_version", fail)
+    monkeypatch.setattr(build_shmem.subprocess, "run", lambda *a, **k: pytest.fail("must not build"))
+    with pytest.raises(RuntimeError, match="CANN"):
+        build_shmem.prepare(root)
+    assert (source / "build/old.bin").exists()
+    assert (source / "install/shmem/deepep-sdk.json").exists()
+
+
+def test_sdk_identity_and_source_edits_are_not_build_admission_checks():
+    source = (ROOT / "scripts/build_shmem.py").read_text(encoding="utf-8")
+    for removed in ("record_shmem_sdk", "shmem_sdk_reuse", "validate_shmem_sdk", "source_patches",
+                    'git("status"', 'lock["shmem"]', "deepep-sdk.json"):
+        assert removed not in source
+
+
+def test_linux_and_parallelism_checks_remain_before_cleanup(project, monkeypatch):
+    root, source = project
+    populate_old_outputs(source)
+    monkeypatch.setattr(build_shmem.platform, "system", lambda: "Windows")
+    with pytest.raises(RuntimeError, match="Linux"):
+        build_shmem.prepare(root)
+    monkeypatch.setattr(build_shmem.platform, "system", lambda: "Linux")
+    monkeypatch.setenv("CMAKE_BUILD_PARALLEL_LEVEL", "0")
+    with pytest.raises(ValueError, match="PARALLEL"):
+        build_shmem.prepare(root)
+    assert (source / "build/old.bin").exists()
+
+
+def test_grouped_run_cache_and_log_overrides_are_preserved(project, monkeypatch):
+    root, _ = project
+    expected = {}
+    for key in ("TMPDIR", "XDG_CACHE_HOME", "ASCEND_CACHE_PATH", "ASCEND_WORK_PATH",
+                "ASCEND_PROCESS_LOG_PATH", "SHMEM_LOG_PATH"):
+        expected[key] = str(root / "diagnostic-runs/group 001" / key.lower())
+        monkeypatch.setenv(key, expected[key])
+    monkeypatch.setenv("TMP", str(root.parent / "system-temp-ignored"))
+    monkeypatch.setenv("TEMP", str(root.parent / "system-temp-ignored"))
+    def run(argv, *, cwd, env, check):
+        for key, value in expected.items():
+            assert env[key] == value and Path(value).is_dir()
+        assert env["TMP"] == expected["TMPDIR"] and env["TEMP"] == expected["TMPDIR"]
+    monkeypatch.setattr(build_shmem.subprocess, "run", run)
+    build_shmem.prepare(root)
+
+
+@pytest.mark.parametrize("key", ["TMPDIR", "XDG_CACHE_HOME", "ASCEND_CACHE_PATH", "ASCEND_WORK_PATH",
+                                 "ASCEND_PROCESS_LOG_PATH", "SHMEM_LOG_PATH"])
+def test_outside_override_rejected_before_cleaning(project, monkeypatch, key):
+    root, source = project
+    populate_old_outputs(source)
+    monkeypatch.setenv(key, str(root.parent / "external-output"))
+    monkeypatch.setattr(build_shmem.subprocess, "run", lambda *a, **k: pytest.fail("must not build"))
+    with pytest.raises(ValueError, match="outside"):
+        build_shmem.prepare(root)
+    assert (source / "build/old.bin").exists()

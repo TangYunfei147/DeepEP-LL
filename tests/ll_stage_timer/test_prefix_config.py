@@ -66,9 +66,9 @@ def test_installed_prefix_identity_and_all_rank_agreement(tmp_path):
     path.write_text(json.dumps(info))
     native = SimpleNamespace(low_latency_small_b_prefix_cores=6)
     identity = st.installed_prefix_identity(package, native, 26, {})
-    assert identity == dict(small_b_prefix_cores=6, shmem_revision='a' * 40)
+    assert identity == dict(small_b_prefix_cores=6)
     st.validate_matching_capabilities([identity, dict(identity)])
-    for changed in (dict(identity, small_b_prefix_cores=1), dict(identity, shmem_revision='b' * 40)):
+    for changed in (dict(identity, small_b_prefix_cores=1),):
         with pytest.raises(RuntimeError, match='differs across ranks'):
             st.validate_matching_capabilities([identity, changed])
     for requested in ('0', '1', '06', '-1', ''):
@@ -79,10 +79,9 @@ def test_installed_prefix_identity_and_all_rank_agreement(tmp_path):
         path.write_text(json.dumps(malformed))
         with pytest.raises(RuntimeError, match='P identity'):
             st.installed_prefix_identity(package, native, 26, {})
-    for revision in (None, 'unknown', 'a' * 39):
+    for revision in (None, 'unknown', 'a' * 39, {}, 99):
         path.write_text(json.dumps(dict(info, shmem=dict(revision=revision))))
-        with pytest.raises(RuntimeError, match='SHMEM revision'):
-            st.installed_prefix_identity(package, native, 26, {})
+        assert st.installed_prefix_identity(package, native, 26, {}) == identity
 
 
 @pytest.mark.parametrize('world,m,b,prefix,effective', [
@@ -102,7 +101,7 @@ def test_comparison_records_raw_and_only_applicable_effective_prefix(world, m, b
     ('dispatch_impl', 'cb59', 'cb59-stream'),
     ('effective_dispatch_impl', 'cb59', 'cb59-stream'),
     ('small_b_prefix_cores', 6, 1), ('effective_small_b_prefix_cores', 6, 1),
-    ('session_transport', 'mte', 'rdma'), ('shmem_revision', 'a' * 40, 'b' * 40)])
+    ('session_transport', 'mte', 'rdma')])
 def test_optional_performance_identity_must_match_if_present(tmp_path, field, left_value, right_value):
     suite = tmp_path / 'suite'
     (suite / 'runs/off').mkdir(parents=True)

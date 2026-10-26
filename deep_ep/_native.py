@@ -6,12 +6,9 @@
 import importlib
 import importlib.util
 from importlib.machinery import EXTENSION_SUFFIXES
-import hashlib
-import json
 from functools import lru_cache
 from pathlib import Path
 from typing import NoReturn
-import warnings
 
 
 def _unavailable(operation: str) -> NoReturn:
@@ -42,15 +39,6 @@ def _load_native():
         raise ImportError("Cannot load deep_ep._C; configure the matching CANN/SHMEM SDK libraries") from exc
     if module.runtime_protocol != 1:
         raise ImportError("Unsupported DeepEP runtime protocol")
-    info = json.loads(Path(__file__).with_name("_build_info.json").read_text(encoding="utf-8"))
-    library = Path(module.shmem_library_path()).resolve()
-    expected = info["shmem"]["sha256"]["lib/libshmem.so"]
-    with library.open("rb") as stream:
-        digest = hashlib.file_digest(stream, "sha256").hexdigest()
-    if digest != expected:
-        warnings.warn(
-            "Loaded SHMEM library differs from the SDK used to build this wheel", RuntimeWarning, stacklevel=2
-        )
     return module
 
 
