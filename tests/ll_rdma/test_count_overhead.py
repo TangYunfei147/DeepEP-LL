@@ -56,3 +56,15 @@ def test_paired_count_records_live_until_the_existing_reuse_barrier():
     complete = kernel.index("counts_.CompleteCumsum();")
     consume = kernel.index("receiver_.Process(timer_);")
     assert "PipeBarrier<PIPE_ALL>();" in kernel[complete:consume]
+
+
+def test_only_the_route_owner_waits_for_scalar_body_preparation():
+    send = _block(_source("dispatch_server_dedup_counts.h"), "void ServerDedupCounts::SendCnt()")
+    owner = _block(send, "if (pairedRoutes_ && aivId_ == 0U)")
+    assert "SyncFunc<HardEvent::MTE2_S>();" in owner
+    assert owner.index("SyncFunc<HardEvent::MTE2_S>();") < owner.index("routeExchange_.PostBody")
+    assert send.count("SyncFunc<HardEvent::MTE2_S>();") == 1
+    # All count workers still acquire input for Vector before their first use.
+    loaded = send.index("DataCopyPad(validExpertIdsTensor_, expertIdsGMTensor_")
+    counted = send.index("CountByVectorRange(start, end, maskBytes)")
+    assert "SyncFunc<HardEvent::MTE2_V>();" in send[loaded:counted]

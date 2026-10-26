@@ -225,7 +225,7 @@ __aicore__ inline void ServerDedupCounts::SendCnt()
     const DataCopyPadExtParams<int32_t> pad{false, 0U, 0U, 0};
     DataCopyPad(validExpertIdsTensor_, expertIdsGMTensor_, idsCopy, pad);
     SyncFunc<HardEvent::MTE2_V>();
-    if (pairedRoutes_) {
+    if (pairedRoutes_ && aivId_ == 0U) {
         // Core0 stages and posts outbound before computing this source's local
         // counts. HNS retires Put's UB scratch on return; body transfer from
         // registered GM overlaps the following count work and MTE publication.
