@@ -16,8 +16,8 @@ def method(source,name):
     return source[start:last]
 
 
-@pytest.mark.parametrize('mode',(0,1,2))
-def test_real_descriptor_publish_and_payload_redirect(tmp_path,mode):
+@pytest.mark.parametrize('mode,validate',((0,0),(1,0),(2,0),(2,1)))
+def test_real_descriptor_publish_and_payload_redirect(tmp_path,mode,validate):
     cc=shutil.which('g++') or shutil.which('clang++')
     if not cc:pytest.skip('CPU C++ compiler unavailable')
     source=RECV.read_text(encoding='utf-8')
@@ -30,6 +30,7 @@ def test_real_descriptor_publish_and_payload_redirect(tmp_path,mode):
     file=tmp_path/'pull.cpp';file.write_text(cpp,encoding='utf-8')
     exe=tmp_path/'pull.exe'
     result=subprocess.run([cc,'-std=c++17','-O2','-UNDEBUG',f'-DDEEPEP_LL_SHARED_PULL_PROBE_MODE={mode}',
+        f'-DDEEPEP_LL_SHARED_PULL_VALIDATE_DESCRIPTOR={validate}',
         '-I',str(ROOT),str(file),'-o',str(exe)],capture_output=True,text=True)
     assert result.returncode==0,result.stdout+result.stderr
     result=subprocess.run([str(exe)],capture_output=True,text=True)
@@ -52,6 +53,7 @@ def test_candidate_preserves_payload_and_output_handle_and_rejects_old_diagnosti
     load=method(source,'IssueLoad')
     assert 'if(reference)' in load and 'if(sharedPull_ && !keepFlags)' not in load
     assert 'descriptor.GetValue(3U)!=kLlSharedPullDescriptor' in load
+    assert load.count('if constexpr(kLlValidateSharedPullDescriptor)')==2
     assert 'const uint32_t role = pulledTerminal_[lane] ? uint32_t(EpServerDedupTokenType::Terminal)' in source
     assert 'if (firstHop && !sharedPull_)' in source
     assert 'header.SetValue(3U,uint32_t(EpServerDedupTokenType::Terminal))' not in source

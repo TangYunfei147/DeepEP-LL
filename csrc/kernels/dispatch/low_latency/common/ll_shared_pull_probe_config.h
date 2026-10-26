@@ -1,13 +1,19 @@
 #pragma once
 #include <cstdint>
 namespace DispatchDedup {
-// Frozen per candidate commit: 0=original, 1=lifetime fence control, 2=shared pull.
+// Frozen per candidate commit: 0=original, 1=historical control, 2=shared pull.
 #ifndef DEEPEP_LL_SHARED_PULL_PROBE_MODE
 #define DEEPEP_LL_SHARED_PULL_PROBE_MODE 2
 #endif
 constexpr uint32_t kLlSharedPullProbeMode = DEEPEP_LL_SHARED_PULL_PROBE_MODE;
 #define DEEPEP_LL_SHARED_PULL_WIRE_REVISION 2
 constexpr uint32_t kLlSharedPullWireRevision = DEEPEP_LL_SHARED_PULL_WIRE_REVISION;
+#ifndef DEEPEP_LL_SHARED_PULL_VALIDATE_DESCRIPTOR
+#define DEEPEP_LL_SHARED_PULL_VALIDATE_DESCRIPTOR 0
+#endif
+constexpr bool kLlValidateSharedPullDescriptor = DEEPEP_LL_SHARED_PULL_VALIDATE_DESCRIPTOR != 0;
+static_assert(DEEPEP_LL_SHARED_PULL_VALIDATE_DESCRIPTOR==0 ||
+              DEEPEP_LL_SHARED_PULL_VALIDATE_DESCRIPTOR==1,"invalid descriptor validation mode");
 static_assert(kLlSharedPullProbeMode<=2U,"invalid shared-pull prototype");
 constexpr uint32_t kLlSharedPullDescriptor = 0x50554c4cU;
 #if defined(__CCE__) && defined(__CCE_IS_AICORE__)

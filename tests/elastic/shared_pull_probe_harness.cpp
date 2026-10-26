@@ -126,10 +126,12 @@ int main(){
         assert(!get.pulledTerminal_[0] && reads==3840);
         for(unsigned b=0;b<8;++b)assert(!std::memcmp(loaded.data()+b*480,peers[2].data()+8192+b*512,480));
     }
-    auto desc=LocalTensor<uint8_t>{peers[2].data()+4096+3936}.ReinterpretCast<uint32_t>();
-    desc.SetValue(3,0);bool rejected=false;try{get.IssueLoad(0,0,false,true,false);}catch(...){rejected=true;}assert(rejected);
-    desc.SetValue(3,kLlSharedPullDescriptor);
-    desc.SetValue(4,8);rejected=false;try{get.IssueLoad(0,0,false,true,false);}catch(...){rejected=true;}assert(rejected);
+    if constexpr(kLlValidateSharedPullDescriptor) {
+        auto desc=LocalTensor<uint8_t>{peers[2].data()+4096+3936}.ReinterpretCast<uint32_t>();
+        desc.SetValue(3,0);bool rejected=false;try{get.IssueLoad(0,0,false,true,false);}catch(...){rejected=true;}assert(rejected);
+        desc.SetValue(3,kLlSharedPullDescriptor);
+        desc.SetValue(4,8);rejected=false;try{get.IssueLoad(0,0,false,true,false);}catch(...){rejected=true;}assert(rejected);
+    }
     for(unsigned group:{1U,4U,16U})for(unsigned rank=0;rank<16;++rank)for(unsigned r=0;r<16;++r){
         assert(LlSharedPullAddressValid(rank,r,16,group,4096,4096,8192,4096)==(rank/group==r/group));
     }

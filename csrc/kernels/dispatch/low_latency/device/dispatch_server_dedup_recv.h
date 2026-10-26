@@ -406,7 +406,8 @@ private:
         source.SetGlobalBuffer(Slot(j));
         pulledTerminal_[lane]=false;
         if(reference) {
-            if(!sharedPull_ || keepFlags) { Trap();return; }
+            if constexpr(kLlValidateSharedPullDescriptor)
+                if(!sharedPull_ || keepFlags) { Trap();return; }
             // The probe already classified this as a committed reference.
             // Ordinary DIRECT packets therefore need no descriptor pre-read.
             // Event7 is outside payload lanes0..5.
@@ -414,13 +415,17 @@ private:
                         {1U,32U,0U,0U,0U},{false,0U,0U,0});
             ServerDedupReceiveSync<HardEvent::MTE2_S>();
             auto descriptor=wire[uint32_t(data_.headerPayloadOffset)].template ReinterpretCast<uint32_t>();
-            if(descriptor.GetValue(3U)!=kLlSharedPullDescriptor) { Trap();return; }
             const uint32_t owner=descriptor.GetValue(4U);
             const uint64_t offset=uint64_t(descriptor.GetValue(5U)) |
                 (uint64_t(descriptor.GetValue(6U))<<32U);
-            if(!LlSharedPullAddressValid(owner,uint32_t(args_->rank),uint32_t(args_->rankSize),
+            // Internal producers construct owner+slot from validated layout and
+            // routing. Keep corruption diagnostics out of the release hot path.
+            if constexpr(kLlValidateSharedPullDescriptor) {
+                if(descriptor.GetValue(3U)!=kLlSharedPullDescriptor ||
+                   !LlSharedPullAddressValid(owner,uint32_t(args_->rank),uint32_t(args_->rankSize),
                 kLlRanksPerGroup,offset,data_.dispatchOffset,data_.dispatchBytes,data_.tokenStride)) {
                 Trap();return;
+            }
             }
             source.SetGlobalBuffer(args_->peerMems[owner]+offset);
             source.SetL2CacheHint(CacheMode::CACHE_MODE_DISABLE);
