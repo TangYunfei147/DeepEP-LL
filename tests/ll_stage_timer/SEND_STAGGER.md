@@ -24,7 +24,7 @@ git clone --branch kernel/ll-g4-stagger --single-branch \
 cd DeepEP-LL-g4-stagger
 # 加载当前机器的CANN环境及Python环境，再执行工程环境脚本。
 source scripts/ll_timer_env.sh
-git submodule update --init --recursive --depth 1
+git submodule update --init --recursive --depth 1 -- third-party/shmem
 unset SHMEM_ROOT CATLASS_ROOT
 python scripts/build_shmem.py
 export DEEPEP_NPU_ARCH=Ascend950

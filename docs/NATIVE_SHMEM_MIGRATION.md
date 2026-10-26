@@ -45,7 +45,7 @@ git -C third-party/shmem diff
 # 使用目标机实际的 CANN 环境位置。
 source /path/to/ascend-toolkit/set_env.sh
 source scripts/ll_timer_env.sh
-git submodule update --init --recursive --depth 1
+git submodule update --init --recursive --depth 1 -- third-party/shmem
 unset SHMEM_ROOT CATLASS_ROOT
 # 仅在上述源码检查完成、使用者已停止后执行。
 python scripts/build_shmem.py --rebuild

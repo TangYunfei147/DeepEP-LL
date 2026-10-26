@@ -51,7 +51,7 @@ prepare_count_sdk() {
   source /home/tyf/0env.sh || return $?
   git fetch origin || return $?
   git switch --detach e19aa4d || return $?
-  git submodule update --init --recursive --depth 1 || return $?
+  git submodule update --init --recursive --depth 1 -- third-party/shmem || return $?
   unset SHMEM_ROOT CATLASS_ROOT
   export DEEPEP_NPU_ARCH=Ascend950
   python scripts/build_shmem.py --rebuild

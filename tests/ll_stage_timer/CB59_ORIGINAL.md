@@ -74,7 +74,8 @@ may take longer than the current split-TU build.
 
 From the current `kernel/ll-g4-small-b-prefix` checkout, load the existing target
 Python/CANN environment. Python build dependencies must already be installed.
-Git obtains original source/submodules; pip installs the locally built wheel
+Git obtains original source and SHMEM submodules only; CATLASS is not fetched.
+Pip installs the locally built wheel
 only into the group's isolated venv.
 
 ```bash

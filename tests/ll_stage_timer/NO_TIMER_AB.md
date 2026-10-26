@@ -74,6 +74,10 @@ environment. Build/runtime dependencies must already exist; the helper does not
 download Python packages or change shared Python. It creates a fresh group with
 two independent source clones, three isolated venvs and three wheel directories.
 
+Dependency initialization is restricted to SHMEM and its required submodules:
+`git submodule update --init --recursive --depth 1 -- third-party/shmem`.
+Do not fetch CATLASS or use an unscoped recursive submodule update/clone.
+
 The SDK is cleaned and rebuilt **once** under source-normal/third-party/shmem.
 All three wheels explicitly use that same SDK. Each wheel's native build tree
 is cleaned before compiling, with compiler ccache reuse disabled. SDK metadata,

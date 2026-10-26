@@ -63,7 +63,7 @@ def prepare(root=ROOT, *, rebuild=False, if_needed=True, allow_local_changes=Fal
     source = assert_local_path(root, root / "third-party/shmem")
     script = assert_local_path(root, source / "scripts/build.sh")
     if not script.is_file():
-        raise RuntimeError("Initialize dependencies first: git submodule update --init --recursive --depth 1")
+        raise RuntimeError("Initialize SHMEM only (do not fetch CATLASS): git submodule update --init --recursive --depth 1 -- third-party/shmem")
     # The upstream native build may download dependencies here; preserve them
     # and reject redirects without treating this source cache as a clean target.
     assert_local_path(root, source / "3rdparty")

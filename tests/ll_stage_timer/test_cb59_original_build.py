@@ -39,7 +39,7 @@ def test_plan_is_pure_and_complete(tmp_path, monkeypatch):
     assert "--no-checkout" in steps["clone"]["argv"]
     assert "--shared" not in steps["clone"]["argv"]
     assert steps["checkout"]["argv"][-1] == original.REFERENCE
-    assert steps["submodules"]["argv"] == ["git", "submodule", "update", "--init", "--recursive", "--depth", "1"]
+    assert steps["submodules"]["argv"] == ["git", "submodule", "update", "--init", "--recursive", "--depth", "1", "--", "third-party/shmem"]
     assert "--system-site-packages" in steps["venv"]["argv"]
     assert "--no-isolation" in steps["wheel"]["argv"]
     assert "--wheel" in steps["clean-wheel"]["argv"]

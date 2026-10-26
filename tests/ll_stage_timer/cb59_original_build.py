@@ -198,7 +198,7 @@ def make_plan(group, root=ROOT, python=sys.executable):
 
     add("clone", ["git", "-c", "core.autocrlf=false", "clone", "--no-hardlinks", "--dissociate", "--no-checkout", root, source])
     add("checkout", ["git", "-c", "core.autocrlf=false", "checkout", "--detach", REFERENCE], source)
-    add("submodules", ["git", "submodule", "update", "--init", "--recursive", "--depth", "1"], source)
+    add("submodules", ["git", "submodule", "update", "--init", "--recursive", "--depth", "1", "--", "third-party/shmem"], source)
     add("patch", [python, helper, "_patch", "--source", source, "--root", root])
     add("verify-source", [python, helper, "_verify-source", "--source", source, "--root", root])
     add("venv", [python, "-m", "venv", "--system-site-packages", venv])

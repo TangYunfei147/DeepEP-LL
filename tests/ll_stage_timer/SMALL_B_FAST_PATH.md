@@ -59,7 +59,7 @@ use the standard pinned dependency/SDK build workflow. Keep the same S/R as the
 baseline; defaults are S28/R28, not an automatic selection.
 
 ```bash
-git submodule update --init --recursive --depth 1
+git submodule update --init --recursive --depth 1 -- third-party/shmem
 unset SHMEM_ROOT CATLASS_ROOT
 export DEEPEP_NPU_ARCH=Ascend950
 export DEEPEP_LL_STAGE_TIMER=OFF

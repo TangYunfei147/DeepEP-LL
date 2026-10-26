@@ -115,7 +115,7 @@ def build_plan(group, root=ROOT, python=sys.executable):
         add(dirname + "-clone", ["git", "-c", "core.autocrlf=false", "clone", "--no-hardlinks", "--dissociate", "--no-checkout", root, source], group, variant)
         add(dirname + "-checkout", ["git", "-c", "core.autocrlf=false", "checkout", "--detach", BASE], source, variant)
         add(dirname + "-preimage", [python, "-I", helper, "_preimage", "--source", source], source, variant)
-        add(dirname + "-submodules", ["git", "submodule", "update", "--init", "--recursive", "--depth", "1"], source, variant)
+        add(dirname + "-submodules", ["git", "submodule", "update", "--init", "--recursive", "--depth", "1", "--", "third-party/shmem"], source, variant)
         add(dirname + "-prepare", [python, "-I", projection, "_prepare", "--source", source, "--mode", mode, "--controller", root], source, variant)
     for variant in VARIANTS:
         layout = _layout(group, variant)

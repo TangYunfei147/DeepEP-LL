@@ -70,7 +70,7 @@ No SDK rebuild is forced when its existing identity validation passes.
 git fetch origin kernel/ll-g4-overlap-recv
 git switch kernel/ll-g4-overlap-recv
 git pull --ff-only origin kernel/ll-g4-overlap-recv
-git submodule update --init --recursive --depth 1
+git submodule update --init --recursive --depth 1 -- third-party/shmem
 source scripts/ll_timer_env.sh
 unset SHMEM_ROOT CATLASS_ROOT
 python scripts/build_shmem.py

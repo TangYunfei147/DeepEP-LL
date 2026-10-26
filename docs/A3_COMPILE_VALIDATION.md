@@ -19,7 +19,7 @@ Inspect Git status and existing tasks first. Source the environment above and th
 `d2cc3e3c5d6a542e74e5ca924dc76247ebbd2f11`.
 
 ```bash
-git submodule update --init --recursive --depth 1
+git submodule update --init --recursive --depth 1 -- third-party/shmem
 unset SHMEM_ROOT CATLASS_ROOT
 python -m pip install --index-url https://pypi.org/simple \
   --target "$PWD/.cache/build-python" -r requirements-build.txt

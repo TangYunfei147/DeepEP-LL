@@ -150,7 +150,7 @@ fi
 source .venv-ll-timer/bin/activate
 python -c "import torch, torch_npu; print(torch.__version__, torch_npu.__version__)"
 
-git submodule update --init --recursive --depth 1
+git submodule update --init --recursive --depth 1 -- third-party/shmem
 unset SHMEM_ROOT CATLASS_ROOT
 export DEEPEP_NPU_ARCH=Ascend950
 export DEEPEP_LL_SEND_CORES=28

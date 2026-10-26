@@ -34,7 +34,7 @@ EpGmmFused 通过 `DEEPEP_BUILD_EP_GMM_FUSED=ON` 构建 AllToAllV → GMM 和 GM
 
 ```bash
 source /path/to/ascend-toolkit/set_env.sh
-git submodule update --init --recursive
+git submodule update --init --recursive --depth 1 -- third-party/shmem
 unset SHMEM_ROOT CATLASS_ROOT  # 使用仓内依赖；外部 SDK 用户见下文。
 python scripts/build_shmem.py
 export DEEPEP_NPU_ARCH=Ascend950
