@@ -110,6 +110,7 @@ public:
         laneStride_ = uint32_t(data_.tokenStride) + 64U;
         const uint32_t available = (kEpServerDedupCountUbBytes - fixed) / laneStride_;
         lanes_ = available < 8U ? available : 8U;  // Safe inputs guarantee at least one lane.
+        if (lanes_ > tasks_.Count()) lanes_ = tasks_.Count();
         pipe_->InitBuffer(lanesBuf_, lanes_ * laneStride_);
         for (uint32_t lane = 0; lane < lanes_; ++lane) SetFlag<HardEvent::MTE3_MTE2>(lane);
 
