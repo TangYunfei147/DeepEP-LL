@@ -140,7 +140,7 @@ private:
     __aicore__ inline uint32_t GetCumSum(uint32_t newAivId);
     // 摘要：轮询本片所有来源计数的 ready 标记；到齐后提取计数、发布片段总数并清除 ready。
     __aicore__ inline void WaitDispatch();
-    // 摘要：为本片局部前缀加上跨核偏移，写出 sendCountsOut 与各核前缀副本，再发布完成标记。
+    // 摘要：为本片局部前缀加上跨核偏移，写出 sendCountsOut 与共享前缀，再发布完成标记。
     __aicore__ inline void CalRecvAndSetFlag();
     // 摘要：等待所有接收核的前缀写出标记到齐，并清除本核对应的标记行。
     __aicore__ inline void WaitCumSumFlag();
@@ -399,7 +399,7 @@ __aicore__ inline void ServerDedupCounts::CompleteCumsum()
         workspace.SetGlobalBuffer(reinterpret_cast<__gm__ int32_t*>(recvCntWorkspaceGM_));
         const DataCopyExtParams copy{1U, rscvStatusNum_ * uint32_t(sizeof(int32_t)), 0U, 0U, 0U};
         const DataCopyPadExtParams<int32_t> pad{false, 0U, 0U, 0};
-        DataCopyPad(prefix, workspace[receiver * rscvStatusNum_], copy, pad);
+        DataCopyPad(prefix, workspace, copy, pad);
         SyncFunc<HardEvent::MTE2_S>();
         stagePool_.InitBuffer(tokenNumBuf_, Ceil(moeExpertNumPerRank_ * sizeof(int64_t), UB_ALIGN) * UB_ALIGN);
         LocalTensor<int64_t> expertCounts = tokenNumBuf_.Get<int64_t>();
@@ -631,7 +631,7 @@ __aicore__ inline void ServerDedupCounts::WaitDispatch()
     if (!packedFrames_) WaitDispatchClearStatus();
 }
 
-// 摘要：为本片局部前缀加上跨核偏移，写出 sendCountsOut 与各核前缀副本，再发布完成标记。
+// 摘要：为本片局部前缀加上跨核偏移，写出 sendCountsOut 与共享前缀，再发布完成标记。
 __aicore__ inline void ServerDedupCounts::CalRecvAndSetFlag()
 {
     if (recStatusNumPerCore_ == 0U) return;
@@ -655,10 +655,9 @@ __aicore__ inline void ServerDedupCounts::CalRecvAndSetFlag()
         // sendCountsOut 写的是累计前缀，而非单条记录的原始发送数量。
         DataCopyPad(sendCountsGlobal[startStatusIndex_], outCountLocal, dataCopyOutParams);
 
-        // 每个接收核各持一份完整前缀副本；当前核向所有副本写入自己负责的片段。
-        for (uint32_t index = 0; index < aivUsedCumSum_; index++) {
-            DataCopyPad(workspaceGlobal[index * rscvStatusNum_ + startStatusIndex_], outCountLocal, dataCopyOutParams);
-        }
+        // Producers own disjoint fragments of one read-only GM prefix. All
+        // receivers acquire the existing ready row before reading this copy.
+        DataCopyPad(workspaceGlobal[startStatusIndex_], outCountLocal, dataCopyOutParams);
     }
     uint8_t repeatTimes = Ceil(aivUsedCumSum_, 8);
     DataCopyParams sumIntriParams{static_cast<uint16_t>(aivUsedCumSum_), 1, 0,

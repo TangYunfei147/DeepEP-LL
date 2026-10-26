@@ -61,18 +61,17 @@ public:
         timer_ = timer;
         if (timer) timer->Start(LlStageTimer::RecvPrepare);
         // 1. 调用方已完成计数阶段的写入，才能 Reset TPipe 回收旧计数 UB。
-        // 从当前 magic 窗口加载本接收核的完整前缀副本，MTE2_S 后 Scalar 才能使用。
+        // 从当前 magic 窗口加载只读共享前缀，MTE2_S 后 Scalar 才能使用。
 
         // Caller has completed count-stage writes before this Reset. The GM
-        // prefix belongs to this receive core; old count UB is no longer used.
+        // prefix is shared and read-only; old count UB is no longer used.
         pipe_->Reset();
         const uint32_t prefixBytes = uint32_t(DispatchDedupAlign(uint64_t(experts_) * 4U, 32U));
         pipe_->InitBuffer(prefixBuf_, prefixBytes);
         GlobalTensor<int32_t> prefixGlobal;
         const auto counts = DispatchServerDedupCountLayout(experts_, coreNum_);
         prefixGlobal.SetGlobalBuffer(reinterpret_cast<__gm__ int32_t*>(args_->peerMems[args_->rank] + windowOffset_ +
-                                                                       counts.cntOffset + counts.prefixOffset +
-                                                                       uint64_t(receiver_) * counts.prefixStride));
+                                                                       counts.cntOffset + counts.prefixOffset));
         auto prefix = prefixBuf_.Get<int32_t>();
         DataCopyPad(prefix, prefixGlobal, {1U, prefixBytes, 0U, 0U, 0U}, {false, 0U, 0U, 0});
         ServerDedupReceiveSync<HardEvent::MTE2_S>();

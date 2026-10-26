@@ -157,3 +157,91 @@ int main() {
                    check=True, timeout=180)
     result = subprocess.run([str(executable)], check=True, capture_output=True, text=True, timeout=30)
     assert "PASS production count prefix: 32 partitions" in result.stdout
+
+
+def test_shared_prefix_publication_and_consumers_keep_the_ready_dependency():
+    counts = _source("dispatch_server_dedup_counts.h")
+    publish = _block(counts, "void ServerDedupCounts::CalRecvAndSetFlag()")
+    write = "DataCopyPad(workspaceGlobal[startStatusIndex_], outCountLocal, dataCopyOutParams)"
+    assert publish.count(write) == 1
+    assert "workspaceGlobal[index" not in publish
+    assert publish.index(write) < publish.index("SyncFunc<AscendC::HardEvent::MTE3_V>()")
+    assert publish.index("PipeBarrier<PIPE_MTE3>()") < publish.index("layout_.cumsumFlagOffset")
+    owner = _block(_block(counts, "void ServerDedupCounts::CompleteCumsum()"), "if (receiver == 0U)")
+    assert "DataCopyPad(prefix, workspace, copy, pad);" in owner
+    receive = _block(_source("dispatch_server_dedup_recv.h"), "void Process(")
+    assert "counts.cntOffset + counts.prefixOffset" in receive
+    assert "counts.prefixStride" not in receive
+    # Sum/readiness matrices still have their independent consumer rows.
+    assert "newAivId * UB_ALIGN" in _block(counts, "uint32_t ServerDedupCounts::GetCumSum(")
+    assert "(aivId_ - aivUsedAllToAll_) * aivUsedCumSum_ * UB_ALIGN" in _block(counts, "void ServerDedupCounts::WaitCumSumFlag()")
+
+
+def test_shared_prefix_layout_and_delayed_fragments(tmp_path):
+    zig = os.environ.get("DEEPEP_TEST_ZIG")
+    if not zig:
+        pytest.skip("Set DEEPEP_TEST_ZIG for C++ CPU validation")
+    split = _block(_source("dispatch_server_dedup_counts.h"), "void SplitToCore(")
+    source = tmp_path / "shared-prefix.cpp"
+    source.write_text(r'''
+#include <algorithm>
+#include <cassert>
+#include <cstdint>
+#include <iostream>
+#include <numeric>
+#include <vector>
+#include "kernels/dispatch/low_latency/common/ep_memory_server_dedup_count_layout.h"
+using namespace DispatchDedup;
+static void SplitToCore(uint32_t total,uint32_t cores,uint32_t core,
+                        uint32_t& start,uint32_t& end,uint32_t& count) {
+''' + split + r'''
+}
+int main() {
+    constexpr uint32_t guard=0x5a5a5a5aU;
+    unsigned cases=0;
+    for(uint32_t cores: {16U,28U,56U,72U}) for(uint32_t experts: {32U,64U,384U,1024U}) {
+        const uint32_t receivers=cores/2U,active=std::min(receivers,experts);
+        const auto layout=DispatchServerDedupCountLayout(experts,cores);
+        const uint64_t matrix=uint64_t(receivers)*receivers*32U;
+        // Capacity and every control offset remain bit-for-bit compatible.
+        assert(layout.cumsumOffset==uint64_t(experts)*512U);
+        assert(layout.prefixOffset==layout.cumsumOffset+matrix);
+        assert(layout.prefixStride==(uint64_t(experts)*4U+31U)/32U*32U);
+        assert(layout.cumsumFlagOffset==layout.prefixOffset+receivers*layout.prefixStride);
+        const uint64_t oldBytes=layout.cntOffset+layout.cumsumFlagOffset+matrix;
+        assert(layout.counterOffset==(oldBytes+1023U)/1024U*1024U);
+        assert(layout.stateBytes==layout.counterOffset+1024U);
+        for(unsigned iteration=0;iteration<4;++iteration) {
+            std::vector<uint32_t> gm(layout.stateBytes/4U+8U,guard),expected(experts),published(experts,guard);
+            uint32_t sum=0;
+            for(uint32_t i=0;i<experts;++i) {sum+=(i+iteration)%5U==0U?i%17U:0U;expected[i]=sum;}
+            std::vector<std::vector<bool>> ready(receivers,std::vector<bool>(active,false));
+            const uint64_t prefix=(layout.cntOffset+layout.prefixOffset)/4U;
+            // Reverse completion leaves producer0 last. No receiver can see a
+            // complete prefix until every producer publishes its existing flag.
+            for(uint32_t next=active;next>0U;--next) {
+                const uint32_t producer=next-1U;
+                uint32_t start,end,count;SplitToCore(experts,receivers,producer,start,end,count);
+                assert(count && end-start==count);
+                for(uint32_t i=start;i<end;++i) {assert(gm[prefix+i]==guard);gm[prefix+i]=expected[i];published[i]=expected[i];}
+                for(uint32_t consumer=0;consumer<receivers;++consumer) ready[consumer][producer]=true;
+                for(uint32_t consumer=0;consumer<receivers;++consumer) {
+                    const bool acquired=std::all_of(ready[consumer].begin(),ready[consumer].end(),[](bool v){return v;});
+                    assert(acquired==(producer==0U));
+                    if(acquired) for(uint32_t i=0;i<experts;++i) assert(gm[prefix+i]==expected[i]);
+                }
+            }
+            assert(published==expected); // sendCountsOut retains exact values.
+            for(uint64_t i=0;i<gm.size();++i)
+                if(i<prefix || i>=prefix+experts) assert(gm[i]==guard);
+            ++cases;
+        }
+    }
+    std::cout<<"PASS shared prefix: "<<cases<<" layouts/routes, delayed disjoint fragments, all consumers, untouched reservation\n";
+}
+''', encoding="utf-8")
+    executable = tmp_path / "shared-prefix.exe"
+    subprocess.run([zig, "c++", "-std=c++17", "-O1", "-UNDEBUG", "-I" + str(ROOT / "csrc"),
+                    str(source), "-o", str(executable)], check=True, timeout=180)
+    result = subprocess.run([str(executable)], check=True, capture_output=True, text=True, timeout=30)
+    assert "PASS shared prefix: 64 layouts/routes" in result.stdout

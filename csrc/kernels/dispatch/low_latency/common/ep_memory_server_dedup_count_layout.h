@@ -49,8 +49,8 @@ struct EpServerDedupCountLayout {
     uint64_t cntOffset;
     uint64_t cumsumOffset;
     uint64_t cumsumFlagOffset;
-    uint64_t prefixOffset;
-    uint64_t prefixStride;
+    uint64_t prefixOffset;  // One shared, read-only prefix begins here.
+    uint64_t prefixStride;  // Retained replica reservation: keep control offsets/capacity unchanged.
     uint64_t counterOffset;  // Retired counter: preserve its reserved layout, never read/write it.
     uint64_t stateBytes;
 };
@@ -73,6 +73,8 @@ DISPATCH_DEDUP_EP_DEDUP_INLINE EpServerDedupCountLayout DispatchServerDedupCount
     layout.cumsumOffset = uint64_t(experts) * kEpServerDedupCountGmStride;
     layout.prefixOffset = layout.cumsumOffset + matrixBytes;
     layout.prefixStride = (uint64_t(experts) * sizeof(int32_t) + 31U) / 32U * 32U;
+    // Only the first prefixStride is used. Retain the old reservation so this
+    // optimization does not move readiness controls or change the wire layout.
     layout.cumsumFlagOffset = layout.prefixOffset + recvCores * layout.prefixStride;
     const uint64_t bytes = layout.cntOffset + layout.cumsumFlagOffset + matrixBytes;
     layout.counterOffset = (bytes + 1023U) / 1024U * 1024U;
