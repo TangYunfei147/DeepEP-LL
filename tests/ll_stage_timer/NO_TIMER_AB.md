@@ -137,7 +137,8 @@ fi
 
 To inspect the stages separately, use `--stage timer`, then a second invocation
 with `--stage optimization` in the same build group. Neither selected run may
-already exist. Analysis combines completed stage plans; it never claims a failed
+already exist unless explicitly using `--resume` for that same saved plan.
+Analysis combines completed stage plans; it never claims a failed
 or partially executed block is complete. `--seeds 0 2` is available for a fresh
 matrix and doubles the default process count; do not mix or average seeds.
 
@@ -148,6 +149,58 @@ Exp plus scalar all-reduce before every sample. Actual seed/routes are restored
 after correctness checks and fingerprinted. Both arms use dispatch+combine.
 Changing numbers to5/50/30 would not reproduce cbd04eb's old consecutive-call
 protocol; that protocol is not mixed into this timer-removal comparison.
+
+## Resume after a failed measurement
+
+Update the controller checkout with `git pull --ff-only`, then repeat the same
+`run` command with `--resume`. Do not repeat `build`: the existing SDK, three
+wheels, venvs and frozen source clones are reused. The saved stage, seeds,
+devices, master address and ports must match. This works with groups created
+before `--resume` was introduced; no source projection or wheel rebuild is needed.
+
+For `--stage all --seeds 0`, if the first hotspot/replay-clean process failed
+after the two normal-route blocks, resume retains those eight validated runs
+and launches the four hotspot runs after three fresh Host preflight checks.
+If a failure occurred later inside a block, all four members of that incomplete
+ABBA block are repeated. A complete block is retained only if its raw samples,
+source/ABI identity and all four route fingerprints validate. Damaged completed
+results stop recovery rather than silently selecting a new measurement.
+
+From the same project root and target environment, retaining the job's original
+`MASTER_ADDR`, `MASTER_PORT` and `SHMEM_PORT`:
+
+```bash
+resume_no_timer_ab() {
+  git pull --ff-only || return $?
+  if [ -z "${MASTER_ADDR:-}" ] || [ -z "${MASTER_PORT:-}" ] || [ -z "${SHMEM_PORT:-}" ]; then
+    echo 'Set the same MASTER_ADDR, MASTER_PORT and SHMEM_PORT as the saved job.'
+    return 1
+  fi
+  python tests/ll_stage_timer/no_timer_ab.py run --run-name ll_no_timer_ab_001 \
+    --resume --stage all --seeds 0 \
+    --devices 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 \
+    --master-addr "$MASTER_ADDR" --master-port "$MASTER_PORT" --shmem-port "$SHMEM_PORT"
+}
+if resume_no_timer_ab; then
+  echo 'Return only diagnostic-runs/ll_no_timer_ab_001/SEND_FIRST.txt'
+else
+  echo 'Resume stopped. Existing and new logs remain; terminal remains open.'
+fi
+```
+
+New attempts use `runs/resume001/...` and `logs/runs/resume001/...`, incrementing
+on later explicit resumes. Old reports/logs are never moved or overwritten.
+`run-history/<saved-plan>/resume001.json` preserves the prior status and the
+retry decision. The final report identifies the selected attempt paths and the
+interruption; superseded samples are excluded from statistics. No automatic
+retry occurs. The error's final exit code alone does not diagnose its cause;
+inspect the failed process log if the same failure recurs.
+
+A fully completed `--resume` only regenerates analysis. A group lock rejects
+concurrent controllers; caught Ctrl-C records `interrupted` and releases it.
+An active state or a stale lock after a forced kill requires inspection of
+the stopped job before recovery; the script does not erase that lock or stop
+other processes automatically.
 
 ## Reading the result
 

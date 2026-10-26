@@ -2,7 +2,7 @@
 """Build three fixed wheels, then serially compare timer removal and stream receive.
 
 Planning and analysis use only the standard library. Build/run commands are for
-the user's Linux target; this helper never retries a failed measurement. SDK
+the user's Linux target; this helper never automatically retries a failed measurement. SDK
 admission, manifests, capabilities and library hashes are not checked.
 """
 from __future__ import annotations
@@ -11,6 +11,8 @@ import sys
 sys.dont_write_bytecode = True
 
 import argparse
+from contextlib import contextmanager
+from datetime import datetime, timezone
 import hashlib
 import importlib.util
 import json
@@ -23,6 +25,7 @@ import stat
 import statistics
 import subprocess
 import types
+import uuid
 
 ROOT = Path(__file__).resolve().parents[2]
 BASE = "439d4597a52b657858217bac7fc1e965f22507f7"
@@ -54,6 +57,7 @@ def parser():
         if name != "analyze":
             command.add_argument("--plan", action="store_true")
         if name == "run":
+            command.add_argument("--resume", action="store_true", help="Explicitly resume the same saved plan; retain complete ABBA blocks and repeat incomplete blocks in new directories")
             command.add_argument("--stage", choices=("timer", "optimization", "all"), default="all")
             command.add_argument("--devices", required=True)
             command.add_argument("--master-addr", required=True)
@@ -460,46 +464,176 @@ def _validate_plan(plan):
     _require(plan == make_run_plan(args, plan["root"]), "Run plan differs from the fixed ABBA matrix")
 
 
-def execute_run(plan):
+def _attempt_run(run, attempt):
+    """Derive output locations; a saved state cannot supply arbitrary commands."""
+    _require(type(attempt) is int and 0 <= attempt <= 999, "Invalid resume attempt")
+    result = dict(run, command=list(run["command"]))
+    if attempt:
+        folder = f"resume{attempt:03d}"
+        result["directory"] = "runs/" + folder + "/" + run["name"]
+        result["report"] = result["directory"] + "/full-report.json"
+        argv = result["command"]
+        directory_index, report_index = argv.index("--output-dir") + 1, argv.index("--output") + 1
+        output_root = Path(argv[directory_index]) / folder
+        argv[directory_index] = str(output_root)
+        argv[report_index] = str(output_root / run["name"] / "full-report.json")
+    return result
+
+
+def _run_log(group, run, attempt):
+    directory = Path(group) / "logs/runs"
+    if attempt:
+        directory /= f"resume{attempt:03d}"
+    return directory / (run["name"] + ".log")
+
+
+def _utc_now():
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _save_state(group, plan, state):
+    path = _local(group, group / plan["status_file"])
+    temporary = _local(group, path.with_name("." + path.name + "." + uuid.uuid4().hex + ".tmp"))
+    with temporary.open("x", encoding="utf-8", newline="\n") as output:
+        json.dump(state, output, indent=2)
+        output.write("\n")
+        output.flush()
+        os.fsync(output.fileno())
+    os.replace(temporary, path)
+
+
+@contextmanager
+def _run_lock(group):
+    path = _local(group, group / ".run.lock")
+    try:
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError as error:
+        raise ValueError("Run group is locked; another controller may be active. Inspect an interrupted process before handling its stale .run.lock") from error
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as output:
+            json.dump(dict(pid=os.getpid(), started_utc=_utc_now()), output)
+        yield
+    finally:
+        path.unlink()
+
+
+def _read_state(group, plan):
+    state = _json(_local(group, group / plan["status_file"]))
+    _require(state.get("format") == RUN_FORMAT and state.get("status") in {"preflight", "running", "failed", "interrupted", "completed"}, "Invalid saved run state")
+    records = state.get("runs")
+    _require(isinstance(records, list) and len(records) <= len(plan["runs"]), "Invalid saved run records")
+    for index, record in enumerate(records):
+        _require(record.get("name") == plan["runs"][index]["name"] and record.get("status") in {"running", "failed", "completed"}, "Saved run records differ from the ordered plan")
+        _attempt_run(plan["runs"][index], record.get("attempt", 0))
+        _require(index == len(records) - 1 or record["status"] == "completed", "Nonterminal failed/running record in saved state")
+    if state["status"] == "completed":
+        _require(len(records) == len(plan["runs"]) and all(record["status"] == "completed" for record in records), "Run group is incomplete; no completed report issued")
+    return state
+
+
+def _completed_blocks(group, plan, state, receipt):
+    """A block is reusable only after raw-sample and cross-arm route checks."""
+    count = 0
+    for start in range(0, len(plan["runs"]), 4):
+        records = state["runs"][start:start + 4]
+        if len(records) != 4 or any(record["status"] != "completed" for record in records):
+            break
+        _require(len({record.get("attempt", 0) for record in records}) == 1, "An ABBA block mixes resume attempts")
+        rows = []
+        for run, record in zip(plan["runs"][start:start + 4], records):
+            selected = _attempt_run(run, record.get("attempt", 0))
+            rows.extend(validate_report(_json(_local(group, group / selected["report"])), selected, receipt))
+        summarize(rows)
+        count += 4
+    return count
+
+
+def execute_run(plan, *, resume=False):
     _require(platform.system() == "Linux", "Run execution requires the user's Linux target; --plan is CPU-only")
     _validate_plan(plan)
-    group, root = Path(plan["group"]), Path(plan["root"])
+    group = _local(plan["root"], Path(plan["group"]))
     receipt = _build_receipt(group)
-    paths = [group / plan["plan_file"], group / plan["status_file"], *(group / run["directory"] for run in plan["runs"])]
-    _require(all(not _local(group, path).exists() for path in paths), "A selected stage/seed/order already exists; no sampling is overwritten or retried")
+    with _run_lock(group):
+        return _execute_run_locked(plan, receipt, resume=resume)
+
+
+def _execute_run_locked(plan, receipt, *, resume):
+    group, root = Path(plan["group"]), Path(plan["root"])
+    attempt, offset = 0, 0
+    stem = Path(plan["plan_file"]).stem
+    if resume:
+        saved = _json(_local(group, group / plan["plan_file"]))
+        _validate_plan(saved)
+        _require(saved == plan, "Resume arguments differ from the original saved plan; reuse the same stage, seeds, devices, address and ports")
+        previous = _read_state(group, plan)
+        _require(previous["status"] in {"failed", "interrupted", "completed"}, "Saved run is still active; explicit resume requires failed/interrupted/completed state")
+        offset = _completed_blocks(group, plan, previous, receipt)
+        if previous["status"] == "completed":
+            return analyze(group)
+        history_dir = _local(group, group / "run-history" / stem)
+        attempt = 1
+        while _local(group, history_dir / f"resume{attempt:03d}.json").exists():
+            attempt += 1
+        _require(attempt <= 999, "Resume attempt limit reached")
+        pending = [_attempt_run(run, attempt) for run in plan["runs"][offset:]]
+        for run in pending:
+            for path in (group / run["directory"], _run_log(group, run, attempt)):
+                _require(not _local(group, path).exists(), "Resume output already exists; no files were changed")
+        history_dir.mkdir(parents=True, exist_ok=True)
+        history = (history_dir / f"resume{attempt:03d}.json").relative_to(group).as_posix()
+        _write(group / history, dict(resumed_utc=_utc_now(), attempt=attempt, retained_blocks=offset // 4,
+               rerun_names=[run["name"] for run in pending], previous_state=previous), exclusive=True)
+        state = dict(format=RUN_FORMAT, status="preflight", runs=previous["runs"][:offset],
+                     resume_history=[*previous.get("resume_history", []), history])
+        print(f"[no-timer-ab] resume{attempt:03d}: retained {offset // 4} complete ABBA blocks; {len(pending)} sampling processes remain", flush=True)
+    else:
+        paths = [group / plan["plan_file"], group / plan["status_file"], *(group / run["directory"] for run in plan["runs"]),
+                 *(_run_log(group, run, 0) for run in plan["runs"])]
+        _require(all(not _local(group, path).exists() for path in paths), "A selected stage/seed/order already exists; use explicit --resume for the same saved plan")
+        for path in sorted((group / "run-plans").glob("*.json")):
+            other = _json(_local(group, path))
+            _validate_plan(other)
+            _require(not ({run["name"] for run in plan["runs"]} & {run["name"] for run in other["runs"]}), "A selected stage/seed/order already exists in another plan")
+        state = dict(format=RUN_FORMAT, status="preflight", runs=[])
+        pending = plan["runs"]
+    session = stem + (f"-resume{attempt:03d}" if attempt else "")
     for directory in ("run-plans", "run-status", "logs/run-preflight", "logs/runs", "runs"):
         _local(group, group / directory).mkdir(parents=True, exist_ok=True)
-    _write(group / plan["plan_file"], plan, exclusive=True)
-    state = dict(format=RUN_FORMAT, status="preflight", runs=[])
-    _write(group / plan["status_file"], state, exclusive=True)
+    if not resume:
+        _write(group / plan["plan_file"], plan, exclusive=True)
+    _save_state(group, plan, state)
     try:
         # Recheck all source/installed identities before the first device run.
         for variant in VARIANTS:
             proof = _proof(group, variant, root)
             _require(proof["source_sha256"] == receipt["variants"][variant]["source_sha256"], "Frozen source changed after building")
             layout = _layout(group, variant)
-            env = _environment(group, variant, run=Path(plan["plan_file"]).stem)
+            env = _environment(group, variant, run=session)
             _provision_environment(group, env)
-            log = group / "logs/run-preflight" / (Path(plan["plan_file"]).stem + "-" + variant + ".log")
+            log = _local(group, group / "logs/run-preflight" / (session + "-" + variant + ".log"))
             _command([str(layout["python"]), "-I", str(root / "tests/ll_stage_timer/no_timer_ab.py"), "_verify-host", "--group", str(group), "--variant", variant, "--controller", str(root)], layout["source"], env, log)
         state["status"] = "running"
-        for run in plan["runs"]:
-            record = dict(name=run["name"], status="running")
+        for run in pending:
+            record = dict(name=run["name"], status="running", attempt=attempt, started_utc=_utc_now())
             state["runs"].append(record)
-            _write(group / plan["status_file"], state)
-            env = _environment(group, run["variant"], run=run["name"], devices=plan["devices"])
+            _save_state(group, plan, state)
+            _local(group, (group / run["directory"]).parent).mkdir(parents=True, exist_ok=True)
+            log = _local(group, _run_log(group, run, attempt))
+            log.parent.mkdir(parents=True, exist_ok=True)
+            env = _environment(group, run["variant"], run=run["name"] + (f"-resume{attempt:03d}" if attempt else ""), devices=plan["devices"])
             _provision_environment(group, env)
-            _command(run["command"], _layout(group, run["variant"])["source"], env, group / "logs/runs" / (run["name"] + ".log"))
-            validate_report(_json(group / run["report"]), run, receipt)
+            _command(run["command"], _layout(group, run["variant"])["source"], env, log)
+            validate_report(_json(_local(group, group / run["report"])), run, receipt)
             record["status"] = "completed"
-            _write(group / plan["status_file"], state)
+            record["finished_utc"] = _utc_now()
+            _save_state(group, plan, state)
         state["status"] = "completed"
-        _write(group / plan["status_file"], state)
-    except Exception as error:
-        state.update(status="failed", error=type(error).__name__, message=str(error))
+        _save_state(group, plan, state)
+    except (Exception, KeyboardInterrupt) as error:
+        state.update(status="interrupted" if isinstance(error, KeyboardInterrupt) else "failed", error=type(error).__name__, message=str(error))
         if state["runs"] and state["runs"][-1]["status"] == "running":
             state["runs"][-1]["status"] = "failed"
-        _write(group / plan["status_file"], state)
+        _save_state(group, plan, state)
         raise
     return analyze(group)
 
@@ -552,6 +686,13 @@ def render_summary(receipt, plans, rows):
     for plan in plans:
         for run in plan["runs"]:
             lines.append(f"{run['stage']} | {run['route']} | {run['seed']} | {run['order']} | {run['side']}{run['repeat']} | {run['variant']} | {run['report']}")
+    resumed = [plan for plan in plans if plan.get("resume_history")]
+    if resumed:
+        lines += ["", "EXPLICIT RESUME: only complete validated ABBA blocks were retained; incomplete blocks were repeated in full.",
+                  "Original and superseded reports/logs remain on target. Paths above identify selected attempts; no samples are pooled across attempts.",
+                  "An interruption separates retained blocks from later blocks; each ABBA comparison remains within its own attempt."]
+        for plan in resumed:
+            lines.append(f"{Path(plan['plan_file']).stem}: {len(plan['resume_history'])} resumes; state snapshots under run-history/{Path(plan['plan_file']).stem}/")
     lines += ["", "COMPLETE TASK RESULTS (us; per-seed ABBA/BAAB, never averaging seeds)",
               "stage route seed B op | A1 A2 B1 B2 | Amean Bmean | delta_us delta_% | pooled_mean_A/B | pooled_p99_A/B | guard"]
     for row in summary:
@@ -581,11 +722,13 @@ def analyze(group):
         plan = _json(_local(group, path))
         _validate_plan(plan)
         _require(Path(plan["group"]) == group, "Saved run plan belongs to another group")
-        state = _json(_local(group, group / plan["status_file"]))
+        state = _read_state(group, plan)
         _require(state.get("status") == "completed" and [item.get("name") for item in state.get("runs", [])] == [run["name"] for run in plan["runs"]]
                  and all(item.get("status") == "completed" for item in state["runs"]), "Run group is incomplete; no completed report issued")
-        plans.append(plan)
-        for run in plan["runs"]:
+        _require(_completed_blocks(group, plan, state, receipt) == len(plan["runs"]), "Run group is incomplete")
+        selected_runs = [_attempt_run(run, record.get("attempt", 0)) for run, record in zip(plan["runs"], state["runs"])]
+        plans.append(dict(plan, runs=selected_runs, resume_history=state.get("resume_history", [])))
+        for run in selected_runs:
             _require(run["name"] not in names, "Duplicate run across plans")
             names.add(run["name"])
             rows.extend(validate_report(_json(_local(group, group / run["report"])), run, receipt))
@@ -630,15 +773,16 @@ def main(argv=None):
             if args.plan:
                 print(json.dumps(plan, indent=2))
                 return 0
-            result = execute_run(plan)
+            result = execute_run(plan, resume=args.resume)
         else:
-            result = analyze(group)
+            with _run_lock(group):
+                result = analyze(group)
         print(result)
         print("Build only: no NPU work." if args.action == "build" else "Return only SEND_FIRST.txt; raw results and logs stay on target.")
         return 0
-    except (ValueError, OSError, subprocess.SubprocessError) as error:
+    except (ValueError, OSError, subprocess.SubprocessError, KeyboardInterrupt) as error:
         print(f"No-timer A/B stopped: {error}. Existing sources, logs and results are preserved.", file=sys.stderr)
-        return 1
+        return 130 if isinstance(error, KeyboardInterrupt) else 1
 
 
 if __name__ == "__main__":

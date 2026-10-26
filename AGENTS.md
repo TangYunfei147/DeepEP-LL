@@ -13,6 +13,7 @@
 - 正式矩阵只纳入直接有cb59目标A/B收益的stream；pair/small无已证实正收益不入选，P1/单VF的不同前缀架构历史收益不混作已验证cb59收益。normalB32、hotspotB16+保留回退检查，不宣称优势。
 - 三wheel为replay-off/replay-clean/stream-clean，共用normal工程清理新编的一份SDK，每wheel清空native产物；全部构建/Host验证后才串行采样。SDK字段/哈希准入仍已删除，采样阶段不重编SDK。
 - 默认seed0、两阶段ABBA共12次ST，EP16/G16/S28R28/P0、B1/2/4/8/16/24/32 M32H3584K8E384，FP8 dispatch+BF16 combine、cpu0、10/100/尾50每轮Exp+scalar all-reduce。不得把旧cbd连续调用协议混入A/B；实际路由指纹/源码/本项目ABI和全rank一致性保护保留。单个≤60000字节报告，指南NO_TIMER_AB.md。
+- no_timer_ab.py支持显式run --resume，复用原SDK/三wheel/venv与冻结源码，不重新build；参数须匹配原计划。仅复用完整且原始数据/路由/身份核验通过的ABBA组，不完整组四次全重跑到resumeNNN新目录，原日志/结果/状态快照保留；禁止自动性能重试或拼接不同attempt。已完成则只分析，组互斥锁拒绝并发，Ctrl-C记录中断。
 
 ## 可复现独立版本只读检查（2026-10-26，当前步骤）
 
