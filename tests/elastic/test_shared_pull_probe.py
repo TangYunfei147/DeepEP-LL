@@ -40,11 +40,12 @@ def test_candidate_preserves_payload_and_output_handle_and_rejects_old_diagnosti
     source=RECV.read_text(encoding='utf-8')
     pub=method(source,'PublishSharedReference')
     assert 'DataCopy(output, wire' not in pub
-    assert pub.count('ServerDedupReceiveSync<HardEvent::MTE3_S>()')==2
+    assert pub.count('ServerDedupReceiveSync<HardEvent::MTE3_S>()')==1
     assert 'wire[uint32_t(data_.tokenStride)+32U]' in pub
     assert 'type.SetValue(0U,role)' in method(source,'RestoreSharedReference')
     prepare=method(source,'PrepareSharedReference')
     assert 'Slot(task)' in prepare and 'Slot(task)' not in pub
+    assert 'HardEvent::V_MTE3' in prepare and 'HardEvent::V_S' not in prepare
     assert source.index('if(pulledTerminal_[lane])')<source.index('const uint32_t role =')
     assert 'header.SetValue(3U,uint32_t(EpServerDedupTokenType::Terminal))' in source
     host=(ROOT/'csrc/ops/low_latency.cpp').read_text(encoding='utf-8')

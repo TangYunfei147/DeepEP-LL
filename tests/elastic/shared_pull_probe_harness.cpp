@@ -6,6 +6,7 @@
 #include <cstring>
 #include <stdexcept>
 #include <vector>
+#include <functional>
 #ifdef NDEBUG
 #error CPU packet/lifetime checks require enabled assertions
 #endif
@@ -18,11 +19,12 @@ using namespace DispatchDedup;
 #define LL_SEG_END(a,b)
 #define LL_SEG_SCOPE(a)
 #define LL_MTE3_DRAIN(a,b,c)
-enum class HardEvent {MTE2_S,MTE2_MTE3,MTE3_MTE2,V_S,S_MTE3,MTE3_S};
+enum class HardEvent {MTE2_S,MTE2_MTE3,MTE3_MTE2,V_S,V_MTE3,S_MTE3,MTE3_S};
 enum class CacheMode {CACHE_MODE_DISABLE};
 template<HardEvent E>void SetFlag(unsigned){}
 template<HardEvent E>void WaitFlag(unsigned){}
-template<HardEvent E>void ServerDedupReceiveSync(){}
+void RetireWrites();
+template<HardEvent E>void ServerDedupReceiveSync(){if constexpr(E==HardEvent::MTE3_S)RetireWrites();}
 void Trap(){throw std::runtime_error("bad descriptor");}
 template<class T>struct LocalTensor {
     uint8_t* p;
@@ -40,8 +42,13 @@ template<class T>struct GlobalTensor {
 struct Params {uint16_t count;uint32_t len,srcStride,dstStride,reserved;};
 template<class T>struct Pad {bool pad;uint8_t left,right;T value;};
 uint64_t writes=0,reads=0;
+std::vector<std::function<void()>> pendingWrites;
+void RetireWrites(){for(auto& op:pendingWrites)op();pendingWrites.clear();}
 template<class T>void DataCopyPad(GlobalTensor<T> dst,LocalTensor<T> src,Params p){
-    for(unsigned i=0;i<p.count;++i){std::memcpy(dst.p+i*(p.len+p.dstStride),src.p+i*(p.len+p.srcStride),p.len);writes+=p.len;}
+    for(unsigned i=0;i<p.count;++i){
+        pendingWrites.push_back([=]{std::memcpy(dst.p+i*(p.len+p.dstStride),src.p+i*(p.len+p.srcStride),p.len);});
+        writes+=p.len;
+    }
 }
 template<class T>void DataCopyPad(LocalTensor<T> dst,GlobalTensor<T> src,Params p,Pad<T>){
     for(unsigned i=0;i<p.count;++i){std::memcpy(dst.p+i*(p.len+p.dstStride),src.p+i*(p.len+p.srcStride),p.len);reads+=p.len;}
@@ -83,6 +90,8 @@ int main(){
     GlobalTensor<uint8_t> second{peers[3].data()+4096};
     pub.PublishSharedReference(second,wire,type);
     pub.RestoreSharedReference(type,2);
+    assert(!pendingWrites.empty()); // Final flags need not block Scalar/type restoration.
+    RetireWrites(); // Original lane retirement, before any scratch reuse.
     assert(writes==2*(32+8*32) && type.GetValue(0)==2);
     assert(!std::memcmp(dst.p,second.p,4096));
     assert(header.GetValue(0)==9&&header.GetValue(1)==17&&header.GetValue(2)==3&&header.GetValue(3)==3);

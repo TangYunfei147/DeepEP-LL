@@ -590,7 +590,9 @@ private:
         type.SetValue(3U,kLlSharedPullDescriptor);type.SetValue(4U,uint32_t(args_->rank));
         type.SetValue(5U,uint32_t(offset));type.SetValue(6U,uint32_t(offset>>32U));type.SetValue(7U,0U);
         Duplicate<float>(flags,1.0f,8U);
-        ServerDedupReceiveSync<HardEvent::V_S>();
+        // Flags are consumed by DMA, never by Scalar. Keep both producers'
+        // dependencies without stalling Scalar on the Vector initialization.
+        ServerDedupReceiveSync<HardEvent::V_MTE3>();
         ServerDedupReceiveSync<HardEvent::S_MTE3>();
     }
 
@@ -608,7 +610,8 @@ private:
         for(uint32_t block=0U;block<uint32_t(data_.blockCount);++block)
             DataCopyPad(output[block*512U+480U],flags.template ReinterpretCast<uint8_t>(),
                         {1U,32U,0U,0U,0U});
-        ServerDedupReceiveSync<HardEvent::MTE3_S>();
+        // Flags remain immutable through the original lane retirement. The
+        // earlier descriptor completion already permits restoring type[0].
     }
 
     __aicore__ inline void RestoreSharedReference(LocalTensor<uint32_t> type,uint32_t role)
