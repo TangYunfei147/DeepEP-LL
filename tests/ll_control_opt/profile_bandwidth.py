@@ -20,7 +20,7 @@ ROOT = Path(__file__).resolve().parents[2]
 BASELINE_REFERENCE = '9027275b31a28608296b1b71c93fa6e2bb456db5'
 # Same business algorithm as BASELINE_REFERENCE, with the separately committed
 # schema17 send-phase bandwidth instrumentation. Both OFF/ON wheels use this exact source.
-DIAGNOSTIC_REVISION = 'e297d1be86472e303508a597b3e4de56ed0c7f06'
+DIAGNOSTIC_REVISION = '0ebb65b59327e69b20f6e96b456fee5352be0ecc'
 STATE = Path('.tmp/ll-send-bandwidth')
 CONDITIONS = dict(observe=dict(mode='observe',mode_id=1),
                   complete=dict(mode='bandwidth-complete',mode_id=6))

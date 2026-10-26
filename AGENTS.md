@@ -1,3 +1,9 @@
+## MTE 消费 HNS PI 编译变体（2026-10-26）
+
+- 用户要求兼容固件 PI on chip 对 SHMEM 编译身份的影响；实际报错为 SDK 的合法额外字段 hns_1825_pi_on_chip=0，CANN版本/timestamp与环境一致。
+- MTE准入支持旧4字段、HNS旧5字段、HNS+PI的6字段身份，PI严格int0/1且需HNS_1825成对；Python复用/校验/CMake三处一致。其余版本、补丁、未知字段、完整文件哈希检查及同轮OFF/ON相同SDK要求不放松，不给MTE添加RDMA宏。
+- 带宽诊断固定0ebb65b（原e297d1b仅叠加SDK准入修复，csrc/deep_ep完全相同），旧失败缓存和SDK保留，正常重跑不需要--rebuild。
+
 ## 单机 shared-pull 快速穿刺（2026-10-26）
 
 - 新实验仅限 EP16/B=M256/H3584/K8/E384/G4/S30R26、预量化 FP8、timer OFF。默认 mode0 保留原路径；固定 control0c3c150 为 mode1（原转发+生命周期栅栏），pull762b5c6 为 mode2（32B引用+末端同组远端读+同栅栏）。协议分别19000/23000/24000+S，禁止混装。

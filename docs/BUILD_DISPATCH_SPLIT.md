@@ -1,5 +1,17 @@
 # LL dispatch compile partition
 
+## HNS PI SDK metadata compatibility (2026-10-26)
+
+The MTE consumer accepts the known `HNS_1825` capability with an optional,
+strict integer `hns_1825_pi_on_chip` value 0 or 1. Python reuse, SDK validation
+and CMake admission agree. CANN version/timestamp, source revision/patches,
+public headers and complete artifact checksums remain enforced; no RDMA/PI
+definitions are added to DeepEP's MTE targets. Existing SDKs are not rewritten.
+Bandwidth source `0ebb65b` differs from `e297d1b` only in those three admission
+files and their CPU test; all kernel and runtime Python files are unchanged.
+SDK regression: 69 passed; 17 real CMake configure cases skipped because CMake
+is unavailable locally. No CANN compilation or device execution was performed.
+
 ## Sending-stage bandwidth diagnostic (2026-10-26, current)
 
 The user selected business baseline `9027275`; the failed Vector-tail candidate

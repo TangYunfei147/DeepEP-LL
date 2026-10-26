@@ -3,7 +3,9 @@
 本实验按用户选择保留 `9027275b31a28608296b1b71c93fa6e2bb456db5` 的业务算法。
 失败的 Vector-tail 已撤销。新的诊断源码由 `profile_bandwidth.py` 的
 `DIAGNOSTIC_REVISION` 固定，OFF/ON 两份完整 wheel 使用同一源码、同一 SDK。
-本次冻结诊断源码为 `e297d1be86472e303508a597b3e4de56ed0c7f06`。
+本次冻结诊断源码为 `0ebb65b59327e69b20f6e96b456fee5352be0ecc`。
+它在原 `e297d1b` 上仅修改三处 SDK 身份准入及相关 CPU 测试；
+`csrc` 和 `deep_ep` 与原打点版本逐文件相同，不带入后续 shared-pull 实验。
 报告同时记录业务参考、实际诊断源码、runner、实际加载库和 SDK 的身份。
 
 固定配置：EP16、B=M256、H3584、K8、E384、G4、S30/R26、HT OFF、MTE、
@@ -102,6 +104,26 @@ SDK 用现有工程内构建和标准身份校验，不静默重建不兼容 SDK
 [BUILD_DISPATCH_SPLIT.md](../../docs/BUILD_DISPATCH_SPLIT.md) 的冷构建步骤。
 
 ## 回传与验证状态
+
+### HNS SDK 的 PI 编译变体兼容
+
+用户现有 SDK 为相同 SHMEM commit、CANN 9.2.0 和 timestamp，额外记录
+`rdma_backend="HNS_1825"` 与 `hns_1825_pi_on_chip=0`。原准入最多允许五个字段，
+因此在文件哈希检查和 kernel 编译之前报 `Existing SHMEM build identity changed`。
+
+现已在 Python 复用、SDK 身份校验和 CMake 三处一致接受合法六字段身份：
+PI 值须为整数0或1，并与 HNS_1825 成对。旧四字段 MTE、五字段 HNS 仍可复用。
+CANN version/timestamp、target、源码 revision/patches、完整头文件/库哈希仍须匹配，
+未知字段和错误类型继续拒绝。同轮 OFF/ON 必须使用相同 SDK manifest/library 哈希。
+这是 MTE 消费者的 SDK 能力兼容，不向 DeepEP 添加 HNS/PI 编译宏。
+
+新固定源码使用独立缓存，保留旧失败目录和原 SDK/manifest；不需要为此加 `--rebuild`。
+在原工程环境执行 `git pull --ff-only` 后重跑上述命令即可，推荐新的
+`--run-prefix send-bandwidth-pi-001`。构建脚本会复用并完整校验工程内的 SDK，
+不编辑它的 PI 字段或覆盖原记录。
+
+此兼容修复通过69项 SDK CPU 检查；本机无 CMake，17项真实配置检查跳过。
+未执行 CANN 编译或设备验证。下方数量为此前带宽诊断的回归记录。
 
 只回传 `results/ll-send-bandwidth/send-bandwidth-001/bandwidth-report.txt`。
 导出器按实际 UTF-8 字节拒绝超过65535的报告，不截断证据，交付数量为1/10。
