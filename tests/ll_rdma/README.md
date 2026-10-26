@@ -9,6 +9,8 @@ LL生产轮询不使用GetSystemCycle，锁定SHMEM SDK保持原实现。
 
 非去重dispatch的逐函数执行流程、伪代码、EP16与EP32完整例子见
 [NON_DEDUP_DISPATCH_FLOW.md](NON_DEDUP_DISPATCH_FLOW.md)。
+去重路径的FIRST_HOP分类、接收转发、sourceMask和权重例子见
+[DEDUP_DISPATCH_FLOW.md](DEDUP_DISPATCH_FLOW.md)。
 
 两机各一条命令的构建/测试/本机解析入口见 [ONE_CLICK.md](ONE_CLICK.md)：
 `bash tests/ll_rdma/one_click.sh NODE_RANK MASTER_IP RUN_NAME`，默认ON诊断，`--mode perf`为OFF性能。

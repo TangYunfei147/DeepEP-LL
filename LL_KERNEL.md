@@ -9,6 +9,7 @@
 当前NDR核心协议为9，切换版本须全 rank 安装匹配 wheel；SDK 配置和身份未改变时自动校验复用，无需仅因切分支重建。其他独立分支的ABI、G与调试协议以各自源码为准。
 
 非去重dispatch执行流程与具体例子见[NON_DEDUP_DISPATCH_FLOW](tests/ll_rdma/NON_DEDUP_DISPATCH_FLOW.md)。
+去重dispatch的FIRST_HOP、relay和权重流程见[DEDUP_DISPATCH_FLOW](tests/ll_rdma/DEDUP_DISPATCH_FLOW.md)。
 
 NDR 固定编入 HNS_1825 能力，`python scripts/build_shmem.py` 默认构建对应 SDK。普通构建/运行无需 `DEEPEP_LL_RDMA` 或 `DEEPEP_LL_BACKEND`。共同入口 `tests/ll_stage_timer/run.py` 按分支选择默认后端，只有纯 MTE 对照才加 `--backend mte`。
 
