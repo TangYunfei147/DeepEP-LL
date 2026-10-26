@@ -10,14 +10,11 @@ class DispatchRdmaBatch {
     uint32_t bytes_ = 0, slotBytes_ = 0, capacity_ = 0, count_ = 0;
     bool gated_ = false;
     GM_ADDR stageBase_ = nullptr;
+    uint32_t firstPeers_ = 0U;
     uint32_t peers_[kMaxPackets]{};
     GM_ADDR destinations_[kMaxPackets]{};
     LlStageTimer::DeviceTimer* timer_ = nullptr;
 
-    __aicore__ inline bool FirstPeer(uint32_t index) const {
-        for (uint32_t i = 0; i < index; ++i) if (peers_[i] == peers_[index]) return false;
-        return true;
-    }
     __aicore__ inline void ClearBodyGate(GM_ADDR stage) {
         GlobalTensor<uint32_t> gate;
         gate.SetGlobalBuffer(reinterpret_cast<__gm__ uint32_t*>(stage + 480U));
@@ -66,6 +63,9 @@ public:
         ClearBodyGate(stage);
         if (timer_) timer_->End(LlStageTimer::SendRdmaStage);
         peers_[count_] = peer;
+        bool first = true;
+        for (uint32_t i = 0; i < count_; ++i) if (peers_[i] == peer) { first = false; break; }
+        if (first) firstPeers_ |= uint32_t(1) << count_;
         if (timer_) timer_->Start(LlStageTimer::SendRdmaBodyPost);
         auto dst = RemoteAddress(args_, peer, offset);
         destinations_[count_] = dst;
@@ -85,7 +85,7 @@ public:
     __aicore__ inline void Flush(LocalTensor<uint8_t> scratch) {
         if (!count_) return;
         if (timer_) timer_->Start(LlStageTimer::SendRdmaBodyWait);
-        for (uint32_t i = 0; i < count_; ++i) if (FirstPeer(i)) Quiet(peers_[i], scratch);
+        for (uint32_t i = 0; i < count_; ++i) if (firstPeers_ & (uint32_t(1) << i)) Quiet(peers_[i], scratch);
         if (timer_) timer_->End(LlStageTimer::SendRdmaBodyWait);
         if (timer_) timer_->Start(LlStageTimer::SendRdmaFlagPost);
         for (uint32_t i = 0; i < count_; ++i) {
@@ -97,9 +97,10 @@ public:
         }
         if (timer_) timer_->End(LlStageTimer::SendRdmaFlagPost);
         if (timer_) timer_->Start(LlStageTimer::SendRdmaFlagWait);
-        for (uint32_t i = 0; i < count_; ++i) if (FirstPeer(i)) Quiet(peers_[i], scratch);
+        for (uint32_t i = 0; i < count_; ++i) if (firstPeers_ & (uint32_t(1) << i)) Quiet(peers_[i], scratch);
         if (timer_) timer_->End(LlStageTimer::SendRdmaFlagWait);
         count_ = 0;
+        firstPeers_ = 0U;
     }
 };
 }
