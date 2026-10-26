@@ -16,7 +16,7 @@ launch = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(launch)
 
 
-@pytest.mark.parametrize("mode", ["timer", "perf"])
+@pytest.mark.parametrize("mode", ["timer", "perf", "reference"])
 def test_defaults_use_real_st_parser_and_keep_modes_separate(mode):
     a = launch.parse_args(["1", "192.0.2.1", "run-001", "--mode", mode])
     arguments = launch.test_arguments(a)
@@ -29,10 +29,12 @@ def test_defaults_use_real_st_parser_and_keep_modes_separate(mode):
     assert [(case.num_tokens, case.dtype) for case in cases] == [(8, "bf16"), (8, "fp8")]
     assert options.warmup == 10 and options.num_iters == 100 and options.perf_tail == 50
     assert options.correctness_repeats == options.repeat_combine == 3
-    assert not options.skip_check and not options.dispatch_only
+    assert not options.skip_check and options.dispatch_only == (mode == "reference")
     assert options.group_backend == "hccl" and options.do_cpu_sync == 0
     assert options.ll_stage_timer == (mode == "timer")
-    assert options.skip_perf_test == (mode == "timer")
+    assert options.skip_perf_test == (mode != "perf")
+    assert options.ll_reference_profile == (mode == "reference")
+    if mode == "reference": assert options.ll_timer_iters == 1
     assert launch.run_id(a) == "run-001-" + mode
 
 
@@ -153,8 +155,8 @@ def test_bad_shape_rejected_before_any_preparation(tokens, monkeypatch):
         launch.main(["0", "192.0.2.1", "bad-shape", "--tokens", tokens])
 
 
-@pytest.mark.parametrize("mode", ["timer", "perf"])
-@pytest.mark.parametrize("fault", [None, "timer", "source", "sdk", "firmware", "library", "branch", "protocol"])
+@pytest.mark.parametrize("mode", ["timer", "perf", "reference"])
+@pytest.mark.parametrize("fault", [None, "timer", "source", "sdk", "firmware", "library", "branch", "protocol", "reference", "reference_metadata"])
 def test_installed_check_rejects_stale_or_mixed_builds(tmp_path, monkeypatch, mode, fault):
     root = tmp_path / "project"
     root.mkdir()
@@ -162,7 +164,8 @@ def test_installed_check_rejects_stale_or_mixed_builds(tmp_path, monkeypatch, mo
     package = root / ".venv-ll-rdma/lib/site-packages/deep_ep"
     package.mkdir(parents=True)
     sdk = {"build": {"hns_1825_pi_on_chip": 0}}
-    info = {"source_sha256": "source", "shmem": {"revision": "sdk", "build": dict(sdk["build"])}}
+    info = {"source_sha256": "source", "shmem": {"revision": "sdk", "build": dict(sdk["build"])},
+            "ll_stage_timer": mode == "timer", "ll_reference_profile": (mode == "reference") != (fault == "reference_metadata")}
     if fault == "source": info["source_sha256"] = "old"
     if fault == "sdk": info["shmem"]["revision"] = "old"
     if fault == "firmware": info["shmem"]["build"]["hns_1825_pi_on_chip"] = 1
@@ -171,6 +174,9 @@ def test_installed_check_rejects_stale_or_mixed_builds(tmp_path, monkeypatch, mo
         low_latency_implementation="wrong" if fault == "branch" else "ndr-hns1825",
         low_latency_core_protocol=8 if fault == "protocol" else 9, low_latency_rdma_enabled=True,
         low_latency_stage_timer_enabled=(mode == "timer") != (fault == "timer"),
+        low_latency_reference_profile_enabled=(mode == "reference") != (fault == "reference"),
+        low_latency_reference_profile_layout=lambda: dict(schema=1, slots=8, fields=8,
+            words=list(__import__('deep_ep.utils.ll_reference_profile_parse', fromlist=['WORDS']).WORDS)),
         low_latency_ranks_per_group=lambda world: 16,
         low_latency_stage_timer_layout=lambda: {"schema": 3},
         shmem_library_path=lambda: str(root / ("wrong.so" if fault == "library" else "third-party/shmem/install/shmem/lib/libshmem.so")))

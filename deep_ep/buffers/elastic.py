@@ -507,6 +507,8 @@ class ElasticBuffer:
                     }
                     from ..utils.ll_stage_timer import attach
                     attach(self, tensors, "dispatch")
+                    from ..utils.ll_reference_profile import attach as attach_reference
+                    attach_reference(self, tensors, "dispatch")
                     retained += tuple(value for key, value in tensors.items() if value is not None and key != "ll_stage_timer_mode")
                     runtime.notify_inflight = retained
                     for value in retained:
@@ -631,6 +633,8 @@ class ElasticBuffer:
                 }
                 from ..utils.ll_stage_timer import attach
                 attach(self, tensors, "combine")
+                from ..utils.ll_reference_profile import attach as attach_reference
+                attach_reference(self, tensors, "combine")
                 retained = tuple(value for key, value in tensors.items() if key != "ll_stage_timer_mode")
                 for value in retained:
                     if not isinstance(value, torch.Tensor):

@@ -4,6 +4,10 @@
 环境、完整ON wheel、稳定尾段采样与分析流程，使用本分支的NDR/SDK/计时schema。
 两台目标机各执行一条命令；不通过SSH连接其他机器、不终止其他作业。
 
+`--mode reference` 是仅LL dispatch的参考式打点，使用独立reference wheel并关闭旧stage/expert计时；
+默认1轮capture，自动生成逐核Excel。阶段定义、BS1命令和回传报告见
+[LL dispatch参考式逐核打点](../ll_reference_profile/README.md)。
+
 默认 EP32，每机设备0..15，B8/M256/H3584/K8/E384，BF16和预量化FP8两组，
 dispatch+combine，正确性检查保留。FP8配置的combine仍是BF16。
 此NDR性能分支仅编译LL，跳过与当前SHMEM内部UDMA接口不匹配的HT路径；

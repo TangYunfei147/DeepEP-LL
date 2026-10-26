@@ -56,9 +56,9 @@ def test_paired_count_records_live_until_the_existing_reuse_barrier():
     assert "return stagePool_;" in _block(counts, "ScratchPool()")
     assert "PipeBarrier<PIPE_ALL>();" in _block(counts, "void Finish()")
     kernel = (DEVICE.parent / "dispatch_server_dedup_kernel.h").read_text(encoding="utf-8")
-    assert "sender_.Process(counts_.ScratchPool(), counts_.ReservedBytes(), timer_)" in kernel
+    assert "sender_.Process(counts_.ScratchPool(), counts_.ReservedBytes(), timer_, profile_)" in kernel
     complete = kernel.index("counts_.CompleteCumsum();")
-    consume = kernel.index("receiver_.Process(timer_);")
+    consume = kernel.index("receiver_.Process(timer_, profile_);")
     assert "PipeBarrier<PIPE_ALL>();" in kernel[complete:consume]
 
 

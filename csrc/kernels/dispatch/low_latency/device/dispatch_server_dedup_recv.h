@@ -5,6 +5,7 @@
 #define DISPATCH_SERVER_DEDUP_RECV_H
 #include "../common/ll_stage_timer_device.h"
 #include "../common/ll_expert_timer_device.h"
+#include "../common/ll_reference_profile_device.h"
 
 #include "kernel_operator.h"
 #include "ll_transport.h"
@@ -56,7 +57,8 @@ public:
     }
 
     // 摘要：执行接收主流程：加载前缀、构建任务、批量探测、预取并消费就绪包，最后清理本核槽位标记。
-    __aicore__ inline void Process(LlStageTimer::DeviceTimer* timer = nullptr)
+    __aicore__ inline void Process(LlStageTimer::DeviceTimer* timer = nullptr,
+                                   LlReferenceProfile::DeviceProfile* profile = nullptr)
     {
         timer_ = timer;
         if (timer) timer->Start(LlStageTimer::RecvPrepare);
@@ -75,15 +77,24 @@ public:
         auto prefix = prefixBuf_.Get<int32_t>();
         DataCopyPad(prefix, prefixGlobal, {1U, prefixBytes, 0U, 0U, 0U}, {false, 0U, 0U, 0});
         ServerDedupReceiveSync<HardEvent::MTE2_S>();
+        if (profile) profile->Mark<30>();
 
         // 2. 按前缀定义的接收输出行均分任务，建立稳定槽位表和可压缩的 pending 表。
         // j 始终标识固定输出行/槽位；pending 下标只表示尚未消费的任务位置。
         tasks_.Build(prefix, uint32_t(args_->rank), uint32_t(args_->rankSize), experts_, bs_, receiver_, pipe_, recvCoreNum_);
-
-
+        if (profile) {
+            profile->Mark<31>();
+            profile->Value<37>(tasks_.Count());
+        }
         // 空任务核没有拥有的接收槽，完成打点后直接返回，无需参与 packet 轮询。
         if (timer) timer->End(LlStageTimer::RecvPrepare);
         if (tasks_.Count() == 0U) {
+            // These are observed zero counters, not missing timestamps.
+            if (profile) {
+                profile->Value<33>(0U);
+                profile->Value<34>(0U);
+                profile->Value<41>(0U);
+            }
             return;
         }
 
@@ -120,6 +131,13 @@ public:
         // 它们按相同顺序推进，保证 consumed % lanes_ 对应之前预取的同一个 packet。
         if (timer) timer->End(LlStageTimer::RecvPrepare);
         uint32_t scan = 0U, issued = 0U, consumed = 0U;
+        if (profile) profile->Mark<32>();
+#ifdef DEEPEP_LL_REFERENCE_PROFILE
+        // Three clocks per ready batch, none per empty scan or packet. These
+        // scalar accumulators are written to GM only after the loop completes.
+        uint64_t pollCycles = 0U, consumeCycles = 0U, batches = 0U;
+        const bool referenceEnabled = profile && profile->Enabled();
+#endif
         while (tasks_.PendingCount() != 0U) {
             // Include all empty scans in one wait interval. Recording every
             // retry perturbs the polling loop and can exhaust the trace buffer.
@@ -127,6 +145,9 @@ public:
             // Probe 对每个 packet 检查全部块标记，不是只看到首块就认为数据可读。
 
             if (timer) timer->Start(LlStageTimer::RecvWait);
+#ifdef DEEPEP_LL_REFERENCE_PROFILE
+            const uint64_t pollBegin = referenceEnabled ? profile->Clock() : 0U;
+#endif
             uint32_t count;
             ProbeResult probe;
             do {
@@ -136,6 +157,14 @@ public:
                 probe = Probe(scan, count);
                 if (probe.readyMask == 0U) scan += count;
             } while (probe.readyMask == 0U);
+#ifdef DEEPEP_LL_REFERENCE_PROFILE
+            const uint64_t pollEnd = referenceEnabled ? profile->Clock() : 0U;
+            if (referenceEnabled) {
+                pollCycles += pollEnd - pollBegin;
+                if (batches == 0U) profile->Value<42>(pollEnd);
+                ++batches;
+            }
+#endif
             if (timer) timer->End(LlStageTimer::RecvWait);
             if (timer) timer->Start(LlStageTimer::RecvConsume);
 
@@ -162,6 +191,9 @@ public:
                 tasks_.RemovePending(scan + index);
                 ++consumed;
             }
+#ifdef DEEPEP_LL_REFERENCE_PROFILE
+            if (referenceEnabled) consumeCycles += profile->Clock() - pollEnd;
+#endif
             if (timer) timer->End(LlStageTimer::RecvConsume);
         }
         if (timer) timer->Start(LlStageTimer::RecvCleanup);
@@ -173,9 +205,18 @@ public:
         // completion barrier. The existing final PIPE_ALL establishes completion.
 
         ClearFlags();
+        if (profile) profile->Mark<35>();
 
         // 最终流水屏障确保输出、relay 和标记清理完成。
         PipeBarrier<PIPE_ALL>();
+        if (profile) profile->Mark<36>();
+#ifdef DEEPEP_LL_REFERENCE_PROFILE
+        if (referenceEnabled) {
+            profile->Value<33>(pollCycles);
+            profile->Value<34>(consumeCycles);
+            profile->Value<41>(batches);
+        }
+#endif
         if (timer) timer->End(LlStageTimer::RecvCleanup);
     }
 

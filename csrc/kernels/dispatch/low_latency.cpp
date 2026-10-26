@@ -5,6 +5,7 @@
 #include "low_latency/launch.hpp"
 #include "low_latency/common/ll_core_config.h"
 #include "low_latency/common/ll_group_policy.h"
+#include "low_latency/common/ll_reference_profile_layout.h"
 
 #if CATLASS_ARCH == 3510
 extern "C" void dispatch_server_dedup_launch_prequant_e4m3_g4(void*, const deepep::EpServerDedupKernelArgs*);
@@ -29,6 +30,18 @@ extern "C" DEEPEP_EXPORT uint32_t deepep_ll_stage_timer_enabled()
 #else
     return 0U;
 #endif
+}
+extern "C" DEEPEP_EXPORT uint32_t deepep_ll_reference_profile_enabled()
+{
+#ifdef DEEPEP_LL_REFERENCE_PROFILE
+    return 1U;
+#else
+    return 0U;
+#endif
+}
+extern "C" DEEPEP_EXPORT uint32_t deepep_ll_reference_profile_schema()
+{
+    return LlReferenceProfile::kSchema;
 }
 extern "C" DEEPEP_EXPORT uint32_t deepep_ll_ranks_per_group(uint32_t world)
 {

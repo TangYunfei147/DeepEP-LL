@@ -1,0 +1,109 @@
+# LL dispatch 参考式逐核打点与 Excel
+
+本入口只测 LL dispatch。阶段与用户提供的逐核 Excel 对齐：29 项耗时，
+原始记录每核 64 个 uint64；实际核数仍由平台与当前设备查询，保持原收发分工。
+参考 ZIP 的 HT dispatch 使用每点一次 GetSystemCycle 和一次独占 GM scalar 写；
+本实现采用这一记录方式，不移植 HT 算法、固定 64 核或参考实验的业务改动。
+
+## 与旧计时器的区别
+
+使用独立构建 `DEEPEP_LL_REFERENCE_PROFILE=ON`，同时固定
+`DEEPEP_LL_STAGE_TIMER=OFF`。两个开关不能同时开启；旧阶段和专家计时在本构建中
+完全关闭。普通 OFF 和原有 timer 入口继续可用，新记录有独立格式、schema 和能力检查。
+SDK、通信协议9、公开 dispatch 输入输出以及原有流水依赖保持。
+
+- 每个固定边界只记录一次时间戳，不做旧计时器的 first/start/sum/count GM 读改写。
+- packet ready 的空扫描不插点；每个有就绪包的批次只读三次时钟，计算轮询和消费累计。
+  两个累计量和批次数保留在 Scalar，结束后写出；首次 ready 复用已有 poll-end 时间。
+- 不在每个包的量化、打包、RDMA post/quiet、输出和转发内增加嵌套打点。
+- 不增加活跃 UB、lane、event 或业务 PIPE_ALL。记录末尾按参考做本核诊断缓存写回和 DDR fence。
+- 主边界记录仍有指令、GM store、寄存器和最终写回成本。低开销设计不等于零扰动，
+  是否比旧计时器更快需要目标机完整 task 对照，不能仅比较不含写回的核内 cycle。
+
+## 两机采样
+
+各机加载已有 CANN 环境，在相同绝对路径的工程根目录运行；使用同一提交和参数。
+每机16卡，EP32。匹配 SDK 复用，本次只需构建匹配的完整 wheel。
+依赖准备只允许 SHMEM：`git submodule update --init --recursive --depth 1 -- third-party/shmem`。
+
+```bash
+ndr_reference() {
+    git pull --ff-only || return
+    bash tests/ll_rdma/one_click.sh "$1" 192.0.2.10 ndr-reference-001 \
+        --mode reference --tokens 1 --dtype fp8 --reference-iters 1
+}
+# 节点0使用0，节点1使用1。替换示例IP为节点0真实IPv4；重跑换run名。
+if ndr_reference 0; then
+    printf '%s\n' 'LL dispatch reference capture completed'
+else
+    printf '%s\n' 'Capture failed; inspect project logs'
+fi
+```
+
+上述例子为 B1/M256/H3584/K8/E384、预量化 FP8、只测 dispatch；
+不是参考文件中的 EP64 实验。去掉 `--tokens 1 --dtype fp8` 将按入口默认 B8、
+BF16和预量化FP8分别运行，不把不同dtype/shape合成一个表。
+`--reference-iters` 控制独立诊断轮数，默认1；10次预热和100次稳定调用后再采集，
+稳定调用和诊断轮次每次均执行既有 Exp + scalar all_reduce，预热仅调用算子。保留当前项目采样协议，
+不把参考 ZIP 或历史表格的 50 轮/尾30当作本入口的采样配置。
+
+所有节点都须参与运行；脚本不通过 SSH 启动另一机。每机解析本机16个 global ranks，
+第二台保留 rank16..31，不重编号。完整 EP32 表需要汇集同一run的两机原始样本，
+再使用 `--require-all-ranks`；缺失远端rank不补零。
+
+## 结果和离线导出
+
+run位于 `results/ll-ndr/ndr-reference-001-reference/`。
+自动分析每个case/route，生成 `core_stage_timings.xlsx`、CSV、JSON及紧凑回传报告。
+已有新格式样本重新导出无需重编或重采；旧 schema3 数据不能转换为这些缺失的参考边界。
+
+```bash
+python tests/ll_reference_profile/analyze.py \
+    --input results/ll-ndr/ndr-reference-001-reference \
+    --output-dir results/ll-ndr/ndr-reference-001-reference/export-002 \
+    --iteration last
+```
+
+Excel 的结构对应参考表：
+
+| 工作表 | 内容 |
+|---|---|
+| 采样汇总 | 全部诊断轮的逐rank最长单核跨度统计、实际配置、分析范围；无OFF数据不伪造性能对照 |
+| 逐核耗时 | 指定单轮的所有rank/核，29项耗时、任务数、ready批次数；默认末轮，非多轮均值 |
+| 阶段说明 | 同核word换算、频率、主阶段/细分包含关系和当前NDR边界 |
+| 原始Cycle | 选中单轮的完整64word，包括时间点、累计值、有效位和身份字段 |
+
+`--iteration N` 使用从0开始的诊断轮编号。所有轮原始JSON保留目标机，汇总仍统计全部轮次。
+Excel/原始样本可能超过回传上限，留在目标机查看；只回传生成的紧凑报告，
+每份实际UTF-8字节不超过60000，整个run提供一个回传文件，不要求上传所有xlsx和日志。
+
+## 阶段边界和解读
+
+主阶段依次覆盖入口配置、Init、magic、计数Init、收发Init、SendCnt；
+发送核执行 Sender，接收核执行 RecvCnt、CalcCumsum、CompleteCumsum、既有计数drain、Receiver；
+最后所有核执行 Counts.Finish。细分包含计数ready、cumsum跨核等待、prefix ready、
+接收前缀/任务/缓冲准备、每批轮询/消费累计、接收清理与最终drain，以及发送路由准备/提交/收尾。
+
+与参考阶段一一对应，但实际NDR业务依赖按当前源码解释：
+
+- `w39` 紧接 SendWithDedup/SendWithoutDedup 返回；`w40-w39` 包含现有输入复用退休、
+  尾 RDMA batch 的 body/flag quiet、lane回收及source metadata完成。不能把这些业务成本排除。
+- packed-count ready 后的dense记录加载属于RecvCnt剩余部分；clear-status位于当前
+  CalcCumsum中GetCumSum之后，不虚称全部清理都在RecvCnt里。
+- `w21-w0` 是核入口至 Counts.Finish 已有最终PIPE_ALL/CTRL恢复，不含末尾诊断发布；
+  `w57-w0` 是诊断发布前的跨度。两者都不是profiler完整task或Host API延迟。
+- `w33/w34` 是每批区间累计，`w41` 是有ready包的批次数，不是包数或空扫描次数。
+- 只有同一核内时间戳作差。默认1000 ticks/µs；无频率时保留ticks。
+  原始大整数保留精度，先用Python整数做差，不让Excel大时间戳相减丢精度。
+- 未执行阶段留空，已执行但耗时为0保留0。父子和并行阶段不能相加，
+  也不能把不同核各阶段的最大值相加当作kernel时延。
+
+源码入口为 `dispatch_variant_kernel.h`、`dispatch_server_dedup_kernel.h` 和
+`device/dispatch_server_dedup_{counts,send,recv}.h`；记录契约在
+`common/ll_reference_profile_layout.h`，纯CPU解析在 `deep_ep/utils/ll_reference_profile_parse.py`。
+
+## 验证范围
+
+CPU检查覆盖记录完整性、阶段换算、空任务/真零、动态核数、大整数精度、构建互斥与Excel导出。
+编译/Host导入验证另行记录；设备正确性、实际性能和打点扰动必须在目标机测量。
+不得把CPU模拟样本或表格预览作为实测结果。

@@ -140,6 +140,7 @@ def test_moved_checkout_with_spaces_and_other_cwd(tmp_path):
     assert (moved/'report/stages.csv').is_file()
     env=dict(os.environ,ASCEND_HOME_PATH=str(tmp_path/'synthetic-toolchain'))
     env.pop('CANN_ENV',None)
-    actual=subprocess.check_output(['bash','-c','source "$1"; printf "%s" "$LL_TIMER_ROOT"','bash',
-                                    str(moved/'scripts/ll_timer_env.sh')],cwd=away,env=env,text=True)
+    path_command = 'cygpath -aw "$LL_TIMER_ROOT"' if os.name == 'nt' else 'printf "%s" "$LL_TIMER_ROOT"'
+    actual=subprocess.check_output(['bash','-c','source "$1"; '+path_command,'bash',
+                                    str(moved/'scripts/ll_timer_env.sh')],cwd=away,env=env,text=True).strip()
     assert Path(actual)==moved

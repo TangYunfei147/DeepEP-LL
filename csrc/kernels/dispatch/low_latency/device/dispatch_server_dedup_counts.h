@@ -10,6 +10,7 @@
 #include "ll_count_frame_receive.h"
 #include "ll_route_exchange.h"
 #include "../common/ll_count_frame_layout.h"
+#include "../common/ll_reference_profile_device.h"
 #include "adv_api/reduce/sum.h"
 #include "../common/ep_memory_server_dedup_count_layout.h"
 
@@ -28,9 +29,10 @@ public:
     // 摘要：绑定路由与计数输出，选择本轮控制区；保存并调整 CTRL[60]，供整数位模式的 FP32 归约使用。
     __aicore__ inline void Init(GM_ADDR commArgs, GM_ADDR expertIds, GM_ADDR expertTokenNumsOut, GM_ADDR sendCountsOut,
                                 uint32_t bs, uint32_t topK, uint32_t experts, uint32_t expertTokenNumsType,
-                                int64_t magic, TPipe* pipe)
+                                int64_t magic, TPipe* pipe, LlReferenceProfile::DeviceProfile* profile = nullptr)
     {
         tpipe_ = pipe;
+        profile_ = profile;
         args_ = reinterpret_cast<const __gm__ DispatchDedup::CommArgs*>(commArgs);
         epRankId_ = args_->rank;
         epWorldSize_ = args_->rankSize;
@@ -146,6 +148,7 @@ private:
     __aicore__ inline void WaitCumSumFlag();
 
     TPipe* tpipe_ = nullptr;
+    LlReferenceProfile::DeviceProfile* profile_ = nullptr;
     const __gm__ DispatchDedup::CommArgs* args_ = nullptr;
     EpServerDedupCountLayout layout_{};
     uint64_t stateOffset_ = 0;
@@ -384,7 +387,9 @@ __aicore__ inline void ServerDedupCounts::CompleteCumsum()
     statusFp32Tensor_ = readyBuf_.Get<float>();
     statusCleanFp32Tensor_ = cleanBuf_.Get<float>();
     // 各核先写前缀再发完成标记；全部标记到齐后，读取才不会混入未更新片段。
+    if (profile_) profile_->Mark<28>();
     WaitCumSumFlag();
+    if (profile_) profile_->Mark<29>();
     // 仅接收组的第 0 核写公开专家计数，避免多核重复写同一输出。
     // 每个专家最后一个来源 rank 的前缀即该专家结束位置；type=0 输出累计数，
     // 其他已验证类型输出与上一专家累计数之差，即该专家自己的接收条数。
@@ -607,6 +612,7 @@ __aicore__ inline void ServerDedupCounts::WaitDispatch()
     DataCopyParams intriParams{static_cast<uint16_t>(recStatusNumPerCore_), 1,
                                static_cast<uint16_t>(CNT_GM_STRIDE_BLOCKS - 1U), 0};
     SyncFunc<AscendC::HardEvent::S_V>();
+    if (profile_) profile_->Mark<24>();
     while (sumOfFlag != compareTarget) {
         if (packedFrames_) {
             ReadCountFrames(statusFp32Tensor_, windowInstatusFp32Tensor_, readPlan, false);
@@ -618,6 +624,7 @@ __aicore__ inline void ServerDedupCounts::WaitDispatch()
         SyncFunc<AscendC::HardEvent::V_S>();
         sumOfFlag = statusSumOutTensor.GetValue(0);
     }
+    if (profile_) profile_->Mark<25>();
 
     if (packedFrames_) {
         // Commit acquired: load the actual dense records, preserving the old
@@ -637,7 +644,9 @@ __aicore__ inline void ServerDedupCounts::CalRecvAndSetFlag()
     uint32_t newAivId = aivId_ - aivUsedAllToAll_;
     // 当前 UB 中是片段内前缀；先等待所有片段总数，再累加编号更小接收核的总数。
     // 这样得到全 rank 接收表中的基址，各核可独立修正自己负责的片段。
+    if (profile_) profile_->Mark<26>();
     const uint32_t offset = GetCumSum(newAivId);
+    if (profile_) profile_->Mark<27>();
     if (packedFrames_) WaitDispatchClearStatus();
 
     if (recStatusNumPerCore_ != 0U) {

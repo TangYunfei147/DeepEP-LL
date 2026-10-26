@@ -256,8 +256,10 @@ class StageTrace:
 def capture(buffer, operation, mode='observe', frequency_hz=DEFAULT_FREQUENCY_HZ,
             *, prepared=None, defer_complete=False):
     """Capture exactly one payload LL call; use independently of profiler loops."""
+    import sys
+    reference = sys.modules.get('deep_ep.utils.ll_reference_profile')
     active = getattr(_state, 'active', {})
-    if id(buffer) in active:
+    if id(buffer) in active or id(buffer) in getattr(getattr(reference, '_state', None), 'active', {}):
         raise RuntimeError('Nested timer contexts for the same buffer are unsupported')
     trace = prepared if prepared is not None else StageTrace(buffer, operation, mode, frequency_hz)
     if prepared is not None and (trace.buffer is not buffer or trace.operation != operation or

@@ -259,6 +259,9 @@ def build_configuration(environment=None):
     default_shmem = ROOT / "third-party/shmem/install/shmem"
 
     result["ll_stage_timer"] = enabled("DEEPEP_LL_STAGE_TIMER", env)
+    result["ll_reference_profile"] = enabled("DEEPEP_LL_REFERENCE_PROFILE", env)
+    if result["ll_stage_timer"] and result["ll_reference_profile"]:
+        raise RuntimeError("DEEPEP_LL_REFERENCE_PROFILE and DEEPEP_LL_STAGE_TIMER are mutually exclusive")
     result["ll_rdma"] = ndr_rdma_enabled(env)
     result["build_type"] = env.get("DEEPEP_BUILD_TYPE", "RelWithDebInfo" if lineinfo else "Release")
     if result["build_type"] not in {"Release", "RelWithDebInfo", "Debug"}:
@@ -425,6 +428,10 @@ class VariantBuild(ConfiguredBuild):
         variant = "megamoe-timer" if beta and timer else ("megamoe" if beta else "core")
         if enabled("DEEPEP_LL_STAGE_TIMER"):
             variant += "-ll-timer"
+        if enabled("DEEPEP_LL_REFERENCE_PROFILE"):
+            if enabled("DEEPEP_LL_STAGE_TIMER"):
+                raise RuntimeError("DEEPEP_LL_REFERENCE_PROFILE and DEEPEP_LL_STAGE_TIMER are mutually exclusive")
+            variant += "-ll-reference"
         self.build_base = str(Path(self.build_base) / variant)
         super().finalize_options()
 
@@ -462,6 +469,7 @@ class CMakeBuild(build_ext):
             f"-DCMAKE_BUILD_TYPE={configuration['build_type']}",
             f"-DDEEPEP_DEVICE_JOBS={jobs}",
             f"-DDEEPEP_LL_STAGE_TIMER={'ON' if configuration.get('ll_stage_timer', False) else 'OFF'}",
+            f"-DDEEPEP_LL_REFERENCE_PROFILE={'ON' if configuration.get('ll_reference_profile', False) else 'OFF'}",
             f"-DPython_EXECUTABLE={sys.executable}",
             f"-Dpybind11_DIR={pybind11.get_cmake_dir()}",
             f"-DCMAKE_CXX_COMPILER={configuration['compiler_path']}",
@@ -545,6 +553,7 @@ class CMakeBuild(build_ext):
         report = directory / "build-timing.json"
         timing = {"cache_key": fingerprint, "configure_skipped": configure_skipped,
                   "ll_stage_timer": configuration.get("ll_stage_timer", False),
+                  "ll_reference_profile": configuration.get("ll_reference_profile", False),
                   "source_sha256": configuration["source_sha256"], "jobs": int(jobs),
                   "completed_unix_ns": time.time_ns(), "seconds": seconds}
         report.write_text(json.dumps(timing, indent=2) + "\n", encoding="utf-8")

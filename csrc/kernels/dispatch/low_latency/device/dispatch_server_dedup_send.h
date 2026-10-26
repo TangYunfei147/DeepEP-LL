@@ -7,6 +7,7 @@
 #ifndef DISPATCH_SERVER_DEDUP_SEND_H
 #define DISPATCH_SERVER_DEDUP_SEND_H
 #include "../common/ll_stage_timer_device.h"
+#include "../common/ll_reference_profile_device.h"
 
 #include "kernel_operator.h"
 #include "ll_transport.h"
@@ -66,8 +67,17 @@ public:
 
     // 摘要：执行本核发送主流程：准备 UB、优先发送去重首跳、再发送 DIRECT，最后写回源端元数据。
     __aicore__ inline void Process(TBufPool<TPosition::VECCALC, 16>& scratch, uint32_t reservedBytes,
-                                   LlStageTimer::DeviceTimer* timer = nullptr)
+                                   LlStageTimer::DeviceTimer* timer = nullptr,
+                                   LlReferenceProfile::DeviceProfile* profile = nullptr)
     {
+        // Count assigned original routes, not deduplicated packets. Auto splits
+        // flat routes independently of the token slice used for output weights.
+        if (profile && profile->Enabled()) {
+            const uint32_t routes = bs_ * k_;
+            const uint32_t assigned = enableDedup_ ? count_ * k_ :
+                routes / sendCores_ + (GetBlockIdx() < routes % sendCores_ ? 1U : 0U);
+            profile->Value<43>(assigned);
+        }
         // 1. 无 token 分片的发送核直接返回；有任务的核复用 SendCnt 释放出的 scratch。
         // reservedBytes 对应仍可能被计数发送读取的 UB，不能当作可用空间覆盖。
         if (!LlSenderHasWork(enableDedup_, count_, bs_ * k_, GetBlockIdx())) return;
@@ -159,11 +169,15 @@ public:
         PipeBarrier<PIPE_V>();
 
         if (timer_) timer_->End(LlStageTimer::SendPrepare);
+        if (profile) profile->Mark<38>();
         if (timer_) timer_->Start(LlStageTimer::SendPayload);
         if (enableDedup_)
             SendWithDedup(input);
         else
             SendWithoutDedup(input);
+        // Reference boundary: packet scheduling has returned. The existing
+        // trailing RDMA batch Flush remains in the drain/metadata interval.
+        if (profile) profile->Mark<39>();
         SenderInputOperations inputOperations{*this, input};
         inputReuse_.Finish(inputOperations);
         if (rdmaBatch_.Pending()) {
@@ -186,6 +200,7 @@ public:
             DataCopyPad(weightOut_[uint64_t(start_) * k_], enableDedup_ ? sourceWeights_ : routeWeights_,
                         {1U, count_ * k_ * 4U, 0U, 0U, 0U});
         Sync<HardEvent::MTE3_S>();
+        if (profile) profile->Mark<40>();
         if (timer_) timer_->End(LlStageTimer::SendMetadata);
     }
 

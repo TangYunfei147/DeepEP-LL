@@ -23,7 +23,7 @@ def parse_args(argv=None):
     p.add_argument("node_rank", type=int, choices=(0, 1))
     p.add_argument("master_addr", help="Reachable numeric IPv4 address of node 0; identical on both hosts")
     p.add_argument("run_name", help="New shared name; the script appends -timer or -perf")
-    p.add_argument("--mode", choices=("timer", "perf"), default="timer")
+    p.add_argument("--mode", choices=("timer", "perf", "reference"), default="timer")
     p.add_argument("--devices", default=",".join(map(str, range(16))))
     p.add_argument("--tokens", nargs="+", type=int, default=[8])
     p.add_argument("--dtype", nargs="+", choices=("bf16", "fp8"), default=["bf16", "fp8"])
@@ -33,6 +33,7 @@ def parse_args(argv=None):
     p.add_argument("--experts", type=int, default=384)
     p.add_argument("--route", choices=("normal", "hotspot"), default="normal")
     p.add_argument("--timer-iters", type=int, default=5)
+    p.add_argument("--reference-iters", type=int, default=1)
     p.add_argument("--master-port", type=int, default=29500)
     p.add_argument("--shmem-port", type=int, default=29501)
     p.add_argument("--ready-port", type=int, default=29502)
@@ -60,6 +61,8 @@ def parse_args(argv=None):
         p.error("--skip-build cannot be combined with --rebuild-shmem")
     if not 1 <= a.ready_timeout <= 86400:
         p.error("ready-timeout must be in 1..86400 seconds")
+    if not 1 <= a.reference_iters <= 1000:
+        p.error("reference-iters must be in 1..1000")
     return a
 
 
@@ -90,13 +93,16 @@ def test_arguments(a):
     if a.mode == "timer":
         result += ["--ll-stage-timer", "--ll-timer-iters", str(a.timer_iters),
                    "--ll-timer-mode", "observe", "--ll-timer-frequency-hz", "1000000000", "--skip-perf-test"]
+    elif a.mode == "reference":
+        result += ["--dispatch-only", "--ll-reference-profile", "--ll-timer-iters", str(a.reference_iters),
+                   "--ll-timer-frequency-hz", "1000000000", "--skip-perf-test"]
     return result
 
 
 def command_plan(a, python):
     commands = []
     if not a.skip_build:
-        commands += [["git", "submodule", "update", "--init", "--recursive", "--depth", "1"],
+        commands += [["git", "submodule", "update", "--init", "--recursive", "--depth", "1", "--", "third-party/shmem"],
                      [str(python), "scripts/build_shmem.py", *(["--rebuild"] if a.rebuild_shmem else [])],
                      [str(python), "-m", "pip", "install", "-r", "requirements-build.txt"],
                      [str(python), "-m", "pip", "install", "-v", "--force-reinstall", "--no-build-isolation", "--no-deps", "."]]
@@ -120,6 +126,7 @@ def child_environment(a):
     env.update({key: a.devices for key in VISIBILITY})
     env.update(DEEPEP_NPU_ARCH="Ascend950", DEEPEP_LL_BACKEND="rdma",
                DEEPEP_LL_STAGE_TIMER="ON" if a.mode == "timer" else "OFF",
+               DEEPEP_LL_REFERENCE_PROFILE="ON" if a.mode == "reference" else "OFF",
                PYTHONDONTWRITEBYTECODE="1", PYTHONUNBUFFERED="1", GIT_TERMINAL_PROMPT="0")
     return env
 
@@ -171,6 +178,19 @@ def installed_identity(a):
         raise RuntimeError("Installed wheel is not the current NDR protocol-9 implementation")
     if not native.low_latency_rdma_enabled or bool(native.low_latency_stage_timer_enabled) != (a.mode == "timer"):
         raise RuntimeError("Installed RDMA/timer capability does not match the requested mode")
+    reference = getattr(native, 'low_latency_reference_profile_enabled', None)
+    if type(reference) is not bool or reference != (a.mode == 'reference'):
+        raise RuntimeError('Installed reference-profile capability does not match the requested mode')
+    if type(info.get('ll_reference_profile')) is not bool or info['ll_reference_profile'] != reference:
+        raise RuntimeError('Installed reference-profile metadata and native capability differ')
+    if reference:
+        from deep_ep.utils.ll_reference_profile_parse import SCHEMA, SLOTS, FIELDS, WORDS
+        layout = native.low_latency_reference_profile_layout()
+        if (layout != dict(schema=SCHEMA, slots=SLOTS, fields=FIELDS, words=list(WORDS)) or
+                any(type(layout.get(key)) is not int for key in ('schema', 'slots', 'fields'))):
+            raise RuntimeError('Installed reference-profile schema differs from this NDR branch')
+        if info.get('ll_stage_timer') is not False:
+            raise RuntimeError('Reference-profile wheel must compile legacy stage tracing OFF')
     if native.low_latency_ranks_per_group(32) != 16 or native.low_latency_stage_timer_layout()["schema"] != 3:
         raise RuntimeError("Installed group/timer schema differs from this NDR branch")
     if Path(native.shmem_library_path()).resolve() != (sdk_root / "lib/libshmem.so").resolve():
@@ -183,7 +203,8 @@ def installed_identity(a):
     shared_args[shared_args.index("--node-rank") + 1] = "<node>"
     return {"schema": 1, "project_root": str(ROOT.resolve()), "git_revision": revision,
             "source_sha256": fingerprint, "sdk_revision": lock["revision"], "sdk_build": sdk["build"],
-            "core_protocol": 9, "timer_schema": 3, "mode": a.mode, "arguments": shared_args}
+            "core_protocol": 9, "timer_schema": 3, "reference_profile": reference,
+            "reference_profile_schema": 1 if reference else None, "mode": a.mode, "arguments": shared_args}
 
 
 def peer_identity(identity):
@@ -260,6 +281,9 @@ def main(argv=None):
     if a.mode == "timer":
         run_logged([python, "tests/ll_stage_timer/analyze.py", result,
                     "--trace-iteration", str(a.timer_iters - 1), "--frequency-hz", "1000000000"],
+                   env, logs / "40-analysis.log")
+    elif a.mode == "reference":
+        run_logged([python, "tests/ll_reference_profile/analyze.py", result, "--iteration", "last"],
                    env, logs / "40-analysis.log")
     print(f"PASS node {a.node_rank}: {result}\nLogs: {logs}", flush=True)
     return 0

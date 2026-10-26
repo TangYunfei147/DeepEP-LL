@@ -8,6 +8,7 @@
 #include "common/dispatch_dedup_types.h"
 #include "common/ep_memory_server_dedup_tiling.h"
 #include "common/ll_dispatch_variant.h"
+#include "common/ll_reference_profile_device.h"
 #include "launch.hpp"
 
 #define DEEPEP_LL_JOIN_IMPL(a, b) a##b
@@ -51,7 +52,12 @@ extern "C" [[bisheng::core_ratio(0, 1)]] __global__ __aicore__ void DEEPEP_LL_VA
     GM_ADDR relayReadIndexOut, GM_ADDR sourceMaskOut, GM_ADDR expertScalesOut, GM_ADDR tilingData,
     int64_t reservedMagic, GM_ADDR inputScales, GM_ADDR stageTimer, uint32_t timerMode, GM_ADDR expertTimer)
 {
+    const uint64_t referenceEntry = LlReferenceProfile::DeviceProfile::EntryClock(stageTimer);
     util_set_ffts_config(reinterpret_cast<const __gm__ DispatchDedup::CommArgs*>(commArgs)->fftsVal);
+    LlReferenceProfile::DeviceProfile profile;
+    profile.Init(stageTimer);
+    profile.Value<0>(referenceEntry);
+    profile.Mark<1>();
     LlStageTimer::DeviceTimer timer;
     timer.Init(stageTimer, 1U, timerMode);
     timer.Start(LlStageTimer::Kernel);
@@ -86,13 +92,15 @@ extern "C" [[bisheng::core_ratio(0, 1)]] __global__ __aicore__ void DEEPEP_LL_VA
             kPrequantized, DEEPEP_LL_VARIANT_GROUP> kernel;
         kernel.Init(commArgs, x, expertIds, expertScales, expandXOut, dynamicScalesOut, expertTokenNumsOut, sendCountsOut,
                     tokenTypeOut, destinationIndexOut, relayReadIndexOut, sourceMaskOut, expertScalesOut, bs, h, topK,
-                    moeExpertNum, expertTokenNumsType, &pipe, inputScales, enableDedup, &timer, &expert);
+                    moeExpertNum, expertTokenNumsType, &pipe, inputScales, enableDedup, &timer, &expert, &profile);
         timer.End(LlStageTimer::WorkerInit);
         kernel.Process();
     }
     timer.End(LlStageTimer::Kernel);
     expert.Finish();
     timer.Finish();
+    profile.Finish(uint32_t(reinterpret_cast<const __gm__ DispatchDedup::CommArgs*>(commArgs)->rank),
+                   uint32_t(reinterpret_cast<const __gm__ DispatchDedup::CommArgs*>(commArgs)->rankSize), bs);
 }
 
 extern "C" DEEPEP_EXPORT void DEEPEP_LL_VARIANT_LAUNCH(void* stream, const deepep::EpServerDedupKernelArgs* args)

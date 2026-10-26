@@ -5,7 +5,8 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def test_cycle_clock_is_confined_to_explicit_timer_headers():
-    diagnostic = {"ll_stage_timer_device.h", "ll_expert_timer_device.h"}
+    diagnostic = {"ll_stage_timer_device.h", "ll_expert_timer_device.h",
+                  "ll_reference_profile_device.h"}
     for directory in (ROOT / "csrc/kernels/dispatch/low_latency",
                       ROOT / "csrc/kernels/combine/low_latency"):
         for source in directory.rglob("*"):
@@ -16,7 +17,9 @@ def test_cycle_clock_is_confined_to_explicit_timer_headers():
             if source.name not in diagnostic:
                 assert "GetSystemCycle" not in text, source
             else:
-                assert "#ifdef DEEPEP_LL_STAGE_TIMER" in text, source
+                guard = ("DEEPEP_LL_REFERENCE_PROFILE" if source.name == "ll_reference_profile_device.h"
+                         else "DEEPEP_LL_STAGE_TIMER")
+                assert f"#ifdef {guard}" in text, source
 
 
 def test_ll_build_keeps_legacy_ht_and_barrier_clock_paths_out():

@@ -18,5 +18,5 @@ def test_frame_mapping_and_transport(tmp_path):
 def test_commit_clear_follows_all_receiver_snapshots():
     s=(ROOT/'csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_counts.h').read_text(encoding='utf-8')
     assert 'if (!packedFrames_) WaitDispatchClearStatus();' in s
-    assert 'const uint32_t offset = GetCumSum(newAivId);\n    if (packedFrames_) WaitDispatchClearStatus();' in s
+    assert 'const uint32_t offset = GetCumSum(newAivId);\n    if (profile_) profile_->Mark<27>();\n    if (packedFrames_) WaitDispatchClearStatus();' in s
     assert 'if (expert == frame.firstExpert)' in s

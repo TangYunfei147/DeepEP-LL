@@ -62,7 +62,7 @@ def prepare(root=ROOT, *, rebuild=False, if_needed=True, allow_local_changes=Fal
     lock = json.loads((root / "dependencies.lock.json").read_text(encoding="utf-8"))
     source = root / "third-party/shmem"
     if not (source / ".git").exists() or not (source / "scripts/build.sh").is_file():
-        raise RuntimeError("Initialize dependencies first: git submodule update --init --recursive")
+        raise RuntimeError("Initialize dependencies first: git submodule update --init --recursive --depth 1 -- third-party/shmem")
     if source.resolve() != source or source.parent.resolve() != source.parent:
         raise RuntimeError("SHMEM source must not be a symlink to another checkout")
 

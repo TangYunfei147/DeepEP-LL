@@ -9,6 +9,7 @@ Use --help for launch, configuration, and profiling options.
 
 import argparse
 import csv
+import hashlib
 import math
 import re
 import tempfile
@@ -33,6 +34,21 @@ def validate_stage_timer_capability(requested, capability):
         raise RuntimeError("All ranks must install a DEEPEP_LL_STAGE_TIMER=ON wheel")
     if capability["stage_timer_schema"] != 3:
         raise RuntimeError("LL byte diagnostics require timer schema 3; rebuild/install the matching wheel on every rank")
+
+
+def diagnostic_requested(args):
+    return args.ll_stage_timer or getattr(args, 'll_reference_profile', False)
+
+
+def validate_reference_profile_capability(requested, capability):
+    if not requested:
+        return
+    if (capability.get('reference_profile') is not True or capability.get('stage_timer') is not False or
+            type(capability.get('reference_profile_schema')) is not int or capability['reference_profile_schema'] != 1):
+        raise RuntimeError('All ranks need the matching reference-profile schema 1 wheel with legacy stage tracing OFF')
+    fingerprint = capability.get('installed_source_sha256')
+    if not isinstance(fingerprint, str) or re.fullmatch(r'[0-9a-f]{64}', fingerprint) is None:
+        raise RuntimeError('Reference profiling requires the installed source fingerprint on every rank')
 
 
 MATRIX_FIELDS = ("num_tokens", "dtype", "num_experts", "hidden", "num_topk", "do_cpu_sync", "fp8_scale_dtype")
@@ -85,9 +101,10 @@ def comparison_metadata(args, world, m):
                 case=case_config(args,m), route=args.route, seed=args.seed,
                 warmup=args.warmup, num_iters=args.num_iters, perf_tail=args.perf_tail,
                 delay_rows=args.delay_rows, delay_cols=args.delay_cols, group_backend=args.group_backend,
-                timer_mode=args.ll_timer_mode if args.ll_stage_timer else None,
-                timer_iters=args.ll_timer_iters if args.ll_stage_timer else 0,
+                timer_mode=('reference' if getattr(args, 'll_reference_profile', False) else args.ll_timer_mode) if diagnostic_requested(args) else None,
+                timer_iters=args.ll_timer_iters if diagnostic_requested(args) else 0,
                 frequency_hz=args.ll_timer_frequency_hz, stage_capture=args.ll_stage_timer,
+                reference_capture=bool(getattr(args, 'll_reference_profile', False)),
                 expert_capture=args.ll_expert_timer, do_handle_copy=args.do_handle_copy,
                 correctness_repeats=args.correctness_repeats, repeat_combine=args.repeat_combine,
                 skip_check=args.skip_check, dispatch_only=args.dispatch_only,
@@ -190,6 +207,7 @@ def make_parser():
     parser.add_argument("--warmup", type=int, default=10)
     parser.add_argument("--num-iters", type=int, default=100)
     parser.add_argument("--ll-stage-timer", action="store_true", help="Separate device-stage diagnostic calls; requires timer-enabled wheel")
+    parser.add_argument("--ll-reference-profile", action="store_true", help="Separate dispatch-only reference cycle capture; requires reference ON and legacy timer OFF wheel")
     parser.add_argument('--ll-expert-timer', action='store_true', help='Opt-in dispatch per-expert receive work; implies stage capture, requires ABI 5')
     parser.add_argument("--ll-timer-iters", type=int, default=5)
     parser.add_argument("--ll-timer-mode", choices=("observe", "drain"), default="observe")
@@ -408,6 +426,8 @@ def parse_args(argv=None):
                 )
     args = make_parser().parse_args(configured + argv)
     if args.ll_expert_timer: args.ll_stage_timer=True
+    if args.ll_reference_profile and not any(value == '--ll-timer-iters' or value.startswith('--ll-timer-iters=') for value in configured + argv):
+        args.ll_timer_iters = 1
     for name in ("output_dir", "output"):
         value = getattr(args, name)
         if value:
@@ -480,7 +500,14 @@ def validate_args(args, world):
     if args.ll_timer_frequency_hz is not None and (not math.isfinite(args.ll_timer_frequency_hz) or args.ll_timer_frequency_hz <= 0):
         raise ValueError("Timer counter frequency must be positive and finite")
     if args.ll_expert_timer: args.ll_stage_timer=True
-    if args.ll_stage_timer and args.skip_check:
+    if getattr(args, 'll_reference_profile', False):
+        if args.ll_stage_timer or args.ll_expert_timer:
+            raise ValueError('Reference profiling cannot run with legacy stage/expert tracing')
+        if not args.dispatch_only:
+            raise ValueError('Reference profiling requires --dispatch-only')
+        if args.ll_timer_mode != 'observe':
+            raise ValueError('Reference profiling has fixed scalar boundaries; drain is unsupported')
+    if diagnostic_requested(args) and args.skip_check:
         raise ValueError("Stage diagnostics require correctness checks")
     if args.warmup < 0 or args.num_iters < 1 or args.repeat_combine < 2:
         raise ValueError("Require warmup>=0, num-iters>=1 and repeat-combine>=2")
@@ -800,6 +827,9 @@ def create_run_directory(parent, name=None):
 
 
 def new_stage_trace(buffer, operation, args, rank):
+    if getattr(args, 'll_reference_profile', False):
+        from deep_ep.utils.ll_reference_profile import ReferenceTrace
+        return ReferenceTrace(buffer, operation, frequency_hz=args.ll_timer_frequency_hz)
     from deep_ep.utils.ll_stage_timer import StageTrace
     if getattr(args, 'll_expert_timer', False) and operation == 'dispatch':
         import torch.distributed as dist
@@ -811,13 +841,19 @@ def new_stage_trace(buffer, operation, args, rank):
 def diagnostic_calls(buffer, invoke, check, args, operation, rank, m, mode,
                      *, prepared=None, prelude_buffers=None):
     """Sample a stabilized tail, retaining outputs/timers until all launches finish."""
-    from deep_ep.utils.ll_stage_timer import capture, StageTrace
+    reference = bool(getattr(args, 'll_reference_profile', False))
+    if reference:
+        from deep_ep.utils.ll_reference_profile import capture
+    else:
+        from deep_ep.utils.ll_stage_timer import capture
     from deep_ep._native import require_native
     import torch
     import torch.distributed as dist
     world = dist.get_world_size()
     logical_group = compiled_group(require_native("LL timer"),world)
-    directory = Path(args.run_directory) / f"case_{args.case_id:05d}" / mode / "ll_stage_timer" / operation / f"rank_{rank:03d}"
+    capture_mode = 'reference' if reference else args.ll_timer_mode
+    capture_directory = 'll_reference_profile' if reference else 'll_stage_timer'
+    directory = Path(args.run_directory) / f"case_{args.case_id:05d}" / mode / capture_directory / operation / f"rank_{rank:03d}"
     if prepared is None:
         prepared = []
         def allocate():
@@ -841,7 +877,7 @@ def diagnostic_calls(buffer, invoke, check, args, operation, rank, m, mode,
     pending = []
     for iteration, trace in enumerate(prepared):
         sampling_prelude(delay, alignment, args)
-        with capture(buffer, operation, args.ll_timer_mode, args.ll_timer_frequency_hz,
+        with capture(buffer, operation, capture_mode, args.ll_timer_frequency_hz,
                      prepared=trace, defer_complete=True):
             output = invoke()
             output[-1].current_stream_wait()
@@ -853,22 +889,24 @@ def diagnostic_calls(buffer, invoke, check, args, operation, rank, m, mode,
         agree_check(lambda: check(output), args, rank)
         metadata = dict(rank=rank, world_size=world, iteration=iteration,
                         comparison=comparison_metadata(args,world,m),
-                        run_id=Path(args.run_directory).name, seed=args.seed, case_id=args.case_id,
+                        run_id=Path(args.run_directory).name, seed=args.seed, route=mode, case_id=args.case_id,
                         correctness="passed", config={**case_config(args, m),
                         "logical_group_size": logical_group},
                         protocol="stabilized diagnostic tail; Exp+scalar all_reduce; deferred validation/export; excluded from profiler",
                         sampling=dict(after_perf=after_perf, warmup=args.warmup, settle_iters=args.num_iters,
                                       diagnostic_iters=args.ll_timer_iters, delay_rows=args.delay_rows,
                                       delay_cols=args.delay_cols, group_backend=args.group_backend,
-                                      expert_timer=bool(getattr(args,'ll_expert_timer',False))))
+                                      expert_timer=bool(getattr(args,'ll_expert_timer',False)),
+                                      reference_profile=reference))
+        if reference:
+            metadata.update(profile_seed=args.reference_profile_seed, route_sha256=args.reference_route_sha256)
         agree_check(lambda: trace.save(directory / f"sample_{iteration:04d}.json", metadata), args, rank)
 
 
 def sample_operation(buffer, invoke, check, args, operation, rank, m, mode, progress):
     """Keep the diagnostic tail identical with and without external profiling."""
     prepared = None
-    if args.ll_stage_timer:
-        from deep_ep.utils.ll_stage_timer import StageTrace
+    if diagnostic_requested(args):
         prepared = []
         def allocate():
             for _ in range(args.ll_timer_iters):
@@ -878,13 +916,13 @@ def sample_operation(buffer, invoke, check, args, operation, rank, m, mode, prog
         diagnostic_calls(buffer, invoke, check, args, operation, rank, m, mode, prepared=prepared,
                          prelude_buffers=None if delay is None else (delay, alignment))
     if args.skip_perf_test:
-        if args.ll_stage_timer:
+        if diagnostic_requested(args):
             progress(f'{operation}.diagnostic')
             diagnostic()
         return None
     profile = Path(args.run_directory) / f'case_{args.case_id:05d}' / mode / operation / f'rank_{rank:03d}'
     return measure(invoke, args, operation, profile, progress,
-                   after_profile=diagnostic if args.ll_stage_timer else None)
+                   after_profile=diagnostic if diagnostic_requested(args) else None)
 
 
 def run_case(buffer, args, rank, world, m, mode):
@@ -967,6 +1005,20 @@ def run_case(buffer, args, rank, world, m, mode):
             torch.npu.synchronize()
             agree_check(lambda: verify_dispatch(recv, handle, entries, args, world, m), args, rank)
     if args.dispatch_only:
+        if getattr(args, 'll_reference_profile', False):
+            # Correctness probes varied the seed above; capture the declared route.
+            completion_boundary(args)
+            routes = make_routes(world, args.num_tokens, args.num_topk, args.num_experts, args.seed, mode)
+            args.reference_profile_seed = args.seed
+            args.reference_route_sha256 = hashlib.sha256(
+                json.dumps(routes, separators=(',', ':')).encode('utf-8')).hexdigest()
+            entries = expert_entries(routes, args.num_experts, world, rank)
+            counts = [len(rows) for rows in entries]
+            indices = torch.tensor(routes[rank], dtype=torch.int64, device='npu')
+            recv, recv_idx, recv_weights, handle, event = dispatch()
+            event.current_stream_wait()
+            torch.npu.synchronize()
+            agree_check(lambda: verify_dispatch(recv, handle, entries, args, world, m), args, rank)
         result = {
             "case_id": args.case_id,
             "route": mode,
@@ -1031,7 +1083,7 @@ def run_case(buffer, args, rank, world, m, mode):
         "backend": "ll",
         "config": case_config(args, m),
     }
-    if not args.skip_perf_test or args.ll_stage_timer:
+    if not args.skip_perf_test or diagnostic_requested(args):
         if rank == 0:
             print(f"[LL ST] timing dispatch/combine: warmup={args.warmup}, iterations={args.num_iters}", flush=True)
         perf = sample_operation(buffer, dispatch,
@@ -1108,6 +1160,13 @@ def worker(local_rank, args):
                       "stage_timer": bool(getattr(native, "low_latency_stage_timer_enabled", False)),
                       "stage_timer_schema": native.low_latency_stage_timer_layout()["schema"],
                       "expert_timer_requested": bool(args.ll_expert_timer)}
+        if getattr(args, 'll_reference_profile', False):
+            info = json.loads(Path(deep_ep.__file__).with_name('_build_info.json').read_text(encoding='utf-8'))
+            if info.get('ll_reference_profile') is not True or info.get('ll_stage_timer') is not False:
+                raise RuntimeError('Installed reference build metadata does not match the requested capture')
+            capability.update(reference_profile=getattr(native, 'low_latency_reference_profile_enabled', None),
+                              reference_profile_schema=native.low_latency_reference_profile_layout()['schema'],
+                              installed_source_sha256=info.get('source_sha256'))
         capabilities = [None] * world
         trace_call(args, "capability.all_gather", dist.all_gather_object, capabilities, capability)
         if any(item != capabilities[0] for item in capabilities):
@@ -1120,6 +1179,7 @@ def worker(local_rank, args):
         if capability['transport']=='rdma' and not capability['rdma_compiled']:
             raise RuntimeError('Requested RDMA is not compiled in this wheel; no MTE fallback')
         validate_stage_timer_capability(args.ll_stage_timer, capability)
+        validate_reference_profile_capability(getattr(args, 'll_reference_profile', False), capability)
         if args.ll_expert_timer and capability['core_protocol'] not in (5, 6, 7, 8, 9):
             raise RuntimeError('Expert diagnostics require ABI 5 on every rank')
         args.ll_stage_timer_capabilities = capabilities
