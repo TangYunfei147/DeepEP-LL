@@ -616,9 +616,7 @@ __aicore__ inline void ServerDedupCounts::WaitDispatch()
     DataCopyParams intriParams{static_cast<uint16_t>(recStatusNumPerCore_), 1,
                                static_cast<uint16_t>(CNT_GM_STRIDE_BLOCKS - 1U), 0};
     SyncFunc<AscendC::HardEvent::S_V>();
-    LlTransport::PollDeadline deadline(LlTransport::Rdma(args_));
     while (sumOfFlag != compareTarget) {
-        deadline.Check();
         if (packedFrames_) {
             ReadCountFrames(statusFp32Tensor_, windowInstatusFp32Tensor_, readPlan, false);
         } else DataCopy(statusFp32Tensor_,

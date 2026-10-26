@@ -13,19 +13,6 @@ template<HardEvent E> __aicore__ inline void Sync(uint32_t id) {
     SetFlag<E>(id);
     WaitFlag<E>(id);
 }
-// Same raw-cycle bound as the pinned SDK's Ascend950 CQ timeout. Disabled for MTE.
-class PollDeadline {
-    bool enabled_;
-    uint64_t start_;
-public:
-    __aicore__ explicit PollDeadline(bool enabled): enabled_(enabled), start_(enabled ? GetSystemCycle() : 0U) {}
-    __aicore__ inline void Check() {
-        if (enabled_ && GetSystemCycle()-start_ > 60000000000ULL) {
-            AscendC::printf("LL RDMA receive timeout on core %u\n", GetBlockIdx());
-            Trap();
-        }
-    }
-};
 __aicore__ inline bool Rdma(const __gm__ Args* a) { return a->reservedConfig[0] == LlRdma::kBackend; }
 __aicore__ inline bool SameHost(const __gm__ Args* a, uint32_t peer) {
     return DispatchDedup::LlSameHost(uint32_t(a->rank), peer,

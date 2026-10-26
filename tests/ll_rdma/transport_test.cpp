@@ -101,9 +101,5 @@ int main() {
     assert(trapped && Model::puts-p==3U); // bodies only; no flags after a CQ failure
     for(unsigned b=0;b<1536;b+=512) assert(remote[16384+b+480]==0);
     Model::before={}; Model::pending.clear();
-    cycles=0; LlTransport::PollDeadline deadline(true), off(false); cycles=60000000001ULL;
-    off.Check(); trapped=false;
-    try { deadline.Check(); } catch(const std::runtime_error&) { trapped=true; }
-    assert(trapped);
     std::cout << "PASS " << cases << " packet publications across AIV 16..72, records/local-read/cross-read-rejection/self/reuse/range/QP; CPU model only\n";
 }

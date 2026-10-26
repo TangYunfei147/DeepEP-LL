@@ -44,7 +44,8 @@ core0独占本rank的QP0执行路由控制，完成所有quiet后才进入自己
 PostBody使用稳定GM源；SDK put返回后UB scratch可用于本源计数。
 PublishCommit复用scratch前，两条计数计算路径均已通过原V_S依赖退休；
 机内计数MTE只引用独立statusBuf，不占用网络scratch。
-epoch溢出trap，等待沿用NDR超时保护；CQ错误不回退为成功。
+epoch溢出检查保留。LL生产轮询不读取GetSystemCycle、不增加超时失败处理；
+显式timer ON诊断计时及锁定SHMEM SDK自身的完成处理保持各自实现。
 
 ### 删除ACK后的复用依据
 

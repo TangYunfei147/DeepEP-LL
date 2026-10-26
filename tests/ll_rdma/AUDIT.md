@@ -50,7 +50,7 @@ route body/epoch采用独立控制区，覆盖下文旧跨机计数描述。
 
 跨机 Packet：UB→注册对称 GM 后显式 MTE3_S 完成，再提交全部 body WQE；指定 peer/本核 QP quiet 后发布全部 flags，再 quiet 才复用暂存。每核独占 QP，不假设跨 QP 排序。SDK scratch 借用已暂存包前 128B，返回前恢复；dispatch relay 使用当前已消费 lane 的事件号，不能抢占其他预取 lane 的 MTE2_S。
 
-NIC 可写接收/控制/暂存视图保持 L2 bypass。机内读取不经 NIC，不借用输入 lane 构造 RDMA WQE，原 MTE2/Vector lane 依赖负责完成与复用。接收超时、SDK CQ 错误和 trap 不转为成功。
+NIC 可写接收/控制/暂存视图保持 L2 bypass。机内读取不经 NIC，不借用输入 lane 构造 RDMA WQE，原 MTE2/Vector lane 依赖负责完成与复用。LL生产轮询不读取GetSystemCycle、不增加超时失败处理；SDK原有CQ完成和错误语义保留。
 
 成功 CQE 的远端完成及 HBM 可见性仍依赖目标 HNS_1825/provider；原有两阶段写的硬件验收不能由 CPU 模型替代。首版跨机写每包两个 quiet，可能有明显开销，未宣称加速。
 

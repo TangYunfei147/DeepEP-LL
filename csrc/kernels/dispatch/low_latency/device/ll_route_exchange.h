@@ -34,8 +34,7 @@ class PairedRouteExchange {
         AscendC::DataSyncBarrier<AscendC::MemDsbT::DDR>();
     }
     __aicore__ inline void Wait(uint64_t offset, uint32_t sequence) const {
-        LlTransport::PollDeadline deadline(true);
-        while (Read(offset) != sequence) deadline.Check();
+        while (Read(offset) != sequence) {}
     }
 public:
     __aicore__ inline void Init(const __gm__ CommArgs* args, uint32_t routes, uint64_t bank) {

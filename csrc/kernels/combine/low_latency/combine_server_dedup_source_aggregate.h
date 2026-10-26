@@ -66,9 +66,7 @@ public:
         if (count_ == 0U) return 0U;
         for (uint32_t lane = 0; lane < inputLanes_; ++lane) SetFlag<HardEvent::V_MTE2>(lane);
         uint32_t remaining = count_, scan = 0U, completed = 0U;
-        LlTransport::PollDeadline deadline(uncached_);
         while (remaining != 0U) {
-            deadline.Check();
             const uint32_t token = pending_.GetValue(scan);
             const uint32_t mask = enableDedup_ ? masks_.GetValue(token - begin_) : 0U;
             if (enableDedup_ && (mask == 0U || (k_ < 32U && (mask >> k_) != 0U))) {

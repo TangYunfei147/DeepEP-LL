@@ -415,9 +415,7 @@ private:
     __aicore__ inline void WaitFlags(GlobalTensor<float> gm, LocalTensor<float> input, LocalTensor<float> work,
                                      LocalTensor<float> sum, uint32_t flags)
     {
-        LlTransport::PollDeadline deadline(LlTransport::Rdma(args_));
         while (true) {
-            deadline.Check();
             // The previous reduction has completed before MTE2 overwrites input.
             Sync<HardEvent::V_MTE2>();
             DataCopyPad(input, gm, {1U, flags * 32U, 0U, 0U, 0U}, {false, 0U, 0U, 0.0f});

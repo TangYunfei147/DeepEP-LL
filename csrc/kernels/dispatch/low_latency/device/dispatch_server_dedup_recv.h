@@ -120,7 +120,6 @@ public:
         // 它们按相同顺序推进，保证 consumed % lanes_ 对应之前预取的同一个 packet。
         if (timer) timer->End(LlStageTimer::RecvPrepare);
         uint32_t scan = 0U, issued = 0U, consumed = 0U;
-        LlTransport::PollDeadline deadline(LlTransport::Rdma(args_));
         while (tasks_.PendingCount() != 0U) {
             // Include all empty scans in one wait interval. Recording every
             // retry perturbs the polling loop and can exhaust the trace buffer.
@@ -135,7 +134,6 @@ public:
                 const uint32_t remaining = tasks_.PendingCount() - scan;
                 count = remaining < kProbeBatch ? remaining : kProbeBatch;
                 probe = Probe(scan, count);
-                deadline.Check();
                 if (probe.readyMask == 0U) scan += count;
             } while (probe.readyMask == 0U);
             if (timer) timer->End(LlStageTimer::RecvWait);
