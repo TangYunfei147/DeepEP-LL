@@ -62,5 +62,37 @@ LL_SENDER_PLAN_INLINE void LlBuildRouteQ(Ids ids, uint32_t routeCount, uint32_t 
     }
 }
 
+// Task records retain token/k/expert in words 0..2. Their former cached-q word
+// becomes a next link: q now comes from the immutable route table. Reverse
+// construction yields the same ascending task order as the old stable scan.
+template <class Words>
+LL_SENDER_PLAN_INLINE void LlBuildStableTaskGroups(Words tasks, uint32_t count, uint32_t expertsPerGroup,
+                                                  uint32_t groups, Words heads)
+{
+    for (uint32_t group = 0; group < groups; ++group) heads.SetValue(group, UINT32_MAX);
+    for (uint32_t next = count; next != 0U; --next) {
+        const uint32_t task = next - 1U;
+        const uint32_t group = tasks.GetValue(task * 4U + 2U) / expertsPerGroup;
+        tasks.SetValue(task * 4U + 3U, heads.GetValue(group));
+        heads.SetValue(group, task);
+    }
+}
+
+// Non-dedup large-domain routing uses original flat indices. Reuse the second
+// retired q hash array for links, including cores owning routes but no tokens.
+template <class Ids, class Words>
+LL_SENDER_PLAN_INLINE void LlBuildStableRouteGroups(Ids ids, uint32_t begin, uint32_t count,
+                                                   uint32_t expertsPerGroup, uint32_t groups,
+                                                   Words heads, Words links)
+{
+    for (uint32_t group = 0; group < groups; ++group) heads.SetValue(group, UINT32_MAX);
+    for (uint32_t next = begin + count; next != begin; --next) {
+        const uint32_t route = next - 1U;
+        const uint32_t group = uint32_t(ids.GetValue(route)) / expertsPerGroup;
+        links.SetValue(route, heads.GetValue(group));
+        heads.SetValue(group, route);
+    }
+}
+
 #undef LL_SENDER_PLAN_INLINE
 }

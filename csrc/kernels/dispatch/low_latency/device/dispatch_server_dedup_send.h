@@ -199,7 +199,7 @@ public:
             if (timer_) timer_->Start(LlStageTimer::SendClassify);
             Classify(token, directMask, firstHopCount, meshFirstK);
             if (timer_) timer_->End(LlStageTimer::SendClassify);
-            sourceMasks_.SetValue(token, 0U);
+            uint32_t sourceMask = directMask;
             for (uint32_t group = 0; group < firstHopCount; ++group) {
                 const uint32_t scheduled = LlFirstHopOrder(firstHopCount, rankInGroup, sendCore,
                                                           start_ + token, group);
@@ -212,23 +212,24 @@ public:
                 const uint32_t index = (start_ + token) * k_ + firstK;
                 const uint32_t expert = uint32_t(routeIds_.GetValue(index));
                 SendPacket(input, start_ + token, firstK, expert, CalTokenSendExpertCnt(expert, index), mask);
-                sourceMasks_.SetValue(token, sourceMasks_.GetValue(token) | (uint32_t(1) << firstK));
+                sourceMask |= uint32_t(1) << firstK;
                 // 源端仅标记实际发出的首跳路由；该位置输出权重 1，原路由权重另存包尾。
                 sourceWeights_.SetValue(token * k_ + firstK, 1.0f);
             }
-            // DIRECT 暂不发送，缓存 token/k/expert/q 四元组。q 在此按原始路由计算，
-            // 后续按 server 重排发送顺序时仍沿用同一个槽位编号。
+            // DIRECT keeps token/k/expert; word 3 is filled with a stable next
+            // link after classification. Its q remains in original route order.
             for (uint32_t k = 0; k < k_; ++k)
                 if (directMask & (uint32_t(1) << k)) {
                     const uint32_t index = (start_ + token) * k_ + k;
                     const uint32_t expert = uint32_t(routeIds_.GetValue(index));
-                    const uint32_t q = CalTokenSendExpertCnt(expert, index);
                     directTasks_.SetValue(directCount_ * 4U, token);
                     directTasks_.SetValue(directCount_ * 4U + 1U, k);
                     directTasks_.SetValue(directCount_ * 4U + 2U, expert);
-                    directTasks_.SetValue(directCount_ * 4U + 3U, q);
                     ++directCount_;
                 }
+            // The complete source role is known from classification. Write its
+            // mask once; packet issue order does not change the selected routes.
+            sourceMasks_.SetValue(token, sourceMask);
         }
 
         // 5. Rotate the existing DIRECT group order by source card and send core.
@@ -241,17 +242,16 @@ public:
         const uint32_t serverNum = args_->rankSize / Group;
         const uint32_t expertsPerServer = localExperts_ * Group;
         const uint32_t ownServer = args_->rank / Group;
+        LlBuildStableTaskGroups(directTasks_, directCount_, expertsPerServer, serverNum, serverState_);
         for (uint32_t step = 0; step < serverNum; ++step) {
             const uint32_t server = LlDirectGroupOrder(serverNum, ownServer, rankInGroup, sendCore, step);
-            const uint32_t firstExpert = server * expertsPerServer;
-            for (uint32_t task = 0; task < directCount_; ++task) {
+            for (uint32_t task = serverState_.GetValue(server); task != UINT32_MAX;
+                 task = directTasks_.GetValue(task * 4U + 3U)) {
                 const uint32_t expert = directTasks_.GetValue(task * 4U + 2U);
-                if (expert < firstExpert || expert >= firstExpert + expertsPerServer) continue;
                 const uint32_t token = directTasks_.GetValue(task * 4U);
                 const uint32_t k = directTasks_.GetValue(task * 4U + 1U);
-                const uint32_t q = directTasks_.GetValue(task * 4U + 3U);
+                const uint32_t q = CalTokenSendExpertCnt(expert, (start_ + token) * k_ + k);
                 SendPacket(input, start_ + token, k, expert, q, 0U);
-                sourceMasks_.SetValue(token, sourceMasks_.GetValue(token) | (uint32_t(1) << k));
                 sourceWeights_.SetValue(token * k_ + k, routeWeights_.GetValue(token * k_ + k));
             }
         }
@@ -277,12 +277,12 @@ public:
         // core's sends by the same 256P+ server order used by dedup DIRECT.
         const uint32_t expertsPerServer = localExperts_ * Group;
         const uint32_t ownServer = args_->rank / Group;
+        auto nextRoute = qSubBuf_.Get<uint32_t>();
+        LlBuildStableRouteGroups(routeIds_, begin, count, expertsPerServer, serverNum, serverState_, nextRoute);
         for (uint32_t step = 0; step < serverNum; ++step) {
             const uint32_t server = EpServerOrder::ServerDedupDispatchDirectOrder(serverNum, ownServer, step);
-            const uint32_t firstExpert = server * expertsPerServer;
-            for (uint32_t i = begin; i < begin + count; ++i) {
+            for (uint32_t i = serverState_.GetValue(server); i != UINT32_MAX; i = nextRoute.GetValue(i)) {
                 const uint32_t expert = uint32_t(routeIds_.GetValue(i));
-                if (expert < firstExpert || expert >= firstExpert + expertsPerServer) continue;
                 SendPacket(input, i / k_, i % k_, expert, CalTokenSendExpertCnt(expert, i), 0U);
             }
         }
