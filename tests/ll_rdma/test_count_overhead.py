@@ -1,5 +1,9 @@
 """Contracts for count UB lifetimes, publication and prefix reuse."""
 from pathlib import Path
+import os
+import subprocess
+
+import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 DEVICE = ROOT / "csrc/kernels/dispatch/low_latency/device"
@@ -68,3 +72,88 @@ def test_only_the_route_owner_waits_for_scalar_body_preparation():
     loaded = send.index("DataCopyPad(validExpertIdsTensor_, expertIdsGMTensor_")
     counted = send.index("CountByVectorRange(start, end, maskBytes)")
     assert "SyncFunc<HardEvent::MTE2_V>();" in send[loaded:counted]
+
+
+def test_prefix_subtotal_executes_production_scalar_scan(tmp_path):
+    """Compile the production body with a delayed GatherMask dependency model."""
+    zig = os.environ.get("DEEPEP_TEST_ZIG")
+    if not zig:
+        pytest.skip("Set DEEPEP_TEST_ZIG for C++ CPU validation")
+    body = _block(_source("dispatch_server_dedup_counts.h"), "void ServerDedupCounts::GatherSumRecvCnt(")
+    assert "\n    Sum(" not in body
+    assert body.index("GatherMask(") < body.index("SyncFunc<AscendC::HardEvent::V_S>()")
+    assert body.index("SyncFunc<AscendC::HardEvent::V_S>()") < body.index("prefix.GetValue(")
+    source = tmp_path / "count-prefix.cpp"
+    source.write_text(r'''
+#include <cassert>
+#include <cstdint>
+#include <cstring>
+#include <iostream>
+#include <vector>
+namespace AscendC { enum class HardEvent { S_V, V_S }; }
+using AscendC::HardEvent;
+static float* pendingDst=nullptr;
+static std::vector<float> pending;
+template<class T> struct LocalTensor {
+    T* ptr;
+    T GetValue(uint32_t i) const {
+        assert(!pendingDst);T result;std::memcpy(&result,ptr+i,sizeof(T));return result;
+    }
+    void SetValue(uint32_t i,T value) const {
+        assert(!pendingDst);std::memcpy(ptr+i,&value,sizeof(T));
+    }
+    template<class U> LocalTensor<U> ReinterpretCast() const {return {reinterpret_cast<U*>(ptr)};}
+};
+struct GatherParams { uint16_t repeats,records,srcStride,dstStride; };
+static void GatherMask(LocalTensor<float> out,LocalTensor<float> input,LocalTensor<uint32_t> pattern,
+                       bool,uint32_t mask,GatherParams shape,uint64_t& elements) {
+    assert(!pendingDst && mask==2U && pattern.GetValue(0)==2U);
+    assert(shape.repeats==1U && shape.srcStride==1U && shape.dstStride==0U);
+    pending.resize(shape.records);
+    for(unsigned i=0;i<shape.records;++i) pending[i]=input.GetValue(i*8U+1U);
+    pendingDst=out.ptr;elements=shape.records;
+}
+struct Fixture {
+    LocalTensor<float> statusFp32Tensor_;
+    uint32_t recStatusNumPerCore_=0,published=0;
+    template<HardEvent event> void SyncFunc() {
+        if constexpr(event==HardEvent::V_S) {
+            assert(pendingDst);std::memcpy(pendingDst,pending.data(),pending.size()*sizeof(float));
+            pendingDst=nullptr;pending.clear();
+        } else assert(!pendingDst);
+    }
+    void PublishRecvCntSum(float value) {std::memcpy(&published,&value,sizeof(value));}
+    void Run(LocalTensor<float>& gatherMaskOutTensor,LocalTensor<uint32_t>& gatherTmpTensor) {
+''' + body + r'''
+    }
+};
+static uint32_t Bits(float value) {uint32_t bits;std::memcpy(&bits,&value,4);return bits;}
+int main() {
+    unsigned cases=0;
+    for(unsigned count: {1U,7U,8U,13U,16U,31U,64U,128U}) for(unsigned mode=0;mode<4;++mode) {
+        std::vector<float> records(count*8U),prefix(count+8U);
+        std::vector<uint32_t> expected(count),pattern(8U);
+        uint32_t sum=0;
+        for(unsigned i=0;i<count;++i) {
+            uint32_t value=mode==0U?0U:mode==1U?16384U:mode==2U?(i%5U==0U?i+1U:0U):(i*127U+3U)%16385U;
+            std::memcpy(records.data()+i*8U+1U,&value,4);sum+=value;expected[i]=sum;
+            const uint32_t ready=0x3f800000U;std::memcpy(records.data()+i*8U,&ready,4);
+        }
+        const uint32_t guard=0x5a5a5a5aU;
+        for(unsigned i=count;i<prefix.size();++i) std::memcpy(prefix.data()+i,&guard,4);
+        Fixture fixture{{records.data()},count};
+        LocalTensor<float> output{prefix.data()};LocalTensor<uint32_t> temporary{pattern.data()};
+        fixture.Run(output,temporary);
+        assert(fixture.published==sum && !pendingDst);
+        for(unsigned i=0;i<count;++i) assert(Bits(prefix[i])==expected[i]);
+        for(unsigned i=count;i<prefix.size();++i) assert(Bits(prefix[i])==guard);
+        ++cases;
+    }
+    std::cout<<"PASS production count prefix: "<<cases<<" partitions, exact subtotal bits, delayed Vector completion, UB guards\n";
+}
+''', encoding="utf-8")
+    executable = tmp_path / "count-prefix.exe"
+    subprocess.run([zig, "c++", "-std=c++17", "-O1", "-UNDEBUG", str(source), "-o", str(executable)],
+                   check=True, timeout=180)
+    result = subprocess.run([str(executable)], check=True, capture_output=True, text=True, timeout=30)
+    assert "PASS production count prefix: 32 partitions" in result.stdout

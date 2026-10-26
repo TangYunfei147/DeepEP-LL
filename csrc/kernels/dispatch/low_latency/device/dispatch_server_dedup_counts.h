@@ -133,8 +133,7 @@ private:
     __aicore__ inline void WaitDispatchClearStatus();
     // 摘要：提取计数字段，计算本片累计前缀，并向其他接收核发布本片总数。
     __aicore__ inline void GatherSumRecvCnt(LocalTensor<float>& gatherMaskOutTensor,
-                                            LocalTensor<uint32_t>& gatherTmpTensor,
-                                            LocalTensor<float>& statusSumOutTensor);
+                                             LocalTensor<uint32_t>& gatherTmpTensor);
     // 摘要：将本核片段总数和就绪标记写入本 rank 的跨核汇总矩阵；空片段也必须发布。
     __aicore__ inline void PublishRecvCntSum(float sumOfRecvCnt);
     // 摘要：等待所有接收核总数就绪，求本核之前各片段之和，再清理本核消费的汇总标记。
@@ -483,8 +482,7 @@ __aicore__ inline void ServerDedupCounts::WaitDispatchClearStatus()
 
 // 摘要：提取计数字段，计算本片累计前缀，并向其他接收核发布本片总数。
 __aicore__ inline void ServerDedupCounts::GatherSumRecvCnt(LocalTensor<float>& gatherMaskOutTensor,
-                                                           LocalTensor<uint32_t>& gatherTmpTensor,
-                                                           LocalTensor<float>& statusSumOutTensor)
+                                                           LocalTensor<uint32_t>& gatherTmpTensor)
 {
     gatherTmpTensor.SetValue(0, 2U);
     uint32_t mask = 2U;
@@ -493,13 +491,7 @@ __aicore__ inline void ServerDedupCounts::GatherSumRecvCnt(LocalTensor<float>& g
     uint64_t recvCnt = 0;
     GatherMask(gatherMaskOutTensor, statusFp32Tensor_, gatherTmpTensor, true, mask,
                {1, (uint16_t)recStatusNumPerCore_, 1, 0}, recvCnt);
-    PipeBarrier<PIPE_V>();
-
-    uint32_t recStatusNumPerCoreInner = Ceil(recStatusNumPerCore_ * sizeof(float), UB_ALIGN) * UB_ALIGN / sizeof(float);
-    SumParams sumParams{1, recStatusNumPerCoreInner, recStatusNumPerCore_};
-    Sum(statusSumOutTensor, gatherMaskOutTensor, sumParams);
     SyncFunc<AscendC::HardEvent::V_S>();
-    float sumOfRecvCnt = statusSumOutTensor.ReinterpretCast<float>().GetValue(0);
 
     // Compute the relative prefix while outgoing cnt may still be in flight.
     // Gather preserved the integer count bit patterns used by the FP32 Sum.
@@ -509,6 +501,9 @@ __aicore__ inline void ServerDedupCounts::GatherSumRecvCnt(LocalTensor<float>& g
         cumulative += uint32_t(prefix.GetValue(i));
         prefix.SetValue(i, cumulative);
     }
+    // The final prefix is already the subtotal. Preserve the original FP32
+    // bit-pattern representation without reducing the same counts twice.
+    const float sumOfRecvCnt = prefix.ReinterpretCast<float>().GetValue(recStatusNumPerCore_ - 1U);
     PublishRecvCntSum(sumOfRecvCnt);
 }
 
@@ -632,7 +627,7 @@ __aicore__ inline void ServerDedupCounts::WaitDispatch()
         ReadCountFrames(statusFp32Tensor_, windowInstatusFp32Tensor_, readPlan, true);
         SyncFunc<HardEvent::MTE2_V>();
     }
-    GatherSumRecvCnt(gatherMaskOutTensor, gatherTmpTensor, statusSumOutTensor);
+    GatherSumRecvCnt(gatherMaskOutTensor, gatherTmpTensor);
     if (!packedFrames_) WaitDispatchClearStatus();
 }
 
