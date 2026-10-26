@@ -1,7 +1,9 @@
 #pragma once
 #include "kernel_operator.h"
 #include "ep_memory_server_dedup_buffer_layout.h"
-#include "../../dispatch/low_latency/common/ep_memory_server_dedup_layout.h"
+// Only the shared bank constants are needed on device. The allocation/layout
+// validator is Host-only and must not enter a Bisheng AICore translation unit.
+#include "../../dispatch/low_latency/common/ep_memory_server_dedup_count_layout.h"
 
 namespace CombineDedup {
 constexpr uint32_t kClearFlagBlocks = 256U;
