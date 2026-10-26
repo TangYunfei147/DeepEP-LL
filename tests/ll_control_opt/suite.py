@@ -463,13 +463,23 @@ def run_environment(args, entry, manifest, root=ROOT):
 
 
 def preflight_code(manifest, send_cores):
+    mode=manifest.get('shared_pull_probe_mode',0)
+    prefix=manifest.get('prefix_ready_revision',0)
+    wire=manifest.get('shared_pull_wire_revision',1)
+    build.protocol_base(mode,prefix,wire)
     return ('from deep_ep._native import require_native; import hashlib,re; from pathlib import Path; '
             'n=require_native("control-path candidate preflight"); '
             f'assert hashlib.sha256(Path(n.__file__).read_bytes()).hexdigest()=={manifest["native_sha256"]!r}; '
             'assert not bool(n.low_latency_stage_timer_enabled); '
             'probe=getattr(n,"low_latency_shared_pull_probe_mode",0); assert type(probe) is int and probe in (0,1,2); '
-            f'assert probe=={manifest.get("shared_pull_probe_mode",0)}; '
-            f'assert n.low_latency_core_protocol==({19000+send_cores},{23000+send_cores},{24000+send_cores})[probe]; '
+            f'assert probe=={mode}; '
+            'prefix=getattr(n,"low_latency_prefix_ready_revision",0); assert type(prefix) is int and prefix in (0,1); '
+            'wire=getattr(n,"low_latency_shared_pull_wire_revision",1); assert type(wire) is int and wire in (1,2); '
+            'assert prefix!=0 or wire==1; '
+            f'assert prefix=={prefix} and wire=={wire}; '
+            f'protocol=({19000+send_cores},{23000+send_cores},{24000+send_cores})[probe] if prefix==0 else '
+            f'({25000+send_cores},{26000+send_cores},{27000+send_cores} if wire==1 else {28000+send_cores})[probe]; '
+            'assert n.low_latency_core_protocol==protocol; '
             'assert n.low_latency_implementation=="g4-r0-prefix"; '
             'g=n.low_latency_ranks_per_group; assert (g(16) if callable(g) else g)==4; '
             'paths={re.sub(r"\\\\([0-7]{3})",lambda m:chr(int(m.group(1),8)),line.split(None,5)[5]) for line in Path("/proc/self/maps").read_text().splitlines() if len(line.split(None,5))==6}; '

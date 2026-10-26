@@ -44,9 +44,11 @@ public:
         axisK_ = topK;
         expertIdsCnt_ = bs * topK;
         rscvStatusNum_ = experts;
-        prefixEpoch_ = uint32_t(magic);
+        // Each consumer owns a separate 32-byte ready record next to its magic
+        // record. The bank bit also changes in combine, so it is not a prefix
+        // generation: D -> C -> D must still require a fresh publication.
         prefixReadyGm_.SetGlobalBuffer(reinterpret_cast<__gm__ uint32_t*>(
-            args_->peerMems[epRankId_]+uint64_t(kLlSendCoreNum)*kEpServerDedupMagicStride+32U));
+            args_->peerMems[epRankId_]+uint64_t(aivId_)*kEpServerDedupMagicStride+32U));
         prefixReadyGm_.SetL2CacheHint(CacheMode::CACHE_MODE_DISABLE);
         moeExpertNumPerRank_ = experts / epWorldSize_;
         expertTokenNumsType_ = expertTokenNumsType;
@@ -157,8 +159,11 @@ private:
     __aicore__ inline void WaitDispatchClearStatus();
     // R0轮询全部来源计数，提取计数并清理本轮通知。
     __aicore__ inline void CalRecvAndSetFlag();
-    // 等待R0发布当前epoch，不清理共享标记；下轮由R0交替发布。
+    // R0 publishes one ready record per actual consumer; readers clear only
+    // their own record after their prefix DMA has completed. No readDone ACK.
+    __aicore__ inline void PublishPrefixReady();
     __aicore__ inline void WaitCumSumFlag();
+    __aicore__ inline void ClearPrefixReady();
 
     LlOverlapLayout overlap_{};
     bool buildLocalTasks_=true;
@@ -187,7 +192,6 @@ private:
     LocalTensor<int32_t> statusTensor_, validExpertIdsTensor_;
     LocalTensor<float> workLocalTensor_, statusFp32Tensor_;
     GlobalTensor<uint32_t> prefixReadyGm_;
-    uint32_t prefixEpoch_=0U;
     TBuf<> prefixPublishBuf_;
     // Both views outlive all their tensors. The record buffer is outside their
     // shared address range and remains immutable until the phase is retired.
@@ -400,6 +404,7 @@ __aicore__ inline void ServerDedupCounts::CompleteCumsum()
     DataCopyPad(prefix, workspace, copy, pad);
     SyncFunc<HardEvent::MTE2_S>();
     }
+    ClearPrefixReady();
     // 仅接收组的第 0 核写公开专家计数，避免多核重复写同一输出。
     // 每个专家最后一个来源 rank 的前缀即该专家结束位置；type=0 输出累计数，
     // 其他已验证类型输出与上一专家累计数之差，即该专家自己的接收条数。
@@ -417,6 +422,11 @@ __aicore__ inline void ServerDedupCounts::CompleteCumsum()
         const DataCopyExtParams output{1U, moeExpertNumPerRank_ * uint32_t(sizeof(int64_t)), 0U, 0U, 0U};
         DataCopyPad(expertTokenNumsOutGMTensor_, expertCounts, output);
     }
+    // Receiver::Prepare resets this pool in the non-overlap fallback. Its
+    // non-dedup caller has no intermediate drain, so retire clear/output DMA
+    // here before releasing those UB sources. The asynchronous path retains
+    // both sources and uses the existing final drain instead.
+    if (!overlap_.enabled) { SyncFunc<HardEvent::MTE3_S>(); }
     // No listening table or payload receive/copy is constructed in this increment.
     LL_SPARSE_MARK(PREFIX_READY);
 }
@@ -527,21 +537,34 @@ __aicore__ inline void ServerDedupCounts::CalRecvAndSetFlag()
     { LL_SEG_SCOPE(BROADCAST_PREFIX);
       LL_BW_TRANSFER(LlStageTimer::PREFIX_LOCAL,false,uint64_t(rscvStatusNum_)*4U,0U);
       DataCopyPad(workspace,prefix,copy); } // One shared table, no per-core replicas.
-    // Finish prefix and count-ready cleanup before releasing a single epoch.
+    // Finish prefix and count-ready cleanup before releasing any consumer.
     { LL_SEG_SCOPE(PREFIX_PUBLISH_WAIT); SyncFunc<HardEvent::MTE3_S>(); }
     LL_SEG_SCOPE(PUBLISH_PREFIX_FLAGS);
-    auto ready=prefixPublishBuf_.Get<uint32_t>();
-    Duplicate<uint32_t>(ready,0U,8U);
-    SyncFunc<HardEvent::V_S>();
-    ready.SetValue(0U,prefixEpoch_);
-    SyncFunc<HardEvent::S_MTE3>();
-    LL_BW_TRANSFER(LlStageTimer::PREFIX_LOCAL,false,32U,0U);
-    DataCopy(prefixReadyGm_,ready,8U);
+    PublishPrefixReady();
     LL_BW_END(LlStageTimer::PREFIX_LOCAL,tpipe_);
     // Publication source is persistent until Finish (or fallback's PIPE_ALL).
 }
 
-// 等待R0发布当前epoch，不清理共享标记；下轮由R0交替发布。
+__aicore__ inline void ServerDedupCounts::PublishPrefixReady()
+{
+    auto ready=prefixPublishBuf_.Get<uint32_t>();
+    Duplicate<uint32_t>(ready,0U,8U);
+    SyncFunc<HardEvent::V_S>();
+    ready.SetValue(0U,1U);
+    SyncFunc<HardEvent::S_MTE3>();
+    const uint32_t firstConsumer=buildLocalTasks_ ? 0U : kLlSendCoreNum;
+    GlobalTensor<uint32_t> notify;
+    for(uint32_t consumer=firstConsumer;consumer<coreNum_;++consumer) {
+        notify.SetGlobalBuffer(reinterpret_cast<__gm__ uint32_t*>(
+            args_->peerMems[epRankId_]+uint64_t(consumer)*kEpServerDedupMagicStride+32U));
+        notify.SetL2CacheHint(CacheMode::CACHE_MODE_DISABLE);
+        LL_BW_TRANSFER(LlStageTimer::PREFIX_LOCAL,false,32U,0U);
+        DataCopy(notify,ready,8U);
+    }
+}
+
+// Only this consumer clears this slot. A fast R0 cannot erase another core's
+// notification while that core is still sending or has not loaded its prefix.
 __aicore__ inline void ServerDedupCounts::WaitCumSumFlag()
 {
     LL_SEG_SCOPE(WAIT_CUMSUM);
@@ -550,8 +573,18 @@ __aicore__ inline void ServerDedupCounts::WaitCumSumFlag()
         LL_SEG_COUNT(WAIT_CUMSUM_ITERATIONS,1U);
         DataCopy(ready,prefixReadyGm_,8U);
         SyncFunc<HardEvent::MTE2_S>();
-    } while (ready.GetValue(0U)!=prefixEpoch_);
-    // Fixed unbanked epoch alternates 1/0. Consumers never clear the producer flag.
+    } while (ready.GetValue(0U)!=1U);
+}
+
+__aicore__ inline void ServerDedupCounts::ClearPrefixReady()
+{
+    auto ready=readyBuf_.Get<uint32_t>();
+    ready.SetValue(0U,0U);
+    SyncFunc<HardEvent::S_MTE3>();
+    DataCopy(prefixReadyGm_,ready,8U);
+    // The zero source remains immutable until the existing Finish/Reset drain.
+    // Same-stream completion retires every consumer's clear before another
+    // dispatch can publish to these unbanked slots; combine never touches them.
 }
 
 }  // namespace DispatchDedup

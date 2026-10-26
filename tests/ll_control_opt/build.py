@@ -314,6 +314,47 @@ def shared_pull_probe_mode(source):
     return int(match.group(1))
 
 
+def source_protocol_revision(source, filename, macro, default, allowed):
+    """Read source-controlled protocol fields; old pinned sources omit them."""
+    header=Path(source)/'csrc/kernels/dispatch/low_latency/common'/filename
+    if not header.exists():
+        return default
+    text=header.read_text(encoding='utf-8')
+    if not re.search(r'^\s*#\s*define\s+'+re.escape(macro)+r'\b',text,re.M):
+        return default
+    match=re.search(r'^#define '+re.escape(macro)+r' ([0-9]+)$',text,re.M)
+    if not match or int(match.group(1)) not in allowed:
+        raise ValueError(f'Cannot identify committed {macro}')
+    return int(match.group(1))
+
+
+def prefix_ready_revision(source):
+    return source_protocol_revision(source,'ll_core_config.h',
+        'DEEPEP_LL_PREFIX_READY_REVISION',0,(0,1))
+
+
+def shared_pull_wire_revision(source):
+    return source_protocol_revision(source,'ll_shared_pull_probe_config.h',
+        'DEEPEP_LL_SHARED_PULL_WIRE_REVISION',1,(1,2))
+
+
+def protocol_base(mode, prefix, wire):
+    if (type(mode) is not int or mode not in (0,1,2) or
+            type(prefix) is not int or prefix not in (0,1) or
+            type(wire) is not int or wire not in (1,2) or
+            (prefix==0 and wire!=1)):
+        raise ValueError('Invalid shared-pull/prefix protocol combination')
+    return (19000,23000,24000)[mode] if prefix==0 else (25000,26000,27000 if wire==1 else 28000)[mode]
+
+
+def source_protocol_identity(source):
+    identity=dict(shared_pull_probe_mode=shared_pull_probe_mode(source),
+                  prefix_ready_revision=prefix_ready_revision(source),
+                  shared_pull_wire_revision=shared_pull_wire_revision(source))
+    protocol_base(*identity.values())
+    return identity
+
+
 def required_links(source, project=True):
     dependencies = links(source)
     # This suite fixes MegaMoE and fused builds OFF. CATLASS (including its
@@ -542,7 +583,7 @@ def build(revision, send_cores, *, root=ROOT, workspace=None, offline_deps=None,
             native_sha = hashlib.sha256(archive.read(natives[0])).hexdigest()
             kernel_sha = hashlib.sha256(archive.read(kernels[0])).hexdigest()
         data = dict(revision=revision, send_cores=send_cores, recv_cores=56 - send_cores, timer='OFF',
-                    shared_pull_probe_mode=shared_pull_probe_mode(source),
+                    **source_protocol_identity(source),
                     **identity,
                     logical_group=4, build_type='Release', wheel=wheels[0].relative_to(canonical.parent).as_posix(),
                     wheel_sha256=sha(wheels[0]), native_sha256=native_sha, kernel_sha256=kernel_sha,

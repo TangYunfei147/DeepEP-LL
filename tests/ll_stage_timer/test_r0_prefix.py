@@ -19,7 +19,7 @@ def test_single_prefix_publication_contract():
     build=source[source.index('ServerDedupCounts::CalRecvAndSetFlag()'):source.index('ServerDedupCounts::WaitCumSumFlag()')]
     assert 'if (aivId_!=kLlSendCoreNum) return;' in build
     assert build.count('DataCopyPad(workspace,prefix,copy)')==1
-    assert build.index('DataCopyPad(workspace,prefix,copy)')<build.index('SyncFunc<HardEvent::MTE3_S>()')<build.index('DataCopy(prefixReadyGm_')
+    assert build.index('DataCopyPad(workspace,prefix,copy)')<build.index('SyncFunc<HardEvent::MTE3_S>()')<build.index('PublishPrefixReady();')
     assert 'GetCumSum(' not in source and 'PublishRecvCntSum(' not in source
     assert 'DataCopyPad(prefix, workspace, copy, pad)' in source
     assert 'CACHE_MODE_DISABLE' in source
@@ -27,26 +27,7 @@ def test_single_prefix_publication_contract():
     assert 'uint64_t(receiver_) * counts.prefixStride' not in receive
     # Incoming count total can exceed 255: no truncated strided reduction repeat.
     assert 'ReduceSum(sum,gather,sumContinueBuf_.Get<float>(),rscvStatusNum_)' in source
-    assert 'Duplicate' not in source[source.index('ServerDedupCounts::WaitCumSumFlag()'):]
-
-def test_epoch_and_full_prefix_shape_changes():
-    from itertools import accumulate
-    import random
-    rng=random.Random(71)
-    epoch=0
-    for experts in (16,384,1024,32,384):
-        next_epoch=1-epoch
-        records=[rng.randrange(257) for _ in range(experts)]
-        arrived=[False]*experts
-        order=list(range(experts));rng.shuffle(order)
-        for n,i in enumerate(order):
-            arrived[i]=True
-            if n+1<experts:
-                assert not all(arrived) and epoch!=next_epoch
-        prefix=list(accumulate(records))
-        assert all(prefix[i]-(prefix[i-1] if i else 0)==records[i] for i in range(experts))
-        # Publication release follows the full table; no per-consumer flag clear.
-        epoch=next_epoch
-        for _ in range(56):
-            assert epoch==next_epoch
-            assert prefix[-1]==sum(records)
+    assert 'prefixEpoch_' not in source
+    complete=source[source.index('ServerDedupCounts::CompleteCumsum()'):source.index('ServerDedupCounts::CalTokenSendExpertCnt')]
+    assert complete.index('DataCopyPad(prefix, workspace, copy, pad)')<complete.index('SyncFunc<HardEvent::MTE2_S>()')<complete.index('ClearPrefixReady();')
+    assert 'uint64_t(aivId_)*kEpServerDedupMagicStride+32U' in source

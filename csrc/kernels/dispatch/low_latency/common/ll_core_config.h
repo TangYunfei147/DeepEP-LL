@@ -2,7 +2,9 @@
 #define DEEPEP_LL_CORE_CONFIG_H
 #include <cstdint>
 #include "ll_shared_pull_probe_config.h"
+#define DEEPEP_LL_PREFIX_READY_REVISION 1
 namespace DispatchDedup {
+constexpr uint32_t kLlPrefixReadyRevision = DEEPEP_LL_PREFIX_READY_REVISION;
 #ifndef DEEPEP_LL_SEND_CORES
 #define DEEPEP_LL_SEND_CORES 28
 #endif
@@ -19,7 +21,8 @@ constexpr uint32_t kLlDispatchUbBytes = 230U * 1024U;
 constexpr uint32_t kLlDispatchRecvCoreNum = kLlActiveCoreNum;
 // Encode the split so mismatched Host/device objects and rank identities differ.
 constexpr uint32_t kLlCoreProtocolVersion =
-    (kLlSharedPullProbeMode==0U ? 19000U : (kLlSharedPullProbeMode==1U ? 23000U:24000U)) + kLlSendCoreNum;
+    (kLlSharedPullProbeMode==0U ? 25000U : (kLlSharedPullProbeMode==1U ? 26000U :
+        (kLlSharedPullWireRevision==1U ? 27000U : 28000U))) + kLlSendCoreNum;
 // Storage capacity remains separate from the fixed 56-core launch.
 constexpr uint32_t kLlMaxCoreNum = 72U;
 constexpr uint32_t kLlMaxRecvCoreNum = 56U;

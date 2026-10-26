@@ -143,6 +143,8 @@ void bind_low_latency(py::module_& module)
     module.attr("low_latency_q_seed_vf") = true;
     module.attr("low_latency_implementation") = "g4-r0-prefix";
     module.attr("low_latency_shared_pull_probe_mode") = DispatchDedup::kLlSharedPullProbeMode;
+    module.attr("low_latency_prefix_ready_revision") = DispatchDedup::kLlPrefixReadyRevision;
+    module.attr("low_latency_shared_pull_wire_revision") = DispatchDedup::kLlSharedPullWireRevision;
     module.attr("low_latency_rdma_enabled") = false;
     module.attr("low_latency_expert_timer_enabled") = false;
     module.attr("low_latency_stage_timer_enabled") = bool(deepep_ll_stage_timer_enabled());

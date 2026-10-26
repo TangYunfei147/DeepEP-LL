@@ -6,6 +6,8 @@ namespace DispatchDedup {
 #define DEEPEP_LL_SHARED_PULL_PROBE_MODE 0
 #endif
 constexpr uint32_t kLlSharedPullProbeMode = DEEPEP_LL_SHARED_PULL_PROBE_MODE;
+#define DEEPEP_LL_SHARED_PULL_WIRE_REVISION 1
+constexpr uint32_t kLlSharedPullWireRevision = DEEPEP_LL_SHARED_PULL_WIRE_REVISION;
 static_assert(kLlSharedPullProbeMode<=2U,"invalid shared-pull prototype");
 constexpr uint32_t kLlSharedPullDescriptor = 0x50554c4cU;
 // Unused tail of magic slot71, outside all 56 active slots and prefix epoch.

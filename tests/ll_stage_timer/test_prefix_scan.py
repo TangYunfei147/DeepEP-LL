@@ -20,7 +20,7 @@ def test_scan_storage_and_publication():
     body=source[source.index('ServerDedupCounts::CalRecvAndSetFlag()'):source.index('ServerDedupCounts::WaitCumSumFlag()')]
     assert 'prefix.SetValue' not in body and 'prefix.GetValue' not in body
     assert body.index('asc_vf_call<R0PrefixScan>')<body.index('SyncFunc<HardEvent::V_MTE3>()')<body.index('DataCopyPad(workspace')
-    assert body.index('SyncFunc<HardEvent::MTE3_S>()')<body.index('DataCopy(prefixReadyGm_')
+    assert body.index('SyncFunc<HardEvent::MTE3_S>()')<body.index('PublishPrefixReady();')
     assert 'Ceil(rscvStatusNum_*4U,256U)*256U' in source
     header=(base/'device/dispatch_prefix_scan.h').read_text(encoding='utf-8')
     assert 'float' not in header and 'GetValue' not in header

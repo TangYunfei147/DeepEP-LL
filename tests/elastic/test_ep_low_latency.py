@@ -32,7 +32,13 @@ def validate_core_split_capability(capability):
     probe=capability.get('shared_pull_probe_mode',0)
     if type(probe) is not int or probe not in (0,1,2):
         raise RuntimeError('Invalid shared-pull prototype mode')
-    protocol_base=(19000,23000,24000)[probe]
+    prefix=capability.get('prefix_ready_revision',0)
+    wire=capability.get('shared_pull_wire_revision',1)
+    if (type(prefix) is not int or prefix not in (0,1) or
+            type(wire) is not int or wire not in (1,2) or (prefix==0 and wire!=1)):
+        raise RuntimeError('Invalid shared-pull/prefix protocol combination')
+    protocol_base=((19000,23000,24000)[probe] if prefix==0 else
+                   (25000,26000,27000 if wire==1 else 28000)[probe])
     if (type(send) is not int or type(recv) is not int or send <= 0 or recv <= 0
             or send + recv != 56 or capability.get("active_aiv") != 56
             or capability.get("core_protocol") != protocol_base + send):
@@ -1290,6 +1296,8 @@ def worker(local_rank, args):
                       "overlap_stage": getattr(native,"low_latency_overlap_stage",0),
                       "core_protocol": native.low_latency_core_protocol,
                       "shared_pull_probe_mode": getattr(native,'low_latency_shared_pull_probe_mode',0),
+                      "prefix_ready_revision": getattr(native,'low_latency_prefix_ready_revision',0),
+                      "shared_pull_wire_revision": getattr(native,'low_latency_shared_pull_wire_revision',1),
                       "stage_timer": bool(getattr(native, "low_latency_stage_timer_enabled", False)),
                       "stage_timer_schema": timer_layout["schema"],
                       "stage_timer_slots": timer_layout.get('slots'),
