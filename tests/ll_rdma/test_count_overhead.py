@@ -36,3 +36,23 @@ def test_count_prefix_is_loaded_only_by_its_output_owner():
     receiver = _block(_source("dispatch_server_dedup_recv.h"), "void Process(")
     assert receiver.index("pipe_->Reset();") < receiver.index("DataCopyPad(prefix, prefixGlobal")
     assert receiver.index("ServerDedupReceiveSync<HardEvent::MTE2_S>()") < receiver.index("tasks_.Build(prefix")
+
+
+def test_paired_count_records_live_until_the_existing_reuse_barrier():
+    counts = _source("dispatch_server_dedup_counts.h")
+    send = _block(counts, "void ServerDedupCounts::SendCnt()")
+    first = send.index("if (count) SendExpertCntRange(start, end)")
+    overwrite = send.index("routeExchange_.ReadPeer")
+    assert "SyncFunc<HardEvent::MTE3_S>();" in send[first:overwrite]
+    last = send.index("SendExpertCntRange(start,end)")
+    assert "SyncFunc<HardEvent::MTE3_S>();" not in send[last:]
+    assert "Reset(" not in send
+    assert "tpipe_->InitBuffer(statusBuf_, ReservedBytes())" in send
+    assert "kEpServerDedupCountUbBytes - ReservedBytes()" in send
+    assert "return stagePool_;" in _block(counts, "ScratchPool()")
+    assert "PipeBarrier<PIPE_ALL>();" in _block(counts, "void Finish()")
+    kernel = (DEVICE.parent / "dispatch_server_dedup_kernel.h").read_text(encoding="utf-8")
+    assert "sender_.Process(counts_.ScratchPool(), counts_.ReservedBytes(), timer_)" in kernel
+    complete = kernel.index("counts_.CompleteCumsum();")
+    consume = kernel.index("receiver_.Process(timer_);")
+    assert "PipeBarrier<PIPE_ALL>();" in kernel[complete:consume]

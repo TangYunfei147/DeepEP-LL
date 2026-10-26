@@ -267,7 +267,9 @@ __aicore__ inline void ServerDedupCounts::SendCnt()
             publishingSource_=routeExchange_.Peer();
             SyncFunc<HardEvent::S_MTE3>();
             SendExpertCntRange(start,end);
-            SyncFunc<HardEvent::MTE3_S>();
+            // statusBuf_ stays reserved and immutable after this publication.
+            // Its final MTE reads may overlap the next phase; the receiver's
+            // pre-Reset barrier or Finish retires them before UB reuse.
             publishingSource_=epRankId_;
         }
         routeExchange_.FinishSend(workBuf_.Get<uint8_t>());
