@@ -63,8 +63,6 @@ uint8_t* stage_timer(py::dict tensors, uint32_t cores, uint32_t& mode, uint32_t 
 {
     mode = 1U;
     if (!tensors.contains("ll_stage_timer") || tensors["ll_stage_timer"].is_none()) return nullptr;
-    if (DispatchDedup::kLlSharedPullProbeMode!=0U)
-        throw std::invalid_argument("Shared-pull prototype supports OFF performance only; use its pinned comparison");
     if (!deepep_ll_stage_timer_enabled()) throw std::invalid_argument("Rebuild with DEEPEP_LL_STAGE_TIMER=ON");
     if (tensors.contains("ll_stage_timer_mode")) mode = tensors["ll_stage_timer_mode"].cast<uint32_t>();
     if ((mode != 1U && mode != 6U) || (operation != 1U && mode != 1U) ||
@@ -88,10 +86,6 @@ uint8_t* expert_timer(py::dict tensors, uint32_t cores, uint32_t experts, uint8_
 }
 DispatchDedup::EpMemoryServerDedupLayout layout(int p, int b, int h, int k, int e, bool fp8)
 {
-    if (DispatchDedup::kLlSharedPullProbeMode!=0U &&
-        (p!=16 || b!=256 || h!=3584 || k!=8 || e!=384 || !fp8 ||
-         DispatchDedup::kLlRanksPerGroup!=4U))
-        throw std::invalid_argument("Shared-pull prototype requires single-host EP16/B256/H3584/K8/E384/G4 prequantized FP8");
     const uint32_t coreNum = query_ll_core_config().active;
     DispatchDedup::EpMemoryServerDedupLayout result{};
     auto mode = fp8 ? DispatchDedup::EpServerDedupInputMode::PrequantizedFp8Packs
@@ -142,7 +136,6 @@ void bind_low_latency(py::module_& module)
     module.attr("low_latency_q_table_enabled") = true;
     module.attr("low_latency_q_seed_vf") = true;
     module.attr("low_latency_implementation") = "g4-r0-prefix";
-    module.attr("low_latency_shared_pull_probe_mode") = DispatchDedup::kLlSharedPullProbeMode;
     module.attr("low_latency_rdma_enabled") = false;
     module.attr("low_latency_expert_timer_enabled") = false;
     module.attr("low_latency_stage_timer_enabled") = bool(deepep_ll_stage_timer_enabled());
@@ -252,8 +245,6 @@ void bind_low_latency(py::module_& module)
                                                  int num_max_tokens_per_rank) {
         const bool fp8 = dtype == "float8_e4m3fn";
         auto checked=layout(p, b, h, k, e, fp8);
-        if (DispatchDedup::kLlSharedPullProbeMode!=0U && num_max_tokens_per_rank!=256)
-            throw std::invalid_argument("Shared-pull prototype requires M=B=256");
         if (!DispatchDedup::EpServerDedupEnabled(num_max_tokens_per_rank) &&
             !DispatchDedup::DispatchDedupPacketUbFits(checked,b,k,e,p,DispatchDedup::kLlDefaultPlanCoreNum,false))
             throw std::invalid_argument("Non-dedup R-only receive exceeds UB budget");

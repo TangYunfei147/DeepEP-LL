@@ -10,7 +10,6 @@
 #include "device/dispatch_server_dedup_counts.h"
 #include "device/dispatch_server_dedup_send.h"
 #include "device/dispatch_server_dedup_recv.h"
-#include "device/ll_shared_pull_fence.h"
 
 namespace DispatchDedup {
 template <class XType, bool WireFp8, bool E4M3, bool Prequantized = false>
@@ -35,11 +34,6 @@ public:
             (WireFp8 ? EpServerDedupInputMode::Quantize16 : EpServerDedupInputMode::Plain16);
         overlap_=LlMakeOverlapLayout(DispatchServerDedupDataLayout(bs,h,topK,experts,mode),
                                     bs,topK,experts,args_->rankSize,args_->rank,core_,mode,enableDedup);
-        if constexpr(kLlSharedPullProbeMode!=0U) {
-            if(LlSharedPullScope(Prequantized,enableDedup,uint32_t(args_->rankSize)) && !overlap_.Async()) {
-                AscendC::Trap();return;
-            }
-        }
         counts_.ConfigureOverlap(overlap_);
         sender_.ConfigureOverlap(overlap_);
         receiver_.ConfigureOverlap(overlap_);
@@ -128,11 +122,6 @@ public:
         { LL_SEG_SCOPE(FINAL_DRAIN);
         sender_.Retire();
         counts_.Finish(); }
-
-        if constexpr(kLlSharedPullProbeMode!=0U) {
-            if(LlSharedPullScope(Prequantized,enableDedup_,uint32_t(args_->rankSize)))
-                LlSharedPullFinish(args_,pipe_);
-        }
 
         // No shared work follows local completion. Same-stream kernel completion
         // orders the next launch after all cores finish their writes and cleanup.

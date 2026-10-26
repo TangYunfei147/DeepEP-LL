@@ -41,8 +41,6 @@ public:
         recvCoreNum_ = enableDedup ? kLlDispatchRecvCoreNum : kLlRecvCoreNum;
         pipe_ = pipe;
         enableDedup_ = enableDedup;
-        sharedPull_ = kLlSharedPullProbeMode==2U &&
-            LlSharedPullScope(Prequantized,enableDedup,uint32_t(args->rankSize));
         bs_ = bs;
         k_ = k;
         experts_ = experts;
@@ -402,27 +400,6 @@ private:
         auto wire = lanesBuf_.Get<uint8_t>()[lane * laneStride_];
         GlobalTensor<uint8_t> source;
         source.SetGlobalBuffer(Slot(j));
-        pulledTerminal_[lane]=false;
-        if(sharedPull_ && !keepFlags) {
-            // Header-only inspection before redirecting a terminal to its
-            // immutable first-hop slot; event7 is outside payload lanes0..5.
-            DataCopyPad(wire[uint32_t(data_.headerPayloadOffset)],source[uint32_t(data_.headerWireOffset)],
-                        {1U,32U,0U,0U,0U},{false,0U,0U,0});
-            ServerDedupReceiveSync<HardEvent::MTE2_S>();
-            auto descriptor=wire[uint32_t(data_.headerPayloadOffset)].template ReinterpretCast<uint32_t>();
-            if(descriptor.GetValue(3U)==kLlSharedPullDescriptor) {
-                const uint32_t owner=descriptor.GetValue(4U);
-                const uint64_t offset=uint64_t(descriptor.GetValue(5U)) |
-                    (uint64_t(descriptor.GetValue(6U))<<32U);
-                if(!LlSharedPullAddressValid(owner,uint32_t(args_->rank),uint32_t(args_->rankSize),
-                    kLlRanksPerGroup,offset,data_.dispatchOffset,data_.dispatchBytes,data_.tokenStride)) {
-                    Trap();return;
-                }
-                source.SetGlobalBuffer(args_->peerMems[owner]+offset);
-                source.SetL2CacheHint(CacheMode::CACHE_MODE_DISABLE);
-                pulledTerminal_[lane]=true;
-            }
-        }
         if (keepFlags) {
             DataCopy(wire, source, uint32_t(data_.tokenStride));
         } else {
@@ -493,9 +470,6 @@ private:
         ServerDedupPacketTail tail(wire, headerOffset,
                                    uint32_t(keepFlags ? data_.relayReadIndexWireOffset : data_.readIndexPayloadOffset));
         auto header = tail.Header();
-        if(pulledTerminal_[lane]) {
-            header.SetValue(3U,uint32_t(EpServerDedupTokenType::Terminal));
-        }
         const uint32_t role = enableDedup_ ? header.GetValue(3U) : 0U;
         const bool firstHop = enableDedup_ && role == uint32_t(EpServerDedupTokenType::FirstHop);
         if (enableDedup_)
@@ -540,13 +514,9 @@ private:
                                        DispatchServerDedupDispatchOffset(data_, sourceRank, destinationRank,
                                                                          expertId % localExperts_, q, ranks,
                                                                          localExperts_, bs_));
-                if(sharedPull_) {
-                    PublishSharedReference(output,wire,type,destination,j);
-                } else {
-                    LL_BW_TRANSFER(LlStageTimer::RELAY,destinationRank!=uint32_t(args_->rank),
-                                   data_.tokenStride,uint64_t(hiddenBytes_)+data_.scaleBytes);
-                    DataCopy(output, wire, uint32_t(data_.tokenStride));
-                }
+                LL_BW_TRANSFER(LlStageTimer::RELAY,destinationRank!=uint32_t(args_->rank),
+                               data_.tokenStride,uint64_t(hiddenBytes_)+data_.scaleBytes);
+                DataCopy(output, wire, uint32_t(data_.tokenStride));
                 if (expertTimer_) expertTimer_->End(expertId, LlExpertTimer::Forward);
             }
             LL_BW_END(LlStageTimer::RELAY,pipe_);
@@ -576,36 +546,6 @@ private:
         SetFlag<HardEvent::MTE3_MTE2>(lane);
     }
 
-    __aicore__ inline void PublishSharedReference(GlobalTensor<uint8_t> output,LocalTensor<uint8_t> wire,
-        LocalTensor<uint32_t> type,LocalTensor<uint32_t> destination,uint32_t task)
-    {
-        // Reuse this lane's existing 64B metadata scratch. Retire both header
-        // and flags before restoring it; no additional live UB allocation.
-        const uint32_t oldType=type.GetValue(0U);
-        const uint32_t d0=destination.GetValue(0U),d1=destination.GetValue(1U),d2=destination.GetValue(2U);
-        auto flags=wire[uint32_t(data_.tokenStride)+32U].template ReinterpretCast<float>();
-        const uint64_t offset=uint64_t(Slot(task)-args_->peerMems[args_->rank]);
-        type.SetValue(0U,d0);type.SetValue(1U,d1);type.SetValue(2U,d2);
-        type.SetValue(3U,kLlSharedPullDescriptor);type.SetValue(4U,uint32_t(args_->rank));
-        type.SetValue(5U,uint32_t(offset));type.SetValue(6U,uint32_t(offset>>32U));type.SetValue(7U,0U);
-        Duplicate<float>(flags,1.0f,8U);
-        ServerDedupReceiveSync<HardEvent::V_S>();
-        ServerDedupReceiveSync<HardEvent::S_MTE3>();
-        DataCopyPad(output[uint32_t(data_.headerWireOffset)],type.template ReinterpretCast<uint8_t>(),
-                    {1U,32U,0U,0U,0U});
-        // Body-before-ready is intentional even for different destinations.
-        // This conservative prototype pays a completion dependency per relay.
-        ServerDedupReceiveSync<HardEvent::MTE3_S>();
-        // Reuse ONE 32B source for each block. A multi-block copy with zero
-        // source stride would advance through UB rather than broadcast it.
-        for(uint32_t block=0U;block<uint32_t(data_.blockCount);++block)
-            DataCopyPad(output[block*512U+480U],flags.template ReinterpretCast<uint8_t>(),
-                        {1U,32U,0U,0U,0U});
-        ServerDedupReceiveSync<HardEvent::MTE3_S>();
-        type.SetValue(0U,oldType);
-        ServerDedupReceiveSync<HardEvent::S_MTE3>();
-    }
-
     // 摘要：仅清零本核拥有的所有接收槽中的 32B 块标记，保留 payload；完成等待由调用方负责。
     __aicore__ inline void ClearFlags()
     {
@@ -627,8 +567,6 @@ private:
     LlOverlapLayout overlap_{};
     LocalTensor<int32_t> sharedPrefix_;
     bool enableDedup_ = false;
-    bool sharedPull_ = false;
-    bool pulledTerminal_[8]{};
     bool probePrefetch_ = false;
     uint64_t windowOffset_ = 0;
     uint32_t recvCoreNum_ = 0, coreNum_ = 0;

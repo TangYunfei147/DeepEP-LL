@@ -29,13 +29,9 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 def validate_core_split_capability(capability):
     send, recv = capability.get("send_cores"), capability.get("recv_cores")
-    probe=capability.get('shared_pull_probe_mode',0)
-    if type(probe) is not int or probe not in (0,1,2):
-        raise RuntimeError('Invalid shared-pull prototype mode')
-    protocol_base=(19000,23000,24000)[probe]
     if (type(send) is not int or type(recv) is not int or send <= 0 or recv <= 0
             or send + recv != 56 or capability.get("active_aiv") != 56
-            or capability.get("core_protocol") != protocol_base + send):
+            or capability.get("core_protocol") != 19000 + send):
         raise RuntimeError("Rebuild/install the matching configured 56-core split wheel on every rank")
 
 
@@ -1289,7 +1285,6 @@ def worker(local_rank, args):
                       "local_q_seed_vf": bool(getattr(native,"low_latency_q_seed_vf",False)),
                       "overlap_stage": getattr(native,"low_latency_overlap_stage",0),
                       "core_protocol": native.low_latency_core_protocol,
-                      "shared_pull_probe_mode": getattr(native,'low_latency_shared_pull_probe_mode',0),
                       "stage_timer": bool(getattr(native, "low_latency_stage_timer_enabled", False)),
                       "stage_timer_schema": timer_layout["schema"],
                       "stage_timer_slots": timer_layout.get('slots'),
@@ -1315,11 +1310,6 @@ def worker(local_rank, args):
         if not getattr(native,"low_latency_q_seed_vf",False):
             raise RuntimeError("Install the VF-seeded q-table candidate wheel from this checkout")
         validate_core_split_capability(capability)
-        if capability['shared_pull_probe_mode']:
-            if (world!=16 or args.num_nodes!=1 or args.dtype!='fp8' or args.ll_stage_timer or
-                args.num_tokens!=256 or args.hidden!=3584 or args.num_topk!=8 or args.num_experts!=384 or
-                args.num_max_tokens_per_rank not in (None,256)):
-                raise RuntimeError('Shared-pull prototype requires the fixed single-host OFF FP8 case')
         if capability['implementation'] not in ('ndr-hns1825','configurable-groups','g4-shared-recv','g4-overlap-recv','g4-r0-prefix'):
             raise RuntimeError('Rebuild the wheel with the shared experiment implementation identity')
         validate_overlap_stage_capability(capability)
