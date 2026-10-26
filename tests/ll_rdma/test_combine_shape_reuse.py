@@ -17,7 +17,8 @@ def test_b1_stage_pollutes_b2_inactive_slot():
         return sum(struct.unpack_from('<f',result,(k+slot)*packet+block*512+480)[0]
                    for slot in range(k) for block in range(blocks))
     assert probe()!=float(blocks)  # old code polls forever
-    result[:]=bytes(len(result))  # pre-publication clear on every rank
+    for block in range(len(result)//512):
+        result[block*512+480:block*512+512]=bytes(32)
     for block in range(blocks):
         struct.pack_into('<f',result,(k+1)*packet+block*512+480,1.0)
     assert probe()==float(blocks)
@@ -28,4 +29,6 @@ def test_dispatch_invalidates_prepare_cache():
     dispatch=s.split('def _dispatch_low_latency',1)[1].split('def _combine_low_latency',1)[0]
     assert 'runtime.combine_window_layout = None' in dispatch
     native=(root/'csrc/ops/low_latency.cpp').read_text(encoding='utf-8')
-    assert 'bank < 2' in native and 'aclrtMemset(result, bytes, 0, bytes)' in native
+    assert 'combine_clear_result_flags_kernel_do(stream, local, blocks, cores)' in native
+    assert 'aclrtSynchronizeStream(stream)' in native
+    assert 'aclrtMemset(result, bytes, 0, bytes)' not in native

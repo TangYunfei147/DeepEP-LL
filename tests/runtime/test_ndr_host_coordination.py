@@ -35,12 +35,14 @@ def runtime(monkeypatch):
     obj.closed = False; obj.coordination_failed = False; obj.host_coordinated = True
     obj.device = 0; obj.rank = 0; obj.world_size = 32; obj.group = object()
     obj.notify_lock = threading.RLock()
-    obj.stream = SimpleNamespace(synchronize=lambda: log.append(('stream_sync',)))
+    obj.stream = SimpleNamespace(synchronize=lambda: log.append(('stream_sync',)), npu_stream=123)
     obj.native = SimpleNamespace(
         barrier=lambda **kw: log.append(('native_barrier', kw)),
         close=lambda **kw: log.append(('native_close', kw)))
-    env['require_native'] = lambda _: SimpleNamespace(clear_low_latency_combine_windows=
-        lambda native, *shape: log.append(('clear_windows', shape)))
+    def clear_windows(native, *arguments):
+        assert arguments[-1] == obj.stream.npu_stream
+        log.append(('clear_windows', arguments[:-1]))
+    env['require_native'] = lambda _: SimpleNamespace(clear_low_latency_combine_windows=clear_windows)
     env['_OWNER'] = obj
     return obj, api, dist, log, env
 

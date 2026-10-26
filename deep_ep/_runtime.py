@@ -342,7 +342,7 @@ class Runtime:
         native = require_native("NDR combine window preparation")
         if not callable(getattr(native, "clear_low_latency_combine_windows", None)):
             raise RuntimeError("Reinstall the matching NDR wheel with combine window preparation")
-        native.clear_low_latency_combine_windows(self.native, b, h, k, e)
+        native.clear_low_latency_combine_windows(self.native, b, h, k, e, self.stream.npu_stream)
         self.combine_window_layout = layout
 
 

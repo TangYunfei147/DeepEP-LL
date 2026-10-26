@@ -128,3 +128,42 @@ int main(){
 }
 ''', 'combine-mask')
 
+
+def test_flag_initializer_preserves_payload_and_bounds(tmp_path):
+    (tmp_path / 'kernel_operator.h').write_text(r'''
+#pragma once
+#include <cassert>
+#include <cstdint>
+#include <vector>
+#define __aicore__
+#define __gm__
+namespace AscendC {
+enum class CacheMode {CACHE_MODE_DISABLE};
+template<class T>struct LocalTensor {T* p;};
+template<class T>struct GlobalTensor {
+ uintptr_t p;void SetGlobalBuffer(T* q){p=reinterpret_cast<uintptr_t>(q);}
+ void SetL2CacheHint(CacheMode){} GlobalTensor operator[](uint64_t i){return {p+i*sizeof(T)};}
+};
+struct Params {uint16_t count;uint32_t bytes,src,dst,reserved;};
+inline std::vector<uint8_t> banks[2];inline std::vector<uint32_t> writes[2];
+inline void DataCopyPad(GlobalTensor<uint8_t> gm,LocalTensor<uint8_t> ub,Params c){
+ assert(c.count>0 && c.count<=256 && c.bytes==32 && c.src==0 && c.dst==480);
+ const uint64_t address=gm.p-0x1000000000ULL;const uint32_t bank=uint32_t(address/(4ULL<<30));
+ const uint64_t offset=address%(4ULL<<30)-(2ULL<<20);assert(bank<2);
+ for(uint32_t i=0;i<c.count;++i){const uint64_t dst=offset+i*512;assert(dst%512==480 && dst+32<=banks[bank].size());
+  for(uint32_t b=0;b<32;++b){assert(ub.p[i*32+b]==0);banks[bank][dst+b]=0;}++writes[bank][dst/512];}
+}
+}
+''', encoding='utf-8')
+    run_cpp(tmp_path, r'''
+#include "kernels/combine/low_latency/combine_clear_flags.h"
+int main(){
+ uint8_t zeros[CombineDedup::kClearFlagUbBytes]{};
+ for(uint32_t cores=16;cores<=72;cores+=2)for(uint64_t blocks:{0ULL,1ULL,15ULL,960ULL,8193ULL}){
+  for(uint32_t bank=0;bank<2;++bank){AscendC::banks[bank].assign(blocks*512,0x69);AscendC::writes[bank].assign(blocks,0);}
+  for(uint32_t core=0;core<cores;++core)CombineDedup::ClearResultFlags(reinterpret_cast<uint8_t*>(0x1000000000ULL),blocks,{zeros},core,cores);
+  for(uint32_t bank=0;bank<2;++bank)for(uint64_t b=0;b<blocks;++b){assert(AscendC::writes[bank][b]==1);
+   for(uint32_t i=0;i<512;++i)assert(AscendC::banks[bank][b*512+i]==(i<480?0x69:0));}
+ }
+}
+''', 'combine-flag-clear')

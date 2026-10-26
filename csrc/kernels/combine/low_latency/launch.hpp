@@ -20,3 +20,4 @@ static_assert(offsetof(EpServerDedupCombineKernelArgs, timerMode) == 88, "timer 
 static_assert(offsetof(EpServerDedupCombineKernelArgs, coreNum) == 92, "active cores");
 }  // namespace deepep
 extern "C" void combine_server_dedup_kernel_do(void* stream, const deepep::EpServerDedupCombineKernelArgs* args);
+extern "C" void combine_clear_result_flags_kernel_do(void* stream, uint8_t* local, uint64_t blocks, uint32_t cores);

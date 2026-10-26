@@ -10,6 +10,12 @@ source mask 的合法性和期望 flag 数在每个源 token 初始化时计算�
 
 本地 CPU 模型执行生产通知及聚合轮询代码，覆盖 16..72 偶数核、G4/G16、无任务通知核、延迟到达、K32 与非法 mask。尚无 CANN 编译、设备正确性或性能验收。
 
+## 2026-10-26：只初始化 result flags
+
+首次/dispatch 后/布局变化的初始化仍在全设备完成之后、HCCL 完成交换之前执行。将两个 bank 的整段 memset 改为同一 combine TU 中的独立 `combine_clear_result_flags_kernel`：每核只写 512B 包中的末尾 32B flags，使用独立 8KiB 全零 UB、每次最多 256 条 strided DMA；payload 和其他区域保持原值。函数在原 runtime stream 启动并等待完成，沿用原初始化失败路径，不新增跨 rank 同步或生产计时。
+
+B8/H3584/K8 时初始化从 983040B 降为 61440B 本地写入，新增 helper task 属于调用前准备，不是 `combine_server_dedup_kernel`。这只是写入量变化，设备启动成本与总体性能仍需测试。缓存失效、固定 shape 连续调用、原全设备/HCCL 完成协调保持不变；Python/private native 初始化入口须匹配更新。
+
 ## B1→B2小B去重窗口复用修复（Host协议2）
 
 combine partial暂存紧随B*K个结果包；B增大时旧小B的stage可能成为新结果槽。
@@ -18,8 +24,8 @@ H3584/K8下B1 stage起点正是B2 token1 slot0起点。M5扫描所有K槽标志�
 core29/56在B2下负责源token1，与用户case1的现象相符，设备最终原因仍需重测确认。
 
 每次dispatch使runtime的combine窗口准备缓存失效。首次/布局变化的NDR combine
-在全设备同步之后、HCCL状态交换之前，通过新native入口同步清零两个bank的
-B*K结果区（包含payload/flags，不涉及dispatch数据区及计数控制区）。所有rank
+在全设备同步之后、HCCL状态交换之前，通过native入口同步清零两个bank的
+B*K结果区 flags（不涉及payload、dispatch数据区及计数控制区）。所有rank
 准备成功后才启动combine，避免清零覆盖另一rank的新发布。同布局连续combine
 继续依赖原消费清flag，不反复清零。准备失败随HCCL交换并封锁runtime。
 Python Host协议升2，旧native缺入口明确拒绝；必须全rank完整重装wheel。

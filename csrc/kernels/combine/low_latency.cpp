@@ -13,6 +13,7 @@
 #include "low_latency/ep_memory_server_dedup_combine_tiling.h"
 #include "../dispatch/low_latency/device/dispatch_server_dedup_magic.h"
 #include "low_latency/launch.hpp"
+#include "low_latency/combine_clear_flags.h"
 
 // 中文审计：ElasticBuffer._combine_low_latency → csrc/ops/low_latency.cpp
 // → combine_server_dedup_kernel_do → 本入口。输入依赖匹配dispatch handle的路由/计数/权重。
@@ -58,5 +59,27 @@ extern "C" DEEPEP_EXPORT void combine_server_dedup_kernel_do(void* stream,
     combine_server_dedup_kernel<<<a.coreNum, DEEPEP_KERNEL_LAUNCH_UB(0), stream>>>(
         a.commArgs, a.expertOut, a.destinationIndex, a.sendCounts, a.expertScales, a.tokenType, a.relayReadIndex,
         a.sourceMask, a.yOut, a.tilingData, a.stageTimer, a.timerMode);
+}
+
+extern "C" [[bisheng::core_ratio(0, 1)]] __global__ __aicore__ void combine_clear_result_flags_kernel(
+    GM_ADDR local, uint64_t blocks)
+{
+    AscendC::TPipe pipe;
+    AscendC::TBuf<> buffer;
+    pipe.InitBuffer(buffer, CombineDedup::kClearFlagUbBytes);
+    auto zeros = buffer.Get<float>();
+    AscendC::Duplicate<float>(zeros, 0.0f, CombineDedup::kClearFlagUbBytes / 4U);
+    AscendC::SetFlag<AscendC::HardEvent::V_MTE3>(0U);
+    AscendC::WaitFlag<AscendC::HardEvent::V_MTE3>(0U);
+    CombineDedup::ClearResultFlags(local, blocks, zeros.ReinterpretCast<uint8_t>(),
+                                   AscendC::GetBlockIdx(), AscendC::GetBlockNum());
+    AscendC::SetFlag<AscendC::HardEvent::MTE3_S>(0U);
+    AscendC::WaitFlag<AscendC::HardEvent::MTE3_S>(0U);
+}
+
+extern "C" DEEPEP_EXPORT void combine_clear_result_flags_kernel_do(void* stream, uint8_t* local,
+                                                                  uint64_t blocks, uint32_t cores)
+{
+    combine_clear_result_flags_kernel<<<cores, DEEPEP_KERNEL_LAUNCH_UB(0), stream>>>(local, blocks);
 }
 #endif
