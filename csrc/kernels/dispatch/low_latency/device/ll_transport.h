@@ -55,7 +55,7 @@ __aicore__ inline void Quiet(uint32_t peer, LocalTensor<uint8_t> scratch, uint32
 // its completion and WQE costs must be measured before introducing a ring.
 __aicore__ inline void Packet(const __gm__ Args* a, uint32_t peer, uint64_t offset,
                               LocalTensor<uint8_t> packet, uint32_t bytes, uint32_t syncId=7U,
-                              LlStageTimer::DeviceTimer* timer=nullptr) {
+                              LlStageTimer::DeviceTimer* timer=nullptr, bool preservePacket=true) {
     Check(a, peer, offset, bytes);
     auto dst = Address(a, peer, offset);
     if (!RemoteWrite(a, peer)) {
@@ -83,13 +83,15 @@ __aicore__ inline void Packet(const __gm__ Args* a, uint32_t peer, uint64_t offs
     if (timer) timer->Start(LlStageTimer::SendRdmaFlagWait);
     Quiet(peer, packet, syncId);
     if (timer) timer->End(LlStageTimer::SendRdmaFlagWait);
-    if (timer) timer->Start(LlStageTimer::SendRdmaRestore);
-    // SDK workspace borrows the first 128B after staging. Restore it because
-    // relay callers reuse this packet for several destinations.
-    DataCopy(packet, Tensor(stage,true), 128U);
-    Sync<HardEvent::MTE2_S>(syncId);
-    PipeBarrier<PIPE_ALL>();
-    if (timer) timer->End(LlStageTimer::SendRdmaRestore);
+    if (preservePacket) {
+        if (timer) timer->Start(LlStageTimer::SendRdmaRestore);
+        // Multi-destination callers retain the packet. Single-use callers
+        // overwrite its body before reuse and need no scratch restoration.
+        DataCopy(packet, Tensor(stage,true), 128U);
+        Sync<HardEvent::MTE2_S>(syncId);
+        PipeBarrier<PIPE_ALL>();
+        if (timer) timer->End(LlStageTimer::SendRdmaRestore);
+    }
 }
 // Strided 32B records. Count records publish only word 0 after words 1..7
 // complete. Ready records carry no payload and are published after local stage

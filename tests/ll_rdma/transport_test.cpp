@@ -52,6 +52,17 @@ int main() {
         }
     }
     Model::before={}; core=0; cores=72; a.reservedConfig[1]=72;
+    // Single-use combine packets retain wire contents and completion while
+    // allowing the SDK to consume their UB prefix. Each new call repacks it.
+    for (uint32_t turn=0;turn<3;++turn) {
+        for (uint32_t i=0;i<1536;++i) packet[i]=uint8_t(i+turn+1U);
+        const auto expected=packet;
+        const auto oldQuiets=Model::quiets;
+        LlTransport::Packet(&a,16,0,{packet.data()},1536,7U,nullptr,false);
+        assert(std::memcmp(remote.data()+16384,expected.data(),1536)==0);
+        assert(std::memcmp(packet.data(),expected.data(),128)!=0);
+        assert(Model::quiets-oldQuiets==2U && Model::pending.empty());
+    }
     std::vector<uint8_t> records(96),scratch(128),received(16000);
     for (uint32_t i=0;i<records.size();++i) records[i]=uint8_t(i+1);
     std::fill(remote.begin(),remote.end(),0);
