@@ -16,7 +16,9 @@ def test_count_wiring_skips_empty_cores_and_retains_source_identity():
             < send.index('routeExchange_.PublishCommit') < send.index('routeExchange_.ReadPeer'))
     assert 'publishingSource_=routeExchange_.Peer()' in send
     assert send.index('routeExchange_.ReadPeer') < send.index('routeExchange_.FinishSend')
-    assert 'pairedRoutes_ && !LlTransport::SameHost(args_,dst)' in code
+    # Paired SendCnt clipped the whole expert range once, before both sources.
+    assert 'pairedRoutes_ && !LlTransport::SameHost(args_,dst)' not in code
+    assert 'start<hostEnd && end>hostFirst' not in send
     assert 'stateOffset_ + frame.frameOffset' in code
 
 def test_production_exchange_with_autonomous_network_and_delays(tmp_path):
@@ -35,19 +37,21 @@ def test_production_exchange_with_autonomous_network_and_delays(tmp_path):
     assert 'PASS body CQ failure prevents commit' in result.stdout
     print(result.stdout)
 
-@pytest.mark.parametrize('b,k,e,cores',[(1,8,384,56),(2,8,384,56),(32,8,384,56),(256,32,1024,72),(1,1,32,72)])
+@pytest.mark.parametrize('b,k,e,cores',[(1,8,384,56),(2,8,384,56),(32,8,384,56),
+    (256,32,1024,72),(1,1,32,72),(512,2,384,56),(1024,8,1024,72)])
 @pytest.mark.parametrize('route',['random','one_host'])
 def test_gateway_counts_preserve_source_prefixes(b,k,e,cores,route):
     rng=random.Random(13)
     routes=[[rng.randrange(e if route=='random' else e//2) for _ in range(b*k)] for _ in range(32)]
     local=e//32
+    count_cores=cores if b<512 else cores//2
     counts={}
     for gateway in range(32):
         host_first=gateway//16*(e//2)
         host_end=host_first+e//2
         for source in (gateway,gateway^16):
-            for core in range(cores):
-                base,extra=divmod(e,cores)
+            for core in range(count_cores):
+                base,extra=divmod(e,count_cores)
                 start=core*base+min(core,extra)
                 end=start+base+(core<extra)
                 for expert in range(max(start,host_first),min(end,host_end)):

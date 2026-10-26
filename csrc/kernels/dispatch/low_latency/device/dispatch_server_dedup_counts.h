@@ -254,9 +254,8 @@ __aicore__ inline void ServerDedupCounts::SendCnt()
         // Status records are reused for the paired source. Retire the local
         // source's MTE body/commit reads before overwriting their UB.
         SyncFunc<HardEvent::MTE3_S>();
-        const uint32_t hostFirst=(epRankId_/16U)*16U*moeExpertNumPerRank_;
-        const uint32_t hostEnd=hostFirst+16U*moeExpertNumPerRank_;
-        if (count && start<hostEnd && end>hostFirst) {
+        // start/end were already clipped to this physical host above.
+        if (count) {
             SyncFunc<HardEvent::V_MTE2>();
             routeExchange_.ReadPeer(validExpertIdsTensor_);
             SyncFunc<HardEvent::MTE2_V>();
@@ -331,7 +330,6 @@ __aicore__ inline void ServerDedupCounts::SendExpertCntRange(uint32_t start, uin
         const uint32_t localExpert = expert % moeExpertNumPerRank_;
         const uint32_t count =
             end - expert < moeExpertNumPerRank_ - localExpert ? end - expert : moeExpertNumPerRank_ - localExpert;
-        if (pairedRoutes_ && !LlTransport::SameHost(args_,dst)) { expert+=count; continue; }
         const uint64_t offset = (uint64_t(localExpert) * epWorldSize_ + publishingSource_) * kEpServerDedupCountGmStride;
         if (packedFrames_) {
             const auto frame = CountFrame(rscvStatusNum_, epWorldSize_,
