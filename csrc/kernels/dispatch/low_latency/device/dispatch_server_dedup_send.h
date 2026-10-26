@@ -70,7 +70,7 @@ public:
     {
         // 1. 无 token 分片的发送核直接返回；有任务的核复用 SendCnt 释放出的 scratch。
         // reservedBytes 对应仍可能被计数发送读取的 UB，不能当作可用空间覆盖。
-        if (enableDedup_ && count_ == 0U) return;
+        if (!LlSenderHasWork(enableDedup_, count_, bs_ * k_, GetBlockIdx())) return;
         timer_ = timer;
         if (LlTransport::Rdma(args_)) rdmaBatch_.Init(args_, uint32_t(data_.tokenStride), timer_);
         if (timer_) timer_->Start(LlStageTimer::SendPrepare);
@@ -144,7 +144,9 @@ public:
                       qWorkBuf_.Get<uint32_t>(), qBytes / sizeof(uint32_t));
         // Quantization reuses the first hash array on V. Retire its Scalar
         // stores once here, replacing repeated vector-prefix reductions.
-        if constexpr (NeedQuantize) Sync<HardEvent::S_V>();
+        if constexpr (NeedQuantize) {
+            if (bs_ > 1U) Sync<HardEvent::S_V>();
+        }
         // 每个 512B 块尾部的 32B 标记预置为 1；发送时 payload 和标记一起搬运。
         // 初始 MTE3_V 事件让 lane 首次可写，后续复用由上一包的发送完成事件控制。
         uint64_t flagMask[2] = {0xffU, 0U};

@@ -33,7 +33,7 @@ static void CheckQ(std::vector<uint32_t> ids, uint32_t topK, uint32_t experts) {
     LlBuildRouteQ(Words{ids.data(), n, &routeReads}, n, topK, experts,
                   Words{first.data() + 1, half}, Words{second.data() + 1, half},
                   Words{q.data() + 1, half}, half);
-    assert(routeReads == n); // one forward route pass, including collisions
+    assert(routeReads == (n <= topK ? 0U : n)); // one pass; first-token q needs no IDs
     std::vector<uint32_t> reference(experts);
     for (uint32_t i = 0; i < n; ++i) {
         const uint32_t expected = i < topK ? 0U : reference[ids[i]];
@@ -92,6 +92,16 @@ static void CheckGroups(const std::vector<uint32_t>& ids, uint32_t groups, uint3
 }
 
 int main() {
+    for (uint32_t senders=8U; senders<=36U; ++senders)
+        for (uint32_t tokens : {1U,2U,8U,16U,32U,256U})
+            for (uint32_t topK=1U; topK<=32U; ++topK)
+                for (uint32_t core=0U; core<senders; ++core) {
+                    const uint32_t ownedTokens=tokens/senders+(core<tokens%senders);
+                    const uint32_t routes=tokens*topK;
+                    const uint32_t ownedRoutes=routes/senders+(core<routes%senders);
+                    assert(LlSenderHasWork(true,ownedTokens,routes,core)==(ownedTokens!=0U));
+                    assert(LlSenderHasWork(false,ownedTokens,routes,core)==(ownedRoutes!=0U));
+                }
     CheckQ({7, 7, 7, 7, 7, 7, 7, 7}, 4, 384); // first-token semantics retained
     CheckQ({1023}, 1, 1024);
     CheckQ(std::vector<uint32_t>(16352, 1023U), 32, 1024); // packed-count boundary

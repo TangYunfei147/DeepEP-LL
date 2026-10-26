@@ -8,6 +8,15 @@ namespace DispatchDedup {
 #define LL_SENDER_PLAN_INLINE inline
 #endif
 
+// A non-dedup core can own flat routes without owning a token-weight slice.
+// If total routes are fewer than sender cores, only the first routeCount cores
+// own routes; otherwise every sender owns at least one.
+LL_SENDER_PLAN_INLINE bool LlSenderHasWork(bool dedup, uint32_t tokenCount,
+                                          uint32_t routeCount, uint32_t core)
+{
+    return tokenCount != 0U || (!dedup && core < routeCount);
+}
+
 template <class Words>
 class LlSplitRouteWords {
     Words first_, second_;
@@ -33,6 +42,12 @@ template <class Ids, class Words>
 LL_SENDER_PLAN_INLINE void LlBuildRouteQ(Ids ids, uint32_t routeCount, uint32_t topK, uint32_t experts,
                                         Words firstScratch, Words secondScratch, Words q, uint32_t halfSlots)
 {
+    if (routeCount <= topK) {
+        // Every original q call returns zero for the first token. No histogram
+        // or hash state is needed when the complete input is that one token.
+        for (uint32_t index = 0; index < routeCount; ++index) q.SetValue(index, 0U);
+        return;
+    }
     LlSplitRouteWords<Words> table(firstScratch, secondScratch, halfSlots);
     const uint32_t slots = halfSlots * 2U;
     const bool dense = experts <= slots;
