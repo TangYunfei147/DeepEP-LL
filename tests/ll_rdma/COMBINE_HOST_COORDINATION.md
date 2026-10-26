@@ -1,5 +1,15 @@
 # NDR combine 重复调用的 HCCL 完成协调
 
+## 2026-10-26：缩减 combine 控制写和重复轮询计算
+
+prepare done 仍保留每通知核独立行和原有布局，只清本次实际 AIV 行宽；ready 只发布给本次实际接收核，保留 512B stride 和最大容量。56 核时每 rank 每次少清 4096B 本地 prepare 尾部，G16 少写 4096B ready（包含 self，其中 peer 为 3840B）。生产完成、组内 ready、M4/M5 输出槽退休和最终排空均保留。
+
+source mask 的合法性和期望 flag 数在每个源 token 初始化时计算一次，失败轮询只重新观察实际到达状态。已有 Host 合法范围 B≤65536、flag DMA 数≤4095，使原有 uint32 pending 槽的低16位可保存 token ID、高16位保存期望数；pending 交换保留这两个字段。UB 预算、lane 数、合法 shape 范围、原 K 顺序和权重归约不变。
+
+发送核只执行统一的最终 PIPE_ALL，删除此前紧邻它的第二次排空。timer ON 时这部分尾部等待统一归入 `CombineFinalDrain`，不再归入 `CombineDirect`；不得把阶段归属迁移解释成完整 kernel 加速。
+
+本地 CPU 模型执行生产通知及聚合轮询代码，覆盖 16..72 偶数核、G4/G16、无任务通知核、延迟到达、K32 与非法 mask。尚无 CANN 编译、设备正确性或性能验收。
+
 ## B1→B2小B去重窗口复用修复（Host协议2）
 
 combine partial暂存紧随B*K个结果包；B增大时旧小B的stage可能成为新结果槽。

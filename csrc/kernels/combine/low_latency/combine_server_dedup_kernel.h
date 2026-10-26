@@ -145,8 +145,6 @@ public:
         } else {
             if (timer_) timer_->Start(LlStageTimer::CombineDirect);
             ReturnDirectTokens();
-            // Retain the full drain after direct-return DMA completion.
-            PipeBarrier<PIPE_ALL>();
             if (timer_) timer_->End(LlStageTimer::CombineDirect);
         }
         // Retires prepare publication, both zero sources and server notification;
@@ -430,13 +428,13 @@ private:
         auto done = Control(args_->rank,
                             COMBINE_DEDUP_EP_SERVER_DEDUP_COMBINE_PREPARE_DONE_OFFSET + uint64_t(core_ - notifyBegin_) * kCombinePrepareRowBytes);
         WaitFlags(done, prepareInput_, prepareWork_, prepareSum_, coreNum_);
-        Duplicate<float>(prepareZero_, 0.0f, kCombinePrepareRowBytes / 4U);
-        Duplicate<float>(notifyUb_, 0.0f, kCombineNotifyRows * 8U);
+        Duplicate<float>(prepareZero_, 0.0f, coreNum_ * 8U);
+        Duplicate<float>(notifyUb_, 0.0f, recvCores_ * 8U);
         Sync<HardEvent::V_S>();
-        for (uint32_t r = 0; r < kCombineNotifyRows; ++r) notifyUb_.SetValue(r * 8U, 1.0f);
+        for (uint32_t r = 0; r < recvCores_; ++r) notifyUb_.SetValue(r * 8U, 1.0f);
         Sync<HardEvent::V_MTE3>();
         Sync<HardEvent::S_MTE3>();
-        DataCopyPad(done, prepareZero_, {1U, kCombinePrepareRowBytes, 0U, 0U, 0U});
+        DataCopyPad(done, prepareZero_, {1U, coreNum_ * 32U, 0U, 0U, 0U});
         // Eight notification cores cover all peers in the logical group.
         // Ready rows retain 512-byte capacity, independent of active group size.
         const uint32_t groupBase = uint32_t(args_->rank) / Group *
@@ -445,7 +443,7 @@ private:
             LlTransport::Records(args_, groupBase + local,
                 control_ + COMBINE_DEDUP_EP_SERVER_DEDUP_COMBINE_SERVER_READY_OFFSET +
                 (uint32_t(args_->rank) % Group) * 32U,
-                notifyUb_.ReinterpretCast<uint8_t>(), kCombineNotifyRows, 512U, false,
+                notifyUb_.ReinterpretCast<uint8_t>(), recvCores_, 512U, false,
                 prepareInput_.ReinterpretCast<uint8_t>());
         }
     }

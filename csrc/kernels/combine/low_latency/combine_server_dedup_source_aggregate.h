@@ -67,13 +67,9 @@ public:
         for (uint32_t lane = 0; lane < inputLanes_; ++lane) SetFlag<HardEvent::V_MTE2>(lane);
         uint32_t remaining = count_, scan = 0U, completed = 0U;
         while (remaining != 0U) {
-            const uint32_t token = pending_.GetValue(scan);
-            const uint32_t mask = enableDedup_ ? masks_.GetValue(token - begin_) : 0U;
-            if (enableDedup_ && (mask == 0U || (k_ < 32U && (mask >> k_) != 0U))) {
-                Trap();
-                return retiredOutputs_;
-            }
-            if (!Probe(token, mask)) {
+            const uint32_t task = pending_.GetValue(scan);
+            const uint32_t token = task & 0xffffU;
+            if (!Probe(token, task >> 16U)) {
                 if (++scan == remaining) scan = 0U;
                 continue;
             }
@@ -81,6 +77,7 @@ public:
             // complete K*N flags, including mask-inactive slots. This source is
             // independent of the final token's in-flight payload and yOut.
             if (remaining == 1U) ClearFlags();
+            const uint32_t mask = enableDedup_ ? masks_.GetValue(token - begin_) : 0U;
             if (dtype_ == DispatchDedup::DISPATCH_DEDUP_DATA_TYPE_FP16)
                 Aggregate<half>(token, mask, completed);
             else
@@ -139,7 +136,18 @@ private:
         if (enableDedup_) DataCopyPad(masks_, maskGm[begin_], {1U, count_ * 4U, 0U, 0U, 0U}, {false, 0U, 0U, 0U});
         DataCopyPad(weights_, weightGm[uint64_t(begin_) * k], {1U, count_ * k * 4U, 0U, 0U, 0U}, {false, 0U, 0U, 0.0f});
         Sync<HardEvent::MTE2_S>();
-        for (uint32_t p = 0; p < count_; ++p) pending_.SetValue(p, begin_ + p);
+        for (uint32_t p = 0; p < count_; ++p) {
+            const uint32_t mask = enableDedup_ ? masks_.GetValue(p) : 0U;
+            if (enableDedup_ && (mask == 0U || (k_ < 32U && (mask >> k_) != 0U))) {
+                Trap();
+                return;
+            }
+            const uint32_t expected =
+                (enableDedup_ ? uint32_t(GetBitCount<1>(uint64_t(mask))) : k_) * blocks_;
+            // BuildLayout admits B <= 65536; the existing flag DMA bound is
+            // <=4095. Cache both fields in the original uint32 task slot.
+            pending_.SetValue(p, (begin_ + p) | (expected << 16U));
+        }
     }
     template <class T>
     __aicore__ inline LocalTensor<T> Allocate(uint32_t bytes)
@@ -154,13 +162,12 @@ private:
         SetFlag<E>(7U);
         WaitFlag<E>(7U);
     }
-    __aicore__ inline bool Probe(uint32_t token, uint32_t mask)
+    __aicore__ inline bool Probe(uint32_t token, uint32_t expected)
     {
         // The previous probe's V_S retired its flag-buffer reader. This UB is
         // independent of payload compute/output, so do not wait for that Vector
         // work before issuing the next flag read. Inactive slot flags stay zero.
         const uint32_t flags = k_ * blocks_;
-        const uint32_t expected = (enableDedup_ ? uint32_t(GetBitCount<1>(uint64_t(mask))) : k_) * blocks_;
         auto src = resultFlags_[uint64_t(token) * k_ * packetBytes_ / 4U + 120U];
         DataCopy(flags_, src, {uint16_t(flags), 1U, 15U, 0U});
         Sync<HardEvent::MTE2_V>();
