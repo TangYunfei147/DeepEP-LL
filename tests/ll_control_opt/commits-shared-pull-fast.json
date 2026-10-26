@@ -1,0 +1,21 @@
+{
+  "schema": 2,
+  "comparison_base": "baseline",
+  "baseline_note": "Current restored baseline78e9fb4 retains SDK PI admission and the accepted9027275 business path. Prefix-only isolates the independent ready-slot correction. Remaining entries compare with the preceding measured entry. Same SDK/full OFF, fixed single-host EP16 B=M256 H3584 K8 E384 G4 S30R26. No speedup established.",
+  "commits": [
+    {
+      "label": "baseline",
+      "revision": "78e9fb4d2686d73e8baf9dbdd633b9bf203fdd4d"
+    },
+    {
+      "label": "prefix-only",
+      "revision": "b2bcdbdcf311a19b2e321710ce084f2dcf9e138e",
+      "comparison_base": "baseline"
+    },
+    {
+      "label": "lean-validation",
+      "revision": "e359eeb908e741b54f7dae97b37508f099087245",
+      "comparison_base": "prefix-only"
+    }
+  ]
+}

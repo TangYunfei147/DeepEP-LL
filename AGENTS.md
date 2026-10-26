@@ -1,3 +1,11 @@
+## 当前独立 shared-pull 优化（2026-10-26，覆盖下方旧穿刺说明）
+
+- 用户明确要求新方案移至 kernel/ll-g4-shared-pull、工作区 DeepEP-LL-shared-pull；原 kernel/ll-g4-control-opt 已恢复实验前代码并保留最新 SDK PI 兼容提交，不能重新混入实验。
+- 用户确认 prefix ready 每核独立32B槽，各核完成prefix读取后清自己的槽（含R0），不加readDone ACK。prefix revision1；基线传输单独提交b2bcdbd用于分离修复成本。
+- 本分支默认mode2、wire revision2、协议28000+S。删除额外全rank尾栅栏，依赖既有单stream同序、双bank、零计数及对应combine的G4ready/partial；不推广至错误handle/并发stream/任意shape。
+- 各项分别提交：引用构造移出成员循环；V→MTE3发布flags和合并Scalar等待；删除无消费wire改写；descriptor32B+单commit32B，DIRECT不预读；逐包地址诊断默认编译关闭，Host/ABI/必要流水依赖保留。不加活跃UB/lane/event。
+- fast清单测恢复基线78e9fb4、prefix-only、最终版；series清单逐提交9版，均固定源码、同SDK完整OFF、EP16/B=M256/H3584/K8/E384/G4/S30R26预量化FP8 dispatch+BF16 combine。详见tests/ll_control_opt/SHARED_PULL_PROBE.md，单报告≤65535字节；历史入口保持固定。
+- 不连接27或其他远端、不执行CANN/NPU；本地CPU检查后直接推送供目标机测试。
 ## MTE 消费 HNS PI 编译变体（2026-10-26）
 
 - 用户要求兼容固件 PI on chip 对 SHMEM 编译身份的影响；实际报错为 SDK 的合法额外字段 hns_1825_pi_on_chip=0，CANN版本/timestamp与环境一致。

@@ -1,0 +1,51 @@
+{
+  "schema": 2,
+  "comparison_base": "baseline",
+  "baseline_note": "Current restored baseline78e9fb4 retains SDK PI admission and the accepted9027275 business path. Prefix-only isolates the independent ready-slot correction. Remaining entries compare with the preceding measured entry. Same SDK/full OFF, fixed single-host EP16 B=M256 H3584 K8 E384 G4 S30R26. No speedup established.",
+  "commits": [
+    {
+      "label": "baseline",
+      "revision": "78e9fb4d2686d73e8baf9dbdd633b9bf203fdd4d"
+    },
+    {
+      "label": "prefix-only",
+      "revision": "b2bcdbdcf311a19b2e321710ce084f2dcf9e138e",
+      "comparison_base": "baseline"
+    },
+    {
+      "label": "pull-reference",
+      "revision": "d4c7c0a1669b6b4fda03d4028964852a2f13999e",
+      "comparison_base": "prefix-only"
+    },
+    {
+      "label": "no-fence",
+      "revision": "2daff37d3b257f65528a892dc9b12f4ec91df8d1",
+      "comparison_base": "pull-reference"
+    },
+    {
+      "label": "prepare-once",
+      "revision": "fdc4335f75b7aa0d6b9df8e940f55ebcc7ea97e8",
+      "comparison_base": "no-fence"
+    },
+    {
+      "label": "async-flags",
+      "revision": "10a437195b16d1c026088ec751527af8fd2e7773",
+      "comparison_base": "prepare-once"
+    },
+    {
+      "label": "logical-role",
+      "revision": "68fe8d1f5415d38ab41194aac95d451db7ea8e18",
+      "comparison_base": "async-flags"
+    },
+    {
+      "label": "single-ready",
+      "revision": "0d02c077a25ebb0fa60bd400fc62f9d754692523",
+      "comparison_base": "logical-role"
+    },
+    {
+      "label": "lean-validation",
+      "revision": "e359eeb908e741b54f7dae97b37508f099087245",
+      "comparison_base": "single-ready"
+    }
+  ]
+}

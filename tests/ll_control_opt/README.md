@@ -1,5 +1,9 @@
-Shared-pull quick prototype: [SHARED_PULL_PROBE.md](SHARED_PULL_PROBE.md). Default mode0 preserves the baseline; the manifest pins separate lifetime-control and pull builds. No device speedup is established.
+# 当前单机 shared-pull 独立实验
 
+使用 [SHARED_PULL_PROBE.md](SHARED_PULL_PROBE.md) 的新分支命令：
+`commits-shared-pull-fast.json` 对比基线、prefix修复和最终版；
+`commits-shared-pull-series.json` 按九个固定版本逐项对比。
+旧方案的资料和固定入口在下文保留，不代表当前 mode2/wire2 的实现。
 # Control-path candidates: commit-by-commit A/B
 
 The current task restores the user-selected business baseline `9027275` and

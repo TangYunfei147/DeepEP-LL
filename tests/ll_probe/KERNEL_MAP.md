@@ -1,5 +1,10 @@
-单机 shared-pull 穿刺入口见 [SHARED_PULL_PROBE.md](../ll_control_opt/SHARED_PULL_PROBE.md)。默认mode0保留原路径；两个固定实验提交分别启用生命周期控制与末端直接读，尚无设备性能结论。
+# 当前独立 shared-pull 分支
 
+kernel/ll-g4-shared-pull 默认 mode2/wire2：counts.h采用每消费核独立ready；
+recv.h采用共享首跳引用、单commit及DIRECT免预读；flag_probe.h输出第三引用mask；
+原全rank完成栅栏已删除。协议28000+S，全rank重建匹配完整OFF wheel。
+固定实验与逐提交清单见 [SHARED_PULL_PROBE.md](../ll_control_opt/SHARED_PULL_PROBE.md)。
+以下基线/打点说明用于历史固定版本；本候选拒绝阶段capture，不用旧schema统计新通信。
 # 泛化分支生产LL路径
 
 当前业务恢复用户指定的9027275基线，失败Vector-tail候选仅保留历史固定源码入口。
