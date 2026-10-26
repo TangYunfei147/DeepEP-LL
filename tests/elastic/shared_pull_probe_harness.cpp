@@ -52,21 +52,6 @@ template<class T>void Duplicate(LocalTensor<T> dst,T value,uint32_t n){for(unsig
 struct Buffer {uint8_t* p;template<class T>LocalTensor<T> Get(){return {p};}};
 struct Args {uint8_t* peerMems[16];unsigned rank=0,rankSize=16;};
 using CommArgs=Args;
-constexpr uint64_t kEpServerDedupControlPrefixBytes=36864;
-unsigned localSyncCalls=0,currentCore=0;
-unsigned GetBlockIdx(){return currentCore;}
-template<bool B>void SyncAll(){++localSyncCalls;}
-template<class Dummy=void>struct TBuf {
-    uint32_t data[8]{};
-    template<class T>LocalTensor<T> Get(){return {reinterpret_cast<uint8_t*>(data)};}
-};
-struct TPipe {
-    void Reset(){}
-    template<class T>void InitBuffer(T&,unsigned n){assert(n==32);}
-    unsigned FetchEventID(HardEvent){return 7;}
-};
-namespace AscendC {using ::TPipe;}
-// ACTUAL_FENCE_METHOD
 // ACTUAL_METADATA_METHOD
 struct Data {uint64_t headerPayloadOffset=3712,headerWireOffset=3936,blockCount=8,tokenStride=4096;
     uint64_t dispatchOffset=4096,dispatchBytes=8192;};
@@ -119,14 +104,4 @@ int main(){
     }
     for(uint64_t off:{0ULL,4095ULL,4097ULL,12288ULL,~0ULL})assert(!LlSharedPullAddressValid(1,2,16,4,off,4096,8192,4096));
     assert(LlSharedPullAddressValid(1,2,16,4,8192,4096,8192,4096));
-    TPipe pipe;
-    for(unsigned epoch=1;epoch<=10;++epoch){
-        for(unsigned r=0;r<16;++r)if(r!=owner.rank)
-            LocalTensor<uint8_t>{peers[r].data()+kLlSharedPullFenceOffset}.ReinterpretCast<uint32_t>().SetValue(0,epoch+1);
-        LlSharedPullFinish(&owner,&pipe);
-        assert(LocalTensor<uint8_t>{peers[owner.rank].data()+kLlSharedPullFenceOffset}.ReinterpretCast<uint32_t>().GetValue(0)==epoch);
-    }
-    currentCore=1;LlSharedPullFinish(&owner,&pipe);assert(localSyncCalls==11);
-    currentCore=0;LocalTensor<uint8_t>{peers[owner.rank].data()+kLlSharedPullFenceOffset}.ReinterpretCast<uint32_t>().SetValue(0,0xffffffffU);
-    rejected=false;try{LlSharedPullFinish(&owner,&pipe);}catch(...){rejected=true;}assert(rejected);
 }

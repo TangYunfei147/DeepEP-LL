@@ -10,7 +10,6 @@
 #include "device/dispatch_server_dedup_counts.h"
 #include "device/dispatch_server_dedup_send.h"
 #include "device/dispatch_server_dedup_recv.h"
-#include "device/ll_shared_pull_fence.h"
 
 namespace DispatchDedup {
 template <class XType, bool WireFp8, bool E4M3, bool Prequantized = false>
@@ -129,11 +128,10 @@ public:
         sender_.Retire();
         counts_.Finish(); }
 
-        if constexpr(kLlSharedPullProbeMode!=0U) {
-            if(LlSharedPullScope(Prequantized,enableDedup_,uint32_t(args_->rankSize)))
-                LlSharedPullFinish(args_,pipe_);
-        }
-
+        // Shared first-hop lifetime follows the existing two-bank protocol:
+        // intervening dispatch counts (including zeros), or matching combine
+        // group-ready/partial return, retire readers before this slot is reused.
+        // The communicator serializes identical call order on one stream.
         // No shared work follows local completion. Same-stream kernel completion
         // orders the next launch after all cores finish their writes and cleanup.
     }

@@ -24,8 +24,6 @@ def test_real_descriptor_publish_and_payload_redirect(tmp_path,mode):
     methods=method(source,'IssueLoad')+'\n'+method(source,'PublishSharedReference')
     cpp=Path(__file__).with_name('shared_pull_probe_harness.cpp').read_text(encoding='utf-8')
     cpp=cpp.replace('// ACTUAL_RECEIVER_METHODS',methods)
-    fence=(ROOT/'csrc/kernels/dispatch/low_latency/device/ll_shared_pull_fence.h').read_text()
-    cpp=cpp.replace('// ACTUAL_FENCE_METHOD',method(fence,'LlSharedPullFinish'))
     packet=(ROOT/'csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_receive_packet.h').read_text()
     cpp=cpp.replace('// ACTUAL_METADATA_METHOD',method(packet,'BuildServerDedupMetadata'))
     file=tmp_path/'pull.cpp';file.write_text(cpp,encoding='utf-8')
@@ -35,29 +33,6 @@ def test_real_descriptor_publish_and_payload_redirect(tmp_path,mode):
     assert result.returncode==0,result.stdout+result.stderr
     result=subprocess.run([str(exe)],capture_output=True,text=True)
     assert result.returncode==0,result.stdout+result.stderr
-
-
-def test_end_fence_uses_monotonic_local_completion_not_parity_or_early_flag():
-    source=(ROOT/'csrc/kernels/dispatch/low_latency/device/ll_shared_pull_fence.h').read_text()
-    assert source.index('SyncAll<true>()')<source.index('GetBlockIdx()!=0U')<source.index('previous+1U')
-    assert source.index('DataCopy(counter,state')<source.index('state.GetValue(0U)<epoch')
-    assert 'previous==0xffffffffU' in source and source.count('CACHE_MODE_DISABLE')==2
-    # Independently simulate arbitrary rank completion/publication order. A
-    # rank can finish t only if all ranks' reads(t) have completed. Monotonic
-    # counters tolerate observing t+1 while another rank is still leaving t.
-    import random
-    for seed in range(20):
-        rng=random.Random(seed);published=[0]*16;exited=[0]*16
-        for _ in range(20000):
-            r=rng.randrange(16)
-            if published[r]==exited[r] and exited[r]<100:
-                published[r]+=1 # publication is after all local reads finish
-            if published[r]>exited[r] and min(published)>=published[r]:
-                exited[r]=published[r]
-            for rank in range(16):
-                assert exited[rank]<=min(published)
-            if min(exited)==100:break
-        assert min(exited)==100
 
 
 def test_candidate_preserves_payload_and_output_handle_and_rejects_old_diagnostics():
