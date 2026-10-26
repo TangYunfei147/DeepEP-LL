@@ -303,6 +303,17 @@ def environment(source, send_cores):
     return env
 
 
+def shared_pull_probe_mode(source):
+    header=Path(source)/'csrc/kernels/dispatch/low_latency/common/ll_shared_pull_probe_config.h'
+    if not header.exists():
+        return 0
+    match=re.search(r'^#define DEEPEP_LL_SHARED_PULL_PROBE_MODE ([012])$',
+                    header.read_text(encoding='utf-8'),re.M)
+    if not match:
+        raise ValueError('Cannot identify committed shared-pull prototype mode')
+    return int(match.group(1))
+
+
 def required_links(source, project=True):
     dependencies = links(source)
     # This suite fixes MegaMoE and fused builds OFF. CATLASS (including its
@@ -531,6 +542,7 @@ def build(revision, send_cores, *, root=ROOT, workspace=None, offline_deps=None,
             native_sha = hashlib.sha256(archive.read(natives[0])).hexdigest()
             kernel_sha = hashlib.sha256(archive.read(kernels[0])).hexdigest()
         data = dict(revision=revision, send_cores=send_cores, recv_cores=56 - send_cores, timer='OFF',
+                    shared_pull_probe_mode=shared_pull_probe_mode(source),
                     **identity,
                     logical_group=4, build_type='Release', wheel=wheels[0].relative_to(canonical.parent).as_posix(),
                     wheel_sha256=sha(wheels[0]), native_sha256=native_sha, kernel_sha256=kernel_sha,
