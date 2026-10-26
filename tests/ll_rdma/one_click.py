@@ -167,8 +167,8 @@ def installed_identity(a):
     if (info.get("shmem", {}).get("revision") != lock["revision"] or
             info.get("shmem", {}).get("build") != sdk["build"]):
         raise RuntimeError("Installed wheel and current SHMEM SDK identity differ; rebuild the wheel")
-    if getattr(native, "low_latency_implementation", None) != "ndr-hns1825" or native.low_latency_core_protocol != 8:
-        raise RuntimeError("Installed wheel is not the current NDR protocol-8 implementation")
+    if getattr(native, "low_latency_implementation", None) != "ndr-hns1825" or native.low_latency_core_protocol != 9:
+        raise RuntimeError("Installed wheel is not the current NDR protocol-9 implementation")
     if not native.low_latency_rdma_enabled or bool(native.low_latency_stage_timer_enabled) != (a.mode == "timer"):
         raise RuntimeError("Installed RDMA/timer capability does not match the requested mode")
     if native.low_latency_ranks_per_group(32) != 16 or native.low_latency_stage_timer_layout()["schema"] != 3:
@@ -183,7 +183,7 @@ def installed_identity(a):
     shared_args[shared_args.index("--node-rank") + 1] = "<node>"
     return {"schema": 1, "project_root": str(ROOT.resolve()), "git_revision": revision,
             "source_sha256": fingerprint, "sdk_revision": lock["revision"], "sdk_build": sdk["build"],
-            "core_protocol": 8, "timer_schema": 3, "mode": a.mode, "arguments": shared_args}
+            "core_protocol": 9, "timer_schema": 3, "mode": a.mode, "arguments": shared_args}
 
 
 def peer_identity(identity):

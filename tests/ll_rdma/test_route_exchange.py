@@ -5,16 +5,17 @@ import subprocess
 import pytest
 ROOT=Path(__file__).resolve().parents[2]
 
-def test_count_wiring_retains_empty_core_ack_and_source_identity():
+def test_count_wiring_skips_empty_cores_and_retains_source_identity():
     code=(ROOT/'csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_counts.h').read_text(encoding='utf-8')
     send=code.split('void ServerDedupCounts::SendCnt()',1)[1].split('void ServerDedupCounts::CountByVectorRange',1)[0]
     assert send.index('start=start<hostFirst?hostFirst:start') < send.index('statusCntAlign_ =')
     empty=send.split('if (count == 0U && pairedRoutes_ && aivId_ != 0U)',1)[1].split('// 3.',1)[0]
-    assert 'routeExchange_.Complete(unusedScratch)' in empty
+    assert 'return;' in empty and 'routeExchange_.' not in empty
     assert (send.index('routeExchange_.PostBody') < send.index('CountByVectorRange(start, end, maskBytes)')
             < send.index('if (count) SendExpertCntRange(start, end)')
             < send.index('routeExchange_.PublishCommit') < send.index('routeExchange_.ReadPeer'))
     assert 'publishingSource_=routeExchange_.Peer()' in send
+    assert send.index('routeExchange_.ReadPeer') < send.index('routeExchange_.FinishSend')
     assert 'pairedRoutes_ && !LlTransport::SameHost(args_,dst)' in code
     assert 'stateOffset_ + frame.frameOffset' in code
 
@@ -27,8 +28,10 @@ def test_production_exchange_with_autonomous_network_and_delays(tmp_path):
         str(Path(__file__).with_name('route_exchange_test.cpp')),'-o',str(exe)],check=True,timeout=180)
     result=subprocess.run([str(exe)],check=True,capture_output=True,text=True,timeout=60)
     assert 'PASS paired route exchange' in result.stdout
-    assert '3 puts / 2 quiets' in result.stdout
-    assert 'PASS same-bank ACK guard and independent alternate bank' in result.stdout
+    assert '2 puts / 2 quiets' in result.stdout
+    assert 'alternating dispatch banks without rank barrier' in result.stdout
+    assert 'existing combine completion boundary' in result.stdout
+    assert 'PASS FinishSend retires outbound commit without peer or local-reader join' in result.stdout
     assert 'PASS body CQ failure prevents commit' in result.stdout
     print(result.stdout)
 

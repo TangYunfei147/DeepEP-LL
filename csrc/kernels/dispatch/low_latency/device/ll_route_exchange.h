@@ -4,8 +4,11 @@
 
 namespace DispatchDedup {
 // Only a gateway's own count cores consume its inbox. They reconstruct counts
-// for the paired source and MTE-publish them to local expert ranks. ACK therefore
-// means all route readers have retired, not merely that NIC delivery completed.
+// for the paired source and MTE-publish them to local expert ranks. Successive
+// dispatches alternate banks and must consume the peer's next epoch before
+// reusing a bank. That peer cannot launch its next epoch until its prior local
+// readers retire. Intervening combine/fallback calls retain their existing
+// completion dependencies; no separate route-reader acknowledgement is needed.
 class PairedRouteExchange {
     const __gm__ CommArgs* args_ = nullptr;
     uint64_t bank_ = 0;
@@ -48,8 +51,6 @@ public:
     __aicore__ inline uint32_t Peer() const { return uint32_t(args_->rank)^16U; }
     __aicore__ inline void PostBody(AscendC::LocalTensor<int32_t> routes, AscendC::LocalTensor<uint8_t> scratch) {
         if (AscendC::GetBlockIdx()!=0U) return;
-        const uint32_t previous=Read(bank_+kRouteLastSent);
-        if (previous) Wait(bank_+kRouteAck,previous);
         // Routes reside in registered symmetric GM; no source points to UB.
         AscendC::DataCopy(LlTransport::Tensor(Local(bank_+kRouteTx),true), routes.ReinterpretCast<uint8_t>(),
                          (bytes_+31U)/32U*32U);
@@ -67,9 +68,8 @@ public:
         LlTransport::Quiet(Peer(),scratch);
         LlTransport::Put(args_,Peer(),LlTransport::Address(args_,Peer(),bank_+kRouteCommit),
                          Local(bank_+kRouteSequence),sizeof(uint32_t),scratch);
-        Write(bank_+kRouteLastSent,epoch_);
-        // Commit progresses without quiet. Complete's final quiet retires both
-        // commit and ACK before this core can reuse the sequence source or QP.
+        // Commit progresses without quiet. FinishSend retires its GM sequence
+        // source and CQ before this core leaves the count phase.
     }
     __aicore__ inline void ReadPeer(AscendC::LocalTensor<int32_t> routes) {
         Wait(bank_+kRouteCommit,epoch_);
@@ -78,16 +78,9 @@ public:
                          (bytes_+31U)/32U*32U);
         LlTransport::Sync<AscendC::HardEvent::MTE2_S>(7U);
     }
-    __aicore__ inline void Complete(AscendC::LocalTensor<uint8_t> scratch) {
-        // Call only after routes are consumed and local count-frame writes retire.
-        Write(bank_+kRouteReadDone+uint64_t(AscendC::GetBlockIdx())*512U,epoch_);
+    __aicore__ inline void FinishSend(AscendC::LocalTensor<uint8_t> scratch) {
         if (AscendC::GetBlockIdx()!=0U) return;
-        Wait(bank_+kRouteCommit,epoch_);
-        for (uint32_t core=0;core<AscendC::GetBlockNum();++core)
-            Wait(bank_+kRouteReadDone+uint64_t(core)*512U,epoch_);
-        LlTransport::Put(args_,Peer(),LlTransport::Address(args_,Peer(),bank_+kRouteAck),
-                         Local(bank_+kRouteSequence),sizeof(uint32_t),scratch);
-        // Same peer/QP as the commit: one completion wait covers both puts.
+        // This waits only for our outbound commit, never for peer/local readers.
         LlTransport::Quiet(Peer(),scratch);
     }
 };

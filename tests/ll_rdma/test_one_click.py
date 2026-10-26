@@ -154,7 +154,7 @@ def test_bad_shape_rejected_before_any_preparation(tokens, monkeypatch):
 
 
 @pytest.mark.parametrize("mode", ["timer", "perf"])
-@pytest.mark.parametrize("fault", [None, "timer", "source", "sdk", "firmware", "library", "branch"])
+@pytest.mark.parametrize("fault", [None, "timer", "source", "sdk", "firmware", "library", "branch", "protocol"])
 def test_installed_check_rejects_stale_or_mixed_builds(tmp_path, monkeypatch, mode, fault):
     root = tmp_path / "project"
     root.mkdir()
@@ -169,7 +169,7 @@ def test_installed_check_rejects_stale_or_mixed_builds(tmp_path, monkeypatch, mo
     (package / "_build_info.json").write_text(json.dumps(info))
     native = SimpleNamespace(
         low_latency_implementation="wrong" if fault == "branch" else "ndr-hns1825",
-        low_latency_core_protocol=8, low_latency_rdma_enabled=True,
+        low_latency_core_protocol=8 if fault == "protocol" else 9, low_latency_rdma_enabled=True,
         low_latency_stage_timer_enabled=(mode == "timer") != (fault == "timer"),
         low_latency_ranks_per_group=lambda world: 16,
         low_latency_stage_timer_layout=lambda: {"schema": 3},

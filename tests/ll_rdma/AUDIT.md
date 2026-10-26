@@ -1,9 +1,11 @@
-# LL 混合 MTE / NDR 协议审计（核心协议8）
+# LL 混合 MTE / NDR 协议审计（核心协议9）
 
 分支 `kernel/ll-ndr-hns1825`。
 
 最新两机EP32(B*K<=8192)初始路由改为rank^16配对交换，gateway重建计数并机内MTE发布，
-route body/epoch/ACK独立生命周期，覆盖下文旧跨机计数描述。
+route body/epoch采用独立控制区，覆盖下文旧跨机计数描述。
+2026-10-26删除路由ACK、每核done汇合和lastSent复用轮询；保留body/commit完成等待。
+复用沿用双bank的下一轮epoch依赖及现有combine协调，不增加屏障。
 其他域保留计数帧路径。参见[PAIRED_ROUTE_EXCHANGE.md](PAIRED_ROUTE_EXCHANGE.md)。
 
 2026-10-22更新：跨机实际B<32启用G16去重（第一项协议6）；跨机计数改为连续frame body加独立commit（第二项协议7），覆盖下文旧28B/4B逐记录描述。详见SMALL_BATCH_DEDUP.md和PACKED_COUNT_FRAMES.md。SDK未改。NDR 指 HNS_1825 NPU Direct RDMA。此版本把原全 peer RDMA 改为：**机内 MTE，跨机 RDMA put，禁止跨机 get**。

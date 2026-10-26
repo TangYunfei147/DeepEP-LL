@@ -212,10 +212,7 @@ __aicore__ inline void ServerDedupCounts::SendCnt()
     tpipe_->InitBufPool(stagePool_, kEpServerDedupCountUbBytes - ReservedBytes());
     if (count == 0U && !pairedRoutes_) return;
     if (count == 0U && pairedRoutes_ && aivId_ != 0U) {
-        // No route consumers on this core. It still participates in the ACK
-        // join, but does not load/scan routes just to publish an empty done.
-        LocalTensor<uint8_t> unusedScratch{};
-        routeExchange_.Complete(unusedScratch);
+        // No route consumer or outbound submission on this core.
         return;
     }
 
@@ -258,8 +255,8 @@ __aicore__ inline void ServerDedupCounts::SendCnt()
     if (count) SendExpertCntRange(start, end);
     if (pairedRoutes_) {
         // All gateways publish their outbound commit before waiting for the
-        // paired source. Body completion is required; commit completion joins
-        // the ACK quiet in Complete, after every local route reader retires.
+        // paired source. Body completion is required; FinishSend separately
+        // retires core0's outbound commit without joining local route readers.
         routeExchange_.PublishCommit(workBuf_.Get<uint8_t>());
         // Status records are reused for the paired source. Retire the local
         // source's MTE body/commit reads before overwriting their UB.
@@ -279,7 +276,7 @@ __aicore__ inline void ServerDedupCounts::SendCnt()
             SyncFunc<HardEvent::MTE3_S>();
             publishingSource_=epRankId_;
         }
-        routeExchange_.Complete(workBuf_.Get<uint8_t>());
+        routeExchange_.FinishSend(workBuf_.Get<uint8_t>());
     }
     // Only statusBuf_ is still read by MTE3. Count's V_S dependencies already
     // retired the shared scratch; do not Reset either pool (A5 drains MTE3).

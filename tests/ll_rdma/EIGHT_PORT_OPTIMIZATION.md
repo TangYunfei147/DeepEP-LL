@@ -52,13 +52,13 @@ put 减少不等于网络 RTT 按相同比例减少：旧实现也会批量提�
 ## 路由表已按源卡整批发送
 
 EP32 RDMA 且 `B*K<=8192` 时，每卡完整路由表是一次 `4*B*K` 字节 body put，
-最大 32768B，另有 commit 和 ACK 各 4B。它位于独立控制区，不使用 token packet 格式。
+最大 32768B，另有 commit 4B。它位于独立控制区，不使用 token packet 格式。
 不同源卡继续使用各自的跨机网口；不增加发送端机内汇聚到单一卡的阶段。
 
 本次将 PostBody 与 PublishCommit 分开：提交后先做本源计数和机内计数发布，
-再完成 body 并提交 commit。commit 的完成等待合并到最后 ACK 的 quiet。
-每 rank 每轮仍是 3 次 put，但 quiet 从 3 次降为 2 次。
-同 bank 复用仍等旧 ACK；空核仍发布 done，空 core0 仍负责完整网络进度。
+再完成 body 并提交 commit。2026-10-26协议9删除ACK及本地done汇合，
+每 rank 每轮为 2 次 put、2 次 quiet；最后quiet仅退休出站commit。
+同 bank 复用依赖已有双窗口epoch及调用顺序；空核直接返回，空 core0 仍负责完整网络进度。
 无新增 Host collective 或全核 SyncAll。详见 [PAIRED_ROUTE_EXCHANGE.md](PAIRED_ROUTE_EXCHANGE.md)。
 
 ## 首跳选择利用 fullmesh
@@ -84,7 +84,7 @@ combine 源码不改；归约首项变化可能改变浮点加法顺序，设备
 
 ## 验证与 A/B
 
-CPU 协议模型覆盖路由异步进展、变 shape、同/交替 bank、延迟 commit/ACK/消费者、
+CPU 协议模型覆盖路由异步进展、变 shape、真实调用顺序的bank复用、延迟commit/消费者、
 CQ 错误、不同 scratch 复用；packet 模型覆盖乱序/部分 body 可见性、逐 word gate、
 Compact/KeepFlags、多 peer/QP、尾批、slot 复用及 128KiB 边界。
 fullmesh 原生 helper 对 19200 组路由核对最少跨组 relay、所有成员以及 q/权重身份保留。

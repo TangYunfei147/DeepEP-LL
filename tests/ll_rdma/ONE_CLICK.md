@@ -42,7 +42,7 @@ bash tests/ll_rdma/one_click.sh 1 192.0.2.10 ndr-b8-001 --rebuild-shmem
 
 1. 创建/复用工程 `.venv-ll-rdma`，继承目标已有torch/torch_npu。
 2. 获取锁定子模块、校验/显式重建SDK、安装构建依赖和完整wheel。
-3. 检查当前源码fingerprint、SDK版本/实际PI模式、安装包NDR协议8、G16及timer模式。
+3. 检查当前源码fingerprint、SDK版本/实际PI模式、安装包NDR协议9、G16及timer模式。
 4. 用既有ST生成CPU计划，执行RDMA环境前检。
 5. 两机核对工程路径、Git版本、源码、SDK与完整测试参数，一致后进入原HCCL入口。
 6. 运行测试；timer模式成功后自动分析各自本机16rank，不要求复制另一机样本。

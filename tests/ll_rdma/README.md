@@ -1,4 +1,4 @@
-# HNS_1825 混合 MTE / NDR LL（核心协议8）
+# HNS_1825 混合 MTE / NDR LL（核心协议9）
 
 当前分支用于LL性能穿刺，只构建LL Host/Device，HT notify/dispatch/combine不编译；
 误调用HT入口会明确报错。CATLASS已移出子模块，普通LL构建不需要它。
@@ -14,6 +14,7 @@
 维护分支：`kernel/ll-ndr-hns1825`。原泛化/打点分支 `kernel/ll-configurable-groups` 不包含此改动。
 
 最新EP32初始路由按每卡网口采用16路配对交换，gateway机内重建/发布计数；
+协议9删除路由ACK及done汇合，每rank每轮仅body和commit两次put，保留两次quiet。
 见[PAIRED_ROUTE_EXCHANGE.md](PAIRED_ROUTE_EXCHANGE.md)。全rank更新完整wheel，SDK不改。
 
 跨机B<32按G16去重见[SMALL_BATCH_DEDUP.md](SMALL_BATCH_DEDUP.md)；
@@ -54,7 +55,7 @@ python -m pip install -v --force-reinstall --no-build-isolation --no-deps .
 bash tests/ll_rdma/build_smoke.sh
 ```
 
-SDK 默认构建 HNS_1825，并自动校验复用已有匹配产物，无需 `--if-needed`；身份不一致时先停止使用该 SDK 的任务，再显式 `--rebuild`。仅使用仓内 `third-party/shmem/install/shmem`。全 rank 必须匹配核心协议8；移除旧的 `DEEPEP_LL_RANKS_PER_GROUP` 编译定义，G 不再通过编辑全局宏设置。
+SDK 默认构建 HNS_1825，并自动校验复用已有匹配产物，无需 `--if-needed`；身份不一致时先停止使用该 SDK 的任务，再显式 `--rebuild`。仅使用仓内 `third-party/shmem/install/shmem`。全 rank 必须匹配核心协议9；移除旧的 `DEEPEP_LL_RANKS_PER_GROUP` 编译定义，G 不再通过编辑全局宏设置。
 
 环境脚本不默认选卡，runner 要显式 `--devices`，日志/缓存/临时文件保持工程内。后续代码、脚本和指南通过 Git 更新，原始数据与构建产物不提交。
 
