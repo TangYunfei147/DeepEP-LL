@@ -18,7 +18,7 @@ string(JSON _patches_count ERROR_VARIABLE _count_error LENGTH "${_sdk_identity}"
 string(JSON _target ERROR_VARIABLE _target_error GET "${_sdk_identity}" build target)
 if(_fields_error OR _type_error OR _count_error OR _target_error
    OR NOT _patches_type STREQUAL "ARRAY" OR NOT _target STREQUAL "Ascend950"
-   OR _field_count LESS 4 OR _field_count GREATER 5)
+   OR _field_count LESS 4 OR _field_count GREATER 6)
     message(FATAL_ERROR "Require a current native SHMEM SDK identity; stop SDK users and rebuild explicitly")
 endif()
 foreach(_identity_key cann_version cann_timestamp target)
@@ -28,11 +28,21 @@ foreach(_identity_key cann_version cann_timestamp target)
         message(FATAL_ERROR "Incomplete native SHMEM SDK build identity")
     endif()
 endforeach()
-if(_field_count EQUAL 5)
+if(_field_count GREATER 4)
     string(JSON _rdma_backend ERROR_VARIABLE _rdma_error GET "${_sdk_identity}" build rdma_backend)
     if(_rdma_error OR NOT _rdma_backend STREQUAL "HNS_1825")
         message(FATAL_ERROR "Unknown SHMEM SDK capability or build identity field")
     endif()
+endif()
+if(_field_count EQUAL 6)
+    string(JSON _hns_pi_type ERROR_VARIABLE _hns_pi_type_error TYPE "${_sdk_identity}" build hns_1825_pi_on_chip)
+    string(JSON _hns_pi_mode ERROR_VARIABLE _hns_pi_error GET "${_sdk_identity}" build hns_1825_pi_on_chip)
+    if(_hns_pi_type_error OR _hns_pi_error OR NOT _hns_pi_type STREQUAL "NUMBER"
+       OR NOT _hns_pi_mode MATCHES "^[01]$")
+        message(FATAL_ERROR "Unknown SHMEM SDK capability or invalid HNS1825 PI-on-chip identity")
+    endif()
+    # This is an MTE consumer. An attested HNS capability does not enable RDMA
+    # or add HNS/PI compile definitions to its Host or Device targets.
 endif()
 # Resolve from the selected SDK on every configure, including direct CMake use.
 unset(ASCENDCL_LIBRARY CACHE)
