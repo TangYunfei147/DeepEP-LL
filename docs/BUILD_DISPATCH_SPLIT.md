@@ -1,5 +1,69 @@
 # LL dispatch compile partition
 
+## Physically remove LL timer source before candidate A/B (2026-10-26)
+
+The user requests testing whether OFF instrumentation still affects compiler
+optimization/Scalar work, then evaluating only optimizations with positive
+target evidence. A fixed439d459 source projection creates normal-off and
+clean-source clones without changing this checkout's production code.
+The complete three-wheel plan is replay-off, replay-clean and stream-clean.
+Pair/small lack a returned positive matched target A/B. Count-ready VF/P1
+benefits in a different prefix design do not establish their benefit when
+newly moved into cb59, so they are not silently combined with this comparison.
+
+The clean projection physically removes LL stage/expert headers, recording
+types, members, parameters, markers, Host dictionary/layout plumbing and
+Python attach/diagnostic paths. Dispatch launch152→136 bytes and combine96→88
+bytes use independent clean wrapper symbols. One-time native/Python artifact
+checks are common to both arms; wire protocols and algorithm identity remain.
+Seven mode TUs, all supported modes, O2, SDK source, tensor lifetime, business
+Scalar/DMA/event/barrier order and packet layouts are preserved. Both clones
+honor the explicitly shared SDK path in the launcher.
+
+Normal and clean build from separate frozen source fingerprints. Only the
+normal source's project-local SDK is cleaned/rebuilt, once. Each wheel's
+native products are cleaned, all full wheels are installed into separate
+venvs, and every Host-only check passes before any sampling command is run.
+Cache files live under ignored source/.cache so compiler artifacts cannot
+invalidate the frozen source proof. SDK identity/hash admission stays removed.
+
+Stage1 is normal-route ABBA replay-off/replay-clean. Stage2 is normal/hotspot
+ABBA replay-clean/stream-clean, with known hotspot B16+ regressions retained as
+guards. Default seed0 gives12 serial ST processes; all use full dispatch plus
+BF16 combine, fixed EP16/G16/S28R28/P0, seven B values through32, and10/100/tail50
+with per-sample Exp plus scalar all-reduce. Actual route fingerprints must
+match within every block. No legacy consecutive-call protocol is mixed in.
+The single<=60000-byte report retains all four repetitions and recomputes the
+per-run max rank tail mean plus pooled tail mean/p99 before comparing repeats.
+
+Local validation:
+
+- Integrated stage/ST/runtime regression:1346 passed,100 environment skips,
+ 8 existing POSIX/compiler fixture exclusions in91.30s;
+ `.tmp/no-timer-integrated-001.log`. The production sources are unchanged.
+- Additional actual local Zig C++ checks:12 passed in333.98s;
+ `.tmp/no-timer-native-final-001.log`. These compile both source modes for all
+ five selectors, exercise all seven Host launch choices and136/88 versus152/96
+ sizes/offsets, check implementation/protocol/artifact exports, and reject mixed
+ launch symbols in both directions. This is CPU compilation, not CANN validation.
+- Projection checks retain braces/operators/literals and compare the full
+ allowed token transformation; an independent extractor compares ordered
+ Scalar/vector/DMA/synchronization calls. Negative wait/event/Scalar mutations
+ fail. Real local clones verify immutable preimages, exact manifests, rejected
+ unknown changes, and matching source fingerprints before and after cache files.
+- Python behavior tests exercise actual Elastic retained tensors/events/error
+ state and the real measure/run_case logic with mocked device objects, including
+ seed restoration and both operations. The normal/clean measure function ASTs
+ remain the same. Plan/runner tests prove all-builds-before-sampling, source and
+ ABI checks, staged execution without overwrites, serial ABBA/BAAB, fail-stop
+ behavior, actual100-to-tail50 statistics and bounded transfer accounting.
+
+No SSH, SDK/CANN build or NPU execution was performed by the assistant. Target
+compilation, correctness and performance are still required. This experiment
+does not claim that timer removal is beneficial before those results arrive.
+Commands and precise scope are in
+[NO_TIMER_AB.md](../tests/ll_stage_timer/NO_TIMER_AB.md).
+
 ## Returned cbd04eb inspection and report-display correction (2026-10-26)
 
 The target report confirms the reference checkout and measurement AST match

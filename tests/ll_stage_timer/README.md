@@ -1,5 +1,7 @@
 # LL稀疏诊断：当前入口
 
+最新实验见[NO_TIMER_AB.md](NO_TIMER_AB.md)：在独立源码副本中完全删除LL打点参数/成员/调用/Host及Python连接代码，对比原样OFF；再对比已测有收益的cb59-stream。三份完整wheel共用一份新编SDK，全程相同10/100/尾50、dispatch+combine、ABBA；当前生产kernel不改，性能仍由目标机执行。pair/small和不同前缀架构的未验证移植不进入正式候选。
+
 当前步骤是[可复现独立工程的非NPU只读检查](REFERENCE_INSPECTION.md)：返回报告已确认`small_bs-DeepEP`的实际源码和measure为cbd04eb，运行5/50/尾30、seed0、dispatch+combine及连续调用尾段；cb59复测为10/100/尾50、每轮Exp+scalar all-reduce且dispatch-only。安装库与运行记录匹配，CANN/编译器身份相同。采样差异已证实，但全部性能差距尚未因果归因；保持快wheel，不因检查而重编或加载NPU。
 
 原始cb59复现入口见[CB59_ORIGINAL.md](CB59_ORIGINAL.md)：small run003仍比历史值慢3.94–4.81us，先独立重建原提交OFF，保留原SDK/页/单入口，按seed0/2反序复测并只回传一份报告。当前ST已修复多轮正确性后实际沿用seed+2采样的问题；新报告记录实际seed及完整路由指纹。

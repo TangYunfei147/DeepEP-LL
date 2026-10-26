@@ -1,5 +1,14 @@
 # LL 编译维护约束
 
+## LL打点源码完全剥离与已验证候选（2026-10-26，最新授权）
+
+- 用户要求检验OFF仍残留的打点结构是否影响编译器/Scalar，先在迁移版本删除相关代码测性能，再验证优化；候选虽先要求全部，随后明确只要验证过确有优化者。本条允许独立生成实验源码及目标机性能脚本，覆盖此前“本轮仅静态检查”；仍不由助手SSH/CANN/NPU执行。
+- 固定基线439d459，normal-off/clean-source独立clone，当前生产文件不改。clean物理移除LL阶段/专家timer、参数、成员、调用、Host/Python attach和诊断入口，保留7TU/O2/所有模式、业务Scalar/DMA/同步/布局/算法。dispatch launch152→136B、combine96→88B是Host结构尺寸，不是通信字节。
+- 两投影用同形一次性artifact身份保护及独立clean链接符号拒绝混装；不恢复空timer类或假layout。prepare_ll_no_timer.py生成并核验全文件与有序依赖序列；生成后的实验文件不手改。
+- 正式矩阵只纳入直接有cb59目标A/B收益的stream；pair/small无已证实正收益不入选，P1/单VF的不同前缀架构历史收益不混作已验证cb59收益。normalB32、hotspotB16+保留回退检查，不宣称优势。
+- 三wheel为replay-off/replay-clean/stream-clean，共用normal工程清理新编的一份SDK，每wheel清空native产物；全部构建/Host验证后才串行采样。SDK字段/哈希准入仍已删除，采样阶段不重编SDK。
+- 默认seed0、两阶段ABBA共12次ST，EP16/G16/S28R28/P0、B1/2/4/8/16/24/32 M32H3584K8E384，FP8 dispatch+BF16 combine、cpu0、10/100/尾50每轮Exp+scalar all-reduce。不得把旧cbd连续调用协议混入A/B；实际路由指纹/源码/本项目ABI和全rank一致性保护保留。单个≤60000字节报告，指南NO_TIMER_AB.md。
+
 ## 可复现独立版本只读检查（2026-10-26，当前步骤）
 
 - 返回报告已确认参考HEAD/关键源码/measure均为cbd04eb、tracked code/build/test无修改，actual5/50/尾30、seed0、dispatch+combine、Exp before0/after1000；14case/op×16rank×50样本重算一致。安装_C/kernel库hash与16rank运行记录一致；CANNtimestamp及编译器hash与此前cb59重建相同，SDK旧4dd80e2。差距仍同时含采样协议、dispatch-only上下文及timer ABI二进制差异，不能宣称全部由采样造成。
