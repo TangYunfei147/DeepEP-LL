@@ -1,5 +1,9 @@
 # Control-path candidates: commit-by-commit A/B
 
+Shared-pull implementation and follow-up optimization now live on the separate
+`kernel/ll-g4-shared-pull` branch. This branch retains the baseline implementation
+and the later SDK PI compatibility commits.
+
 The current task restores the user-selected business baseline `9027275` and
 measures six dispatch sending stages with schema17/profile8. Use
 [SEND_BANDWIDTH.md](SEND_BANDWIDTH.md) for matched OFF/observe/completion captures

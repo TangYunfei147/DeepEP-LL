@@ -237,3 +237,8 @@ and complete OFF/ON wheels for ed1c553/4d37eb6/c7d70a4 all passed. Six Host-only
 imports confirmed HT disabled, LL factory, timer/protocol and loaded SDK hash;
 no native Runtime/device execution. Logs and wheels remain in the authorized
 directory's ll-only-fix-001 child; see tests/ll_control_opt/LL_ONLY_FIX.md.
+## shared-pull 分支隔离（2026-10-26）
+
+- 用户要求当前分支保持基线实现。shared-pull 实验已迁至独立分支 kernel/ll-g4-shared-pull、工作区 DeepEP-LL-shared-pull；本分支以追加撤销提交恢复实验前代码，保留全部后续 SDK PI 兼容提交和固定带宽入口。
+- 后续 prefix 独立 ready 修复及 shared-pull 各项优化仅在新分支分别提交；不将实验代码重新混入本分支。
+
