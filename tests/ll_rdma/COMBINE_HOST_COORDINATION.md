@@ -16,6 +16,8 @@ source mask 的合法性和期望 flag 数在每个源 token 初始化时计算�
 
 B8/H3584/K8 时初始化从 983040B 降为 61440B 本地写入，新增 helper task 属于调用前准备，不是 `combine_server_dedup_kernel`。这只是写入量变化，设备启动成本与总体性能仍需测试。缓存失效、固定 shape 连续调用、原全设备/HCCL 完成协调保持不变；Python/private native 初始化入口须匹配更新。
 
+combine direct/partial 的每个 output 只发送到一个目的 rank，下一次 lane 使用先完整覆盖 body，因此使用 `Packet(..., preservePacket=false)` 跳过 SDK scratch 前 128B 的恢复。flag 初始化、注册 GM staging、body/flag 两次 quiet 和输出 lane 退休保持；其他会重发同一包的调用保留默认恢复契约。
+
 ## B1→B2小B去重窗口复用修复（Host协议2）
 
 combine partial暂存紧随B*K个结果包；B增大时旧小B的stage可能成为新结果槽。

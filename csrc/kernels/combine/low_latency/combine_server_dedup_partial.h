@@ -255,8 +255,10 @@ private:
         WaitFlag<HardEvent::V_MTE3>(lane);
         // A reduced result is a forwarding hop, not a byte-for-byte relay.
         if (timer_) timer_->CountData(uint32_t(args_->rank), source, packetBytes_, true);
+        // This reduced output has one destination; the next use rewrites its
+        // body and never reads the SDK's borrowed first 128 bytes.
         LlTransport::Packet(args_, source, window_ + COMBINE_DEDUP_EP_SERVER_DEDUP_SHARED_DATA_OFFSET +
-            (uint64_t(token) * k_ + topk) * packetBytes_, output, packetBytes_);
+            (uint64_t(token) * k_ + topk) * packetBytes_, output, packetBytes_, 7U, nullptr, false);
         SetFlag<HardEvent::MTE3_V>(lane);
     }
 

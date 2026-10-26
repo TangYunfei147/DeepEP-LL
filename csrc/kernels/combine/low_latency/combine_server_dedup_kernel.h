@@ -379,8 +379,10 @@ private:
                 SetFlag<HardEvent::V_MTE3>(lane);
                 WaitFlag<HardEvent::V_MTE3>(lane);
                 if (timer_) timer_->CountData(uint32_t(args_->rank), source, resultStride_, false);
+                // One destination owns this output. Its body is overwritten on
+                // the next lane use, so SDK scratch need not be restored.
                 LlTransport::Packet(args_, source, window_ + COMBINE_DEDUP_EP_SERVER_DEDUP_SHARED_DATA_OFFSET +
-                    (uint64_t(token) * topK_ + topk) * resultStride_, output, resultStride_);
+                    (uint64_t(token) * topK_ + topk) * resultStride_, output, resultStride_, 7U, nullptr, false);
                 SetFlag<HardEvent::MTE3_V>(lane);
             }
             // No server fence: the next scan can overlap pending output DMA.
