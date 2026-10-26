@@ -148,7 +148,22 @@ def test_sdk_identity_is_required_for_every_native_wheel(build, monkeypatch, tmp
         == hashlib.sha256((sdk / "lib/libshmem.so").read_bytes()).hexdigest()
     )
     assert result["shmem"]["revision"] == ("unknown" if fault in ("missing", "json", "list") else identity["revision"])
+    assert result["shmem"]["build"] == identity["build"]
     assert manifest.exists() == (fault != "missing")
+    # A changed vendor value keeps its exact JSON type in the build artifact
+    # and isolates the native cache even when SDK file contents are unchanged.
+    identities = {build.build_cache_key(result)}
+    for value in (None, False, True, 0, 1, 2, -1, '0', '1', 'auto', 0.0, [], {'mode': [1, 2]}):
+        identity['build']['hns_1825_pi_on_chip'] = value
+        manifest.write_text(json.dumps(identity))
+        recorded_before = manifest.read_bytes()
+        configuration = build.build_configuration(env)
+        actual = configuration['shmem']['build']['hns_1825_pi_on_chip']
+        assert actual == value and type(actual) is type(value)
+        key = build.build_cache_key(configuration)
+        assert key not in identities
+        identities.add(key)
+        assert manifest.read_bytes() == recorded_before
     before = build.build_cache_key(result)
     result["shmem"]["sha256"]["lib/libshmem.so"] = "0" * 64
     assert build.build_cache_key(result) != before

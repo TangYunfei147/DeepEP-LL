@@ -103,6 +103,12 @@ but its optimized argument use and prologue need not match a full dispatch.
 Update this branch and run from the project root in the existing target
 Python/CANN environment. Keep the validated SDK. Use fresh run names if these
 already exist. These functions return failure without closing the terminal.
+
+If wheel preparation reports an incomplete `include/src/lib` manifest, follow
+the [SDK recovery steps](../../docs/SHMEM_MASTER_UPDATE.md#optional-vendor-metadata-and-incomplete-manifests-2026-10-26)
+first. Optional `hns_1825_pi_on_chip` values are accepted unchanged, but cannot
+repair missing file hashes. Preserve failed run directories and use new build
+names/wheel maps after the explicit SDK rebuild.
 Build both `cb59` and `cb59-small` again from this same source revision: four
 fresh wheels in total, each implementation's OFF and schema16 sparse variant.
 Do not reuse the historical cb59 or schema15 wheel maps for this comparison.

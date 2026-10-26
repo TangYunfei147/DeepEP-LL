@@ -1,5 +1,11 @@
 # LL 编译维护约束
 
+## SHMEM 可选字段与清单校验（2026-10-26）
+
+- 用户要求适配`hns_1825_pi_on_chip`所有值，覆盖旧仅int0/1并要求HNS标签的规则。此字段作为opaque JSON元数据，缺省及任意JSON值均原样接受，不强转bool、不推导RDMA能力；独立`rdma_backend`校验及require_rdma的HNS要求保留。
+- MTE复用只忽略该可选元数据及已认可的backend能力差异，保留共同构建输入、revision和source_patches约束；wheel配置和native cache记录完整SDK build对象，不能丢字段。SDK文件覆盖及哈希校验继续严格执行。
+- include/src/lib清单覆盖错误不等于字段不兼容，当前报错给出缺失总数、目录分布和示例；不得删除manifest后重新hash旧库冒充完整构建。清单不完整仍显式从锁定源码重建，不覆盖正在被其他任务使用的SDK。恢复步骤见docs/SHMEM_MASTER_UPDATE.md。
+
 ## 配对接收与小场景启动诊断（2026-10-25，最新实验授权）
 
 - 用户要求继续分离count记录归属与payload消费归属，并允许临时删除B>32场景来定位移植性能差距。独立候选`cb59-pair`（macro3/23028/cb59-pair-recv）在EP16小direct中由相邻两个R核交换精确dense区间后均分payload；count生产、专家计数写者、source发送均保持stream/cb59。其他shape使用cb59协议，未改默认选择。

@@ -7,20 +7,24 @@ except ModuleNotFoundError:
 
 
 def mte_compatible(identity, revision, expected_build):
-    """Accept native HNS capabilities only with exactly matching build inputs."""
+    """Compare MTE inputs while preserving vendor metadata in the original identity."""
     if not isinstance(identity, dict) or identity.get("revision") != revision:
         return False
     build = identity.get("build", {})
     try:
         validate_build_identity(build)
+        validate_build_identity(expected_build)
     except RuntimeError:
         return False
     if build == expected_build:
         return True
-    if expected_build.get("source_patches") or build.get("rdma_backend") != "HNS_1825":
+    if expected_build.get("source_patches"):
         return False
-    # The MTE consumer does not use the HNS doorbell. Preserve optional
-    # attested mode metadata, while comparing every shared build input.
+    # MTE does not interpret the optional vendor field, regardless of its JSON
+    # representation or presence of the separately validated HNS capability.
+    # This comparison must not rewrite either manifest or expected inputs.
     shared_build = {key: value for key, value in build.items()
                     if key not in {"rdma_backend", "hns_1825_pi_on_chip"}}
-    return shared_build == expected_build
+    shared_expected = {key: value for key, value in expected_build.items()
+                       if key not in {"rdma_backend", "hns_1825_pi_on_chip"}}
+    return shared_build == shared_expected

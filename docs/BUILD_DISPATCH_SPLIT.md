@@ -1,5 +1,25 @@
 # LL dispatch compile partition
 
+## SDK metadata compatibility and coverage diagnostics (2026-10-26)
+
+The user supplied a build_ext failure before native compilation: the selected
+SDK manifest omitted installed include/src/lib inputs. This remains a strict
+error, now reporting counts and example paths with explicit rebuild guidance.
+No old SDK manifest is rewritten or re-attested by this change.
+
+The separately requested optional `hns_1825_pi_on_chip` field accepts all
+JSON values, without backend inference or value coercion. The complete SDK
+build metadata is retained in the wheel configuration and native cache key.
+Common build/source/revision, backend capability and file hash checks remain.
+
+Focused CPU validation: **539 passed,30 missing-CMake skips,8 existing
+Windows/POSIX compiler tests deselected,4.38s**;
+`.tmp/sdk-vendor-final-001.log`. Coverage includes typed metadata roundtrips,
+native-cache separation, corruption rejection, explicit rebuild/reuse behavior,
+loader checks and diagnostic build planning. No kernel, timer, SDK source or
+native build graph was changed. No remote/CANN/NPU execution was performed.
+Recovery commands are in [SHMEM_MASTER_UPDATE.md](SHMEM_MASTER_UPDATE.md).
+
 ## Pair receive and small-direct startup experiment (2026-10-25)
 
 The user requested further count/payload ownership separation and explicitly

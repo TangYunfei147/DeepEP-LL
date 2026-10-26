@@ -73,8 +73,14 @@ def test_missing_manifest_coverage_and_new_inputs_are_rejected(installed):
     identity = json.loads(path.read_text())
     del identity["sha256"]["src/device/gm2gm/engine/shmem_device_udma.hpp"]
     path.write_text(json.dumps(identity), encoding="utf-8")
-    with pytest.raises(ValueError, match="all installed include/src/lib"):
+    before = path.read_bytes()
+    with pytest.raises(ValueError, match="all installed include/src/lib") as error:
         recorder.check(sdk)
+    message = str(error.value)
+    assert "1 unrecorded files (include=0, src=1, lib=0)" in message
+    assert "src/device/gm2gm/engine/shmem_device_udma.hpp" in message
+    assert "build_shmem.py --rebuild" in message
+    assert path.read_bytes() == before
 
 
 def test_new_installed_header_requires_new_identity(installed):
@@ -90,3 +96,28 @@ def test_locked_header_lf_normalization_is_preserved(installed):
     (sdk / "include/host/shmem_host_def.h").write_bytes(b"host\r\n")
     recorder.record(sdk, "locked", build_info=BUILD)
     recorder.check(sdk)
+
+
+@pytest.mark.parametrize('value', [None, False, True, -1, 0, 1, 2, 1.5, 'auto', 'OFF', [], {'mode': [0, 2]}])
+def test_optional_vendor_metadata_roundtrips_and_does_not_hide_damage(installed, value):
+    sdk, _ = installed
+    info = {**BUILD, 'hns_1825_pi_on_chip': value}
+    manifest = recorder.record(sdk, 'locked', build_info=info)
+    before = manifest.read_bytes()
+    assert recorder.check(sdk) == manifest
+    recorded = json.loads(before)['build']
+    assert recorded == info and type(recorded['hns_1825_pi_on_chip']) is type(value)
+    (sdk / 'lib/libshmem_utils.so').write_bytes(b'corrupt')
+    with pytest.raises(ValueError, match='checksum mismatch'):
+        recorder.check(sdk)
+    assert manifest.read_bytes() == before
+
+
+def test_missing_coverage_diagnostic_is_bounded_and_counts_all_paths(installed):
+    sdk, _ = installed
+    required = {f'{directory}/input_{i}.hpp' for directory in ('include', 'src', 'lib') for i in range(50)}
+    with pytest.raises(ValueError) as error:
+        recorder.require_manifest_coverage(sdk, {}, required)
+    message = str(error.value)
+    assert '150 unrecorded files (include=50, src=50, lib=50)' in message
+    assert '142 more' in message and len(message) < 1500

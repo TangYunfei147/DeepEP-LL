@@ -44,6 +44,29 @@ def sdk_input_files(sdk):
     return sorted(files)
 
 
+def require_manifest_coverage(sdk, hashes, required=None):
+    """Explain an incomplete identity without attesting or changing any input."""
+    if not isinstance(hashes, dict) or any(not isinstance(key, str) for key in hashes):
+        raise ValueError("Invalid SDK manifest checksums")
+    sdk = Path(sdk).resolve()
+    if required is None:
+        required = {path.relative_to(sdk).as_posix() for path in sdk_input_files(sdk)}
+    missing = sorted(set(required) - set(hashes))
+    if not missing:
+        return
+    counts = ", ".join(
+        f"{name}={sum(path.startswith(name + '/') for path in missing)}" for name in ("include", "src", "lib"))
+    examples = ", ".join(missing[:8])
+    remaining = f"; {len(missing) - 8} more" if len(missing) > 8 else ""
+    raise ValueError(
+        "SHMEM SDK manifest must cover all installed include/src/lib inputs: "
+        f"{len(missing)} unrecorded files ({counts}); examples: {examples}{remaining}. "
+        "An old/partial manifest or changed installation cannot be repaired by accepting a build field. "
+        "After stopping users of this SDK, rebuild explicitly with python scripts/build_shmem.py --rebuild; "
+        "do not regenerate hashes over unverified old binaries."
+    )
+
+
 def record(sdk, revision, *, build_info=None):
     validate_build_identity(build_info)
     sdk = Path(sdk).resolve()
@@ -90,12 +113,9 @@ def check(sdk):
         if hashlib.sha256(data).hexdigest() != expected:
             raise ValueError(f"SDK public header mismatch: {relative}")
     hashes = recorded.get("sha256", {})
-    if not isinstance(hashes, dict):
-        raise ValueError("Invalid SDK manifest checksums")
     required = {path.relative_to(sdk).as_posix() for path in sdk_input_files(sdk)}
     required.update("include/" + name for name in lock["header_sha256_lf"])
-    if not required.issubset(hashes):
-        raise ValueError("SDK manifest must cover all installed include/src/lib inputs")
+    require_manifest_coverage(sdk, hashes, required)
     for relative, expected in hashes.items():
         path = (sdk / relative).resolve()
         if not path.is_relative_to(sdk) or not path.is_file():

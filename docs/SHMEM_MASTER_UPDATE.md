@@ -62,6 +62,76 @@ source at `third-party/shmem/3rdparty/json` (including
 build dependency, not a tracked vendor modification. Do not copy an old
 compiled SHMEM library under a new manifest.
 
+## Optional vendor metadata and incomplete manifests (2026-10-26)
+
+`build.hns_1825_pi_on_chip` is optional vendor metadata. This branch accepts
+every JSON value without coercion or a fixed enum: absent, null, bool, integer,
+float, string, array or object. It does not require `rdma_backend` merely
+because this field exists. An explicitly supplied backend must still be
+`HNS_1825`, and a consumer requiring RDMA must still have that backend recorded.
+The optional field itself never grants RDMA capability.
+
+MTE reuse compares the common revision/CANN/target/source-patch inputs while
+leaving the optional field untouched. SDK recording, the wheel build metadata
+and native cache retain the complete `build` object, including its original
+JSON types. Changing the recorded value isolates the native cache even when
+the SDK file hashes are unchanged. Other unknown build fields, mismatched
+source revision, modified inputs and incomplete file manifests remain errors.
+
+The error `manifest must cover all installed include/src/lib inputs` is
+independent of this optional field. It means some currently installed input
+files have no recorded hash: the manifest may be from an older partial recorder,
+or files may have been added after the identity was produced. The check now
+reports the total, per-directory counts and up to eight example paths. It does
+not modify the manifest or certify unrecorded binaries.
+
+For a read-only diagnostic, select the same SDK as the build:
+
+```bash
+python scripts/record_shmem_sdk.py \
+  --sdk "${SHMEM_ROOT:-$PWD/third-party/shmem/install/shmem}" --check
+```
+
+If only this optional field differed and full identity/file validation passes,
+reuse the SDK with the updated scripts; rebuilding it is unnecessary. If the
+manifest is incomplete, use an explicit build from the pinned source. The
+commands below rebuild the **project's** SDK, not an externally selected SDK.
+Stop users of that project SDK first, or use a separate checkout if it is in use.
+Do not delete its manifest and rehash the existing library as a shortcut.
+
+```bash
+prepare_checked_sdk() {
+  git submodule update --init --recursive --depth 1 || return $?
+  unset SHMEM_ROOT CATLASS_ROOT
+  export DEEPEP_NPU_ARCH=Ascend950
+  python scripts/build_shmem.py --rebuild || return $?
+  export LD_LIBRARY_PATH="$PWD/third-party/shmem/install/shmem/lib:${LD_LIBRARY_PATH:-}"
+  python scripts/record_shmem_sdk.py \
+    --sdk third-party/shmem/install/shmem --check || return $?
+}
+build_small_ab_after_sdk() {
+  local impl
+  export DEEPEP_LL_SEND_CORES=28 DEEPEP_LL_RECV_CORES=28
+  export DEEPEP_LL_SMALL_B_PREFIX_CORES=0
+  for impl in cb59 cb59-small; do
+    DEEPEP_LL_DISPATCH_IMPL="$impl" \
+      python tests/ll_stage_timer/diagnose.py --build-only \
+        --run-name "small_scope_${impl}_build_002" || return $?
+  done
+}
+if prepare_checked_sdk && build_small_ab_after_sdk; then
+  echo 'SDK checked and both complete OFF/ON builds finished.'
+else
+  echo 'Preparation or build stopped; preserve the logs. Terminal remains open.'
+fi
+```
+
+Load the existing target Python/CANN environment first, and update this branch
+before using these commands. The `_002` names preserve the failed `_001`
+attempt; use new names again if `_002` already exists. Subsequent run commands
+must point to the successful `_002/node_000/wheel-map.json` paths. Both A/B
+variants must use that same validated SDK and the same source revision.
+
 Use [the P experiment](../tests/ll_stage_timer/PARALLEL_PREFIX.md) to build all
 variants before sampling. Fix this SDK revision across the P=26/6/1 comparison;
 an old-SDK versus new-SDK comparison is a separate experiment.

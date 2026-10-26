@@ -149,7 +149,7 @@ def checked_run(argv, **kwargs):
 
 
 def validate_shmem_sdk(root, expected):
-    from scripts.record_shmem_sdk import sdk_input_files
+    from scripts.record_shmem_sdk import require_manifest_coverage
     manifest = Path(root) / "deepep-sdk.json"
     if not manifest.is_file():
         raise RuntimeError("SHMEM SDK needs deepep-sdk.json; see scripts/record_shmem_sdk.py")
@@ -164,10 +164,10 @@ def validate_shmem_sdk(root, expected):
     hashes = sdk.get("sha256")
     if not isinstance(hashes, dict):
         raise RuntimeError("Invalid SHMEM SDK manifest checksums")
-    required = {path.relative_to(manifest.parent.resolve()).as_posix()
-                for path in sdk_input_files(manifest.parent)}
-    if not required.issubset(hashes):
-        raise RuntimeError("SHMEM SDK manifest must cover all installed include/src/lib inputs")
+    try:
+        require_manifest_coverage(manifest.parent, hashes)
+    except ValueError as error:
+        raise RuntimeError(str(error)) from error
     for relative, digest in hashes.items():
         path = (manifest.parent / relative).resolve()
         if not path.is_relative_to(manifest.parent.resolve()) or not path.is_file():
@@ -275,6 +275,9 @@ def build_configuration(environment=None):
     # Record actual inputs so replacing an unpinned SDK invalidates the build cache.
     result["shmem"] = {
         "revision": sdk.get("revision", "unknown") if isinstance(sdk, dict) else "unknown",
+        # Preserve every optional vendor value and include it in the native
+        # cache identity; admission compatibility must not erase provenance.
+        "build": sdk["build"],
         "sha256": {
             path.relative_to(manifest.parent).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
             for path in files
