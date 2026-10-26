@@ -17,6 +17,7 @@
 #include "../common/ll_send_order.h"
 #include "../common/ll_fullmesh_first_hop.h"
 #include "../common/ll_sender_route_plan.h"
+#include "../common/ll_sender_input_reuse.h"
 #include "../../../common/ep_packet_receive_layout.h"
 
 namespace DispatchDedup {
@@ -161,6 +162,8 @@ public:
             SendWithDedup(input);
         else
             SendWithoutDedup(input);
+        SenderInputOperations inputOperations{*this, input};
+        inputReuse_.Finish(inputOperations);
         if (rdmaBatch_.Pending()) {
             // End-of-stream may borrow any lane only after local MTE reads retire.
             PipeBarrier<PIPE_ALL>();
@@ -386,27 +389,58 @@ private:
                 index.SetValue(entries * 2U, expert | (q << 16U));
                 weights.SetValue(entries * 2U + 1U, routeWeights_.GetValue(token * k_ + k));
             }
+        if constexpr (Prequantized) {
+            LlClearStalePrequantTail(index, cachedTailEntries_, entries);
+            cachedTailEntries_ = entries;
+        }
         index.SetValue(0U, entries);
     }
-    // 摘要：搬入一个 token，可选量化并填尾部；打包为 480B 数据加 32B 标记的块后异步发送，按事件复用 lane。
-    __aicore__ inline void SendPacket(TQue<QuePosition::VECIN, 1>& input, uint32_t token, uint32_t firstK,
-                                      uint32_t expert, uint32_t q, uint32_t mask)
+    struct SenderInputOperations {
+        ServerDedupSender& sender;
+        TQue<QuePosition::VECIN, 1>& input;
+        __aicore__ inline void LoadInput(uint32_t token) { sender.LoadTokenInput(input, token); }
+        __aicore__ inline void ReleaseInput() {
+            if constexpr (!NeedQuantize) input.template FreeTensor<XType>(sender.cachedInput_);
+        }
+        __aicore__ inline void WaitPackedRead() {
+            if (sender.timer_) sender.timer_->Start(LlStageTimer::SendInputWait);
+            // This replaces the per-packet input wait on a cache hit. TQue is
+            // deliberately still holding this buffer, so it cannot provide a
+            // new MTE2 dependency for Scalar tail writes. Wait for V directly.
+            sender.template Sync<HardEvent::V_S>();
+            if (sender.timer_) sender.timer_->End(LlStageTimer::SendInputWait);
+        }
+    };
+
+    // Load/quantize only when the scheduled token changes. The cached payload
+    // never aliases outBuf_, which the SDK may borrow as submission scratch.
+    __aicore__ inline void LoadTokenInput(TQue<QuePosition::VECIN, 1>& input, uint32_t token)
     {
-        if (timer_) timer_->Start(LlStageTimer::SendPack);
-        const uint32_t tokenId = token, destination = expert / localExperts_;
         if (timer_) timer_->Start(LlStageTimer::SendInputGmToUb);
         auto x = input.template AllocTensor<XType>();
         if constexpr (Prequantized) {
             // The full payload queue slot stages H bytes and 4P scale bytes.
-            // Only padding is synthesized; no input is read past its row end.
-            Duplicate<uint8_t>(x.template ReinterpretCast<uint8_t>(), 0U, uint32_t(data_.packedPayloadBytes));
+            // Clear padding instead of the whole payload. For nonaligned H,
+            // only the last <=31 input bytes share its aligned padding clear;
+            // the following load overwrites them. Scales remain untouched.
+            const auto padding = LlPlanPrequantPadding(h_, uint32_t(data_.quantCount),
+                uint32_t(data_.scaleBytes), uint32_t(data_.packedPayloadBytes));
+            auto bytes = x.template ReinterpretCast<uint8_t>();
+            if (padding.inputBytes) Duplicate<uint8_t>(bytes[padding.inputOffset], 0U, padding.inputBytes);
+            if (padding.tailBlockMask) {
+                uint64_t mask[2] = {padding.tailBlockMask, 0U};
+                Duplicate<uint32_t>(bytes[padding.tailBlockOffset].template ReinterpretCast<uint32_t>(),
+                                    0U, mask, 1U, 1U, 8U);
+            }
+            if (padding.tailBytes) Duplicate<uint8_t>(bytes[padding.tailOffset], 0U, padding.tailBytes);
             Sync<HardEvent::V_MTE2>();
+            cachedTailEntries_ = 0U;
         }
-        DataCopyPad(x, x_[uint64_t(tokenId) * h_], {1U, h_ * uint32_t(sizeof(XType)), 0U, 0U, 0U},
+        DataCopyPad(x, x_[uint64_t(token) * h_], {1U, h_ * uint32_t(sizeof(XType)), 0U, 0U, 0U},
                     {NeedQuantize, 0U, 0U, XType(0)});
         if constexpr (Prequantized) {
             auto scale = x.template ReinterpretCast<uint8_t>()[uint32_t(data_.quantCount)];
-            DataCopyPad(scale, inputScales_[uint64_t(tokenId) * data_.scaleBytes],
+            DataCopyPad(scale, inputScales_[uint64_t(token) * data_.scaleBytes],
                         {1U, uint32_t(data_.scaleBytes), 0U, 0U, 0U}, {false, 0U, 0U, uint8_t(0)});
         }
         input.EnQue(x);
@@ -414,21 +448,33 @@ private:
         if (timer_) timer_->Start(LlStageTimer::SendInputWait);
         x = input.template DeQue<XType>();
         if (timer_) timer_->End(LlStageTimer::SendInputWait);
-        LocalTensor<uint8_t> payload;
         if constexpr (NeedQuantize) {
-            payload = quantBuf_.Get<uint8_t>();
+            cachedPayload_ = quantBuf_.Get<uint8_t>();
             if constexpr (E4M3)
-                QuantMxfp8<fp8_e4m3fn_t>(payload, x);
+                QuantMxfp8<fp8_e4m3fn_t>(cachedPayload_, x);
             else
-                QuantMxfp8<fp8_e5m2_t>(payload, x);
+                QuantMxfp8<fp8_e5m2_t>(cachedPayload_, x);
             input.template FreeTensor<XType>(x);
             Sync<HardEvent::V_S>();
         } else {
             if (timer_) timer_->Start(LlStageTimer::SendInputWait);
             Sync<HardEvent::MTE2_S>();
             if (timer_) timer_->End(LlStageTimer::SendInputWait);
-            payload = x.template ReinterpretCast<uint8_t>();
+            cachedInput_ = x;
+            cachedPayload_ = x.template ReinterpretCast<uint8_t>();
         }
+    }
+
+    // Every packet still builds its own header/tail and lane, while consecutive
+    // emissions of one token share input/quantized bytes. Group/order is unchanged.
+    __aicore__ inline void SendPacket(TQue<QuePosition::VECIN, 1>& input, uint32_t token, uint32_t firstK,
+                                      uint32_t expert, uint32_t q, uint32_t mask)
+    {
+        if (timer_) timer_->Start(LlStageTimer::SendPack);
+        const uint32_t destination = expert / localExperts_;
+        SenderInputOperations inputOperations{*this, input};
+        inputReuse_.Prepare(token, inputOperations);
+        auto payload = cachedPayload_;
         if (timer_) timer_->Start(LlStageTimer::SendTail);
         FillTail(payload, token, firstK, mask);
         if (timer_) timer_->End(LlStageTimer::SendTail);
@@ -448,7 +494,6 @@ private:
         Duplicate<float>(out.template ReinterpretCast<float>()[PacketReceiveLayout::kMarkerOffset / 4U],
                          mask != 0U ? PacketReceiveLayout::kKeepFlags : PacketReceiveLayout::kCompact, markerMask, 1U,
                          1U, 8U);
-        if constexpr (!NeedQuantize) input.template FreeTensor<XType>(x);
         SetFlag<HardEvent::V_MTE3>(lane);
         WaitFlag<HardEvent::V_MTE3>(lane);
         if (timer_) timer_->End(LlStageTimer::SendPack);
@@ -482,6 +527,10 @@ private:
     TPipe* pipe_ = nullptr;
     LlStageTimer::DeviceTimer* timer_ = nullptr;
     LlTransport::DispatchRdmaBatch rdmaBatch_;
+    LlSenderInputReuse inputReuse_;
+    LocalTensor<XType> cachedInput_;
+    LocalTensor<uint8_t> cachedPayload_;
+    uint32_t cachedTailEntries_ = 0U;
     bool enableDedup_ = false, fullMeshFirstHop_ = false;
     TBufPool<TPosition::VECCALC, 16>* scratch_ = nullptr;
     uint32_t sendCores_ = 0;
