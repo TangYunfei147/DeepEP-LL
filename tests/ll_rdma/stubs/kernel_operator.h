@@ -5,14 +5,19 @@
 #include <cstdio>
 #include <mutex>
 #include <chrono>
+#include <vector>
 #define __aicore__
 #define __gm__
 #define __ubuf__
 constexpr int PIPE_ALL=0;
 namespace AscendC {
-enum class HardEvent { S_MTE3, MTE3_S, MTE2_S, V_S, S_MTE2 };
-inline thread_local bool events[5][8]{};
+enum class HardEvent { S_MTE3, MTE3_S, MTE2_S, V_S, S_MTE2, MTE2_V };
+inline thread_local bool events[6][8]{};
 inline std::mutex memoryMutex;
+#ifdef DEEPEP_TEST_ROUTE_THREADS
+struct DeferredMte2Copy { void* dst;const void* src;uint32_t bytes; };
+inline thread_local std::vector<DeferredMte2Copy> deferredMte2;
+#endif
 template<HardEvent E> void SetFlag(uint32_t id) {
     if(id>=8 || events[int(E)][id]) throw std::runtime_error("event reused while live");
     events[int(E)][id]=true;
@@ -20,6 +25,13 @@ template<HardEvent E> void SetFlag(uint32_t id) {
 template<HardEvent E> void WaitFlag(uint32_t id) {
     if(id>=8 || !events[int(E)][id]) throw std::runtime_error("wait without event");
     events[int(E)][id]=false;
+#ifdef DEEPEP_TEST_ROUTE_THREADS
+    if constexpr(E==HardEvent::MTE2_S || E==HardEvent::MTE2_V) {
+        std::lock_guard<std::mutex> guard(memoryMutex);
+        for(const auto& copy:deferredMte2) std::memcpy(copy.dst,copy.src,copy.bytes);
+        deferredMte2.clear();
+    }
+#endif
 }
 using std::printf;
 inline uint64_t cycles=0;
@@ -68,7 +80,13 @@ template<class T> void DataCopy(LocalTensor<T> dst, GlobalTensor<T> src, DataCop
 }
 template<class T> struct DataCopyPadExtParams { bool pad; uint8_t left, right; T value; };
 template<class T> void DataCopy(GlobalTensor<T> d, LocalTensor<T> s, uint32_t n) { std::lock_guard<std::mutex> guard(memoryMutex); std::memcpy(d.p,s.p,n*sizeof(T)); }
-template<class T> void DataCopy(LocalTensor<T> d, GlobalTensor<T> s, uint32_t n) { std::lock_guard<std::mutex> guard(memoryMutex); std::memcpy(d.p,s.p,n*sizeof(T)); }
+template<class T> void DataCopy(LocalTensor<T> d, GlobalTensor<T> s, uint32_t n) {
+#ifdef DEEPEP_TEST_ROUTE_THREADS
+    deferredMte2.push_back({d.p,s.p,uint32_t(n*sizeof(T))});
+#else
+    std::lock_guard<std::mutex> guard(memoryMutex);std::memcpy(d.p,s.p,n*sizeof(T));
+#endif
+}
 template<class T> void DataCopyPad(GlobalTensor<T> d, LocalTensor<T> s, DataCopyExtParams c) {
     for (uint32_t i=0;i<c.count;++i) std::memcpy(reinterpret_cast<uint8_t*>(d.p)+i*(c.bytes+c.dstStride),
         reinterpret_cast<uint8_t*>(s.p)+i*((c.bytes+31U)/32U*32U+c.srcStride*32U),c.bytes);

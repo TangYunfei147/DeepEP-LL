@@ -257,7 +257,7 @@ __aicore__ inline void ServerDedupCounts::SendCnt()
         // start/end were already clipped to this physical host above.
         if (count) {
             SyncFunc<HardEvent::V_MTE2>();
-            routeExchange_.ReadPeer(validExpertIdsTensor_);
+            routeExchange_.ReadPeerAsync(validExpertIdsTensor_);
             SyncFunc<HardEvent::MTE2_V>();
             if (expertIdsCnt_ >= SIZE_ALIGN_256 / sizeof(int32_t) && 2U * maskBytes <= routeBytes)
                 CountByVectorRange(start,end,maskBytes);

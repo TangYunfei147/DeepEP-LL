@@ -207,7 +207,12 @@ static void TestEpochs(bool interleaveCombine) {
                     if(consumes) {
                         // Delayed readers exercise the inbox overwrite check.
                         if(cpuCore==7U || cpuCore==15U) std::this_thread::sleep_for(side?8ms:2ms);
-                        exchange.ReadPeer({data.data()});
+                        std::fill(data.begin(),data.end(),-2);
+                        exchange.ReadPeerAsync({data.data()});
+                        assert(data[0]==-2 && deferredMte2.size()==1U);
+                        // Production count reconstruction acquires with MTE2_V.
+                        LlTransport::Sync<HardEvent::MTE2_V>(7U);
+                        assert(deferredMte2.empty());
                         for(unsigned i=0;i<routes;++i) assert(data[i]==value(peer,iteration,i));
                         network.RetireRead(side,cpuCore,iteration+1U,bank);
                         if(cpuCore==7U || cpuCore==15U) std::this_thread::sleep_for(2ms);

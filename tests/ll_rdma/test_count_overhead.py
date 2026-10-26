@@ -74,6 +74,19 @@ def test_only_the_route_owner_waits_for_scalar_body_preparation():
     assert "SyncFunc<HardEvent::MTE2_V>();" in send[loaded:counted]
 
 
+def test_async_route_load_is_acquired_by_its_vector_consumer():
+    route = _block(_source("ll_route_exchange.h"), "void ReadPeerAsync(")
+    assert route.index("Wait(bank_+kRouteCommit,epoch_)") < route.index("DataCopy(")
+    assert "HardEvent::S_MTE2" in route
+    assert "HardEvent::MTE2_S" not in route
+    send = _block(_source("dispatch_server_dedup_counts.h"), "void ServerDedupCounts::SendCnt()")
+    loaded = send.index("routeExchange_.ReadPeerAsync(validExpertIdsTensor_)")
+    acquired = send.index("SyncFunc<HardEvent::MTE2_V>();", loaded)
+    consumed = send.index("CountByVectorRange(start,end,maskBytes)", loaded)
+    assert loaded < acquired < consumed
+    assert send.index("SyncFunc<HardEvent::V_MTE2>();") < loaded
+
+
 def test_prefix_subtotal_executes_production_scalar_scan(tmp_path):
     """Compile the production body with a delayed GatherMask dependency model."""
     zig = os.environ.get("DEEPEP_TEST_ZIG")

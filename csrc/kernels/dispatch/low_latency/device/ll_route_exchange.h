@@ -70,12 +70,13 @@ public:
         // Commit progresses without quiet. FinishSend retires its GM sequence
         // source and CQ before this core leaves the count phase.
     }
-    __aicore__ inline void ReadPeer(AscendC::LocalTensor<int32_t> routes) {
+    // Acquire the remote commit and issue the body load. The caller owns the
+    // MTE2_V (or MTE2_S) dependency before consuming/reusing this UB view.
+    __aicore__ inline void ReadPeerAsync(AscendC::LocalTensor<int32_t> routes) {
         Wait(bank_+kRouteCommit,epoch_);
         LlTransport::Sync<AscendC::HardEvent::S_MTE2>(7U);
         AscendC::DataCopy(routes.ReinterpretCast<uint8_t>(), LlTransport::Tensor(Local(bank_+kRouteRx),true),
                          (bytes_+31U)/32U*32U);
-        LlTransport::Sync<AscendC::HardEvent::MTE2_S>(7U);
     }
     __aicore__ inline void FinishSend(AscendC::LocalTensor<uint8_t> scratch) {
         if (AscendC::GetBlockIdx()!=0U) return;
