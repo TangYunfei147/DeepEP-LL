@@ -1,5 +1,7 @@
 # LL稀疏诊断：当前入口
 
+当前步骤是[可复现独立工程的非NPU只读检查](REFERENCE_INSPECTION.md)：检查`small_bs-DeepEP`及`results/cbd04eb/10261635_18whtneo`，不重编、不加载NPU。已确认Git中的cbd04eb旧采样为5/50/尾30及连续dispatch，cb59bff改为10/100/尾50、每轮Exp+scalar all-reduce；先核对目标实际代码/config，再比较性能。
+
 原始cb59复现入口见[CB59_ORIGINAL.md](CB59_ORIGINAL.md)：small run003仍比历史值慢3.94–4.81us，先独立重建原提交OFF，保留原SDK/页/单入口，按seed0/2反序复测并只回传一份报告。当前ST已修复多轮正确性后实际沿用seed+2采样的问题；新报告记录实际seed及完整路由指纹。
 
 最新两组实验：[配对接收CB59_PAIR.md](CB59_PAIR.md)比较`cb59-stream`/`cb59-pair`；[小场景启动诊断CB59_SMALL.md](CB59_SMALL.md)比较`cb59`/`cb59-small`。统一先运行`python tests/ll_stage_timer/build_ab.py --experiment all --run-name ll_ab_clean_build_003`：清理并重编工程SDK一次，再清理并编译四实现共八份OFF/ON wheel，全部成功后串行采样。已删除SHMEM清单、字段、版本、哈希校验，不再复用旧SDK/对象；源码、依赖下载、历史wheel和数据保留。详细清理边界见[SDK构建原则](../../docs/SHMEM_MASTER_UPDATE.md)。新采集schema16、每核512B，历史schema15只离线读取。

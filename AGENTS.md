@@ -1,5 +1,12 @@
 # LL 编译维护约束
 
+## 可复现独立版本只读检查（2026-10-26，当前步骤）
+
+- 用户确认可复现目录/home/t30064812/small_bs-DeepEP、结果results/cbd04eb/10261635_18whtneo，CANN相同；明确助手无法直接连接，要求在当前分支提供非NPU检查脚本，由用户执行。不得SSH、构建/安装、设备查询、导入Torch/torch_npu/deep_ep或执行被检查源码。
+- inspect_reference.py只读指定源码/结果及明确关联的构建、安装元信息，输出到当前脚本工程的新diagnostic-runs目录；不写参考目录，不改SDK，不恢复SHMEM准入校验。只回传一个≤60000字节报告，详细证据留目标机。
+- 本地Git证实cbd04eb与此前重建cb59bff不只打点有差异：旧ST默认5/50/尾30，首dispatch后1000Exp+一次all-reduce再连续dispatch；cb59为10/100/尾50且每轮Exp+scalar all-reduce。kernel_durations/sample_stats/summarize_kernel统计逻辑相同。结果目录名和默认值不能代替目标实际Git/config证据；离线统一tail也不能消除调用前序差异。
+- cbd04eb无timer的dispatch launch为136B，cb59 timer提交变144B且协议1→2；SDK gitlink/lock不变、OFF仍O2单入口。OFF计时方法编译空不代表二进制必然相同，未完成匹配实验前不归因固定5us。
+
 ## 原始 cb59 重建复测（2026-10-26）
 
 - 用户在small run003仍未复现17–22us后要求考虑运行/修改指定原分支定位差距，并确认只保留源码、需要重建。先从固定cb59bff99ecd39d27ef57788c5e6fd0009e4e636独立副本重建OFF，保留原SDK、1GiB页、MTE+UDMA初始化、动态1:1、G16、单入口及144B launch；这是历史原代码实验，不把单入口恢复进当前七TU实现。

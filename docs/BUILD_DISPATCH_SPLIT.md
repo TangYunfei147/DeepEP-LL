@@ -1,5 +1,45 @@
 # LL dispatch compile partition
 
+## Reproducible cbd04eb deployment: inspect before further changes (2026-10-26)
+
+The user found a reproducible independent small_bs-DeepEP deployment with
+results/cbd04eb/10261635_18whtneo and confirmed the same CANN environment.
+The previous isolated reproduction rebuilt cb59bff, not cbd04eb. Both used the
+old4dd80e2 SHMEM source, but a key measurement difference is now established
+from local Git: cbd04eb defaults to5/50/tail30 and a first dispatch followed by
+1000Exp calls, one alignment collective and consecutive remaining dispatches;
+cb59bff uses10/100/tail50 with Exp plus scalar all-reduce before every captured
+call. Full task parsing and max-of-rank-tail-mean aggregation are unchanged.
+
+This corrects treating the historical latency table as if it established the
+same actual sampling protocol as cb59bff. Earlier documentation described the
+two cb59/replay defaults, but did not establish the provenance of the historical
+17–22us numbers. The target's actual source/config still needs inspection;
+directory names and Git defaults are not sufficient evidence.
+
+cbd04eb also predates the timer-related136-to144-byte dispatch launch change,
+the timer pointer member, and protocol1-to2 change. OFF timer methods have no
+recording bodies, but compiler output identity is not established by that fact.
+The SDK gitlink/lock, O2 device flags and monolithic entry remain unchanged
+between these commits. No existing result isolates the cost of those changes.
+
+Per the user's explicit request, inspect_reference.py performs only static
+file/Git/result inspection on their target. The assistant performs no remote
+connection, compilation, native loading or NPU execution. The reference project
+is read-only; only a new output group in the current checkout is written.
+See [REFERENCE_INSPECTION.md](../tests/ll_stage_timer/REFERENCE_INSPECTION.md).
+
+Local validation:103 passed,2 missing-C++ skips in1.48s,
+`.tmp/reference-inspection-final-002.log`. Tests cover unchanged reference/result
+bytes, no framework/inspected-source execution, Git-only read subprocesses,
+repository-owner detection, actual50-sample tail math, CSV task intervals,
+SDK metadata without admission gates, missing evidence, safe output boundaries,
+and a7B/two-operation/16-rank report preserving all evidence categories within
+the60000-byte UTF-8/CRLF ceiling. The two immutable Git STs were parsed locally:
+measure differs; kernel_durations/sample_stats/summarize_kernel are identical.
+No kernel, production build configuration or sampling implementation changed
+in this inspection delivery. Actual target deployment evidence is still pending.
+
 ## Original cb59 rebuild and route identity correction (2026-10-26)
 
 The supplied small run003 measured22.0143–25.9518us across B1/2/4/8/16/24/32,
