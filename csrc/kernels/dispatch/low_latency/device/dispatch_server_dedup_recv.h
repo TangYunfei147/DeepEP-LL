@@ -290,9 +290,10 @@ private:
         auto destination = wire[uint32_t(data_.tokenStride) + 32U].template ReinterpretCast<uint32_t>();
         ServerDedupPacketTail tail(wire, headerOffset,
                                    uint32_t(keepFlags ? data_.relayReadIndexWireOffset : data_.readIndexPayloadOffset));
-        const bool firstHop = enableDedup_ && tail.Header().GetValue(3U) == uint32_t(EpServerDedupTokenType::FirstHop);
+        bool firstHop = false;
         if (enableDedup_)
-            BuildServerDedupMetadata(type, destination, tail, tasks_.Position(j));
+            firstHop = BuildServerDedupMetadata(type, destination, tail, tasks_.Position(j)) ==
+                       uint32_t(EpServerDedupTokenType::FirstHop);
         else
             for (uint32_t i = 0U; i < 3U; ++i) destination.SetValue(i, tail.Header().GetValue(i));
         if (expertTimer_) expertTimer_->End(expert, LlExpertTimer::Metadata);
