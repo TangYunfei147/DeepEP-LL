@@ -383,6 +383,12 @@ def test_performance_table_uses_full_tasks_and_matching_identity(tmp_path):
     path.write_text(json.dumps(on))
     row=diagnose._performance_rows(suite)[0]
     assert row['status'].startswith('unavailable') and 'ratio' not in row
+    for field, value in (('seed', 2), ('correctness_repeats', 3), ('profile_seed', 2),
+                         ('profile_route_sha256', 'c'*64), ('profile_route_fingerprint_schema', 1)):
+        on['comparison'] = dict(identity, **{field: value})
+        path.write_text(json.dumps(on))
+        row = diagnose._performance_rows(suite)[0]
+        assert row['status'].startswith('unavailable') and 'ratio' not in row
 
 
 def test_installed_wheel_source_and_native_layout_are_checked(tmp_path,monkeypatch):

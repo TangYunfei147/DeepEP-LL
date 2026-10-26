@@ -119,7 +119,9 @@ def test_collect_reads_existing_cases_and_all_rounds_not_suite_archive(tmp_path)
     (suite/'node_000/plan.json').write_text(json.dumps(plan))
     fixture=module('test_triage_metrics');transfer=module('transfer_report')
     samples=[fixture.sample(i,r,kernel=1000 if i<4 else 9000) for i in range(5) for r in range(2)]
-    context=dict(world_size=2,sampling=dict(diagnostic_iters=5),configurations=dict(dispatch=samples[0][0]['config']))
+    context=dict(world_size=2,sampling=dict(diagnostic_iters=5),configurations=dict(dispatch=samples[0][0]['config']),
+                 comparison=dict(seed=0, correctness_repeats=3, profile_seed=0,
+                                 profile_route_sha256='a'*64, profile_route_fingerprint_schema=1))
     transfer.export_bundle(suite/'analysis/prepare/case_00000',context,samples)
     # The huge previous suite archive is deliberately unreadable and ignored.
     (suite/'transfer').mkdir();(suite/'transfer/manifest.json').write_text('not used')
@@ -127,9 +129,12 @@ def test_collect_reads_existing_cases_and_all_rounds_not_suite_archive(tmp_path)
     assert len(data['cases'])==1
     assert data['cases'][0]['metrics']['coverage']['samples']==10
     assert data['cases'][0]['metrics']['slowest']['R']['iteration']==4
+    assert data['cases'][0]['provenance']['profile_seed'] == 0
+    assert data['cases'][0]['provenance']['profile_route_sha256'] == 'a'*64
     assert data['complete'] is False and any('Missing OFF' in x for x in data['issues'])
     text=triage.render(data)
     assert 'INCOMPLETE' in text and 'C001' in text
+    assert '"profile_seed":0' in text and '"profile_route_sha256":"' + 'a'*64 in text
 
 
 def test_empty_focus_is_rejected_without_overwriting_existing_report(tmp_path,monkeypatch):

@@ -77,7 +77,9 @@ def collect(suite):
             provenance = {key: (context.get('comparison') or {}).get(key) for key in (
                 'implementation', 'transport', 'logical_group', 'core_protocol',
                 'source_revision', 'source_sha256')}
-            for key in ('dispatch_impl', 'effective_dispatch_impl', 'dispatch_capability'):
+            for key in ('dispatch_impl', 'effective_dispatch_impl', 'dispatch_capability',
+                        'seed', 'correctness_repeats', 'profile_seed',
+                        'profile_route_sha256', 'profile_route_fingerprint_schema'):
                 value = (context.get('comparison') or {}).get(key)
                 if value is not None:
                     provenance[key] = value
@@ -137,6 +139,7 @@ def _essential(data):
         'OFF/ON rows are full profiler kernel tasks; sparse internal spans exclude only post-work diagnostic export. Legacy captures may also exclude diagnostic synchronization.',
         'Different profiles are independent runs. Do not add costs, parents/children, or subtract cross-rank clocks.',
         'Probe overhead may slow preparation and reduce later waits. Check ON/OFF before interpreting waits.',
+        'Actual sampling routes are identified by profile_seed/profile_route_sha256 when recorded; old declared seed alone does not verify them.',
         'Sparse activity counts cores recording FIRST_SEND/PROBE/READY. Packet totals, packet balance and ready/probe ratios are NOT COLLECTED.',
         'Legacy activity counts positive packet counters only; missing observations are not invented.',
         'FIRST_SEND->SEND_DONE ends at existing sender retirement and may overlap shared reception; it is not pure link-transfer time.',

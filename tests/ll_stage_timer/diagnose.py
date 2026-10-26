@@ -337,7 +337,8 @@ def _performance_rows(suite):
     identity_fields = ('implementation', 'transport', 'logical_group', 'active_aiv',
                        'send_cores', 'recv_cores', 'core_protocol', 'source_revision', 'source_sha256')
     optional_identity_fields = ('dispatch_impl', 'dispatch_capability', 'effective_dispatch_impl', 'small_b_prefix_cores', 'effective_small_b_prefix_cores',
-                                'session_transport')
+                                'session_transport', 'seed', 'correctness_repeats', 'profile_seed',
+                                'profile_route_sha256', 'profile_route_fingerprint_schema')
     rows = []
     for path in sorted((suite / 'runs').glob('*/case_*/*/active_capture_dispatch.json')):
         data = json.loads(path.read_text(encoding='utf-8'))

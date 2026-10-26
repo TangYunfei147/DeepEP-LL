@@ -196,7 +196,8 @@ def comparison_metadata(args, world, m):
     if runtime.get('dispatch_impl') is not None:
         path_identity['effective_dispatch_impl'] = _DISPATCH['effective_dispatch_implementation'](
             runtime['dispatch_impl'], world, args.num_tokens, m)
-    return dict(**runtime, **path_identity, effective_small_b_prefix_cores=effective_prefix,
+    route_identity = getattr(args, 'profile_route_identity', {})
+    return dict(**runtime, **path_identity, **route_identity, effective_small_b_prefix_cores=effective_prefix,
                 comparison_schema=1, sampling_protocol='exp-reduce-stable-tail-v2',
                 perf_enabled=not args.skip_perf_test, world_size=world,
                 local_world_size=int(os.environ.get('LOCAL_WORLD_SIZE',args.num_processes)),
@@ -648,6 +649,37 @@ def make_routes(world, b, k, e, seed, route="normal"):
             rows.append(chosen)
         result.append(rows)
     return result
+
+
+def profile_route_identity(routes, seed):
+    """Identify the exact all-rank route tensor used by timed calls, CPU-only."""
+    import hashlib
+
+    encoded = json.dumps(routes, separators=(',', ':'), ensure_ascii=True).encode('ascii')
+    return dict(profile_seed=seed, profile_route_sha256=hashlib.sha256(encoded).hexdigest(),
+                profile_route_fingerprint_schema=1)
+
+
+def check_route_reuse(seed, repeats, initial_output, *, select_seed, invoke, wait, check, boundary):
+    """Exercise changing routes, then restore a fresh matching profiling handle.
+
+    Callbacks keep source indices, expected expert rows, and returned handles in
+    one state. No timing/capture starts here. The single-check case retains its
+    original dispatch without an extra refresh.
+    """
+    if repeats < 1:
+        raise ValueError("correctness-repeats must be positive")
+    output = initial_output
+    seeds = [seed + repeat for repeat in range(1, repeats)]
+    if seeds:
+        seeds.append(seed)
+    for next_seed in seeds:
+        boundary()
+        select_seed(next_seed)
+        output = invoke()
+        wait(output)
+        check(output)
+    return output
 
 
 def expert_entries(routes, experts, world, rank):
@@ -1108,6 +1140,7 @@ def run_case(buffer, args, rank, world, m, mode):
         record_case_progress(args, rank, m, mode, phase)
 
     progress("prepare")
+    route_seed = args.seed
     routes = make_routes(world, args.num_tokens, args.num_topk, args.num_experts, args.seed, mode)
     entries = expert_entries(routes, args.num_experts, world, rank)
     counts = [len(rows) for rows in entries]
@@ -1123,6 +1156,14 @@ def run_case(buffer, args, rank, world, m, mode):
     indices = torch.tensor(routes[rank], dtype=torch.int64, device="npu")
     weights = torch.arange(1, args.num_topk + 1, dtype=torch.float32, device="npu") / 32
     weights = weights.repeat(args.num_tokens, 1).contiguous()
+
+    def select_seed(seed):
+        nonlocal routes, entries, counts, indices, route_seed
+        route_seed = seed
+        routes = make_routes(world, args.num_tokens, args.num_topk, args.num_experts, seed, mode)
+        entries = expert_entries(routes, args.num_experts, world, rank)
+        counts = [len(rows) for rows in entries]
+        indices = torch.tensor(routes[rank], dtype=torch.int64, device="npu")
 
     def dispatch():
         return buffer.dispatch(
@@ -1165,19 +1206,20 @@ def run_case(buffer, args, rank, world, m, mode):
     agree_check(check_backend, args, rank)  # Never allow --skip-check to hide an HT fallback.
     if not args.skip_check:
         agree_check(lambda: verify_dispatch(recv, handle, entries, args, world, m), args, rank)
-        if args.correctness_repeats < 1:
-            raise ValueError("correctness-repeats must be positive")
-        for repeat in range(1, args.correctness_repeats):
-            # Reuse both protocol windows with changed routing, on the same Session.
-            completion_boundary(args)
-            routes = make_routes(world, args.num_tokens, args.num_topk, args.num_experts, args.seed + repeat, mode)
-            entries = expert_entries(routes, args.num_experts, world, rank)
-            counts = [len(rows) for rows in entries]
-            indices = torch.tensor(routes[rank], dtype=torch.int64, device="npu")
-            recv, recv_idx, recv_weights, handle, event = dispatch()
-            event.current_stream_wait()
+        def wait_reused_output(output):
+            output[-1].current_stream_wait()
             torch.npu.synchronize()
-            agree_check(lambda: verify_dispatch(recv, handle, entries, args, world, m), args, rank)
+
+        def check_reused_output(output):
+            agree_check(lambda: verify_dispatch(output[0], output[3], entries, args, world, m), args, rank)
+
+        recv, recv_idx, recv_weights, handle, event = check_route_reuse(
+            args.seed, args.correctness_repeats, (recv, recv_idx, recv_weights, handle, event),
+            select_seed=select_seed, invoke=dispatch, wait=wait_reused_output, check=check_reused_output,
+            boundary=lambda: completion_boundary(args))
+    # The timed closure and combine handle now refer to the declared seed,
+    # regardless of how many changed-route correctness calls preceded them.
+    args.profile_route_identity = profile_route_identity(routes, route_seed)
     if args.dispatch_only:
         result = {
             "case_id": args.case_id,
@@ -1185,6 +1227,7 @@ def run_case(buffer, args, rank, world, m, mode):
             "correctness": "skipped" if args.skip_check else "passed",
             "backend": "ll",
             "config": case_config(args, m),
+            "profile_route_identity": dict(args.profile_route_identity),
             "tested_operations": ["dispatch"],
         }
         perf = sample_operation(buffer, dispatch,
@@ -1242,6 +1285,7 @@ def run_case(buffer, args, rank, world, m, mode):
         "correctness": "skipped" if args.skip_check else "passed",
         "backend": "ll",
         "config": case_config(args, m),
+        "profile_route_identity": dict(args.profile_route_identity),
     }
     if not args.skip_perf_test or args.ll_stage_timer:
         if rank == 0:
