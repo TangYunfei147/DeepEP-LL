@@ -21,7 +21,8 @@ def test_real_descriptor_publish_and_payload_redirect(tmp_path,mode):
     cc=shutil.which('g++') or shutil.which('clang++')
     if not cc:pytest.skip('CPU C++ compiler unavailable')
     source=RECV.read_text(encoding='utf-8')
-    methods=method(source,'IssueLoad')+'\n'+method(source,'PublishSharedReference')
+    methods='\n'.join(method(source,name) for name in
+        ('IssueLoad','PrepareSharedReference','PublishSharedReference','RestoreSharedReference'))
     cpp=Path(__file__).with_name('shared_pull_probe_harness.cpp').read_text(encoding='utf-8')
     cpp=cpp.replace('// ACTUAL_RECEIVER_METHODS',methods)
     packet=(ROOT/'csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_receive_packet.h').read_text()
@@ -41,7 +42,9 @@ def test_candidate_preserves_payload_and_output_handle_and_rejects_old_diagnosti
     assert 'DataCopy(output, wire' not in pub
     assert pub.count('ServerDedupReceiveSync<HardEvent::MTE3_S>()')==2
     assert 'wire[uint32_t(data_.tokenStride)+32U]' in pub
-    assert 'type.SetValue(0U,oldType)' in pub
+    assert 'type.SetValue(0U,role)' in method(source,'RestoreSharedReference')
+    prepare=method(source,'PrepareSharedReference')
+    assert 'Slot(task)' in prepare and 'Slot(task)' not in pub
     assert source.index('if(pulledTerminal_[lane])')<source.index('const uint32_t role =')
     assert 'header.SetValue(3U,uint32_t(EpServerDedupTokenType::Terminal))' in source
     host=(ROOT/'csrc/ops/low_latency.cpp').read_text(encoding='utf-8')

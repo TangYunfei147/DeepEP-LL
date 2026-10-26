@@ -529,6 +529,7 @@ private:
             LL_SEG_RELAY_COMPLETION(pipe_);
             LL_SEG_SCOPE(RELAY_ISSUE);
             LL_SEG_COUNT(RELAY_PACKETS, members);
+            if(sharedPull_) PrepareSharedReference(wire,type,destination,j);
             for (uint32_t i = 0U; i < members; ++i) {
                 const uint32_t index = tail.Entry(i).GetValue(0U);
                 const uint32_t expertId = index & 0xffffU;
@@ -541,7 +542,7 @@ private:
                                                                          expertId % localExperts_, q, ranks,
                                                                          localExperts_, bs_));
                 if(sharedPull_) {
-                    PublishSharedReference(output,wire,type,destination,j);
+                    PublishSharedReference(output,wire,type);
                 } else {
                     LL_BW_TRANSFER(LlStageTimer::RELAY,destinationRank!=uint32_t(args_->rank),
                                    data_.tokenStride,uint64_t(hiddenBytes_)+data_.scaleBytes);
@@ -549,6 +550,7 @@ private:
                 }
                 if (expertTimer_) expertTimer_->End(expertId, LlExpertTimer::Forward);
             }
+            if(sharedPull_) RestoreSharedReference(type,role);
             LL_BW_END(LlStageTimer::RELAY,pipe_);
         }
         LL_SEG_BEGIN(payloadOut,RX_PAYLOAD_OUTPUT);
@@ -576,12 +578,11 @@ private:
         SetFlag<HardEvent::MTE3_MTE2>(lane);
     }
 
-    __aicore__ inline void PublishSharedReference(GlobalTensor<uint8_t> output,LocalTensor<uint8_t> wire,
+    __aicore__ inline void PrepareSharedReference(LocalTensor<uint8_t> wire,
         LocalTensor<uint32_t> type,LocalTensor<uint32_t> destination,uint32_t task)
     {
-        // Reuse this lane's existing 64B metadata scratch. Retire both header
-        // and flags before restoring it; no additional live UB allocation.
-        const uint32_t oldType=type.GetValue(0U);
+        // Every member points at the same immutable first-hop packet. Prepare
+        // this lane's existing 64B scratch once, before the member loop.
         const uint32_t d0=destination.GetValue(0U),d1=destination.GetValue(1U),d2=destination.GetValue(2U);
         auto flags=wire[uint32_t(data_.tokenStride)+32U].template ReinterpretCast<float>();
         const uint64_t offset=uint64_t(Slot(task)-args_->peerMems[args_->rank]);
@@ -591,6 +592,12 @@ private:
         Duplicate<float>(flags,1.0f,8U);
         ServerDedupReceiveSync<HardEvent::V_S>();
         ServerDedupReceiveSync<HardEvent::S_MTE3>();
+    }
+
+    __aicore__ inline void PublishSharedReference(GlobalTensor<uint8_t> output,LocalTensor<uint8_t> wire,
+        LocalTensor<uint32_t> type)
+    {
+        auto flags=wire[uint32_t(data_.tokenStride)+32U].template ReinterpretCast<float>();
         DataCopyPad(output[uint32_t(data_.headerWireOffset)],type.template ReinterpretCast<uint8_t>(),
                     {1U,32U,0U,0U,0U});
         // Body-before-ready is intentional even for different destinations.
@@ -602,7 +609,11 @@ private:
             DataCopyPad(output[block*512U+480U],flags.template ReinterpretCast<uint8_t>(),
                         {1U,32U,0U,0U,0U});
         ServerDedupReceiveSync<HardEvent::MTE3_S>();
-        type.SetValue(0U,oldType);
+    }
+
+    __aicore__ inline void RestoreSharedReference(LocalTensor<uint32_t> type,uint32_t role)
+    {
+        type.SetValue(0U,role);
         ServerDedupReceiveSync<HardEvent::S_MTE3>();
     }
 

@@ -78,8 +78,13 @@ int main(){
     header.SetValue(0,9);header.SetValue(1,17);header.SetValue(2,3);header.SetValue(3,3);
     auto type=wire[4096].ReinterpretCast<uint32_t>();type.SetValue(0,2);
     GlobalTensor<uint8_t> dst{peers[2].data()+4096};
-    pub.PublishSharedReference(dst,wire,type,header,0);
-    assert(writes==32+8*32 && type.GetValue(0)==2);
+    pub.PrepareSharedReference(wire,type,header,0);
+    pub.PublishSharedReference(dst,wire,type);
+    GlobalTensor<uint8_t> second{peers[3].data()+4096};
+    pub.PublishSharedReference(second,wire,type);
+    pub.RestoreSharedReference(type,2);
+    assert(writes==2*(32+8*32) && type.GetValue(0)==2);
+    assert(!std::memcmp(dst.p,second.p,4096));
     assert(header.GetValue(0)==9&&header.GetValue(1)==17&&header.GetValue(2)==3&&header.GetValue(3)==3);
     assert(peers[1]==original); // Header rewrite only touched the private UB.
     for(unsigned b=0;b<8;++b)for(unsigned i=0;i<8;++i){float v;std::memcpy(&v,peers[2].data()+4096+b*512+480+i*4,4);assert(v==1.0f);}
