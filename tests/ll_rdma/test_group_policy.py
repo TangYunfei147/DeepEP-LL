@@ -1,17 +1,26 @@
 """Host tiling policy and write-only host-boundary invariants (CPU only)."""
 from pathlib import Path
+import os
+import shutil
 import subprocess
 from types import SimpleNamespace
 from contextlib import contextmanager
+import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 
 
 def test_tiling_keys_and_host_boundaries(tmp_path):
+    compiler = shutil.which("g++")
+    zig = os.environ.get("DEEPEP_TEST_ZIG")
+    if compiler is None and not zig:
+        pytest.skip("Set DEEPEP_TEST_ZIG or install g++ for the C++ policy model")
+    command = [compiler] if compiler else [zig, "c++"]
     cpp = tmp_path / "policy.cpp"
     cpp.write_text(r'''
 #include <cassert>
 #include <cstddef>
+#include <initializer_list>
 #include "csrc/kernels/dispatch/low_latency/common/ep_memory_server_dedup_layout.h"
 #include "csrc/kernels/dispatch/low_latency/common/ep_memory_server_dedup_tiling.h"
 #include "csrc/kernels/combine/low_latency/combine_layout.h"
@@ -42,12 +51,15 @@ int main() {
     assert(!LlSameHost(0,1,1) && LlSameHost(0,1,2)); // real two-rank primitive layouts
 }
 ''')
-    exe = tmp_path / "policy"
-    subprocess.run(["g++", "-std=c++17", "-I", str(ROOT), str(cpp), "-o", str(exe)], check=True)
-    subprocess.run([str(exe)], check=True)
+    exe = tmp_path / "policy.exe"
+    # Quote-only lookup avoids shadowing libc++'s <version> with repo/version.
+    subprocess.run([*command, "-std=c++17", "-UNDEBUG", "-iquote", str(ROOT),
+                    str(cpp), "-o", str(exe)], check=True, timeout=180)
+    subprocess.run([str(exe)], check=True, timeout=60)
 
 
 def test_diagnostic_metadata_uses_selected_group(monkeypatch, tmp_path):
+    pytest.importorskip("torch")
     from tests.elastic import test_ep_low_latency as st
     from deep_ep import _native
     from deep_ep.utils import ll_stage_timer
@@ -83,4 +95,4 @@ def test_wrong_physical_rank_layout_rejected_in_plan(tmp_path):
         "--backend", "rdma", "--devices", "0,1", "--validation",
         "--config", "tests/ll_rdma/target16.json", "--num-processes", "8", "--num-nodes", "2", "--plan"],
         cwd=tmp_path, env=env, capture_output=True, text=True, timeout=30)
-    assert result.returncode and "16 contiguous ranks per physical host" in result.stderr
+    assert result.returncode and "16 contiguous ranks per host" in result.stderr

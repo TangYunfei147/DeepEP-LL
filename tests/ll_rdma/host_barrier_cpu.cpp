@@ -34,7 +34,7 @@ std::array<State, 256> states;
 std::mutex lock;
 thread_local int rank_id;
 thread_local std::vector<Pending> pending;
-std::atomic<int> puts{0}, stores{0}, fallback{0};
+std::atomic<int> rdma_puts{0}, stores{0}, fallback{0};
 
 int owner(const void* p) {
     const auto address = reinterpret_cast<uintptr_t>(p);
@@ -95,7 +95,7 @@ inline void aclshmemx_roce_qp_put_nbi(uint8_t* dst, uint8_t* src, uint8_t*, unsi
     assert(n == 4 && qp == 0 && owner(src) == rank_id);
     assert(!(states[rank_id].topo_list[peer] & ACLSHMEM_TRANSPORT_MTE));
     pending.push_back({static_cast<int32_t*>(translated(dst, peer)), reinterpret_cast<int32_t*>(src)});
-    ++puts;
+    ++rdma_puts;
 }
 inline void aclshmemx_roce_qp_quiet(int, unsigned, uint8_t*, unsigned) {
     std::this_thread::yield();
@@ -131,7 +131,7 @@ int main() {
         });
         for (auto& worker : workers) worker.join();
     }
-    assert(puts > 0 && stores > 0 && fallback == 0);
+    assert(rdma_puts > 0 && stores > 0 && fallback == 0);
     rank_id = 0;
     teams[0].size = 16;
     for (int p = 0; p < 16; ++p) { teams[0].pe_mapping[p] = p; states[0].topo_list[p] = ACLSHMEM_TRANSPORT_MTE; }

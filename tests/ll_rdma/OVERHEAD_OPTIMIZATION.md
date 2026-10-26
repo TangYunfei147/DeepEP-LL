@@ -21,30 +21,28 @@ LL生产轮询不使用`GetSystemCycle`，不新增超时、Trap、错误重试�
 | 664d327 | Receiver lane数量不超过实际任务数 |
 | cb03413 | 复用metadata构造时已读取的packet role |
 | 03c37a1 | Packet提供单次发送免128B恢复路径，默认仍保留复用语义 |
-| 87f8363 | RDMA batch初始化时校验/缓存stage，保存已计算的远端地址 |
-| 3f58c24 | 两轮quiet复用相同的唯一peer位图 |
-| ffb083b | 验证远端分支入口契约与动态地址边界 |
-| 348aad8 | combine按实际核数通知/清理，删除重复排空，缓存mask期望值 |
-| b2bd180 | 两bank只初始化flags，保留原调用前完成协调 |
-| 81c922b | combine显式使用单次发送免恢复接口 |
-| cfb0d2e | 将期望flag数装入原pending槽，保持原UB布局和shape准入 |
-| 3c2a135 | 生产LL无取时钟调用及构建范围的回归约束 |
-| f9b7e18 | 按原展平路由顺序一次生成q表 |
-| d8fe5d4 | 稳定DIRECT分组链表与每token一次sourceMask写入 |
-| cb25027 | 缓存最近token输入/量化body，保留队列与pack读取依赖 |
-| 588b74e | 删除非receiver0在count阶段的无用prefix读取 |
-| 7f607e1 | 配对计数最后一次MTE写在已有复用边界退休 |
-| 6bbc363 | 仅core0执行路由body准备等待 |
-| be56022 | 复用Scalar累计prefix末值，删除重复subtotal归约 |
-| 9cedef8 | 发布单份共享只读prefix，保留控制区布局容量 |
-| 121530c | 删除已夹取本机专家范围后的重复判断 |
-| 93b53c8 | 路由异步读取由原Vector消费者获取完成 |
-| ebb20cf | 预量化FP8只清padding，缓存复用保持完整relay尾部字节 |
-| c461ac1 | B1沿用q全零特例，跳过空闲发送核的初始化 |
-| fa771e3 | 保留原本支持的非对齐H，不缩小输入范围 |
+| 200f5da | RDMA batch初始化时校验/缓存stage与远端地址，含入口契约回归 |
+| db04d23 | 两轮quiet复用相同的唯一peer位图 |
+| 7d07dbc | combine实际范围控制写、统一排空、原pending槽缓存期望数；UB布局不变 |
+| 9922112 | 两bank只初始化flags，保留原调用前完成协调 |
+| be327de | combine显式使用单次发送免恢复接口 |
+| f8c502d | 生产LL无取时钟调用及构建范围的回归约束 |
+| f567e6e | 按原展平路由顺序一次生成q表 |
+| 0613e0e | 稳定DIRECT分组链表与每token一次sourceMask写入 |
+| ff709bb | 输入/量化body复用及padding初始化，完整relay尾部和非对齐H保持 |
+| 83303de | 删除非receiver0在count阶段的无用prefix读取 |
+| e7d3abb | 配对计数最后一次MTE写在已有复用边界退休 |
+| 80c4352 | 仅core0执行路由body准备等待 |
+| ec74a1d | 复用Scalar累计prefix末值，删除重复subtotal归约 |
+| aa1c596 | 发布单份共享只读prefix，保留控制区布局容量 |
+| a488a76 | 删除已夹取本机专家范围后的重复判断 |
+| 55c630f | 路由异步读取由原Vector消费者获取完成 |
+| 52c4852 | B1沿用q全零特例，跳过空闲发送核的初始化 |
+| e9989c4 | 既有CPU ABI/传输测试使用可用编译器并隔离标准头搜索 |
 
 原始提交顺序可用`git log --reverse --oneline 85d9cdc..HEAD`查看。
 补充文档和后续验证修正以该日志为准。
+预量化完整尾部、非对齐H与UB布局的修正已并入对应优化提交，避免中间版本改变输入输出。
 
 ## 保留的依赖
 
@@ -110,3 +108,15 @@ fi
 无需回传全部原始数据；原始数据保留目标机，回传文件仍每个不超过65535字节、总数不超过10。
 
 本地CPU协议/布局/调度模型不能替代CANN编译、NPU精度或性能验收。
+
+## 本地验证记录
+
+整合套件为`tests/ll_rdma`、`tests/runtime/test_ndr_host_coordination.py`、
+`tests/ll_stage_timer/test_experts.py`和`tests/ll_stage_timer/test_parity.py`：
+**222通过，2项因本机未安装Torch跳过**。其中CPU C++模型使用Zig，覆盖OFF/ON传输、
+14种Host launch选择、16..72核边界、延迟网络/消费者、共享prefix、精确q和完整metadata、
+输入缓存及非对齐H、flag-only初始化与现有Host完成协调。
+
+整套检查发现的5项旧失败已在基线85d9cdc复现，修正仅涉及测试工具链/断言适配；
+没有为通过测试新增生产失败处理。提交整理前后源码tree一致，验证结果对应最终代码。
+CANN编译、设备正确性和性能尚未执行；未连接远端。

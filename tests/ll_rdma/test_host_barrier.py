@@ -1,5 +1,6 @@
 """DeepEP-owned Host barrier checks; SHMEM remains untouched."""
 from pathlib import Path
+import os
 import random
 import shutil
 import subprocess
@@ -9,18 +10,29 @@ ROOT = Path(__file__).resolve().parents[2]
 
 def test_real_helper_against_cpu_transport_doubles(tmp_path):
     compiler = shutil.which("g++") or shutil.which("clang++")
-    if compiler is None:
-        pytest.skip("C++17 compiler required for the actual Host barrier helper")
+    zig = os.environ.get("DEEPEP_TEST_ZIG")
+    if compiler is None and not zig:
+        pytest.skip("Set DEEPEP_TEST_ZIG or install a C++17 compiler for the Host barrier helper")
+    command = [compiler] if compiler else [zig, "c++"]
     binary = tmp_path / "host-barrier.exe"
-    subprocess.run([compiler, "-std=c++17", "-pthread", "-I" + str(ROOT),
-                    str(Path(__file__).with_name("host_barrier_cpu.cpp")), "-o", str(binary)], check=True)
+    subprocess.run([*command, "-std=c++17", "-UNDEBUG", "-pthread", "-iquote", str(ROOT),
+                    str(Path(__file__).with_name("host_barrier_cpu.cpp")), "-o", str(binary)],
+                   check=True, timeout=180)
     subprocess.run([str(binary)], check=True, timeout=60)
 
 
 def test_project_build_owns_barrier():
     cmake = (ROOT / "cmake/device/CMakeLists.txt").read_text()
-    common = cmake.split("add_library(deepep_kernel_common OBJECT", 1)[1].split("set(_ll_sources", 1)[0]
-    assert "csrc/kernels/runtime/host_barrier.cpp" not in common
+    ll_sources = cmake.split("set(_ll_sources", 1)[1].split("add_library(deepep_kernel_ll_plain", 1)[0]
+    assert "csrc/kernels/dispatch/low_latency.cpp" in ll_sources
+    assert "csrc/kernels/combine/low_latency.cpp" in ll_sources
+    assert "low_latency/variants/${_mode}_g${_group}.cpp" in ll_sources
+    for variant in ("plain", "timer"):
+        assert f"add_library(deepep_kernel_ll_{variant} OBJECT ${{_ll_sources}})" in cmake
+    assert "add_library(deepep_kernels SHARED $<TARGET_OBJECTS:${_ll_variant}>)" in cmake
+    # The legacy helper remains testable but is absent from the LL build and
+    # from Session's runtime launch path; NDR uses its existing Host collective.
+    assert "csrc/kernels/runtime/host_barrier.cpp" not in cmake
     launcher = (ROOT / "csrc/kernels/runtime/host_barrier.cpp").read_text()
     assert "deepep_ndr_host_barrier_kernel" in launcher
     session = (ROOT / "csrc/runtime/session.cpp").read_text()

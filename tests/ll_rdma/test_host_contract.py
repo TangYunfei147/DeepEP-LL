@@ -23,6 +23,7 @@ def test_explicit_runtime_selection(monkeypatch, backend, udma):
 
 
 def test_no_ht_fallback(monkeypatch):
+    pytest.importorskip("torch")
     from deep_ep.buffers import elastic
     monkeypatch.setattr(elastic, "require_native", lambda _: None)
     monkeypatch.setattr(elastic, "npu_api", lambda: None)
