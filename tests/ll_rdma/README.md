@@ -3,6 +3,10 @@
 当前分支用于LL性能穿刺，只构建LL Host/Device，HT notify/dispatch/combine不编译；
 误调用HT入口会明确报错。CATLASS已移出子模块，普通LL构建不需要它。
 
+2026-10-26冗余通信/Scalar清理、独立commit清单和OFF验收命令见
+[OVERHEAD_OPTIMIZATION.md](OVERHEAD_OPTIMIZATION.md)。公开dispatch/combine输入输出保持；
+LL生产轮询不使用GetSystemCycle，锁定SHMEM SDK保持原实现。
+
 两机各一条命令的构建/测试/本机解析入口见 [ONE_CLICK.md](ONE_CLICK.md)：
 `bash tests/ll_rdma/one_click.sh NODE_RANK MASTER_IP RUN_NAME`，默认ON诊断，`--mode perf`为OFF性能。
 
