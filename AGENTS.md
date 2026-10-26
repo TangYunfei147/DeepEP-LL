@@ -1,5 +1,12 @@
 # LL 编译维护约束
 
+## 原始 cb59 重建复测（2026-10-26）
+
+- 用户在small run003仍未复现17–22us后要求考虑运行/修改指定原分支定位差距，并确认只保留源码、需要重建。先从固定cb59bff99ecd39d27ef57788c5e6fd0009e4e636独立副本重建OFF，保留原SDK、1GiB页、MTE+UDMA初始化、动态1:1、G16、单入口及144B launch；这是历史原代码实验，不把单入口恢复进当前七TU实现。
+- 仅移除原构建/加载/ST的SHMEM身份门禁并应用清理重编，不改原C++、SDK源码或测量算法；目标运行由用户执行，不连接远端。入口cb59_original.py，指南CB59_ORIGINAL.md。
+- 原ST按声明seed采样；当前ST已修复correctness_repeats后沿用seed+2的问题，重复正确性后恢复声明seed及matching handle，profile_seed和全rank路由指纹明确记录。未记录有效seed的旧文件不伪造元数据。
+- 原代码默认seed0/2、两轮反序、七B、OFF10/100/tail50，仅回传一个不超过60000字节报告。先确认原版在同日环境是否仍快，再决定单变量页/Session/SDK/入口替换或原版打点，不从ON内部跨度推断OFF launch开销。
+
 ## 清理重编替代 SHMEM 校验（2026-10-26，当前有效原则）
 
 - 用户明确要求 small A/B 与配对接收都移除 SHMEM 校验，每次脚本删除相关编译产物后重编。本条覆盖下方全部旧 SDK identity/manifest/hash/revision/capability/字段值域准入及默认复用规定。

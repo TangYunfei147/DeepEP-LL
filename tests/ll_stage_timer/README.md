@@ -1,5 +1,7 @@
 # LL稀疏诊断：当前入口
 
+原始cb59复现入口见[CB59_ORIGINAL.md](CB59_ORIGINAL.md)：small run003仍比历史值慢3.94–4.81us，先独立重建原提交OFF，保留原SDK/页/单入口，按seed0/2反序复测并只回传一份报告。当前ST已修复多轮正确性后实际沿用seed+2采样的问题；新报告记录实际seed及完整路由指纹。
+
 最新两组实验：[配对接收CB59_PAIR.md](CB59_PAIR.md)比较`cb59-stream`/`cb59-pair`；[小场景启动诊断CB59_SMALL.md](CB59_SMALL.md)比较`cb59`/`cb59-small`。统一先运行`python tests/ll_stage_timer/build_ab.py --experiment all --run-name ll_ab_clean_build_003`：清理并重编工程SDK一次，再清理并编译四实现共八份OFF/ON wheel，全部成功后串行采样。已删除SHMEM清单、字段、版本、哈希校验，不再复用旧SDK/对象；源码、依赖下载、历史wheel和数据保留。详细清理边界见[SDK构建原则](../../docs/SHMEM_MASTER_UPDATE.md)。新采集schema16、每核512B，历史schema15只离线读取。
 
 2026-10-26的清理重编原则覆盖下方历史实验中的SDK复用/验证说明。`--skip-build --wheel-map`仅用于采样本轮已完成构建的wheel，采样阶段不再清理SDK。项目自身的implementation、S/R/G、ABI/schema、源码和全rank一致性保护保留。

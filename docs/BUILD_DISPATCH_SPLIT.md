@@ -1,5 +1,57 @@
 # LL dispatch compile partition
 
+## Original cb59 rebuild and route identity correction (2026-10-26)
+
+The supplied small run003 measured22.0143–25.9518us across B1/2/4/8/16/24/32,
+still3.9447–4.8082us above the historical original cb59 values. The generic
+large-B removal therefore did not reproduce that range. These separate runs
+do not isolate a cause. ON adds10.3–18.2%; independently aggregated receiver
+control spans cannot be added or subtracted from OFF tasks for attribution.
+
+Source audit found a concrete sampling mismatch: current ST's default three
+correctness calls retained seed+2 routes for profiling while reporting seed.
+Original ST uses its declared seed directly. Current ST now restores the
+declared seed and matching output/handle after repeated checks, and records
+profile_seed plus a complete all-rank route fingerprint. It preserves the
+single-check call count. Behavioral CPU tests execute the real run_case with
+mock device objects across FP8/BF16, repeated checks, dispatch and combine.
+Equal-seed original/current normal routes match for all seven B values; the
+seed difference alone is not evidence for the full latency gap.
+
+The user confirmed the old source remains but its binary must be rebuilt.
+cb59_original.py therefore prepares a new independent clone of fixed
+cb59bff99ecd39d27ef57788c5e6fd0009e4e636, its original SDK and one complete OFF
+wheel. Its only source adaptations remove SDK build/loader/preflight gates and
+provide safe clean-building helpers. Byte checks preserve every original C++
+file and the original device build graph. Original1GiB pages, MTE+UDMA Session
+initialization, dynamic1:1 cores, G16, monolithic entry,144-byte launch and O2
+remain. The current branch's seven TUs are unchanged. No Python dependencies
+are downloaded or updated; the isolated venv inherits the chosen environment.
+
+Target runs use seed0/2 in order0,2,2,0, the original ST and10/100/tail50 full
+tasks. Analysis validates raw100-sample/rank coverage, recomputes tail50 means,
+records actual AIV/G/environment/routes, and exports one<=60000-byte report
+under the existing ten-send budget. A56/G16 match is only a core/group match,
+not a claim that SDK/pages/toolchain/date are controlled. All original source,
+SDK, wheel and logs remain inside the new group; previous runs are preserved.
+
+The assistant performed local CPU validation only: no SSH, CANN compilation,
+Host loading of an actual NPU wheel, or NPU execution. Target instructions,
+source boundary and follow-up decision order are in
+[CB59_ORIGINAL.md](../tests/ll_stage_timer/CB59_ORIGINAL.md).
+
+Final local CPU regression:1186 passed,96 environment skips,9 deselected in
+64.28s; `.tmp/cb59-original-integrated-002.log`. This includes real original
+Git-source patch checks, source-byte preservation, isolated build command
+sequencing, failure handling, route/handle restoration, raw-tail recomputation,
+bounded transfer receipts, and output-tree exclusion. Both generated cb59
+source checks pass. The first broader pass hit access-denied while creating
+the existing Windows junction fixture; a separate reproduction confirmed the
+same permission failure. That environment case joins the eight pre-existing
+POSIX compiler exclusions in the final pass; cleanup logic was not weakened.
+Git Bash syntax-only startup was also denied by the Windows MSYS named-object
+permission boundary, so no successful Bash execution is claimed.
+
 ## SDK metadata compatibility and coverage diagnostics (2026-10-26)
 
 The user supplied a build_ext failure before native compilation: the selected
