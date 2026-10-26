@@ -46,8 +46,9 @@ def test_candidate_preserves_payload_and_output_handle_and_rejects_old_diagnosti
     prepare=method(source,'PrepareSharedReference')
     assert 'Slot(task)' in prepare and 'Slot(task)' not in pub
     assert 'HardEvent::V_MTE3' in prepare and 'HardEvent::V_S' not in prepare
-    assert source.index('if(pulledTerminal_[lane])')<source.index('const uint32_t role =')
-    assert 'header.SetValue(3U,uint32_t(EpServerDedupTokenType::Terminal))' in source
+    assert 'const uint32_t role = pulledTerminal_[lane] ? uint32_t(EpServerDedupTokenType::Terminal)' in source
+    assert 'if (firstHop && !sharedPull_)' in source
+    assert 'header.SetValue(3U,uint32_t(EpServerDedupTokenType::Terminal))' not in source
     host=(ROOT/'csrc/ops/low_latency.cpp').read_text(encoding='utf-8')
     assert 'Shared-pull prototype supports OFF performance only' in host
     assert 'p!=16 || b!=256 || h!=3584 || k!=8 || e!=384 || !fp8' in host

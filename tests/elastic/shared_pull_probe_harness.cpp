@@ -102,10 +102,11 @@ int main(){
     assert(get.pulledTerminal_[0] && reads==32+8*480);
     for(unsigned b=0;b<8;++b)assert(!std::memcmp(loaded.data()+b*480,original.data()+4096+b*512,480));
     auto pulledHeader=LocalTensor<uint8_t>{loaded.data()+3712}.ReinterpretCast<uint32_t>();
-    pulledHeader.SetValue(3,uint32_t(EpServerDedupTokenType::Terminal));
     auto outType=LocalTensor<uint8_t>{loaded.data()+4096}.ReinterpretCast<uint32_t>();
     auto outDestination=LocalTensor<uint8_t>{loaded.data()+4128}.ReinterpretCast<uint32_t>();
-    BuildServerDedupMetadata(outType,outDestination,pulledHeader.GetValue(3),137);
+    const auto role=get.pulledTerminal_[0] ? uint32_t(EpServerDedupTokenType::Terminal) : pulledHeader.GetValue(3);
+    BuildServerDedupMetadata(outType,outDestination,role,137);
+    assert(pulledHeader.GetValue(3)==2); // Kept FirstHop body, Terminal logical output.
     assert(outType.GetValue(0)==3 && outDestination.GetValue(0)==137);
     assert(outDestination.GetValue(1)==UINT32_MAX && outDestination.GetValue(2)==UINT32_MAX);
     // A reference remains readable after source flag cleanup, not payload erase.

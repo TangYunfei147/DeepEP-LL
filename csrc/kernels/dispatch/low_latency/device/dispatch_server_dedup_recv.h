@@ -493,10 +493,8 @@ private:
         ServerDedupPacketTail tail(wire, headerOffset,
                                    uint32_t(keepFlags ? data_.relayReadIndexWireOffset : data_.readIndexPayloadOffset));
         auto header = tail.Header();
-        if(pulledTerminal_[lane]) {
-            header.SetValue(3U,uint32_t(EpServerDedupTokenType::Terminal));
-        }
-        const uint32_t role = enableDedup_ ? header.GetValue(3U) : 0U;
+        const uint32_t role = pulledTerminal_[lane] ? uint32_t(EpServerDedupTokenType::Terminal) :
+            (enableDedup_ ? header.GetValue(3U) : 0U);
         const bool firstHop = enableDedup_ && role == uint32_t(EpServerDedupTokenType::FirstHop);
         if (enableDedup_)
             BuildServerDedupMetadata(type, destination, role, tasks_.Position(j));
@@ -506,7 +504,7 @@ private:
             destination = header;
         if (expertTimer_) expertTimer_->End(expert, LlExpertTimer::Metadata);
         // FIRST_HOP preparation is shared work: retain only the core stage timer.
-        if (firstHop) {
+        if (firstHop && !sharedPull_) {
             PrepareServerDedupForward(tail);
             // Forwarded packets only need compact payload. The hint remains
             // independent of the application-level token type in the header.
