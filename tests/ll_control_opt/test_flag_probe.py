@@ -108,11 +108,14 @@ alignas(256) uint32_t output[128];
 uint32_t state=9821U;
 uint32_t random_u32() { state=state*1664525U+1013904223U; return state; }
 
-void check(uint32_t count) {
-    uint32_t expectedReady=0, expectedKeep=0;
+void check(uint32_t count,bool references=false) {
+    uint32_t expectedReady=0, expectedKeep=0, expectedReference=0;
     for(unsigned row=0; row<count; ++row) {
         float sum=0;
         for(unsigned j=0; j<64; ++j) sum+=flags[row*64+j];
+        if(references && flags[row*64]==DispatchDedup::PacketReceiveLayout::kReference) {
+            expectedReady|=1U<<row;expectedReference|=1U<<row;continue;
+        }
         const auto layout=DispatchDedup::PacketReceiveLayout::Decode(sum,8U);
         if(layout!=DispatchDedup::PacketReceiveLayout::State::Pending)
             expectedReady|=1U<<row;
@@ -123,10 +126,11 @@ void check(uint32_t count) {
     std::memcpy(before.data(), flags, sizeof(flags));
     std::fill(std::begin(output),std::end(output),0xcafe1234U);
     loads=stores=0;
-    DispatchDedup::BuildReceiveFlagMasks(flags,output,count,8U);
-    assert(output[0]==expectedReady && output[1]==expectedKeep);
+    if(references) DispatchDedup::BuildReceiveFlagMasks(flags,output,count,8U,true);
+    else DispatchDedup::BuildReceiveFlagMasks(flags,output,count,8U);
+    assert(output[0]==expectedReady && output[1]==expectedKeep && output[2]==expectedReference);
     assert(loads==count && stores==1);
-    for(unsigned i=2; i<128; ++i) assert(output[i]==0xcafe1234U);
+    for(unsigned i=3; i<128; ++i) assert(output[i]==0xcafe1234U);
     assert(std::memcmp(before.data(),flags,sizeof(flags))==0);
 }
 
@@ -148,7 +152,7 @@ int main() {
                     for(unsigned j=0; j<64; ++j)
                         flags[row*64+j]=(random_u32()%4U)*0.5f;
             }
-            check(count);
+            check(count);check(count,true);
         }
     // Missing any one of the 64 words prevents a complete packet. Exercise
     // each packet bit independently, not just the marker/first flag block.
@@ -158,9 +162,13 @@ int main() {
             flags[row*64+word]=0;
             check(16);
             assert((output[0]&(1U<<row))==0);
+            check(16,true);
+            assert((output[0]&(1U<<row))==0);
             if(word!=0) {
                 flags[row*64]=1.5f;
                 check(16);
+                assert((output[0]&(1U<<row))==0);
+                check(16,true);
                 assert((output[0]&(1U<<row))==0);
             }
         }
@@ -174,6 +182,34 @@ int main() {
         flags[0]=value;
         check(16);
         assert((output[0]&1U)==0);
+        check(16,true);
+        assert((output[0]&1U)==0);
     }
+    // Reference readiness depends only on the first word, even if the unused
+    // block flags have old values or NaNs. Each batch mixes ordinary/reference
+    // and incomplete packets; none of the reference bits may enter KeepFlags.
+    for(unsigned count=0;count<=16;++count) for(unsigned round=0;round<64;++round) {
+        for(unsigned row=0;row<16;++row) {
+            std::fill(flags+row*64,flags+(row+1)*64,1.0f);
+            const unsigned type=(row+round)%4;
+            if(type==0) {
+                for(unsigned word=0;word<64;++word)
+                    flags[row*64+word]=(round%3==0 ? 0.0f : round%3==1 ? 1.5f : std::numeric_limits<float>::quiet_NaN());
+                flags[row*64]=-1.0f;
+            } else if(type==1) flags[row*64]=1.5f;
+            else if(type==2) flags[row*64+17]=0.0f;
+        }
+        check(count);check(count,true);
+        assert((output[1]&output[2])==0);
+    }
+    for(unsigned word=1;word<64;++word) {
+        std::fill(std::begin(flags),std::end(flags),1.0f);flags[word]=-1.0f;
+        check(16,true);assert(!(output[0]&1U)&&output[2]==0U);
+    }
+    // Reference takes precedence even if unused words happen to sum to the
+    // ordinary KeepFlags value; the legacy decoder keeps its exact semantics.
+    std::fill(std::begin(flags),std::end(flags),1.0f);flags[0]=-1.0f;flags[1]=3.5f;
+    check(16);assert((output[1]&1U)&&output[2]==0U);
+    check(16,true);assert(!(output[1]&1U)&&(output[2]&1U));
 }
 """

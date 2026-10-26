@@ -13,6 +13,9 @@ namespace PacketReceiveLayout {
 constexpr uint32_t kMarkerOffset = 480U;
 constexpr float kCompact = 1.0f;
 constexpr float kKeepFlags = 1.5f;
+// Separate reference commit, recognized only by the shared-pull receiver.
+// Normal packet decoding below continues to require all block flags.
+constexpr float kReference = -1.0f;
 enum class State { Pending, Compact, KeepFlags };
 
 #if defined(__CCE__) && defined(__CCE_IS_AICORE__)

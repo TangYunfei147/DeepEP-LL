@@ -42,10 +42,16 @@ def test_candidate_preserves_payload_and_output_handle_and_rejects_old_diagnosti
     assert 'DataCopy(output, wire' not in pub
     assert pub.count('ServerDedupReceiveSync<HardEvent::MTE3_S>()')==1
     assert 'wire[uint32_t(data_.tokenStride)+32U]' in pub
+    assert pub.count('DataCopyPad(')==2 and 'for(' not in pub
+    assert 'PacketReceiveLayout::kMarkerOffset' in pub
     assert 'type.SetValue(0U,role)' in method(source,'RestoreSharedReference')
     prepare=method(source,'PrepareSharedReference')
     assert 'Slot(task)' in prepare and 'Slot(task)' not in pub
     assert 'HardEvent::V_MTE3' in prepare and 'HardEvent::V_S' not in prepare
+    assert 'PacketReceiveLayout::kReference' in prepare
+    load=method(source,'IssueLoad')
+    assert 'if(reference)' in load and 'if(sharedPull_ && !keepFlags)' not in load
+    assert 'descriptor.GetValue(3U)!=kLlSharedPullDescriptor' in load
     assert 'const uint32_t role = pulledTerminal_[lane] ? uint32_t(EpServerDedupTokenType::Terminal)' in source
     assert 'if (firstHop && !sharedPull_)' in source
     assert 'header.SetValue(3U,uint32_t(EpServerDedupTokenType::Terminal))' not in source

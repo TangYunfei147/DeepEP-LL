@@ -18,14 +18,14 @@ struct Model {
     TPipe pipe;
     TBuf<> prefixBuffer;
     ServerDedupReceiveTasks tasks;
-    std::vector<bool> ready, firstHop;
+    std::vector<bool> ready, firstHop, reference;
     std::set<unsigned> consumed;
     unsigned ids[32]{}, probeCount=0, probeOffset=0, probeStarts=0, primes=0, issued=0;
     bool outstanding=false, cascade=false;
     LlReceiveProbeResult captured;
-    struct Active { LlReceivePriority order; unsigned offset=0, primed=0; };
+    struct Active { LlReceivePriority order; unsigned offset=0, primed=0, referenceMask=0; };
 
-    explicit Model(unsigned size) : ready(size), firstHop(size) {
+    explicit Model(unsigned size) : ready(size), firstHop(size), reference(size) {
         pipe.InitBuffer(prefixBuffer,64);
         auto prefix=prefixBuffer.Get<int32_t>();
         for (unsigned i=0;i<16;++i) prefix.SetValue(i,int32_t(size));
@@ -50,6 +50,7 @@ struct Model {
             ids[offset+i]=j;
             if(ready[j]) captured.readyMask|=1U<<i;
             if(ready[j] && firstHop[j]) captured.keepFlagsMask|=1U<<i;
+            if(ready[j] && reference[j]) captured.referenceMask|=1U<<i;
         }
         // Latch the older observation. A relay during ConsumeReady may make
         // B ready, but it cannot change this snapshot into a false true result.
@@ -63,7 +64,7 @@ struct Model {
     Active PrimeReady(unsigned offset,unsigned count,LlReceiveProbeResult probe) {
         assert(!outstanding && offset==probeOffset);
         ++primes;
-        Active active{LlMakeReceivePriority(count,probe.readyMask,probe.keepFlagsMask),offset,0};
+        Active active{LlMakeReceivePriority(count,probe.readyMask,probe.keepFlagsMask),offset,0,probe.referenceMask};
         active.primed=std::min(6U,active.order.count);
         issued+=active.primed;
         return active;
@@ -72,6 +73,10 @@ struct Model {
         for(unsigned n=0;n<active.order.count;++n) {
             const unsigned j=ids[active.offset+active.order.At(n)];
             assert(ready[j] && consumed.insert(j).second);
+            // B's FinishProbe overwrites captured, but cannot alter A's saved
+            // reference identity, including after priority reorders its IDs.
+            const auto bit=1U<<active.order.At(n);
+            assert(bool(active.referenceMask&bit)==reference[j]);
             if(cascade && firstHop[j] && (j^1U)<ready.size()) ready[j^1U]=true;
         }
     }
@@ -90,6 +95,7 @@ static void CheckOnce(unsigned size,unsigned scan,unsigned pattern,std::mt19937&
     for(unsigned j=0;j<size;++j) {
         model.ready[j]=pattern==0?false:pattern==1?true:pattern==2?(j%2==0):bool(rng()&1U);
         model.firstHop[j]=bool(rng()&1U);
+        model.reference[j]=!model.firstHop[j] && bool(rng()&1U);
     }
     const unsigned oldScan=scan, starts=model.probeStarts;
     const bool result=LlRunReceiveProbePair(model,model.tasks.PendingCount(),scan);
@@ -118,7 +124,10 @@ int main() {
     // a terminal can become ready only while A/B is being consumed elsewhere.
     for(unsigned seed=0;seed<80;++seed) {
         Model model(33U+2U*(seed%49));model.cascade=true;
-        for(unsigned j=0;j<model.ready.size();++j) model.firstHop[j]=(j%2)==0;
+        for(unsigned j=0;j<model.ready.size();++j) {
+            model.firstHop[j]=(j%2)==0;
+            model.reference[j]=!model.firstHop[j];
+        }
         unsigned scan=seed%model.ready.size(),round=0;
         while(model.tasks.PendingCount() && round<2000) {
             for(unsigned j=0;j<model.ready.size();j+=2)

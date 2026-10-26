@@ -171,6 +171,7 @@ public:
                     const uint32_t index=order.At(nextLoad++);
                     IssueLoad(snapshot.GetValue(index),issued_%lanes_,
                               (probe.keepFlagsMask&(uint32_t(1)<<index))!=0U,
+                              (probe.referenceMask&(uint32_t(1)<<index))!=0U,
                               !overlap_.enabled || issued_>=lanes_);
                     ++issued_;
                 }
@@ -218,13 +219,10 @@ public:
 private:
     static constexpr uint32_t kProbeBatch = kLlReceiveProbeBatch;
     static_assert(kProbeBatch<=16U,"priority order uses four-bit snapshot positions");
-    struct ProbeResult {
-        uint32_t readyMask = 0U;
-        uint32_t keepFlagsMask = 0U;
-    };
+    using ProbeResult = LlReceiveProbeResult;
     struct ReadyBatch {
         LlReceivePriority order;
-        uint32_t snapshotOffset=0U, keepFlagsMask=0U, nextLoad=0U;
+        uint32_t snapshotOffset=0U, keepFlagsMask=0U, referenceMask=0U, nextLoad=0U;
     };
     struct ProbePipelineOps {
         ServerDedupReceiver* receiver;
@@ -249,6 +247,7 @@ private:
             const uint32_t index=batch.order.At(batch.nextLoad++);
             IssueLoad(snapshot.GetValue(batch.snapshotOffset+index),issued_%lanes_,
                       (batch.keepFlagsMask&(uint32_t(1)<<index))!=0U,
+                      (batch.referenceMask&(uint32_t(1)<<index))!=0U,
                       !overlap_.enabled || issued_>=lanes_);
             ++issued_;
         }
@@ -258,6 +257,7 @@ private:
         batch.order=LlMakeReceivePriority(count,probe.readyMask,enableDedup_ ? probe.keepFlagsMask:0U);
         batch.snapshotOffset=offset;
         batch.keepFlagsMask=probe.keepFlagsMask;
+        batch.referenceMask=probe.referenceMask;
         FillReadyLanes(batch);
         return batch;
     }
@@ -306,7 +306,7 @@ private:
         { LL_SEG_SCOPE(RX_FLAG_REDUCE);
           if (blocks==8U)
               BuildReceiveFlagMasks(reinterpret_cast<__ubuf__ float*>(flags.GetPhyAddr()),
-                  reinterpret_cast<__ubuf__ uint32_t*>(sums.GetPhyAddr()),count,blocks);
+                  reinterpret_cast<__ubuf__ uint32_t*>(sums.GetPhyAddr()),count,blocks,sharedPull_);
           else
               Sum<float>(sums,flags,workBuf_.Get<uint8_t>(),SumParams{count,blocks*8U,blocks*8U});
           SetFlag<HardEvent::V_S>(6U);
@@ -323,6 +323,7 @@ private:
             auto masks=sumBuf_.Get<uint32_t>();
             result.readyMask=masks.GetValue(0U);
             result.keepFlagsMask=masks.GetValue(1U);
+            result.referenceMask=masks.GetValue(2U);
         } else {
             auto sums=sumBuf_.Get<float>();
             for (uint32_t i=0U;i<count;++i) {
@@ -366,7 +367,7 @@ private:
         { LL_SEG_SCOPE(RX_FLAG_REDUCE);
           if (fusedMasks) {
               BuildReceiveFlagMasks(reinterpret_cast<__ubuf__ float*>(flags.GetPhyAddr()),
-                  reinterpret_cast<__ubuf__ uint32_t*>(sums.GetPhyAddr()),count,blocks);
+                  reinterpret_cast<__ubuf__ uint32_t*>(sums.GetPhyAddr()),count,blocks,sharedPull_);
           } else {
               Sum<float>(sums, flags, work, SumParams{count, blocks * 8U, blocks * 8U});
           }
@@ -377,6 +378,7 @@ private:
             auto masks=sums.template ReinterpretCast<uint32_t>();
             result.readyMask=masks.GetValue(0U);
             result.keepFlagsMask=masks.GetValue(1U);
+            result.referenceMask=masks.GetValue(2U);
             LL_SEG_COUNT(RX_READY,uint32_t(__builtin_popcount(result.readyMask)));
         } else {
         for (uint32_t i = 0; i < count; ++i) {
@@ -391,7 +393,7 @@ private:
     }
 
     // 摘要：等待 lane 的旧输出完成后，将 packet 从 GM 预取到 UB，分别发布给 Scalar 和 MTE3 的依赖事件。
-    __aicore__ inline void IssueLoad(uint32_t j, uint32_t lane, bool keepFlags, bool reuse)
+    __aicore__ inline void IssueLoad(uint32_t j, uint32_t lane, bool keepFlags, bool reference, bool reuse)
     {
         LL_SEG_BEGIN(segBegin1, RECV_BUFFER_WAIT);
         if (reuse) { LL_SEG_SCOPE(RX_LANE_REUSE_WAIT);
@@ -403,25 +405,26 @@ private:
         GlobalTensor<uint8_t> source;
         source.SetGlobalBuffer(Slot(j));
         pulledTerminal_[lane]=false;
-        if(sharedPull_ && !keepFlags) {
-            // Header-only inspection before redirecting a terminal to its
-            // immutable first-hop slot; event7 is outside payload lanes0..5.
+        if(reference) {
+            if(!sharedPull_ || keepFlags) { Trap();return; }
+            // The probe already classified this as a committed reference.
+            // Ordinary DIRECT packets therefore need no descriptor pre-read.
+            // Event7 is outside payload lanes0..5.
             DataCopyPad(wire[uint32_t(data_.headerPayloadOffset)],source[uint32_t(data_.headerWireOffset)],
                         {1U,32U,0U,0U,0U},{false,0U,0U,0});
             ServerDedupReceiveSync<HardEvent::MTE2_S>();
             auto descriptor=wire[uint32_t(data_.headerPayloadOffset)].template ReinterpretCast<uint32_t>();
-            if(descriptor.GetValue(3U)==kLlSharedPullDescriptor) {
-                const uint32_t owner=descriptor.GetValue(4U);
-                const uint64_t offset=uint64_t(descriptor.GetValue(5U)) |
-                    (uint64_t(descriptor.GetValue(6U))<<32U);
-                if(!LlSharedPullAddressValid(owner,uint32_t(args_->rank),uint32_t(args_->rankSize),
-                    kLlRanksPerGroup,offset,data_.dispatchOffset,data_.dispatchBytes,data_.tokenStride)) {
-                    Trap();return;
-                }
-                source.SetGlobalBuffer(args_->peerMems[owner]+offset);
-                source.SetL2CacheHint(CacheMode::CACHE_MODE_DISABLE);
-                pulledTerminal_[lane]=true;
+            if(descriptor.GetValue(3U)!=kLlSharedPullDescriptor) { Trap();return; }
+            const uint32_t owner=descriptor.GetValue(4U);
+            const uint64_t offset=uint64_t(descriptor.GetValue(5U)) |
+                (uint64_t(descriptor.GetValue(6U))<<32U);
+            if(!LlSharedPullAddressValid(owner,uint32_t(args_->rank),uint32_t(args_->rankSize),
+                kLlRanksPerGroup,offset,data_.dispatchOffset,data_.dispatchBytes,data_.tokenStride)) {
+                Trap();return;
             }
+            source.SetGlobalBuffer(args_->peerMems[owner]+offset);
+            source.SetL2CacheHint(CacheMode::CACHE_MODE_DISABLE);
+            pulledTerminal_[lane]=true;
         }
         if (keepFlags) {
             DataCopy(wire, source, uint32_t(data_.tokenStride));
@@ -587,7 +590,7 @@ private:
         type.SetValue(0U,d0);type.SetValue(1U,d1);type.SetValue(2U,d2);
         type.SetValue(3U,kLlSharedPullDescriptor);type.SetValue(4U,uint32_t(args_->rank));
         type.SetValue(5U,uint32_t(offset));type.SetValue(6U,uint32_t(offset>>32U));type.SetValue(7U,0U);
-        Duplicate<float>(flags,1.0f,8U);
+        Duplicate<float>(flags,PacketReceiveLayout::kReference,8U);
         // Flags are consumed by DMA, never by Scalar. Keep both producers'
         // dependencies without stalling Scalar on the Vector initialization.
         ServerDedupReceiveSync<HardEvent::V_MTE3>();
@@ -603,11 +606,10 @@ private:
         // Body-before-ready is intentional even for different destinations.
         // This conservative prototype pays a completion dependency per relay.
         ServerDedupReceiveSync<HardEvent::MTE3_S>();
-        // Reuse ONE 32B source for each block. A multi-block copy with zero
-        // source stride would advance through UB rather than broadcast it.
-        for(uint32_t block=0U;block<uint32_t(data_.blockCount);++block)
-            DataCopyPad(output[block*512U+480U],flags.template ReinterpretCast<uint8_t>(),
-                        {1U,32U,0U,0U,0U});
+        // One separate ready slot commits the descriptor. Reference consumers
+        // ignore the other block flags; normal payload senders retain them.
+        DataCopyPad(output[PacketReceiveLayout::kMarkerOffset],flags.template ReinterpretCast<uint8_t>(),
+                    {1U,32U,0U,0U,0U});
         // Flags remain immutable through the original lane retirement. The
         // earlier descriptor completion already permits restoring type[0].
     }

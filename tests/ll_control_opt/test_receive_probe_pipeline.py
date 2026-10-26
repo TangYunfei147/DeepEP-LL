@@ -48,6 +48,12 @@ def test_device_event_and_spare_storage_contract():
     assert layout.index('if (lanes>6) lanes=6;') < layout.index('LlReceiveProbePrefetchFits(p.totalBytes')
     assert 'p.totalBytes+=kLlReceiveProbeExtraBytes;' in layout
     assert 'ServerDedupReceiveSync<HardEvent::S_MTE3>();' in source
+    assert 'using ProbeResult = LlReceiveProbeResult;' in source
+    assert 'batch.referenceMask=probe.referenceMask;' in source
+    assert source.count('result.referenceMask=masks.GetValue(2U);')==2
+    assert source.count('count,blocks,sharedPull_);')==2
+    assert '(probe.referenceMask&(uint32_t(1)<<index))!=0U' in source
+    assert '(batch.referenceMask&(uint32_t(1)<<index))!=0U' in source
     # Probe scopes end before A consumes. ON has the same waits as OFF; its
     # submit/join fragments must not count the intervening payload work.
     helper = (COMMON / 'll_receive_probe_pipeline.h').read_text(encoding='utf-8')

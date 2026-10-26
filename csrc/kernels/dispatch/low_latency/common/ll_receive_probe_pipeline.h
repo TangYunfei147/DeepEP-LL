@@ -19,6 +19,7 @@ LL_PROBE_INLINE bool LlReceiveProbePrefetchFits(uint64_t used, uint64_t capacity
 struct LlReceiveProbeResult {
     uint32_t readyMask = 0U;
     uint32_t keepFlagsMask = 0U;
+    uint32_t referenceMask = 0U;
 };
 
 // At most two adjacent snapshots. Pending is immutable until both snapshots

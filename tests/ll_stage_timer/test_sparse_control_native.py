@@ -41,6 +41,8 @@ def test_business_sources_match_ed1_after_probe_removal():
         # mocks and delayed schedules exercise the changed paths separately.
         if relative in {
             'csrc/kernels/dispatch/low_latency/common/ll_core_config.h',
+            'csrc/kernels/dispatch/low_latency/common/ll_receive_probe_pipeline.h',
+            'csrc/kernels/dispatch/low_latency/device/dispatch_flag_probe.h',
             'csrc/kernels/dispatch/low_latency/dispatch_server_dedup_kernel.h',
             'csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_counts.h',
             'csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_recv.h'}:
@@ -188,7 +190,7 @@ int main(){
  static_assert(kSchema==17 && kWordsPerCore*8==1024 && kPointCount==18 && kExportWords==128);
  static_assert(kBandwidthStageCount==6 && kBandwidthRecordWords==16 && kBandwidthWordOffset==32);
  static_assert(DispatchDedup::kLlSendCoreNum==30 && DispatchDedup::kLlRecvCoreNum==26);
- static_assert(DispatchDedup::kLlCoreProtocolVersion==19030 && DispatchDedup::kLlDispatchUbBytes==230*1024);
+ static_assert(DispatchDedup::kLlCoreProtocolVersion==28030 && DispatchDedup::kLlDispatchUbBytes==230*1024);
  std::vector<uint64_t> words(56*kWordsPerCore+64,0);
  std::fill(words.end()-64,words.end(),0x12345678ULL);
  AscendC::core=55;
@@ -344,7 +346,7 @@ int main() {
    assert(threw && !calls);
  }
  bool threw=false;try {dispatch_server_dedup_kernel_do_bw17(nullptr,nullptr,0);}catch(const std::invalid_argument&){threw=true;}assert(threw);
- assert(deepep_ll_core_protocol_version()==19030 && deepep_ll_ranks_per_group()==4);
+ assert(deepep_ll_core_protocol_version()==28030 && deepep_ll_ranks_per_group()==4);
  assert(deepep_ll_stage_timer_schema()==17 && deepep_ll_stage_timer_profile_id()==8);
 #ifdef DEEPEP_LL_STAGE_TIMER
  assert(deepep_ll_stage_timer_enabled()==1);

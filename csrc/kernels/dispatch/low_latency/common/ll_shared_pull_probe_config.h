@@ -6,7 +6,7 @@ namespace DispatchDedup {
 #define DEEPEP_LL_SHARED_PULL_PROBE_MODE 2
 #endif
 constexpr uint32_t kLlSharedPullProbeMode = DEEPEP_LL_SHARED_PULL_PROBE_MODE;
-#define DEEPEP_LL_SHARED_PULL_WIRE_REVISION 1
+#define DEEPEP_LL_SHARED_PULL_WIRE_REVISION 2
 constexpr uint32_t kLlSharedPullWireRevision = DEEPEP_LL_SHARED_PULL_WIRE_REVISION;
 static_assert(kLlSharedPullProbeMode<=2U,"invalid shared-pull prototype");
 constexpr uint32_t kLlSharedPullDescriptor = 0x50554c4cU;

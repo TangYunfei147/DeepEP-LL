@@ -1,6 +1,6 @@
 // Compile the actual receiver descriptor publisher and payload-loader methods.
-// DMA is immediate here: separate ordering checks and the lifetime model test
-// cover dependencies. This checks bytes, bounds, scratch restoration and copies.
+// Writes consume their UB source on delayed retirement. Reads are immediate;
+// separate event tests cover dependencies. Check bytes, bounds and restoration.
 #include <cassert>
 #include <cstdint>
 #include <cstring>
@@ -12,6 +12,7 @@
 #endif
 #include "csrc/kernels/dispatch/low_latency/common/ll_shared_pull_probe_config.h"
 #include "csrc/kernels/dispatch/low_latency/common/ep_memory_server_dedup_protocol.h"
+#include "csrc/kernels/common/ep_packet_receive_layout.h"
 using namespace DispatchDedup;
 #define __aicore__
 #define __gm__
@@ -87,18 +88,22 @@ int main(){
     GlobalTensor<uint8_t> dst{peers[2].data()+4096};
     pub.PrepareSharedReference(wire,type,header,0);
     pub.PublishSharedReference(dst,wire,type);
+    auto publishedDescriptor=LocalTensor<uint8_t>{dst.p+3936}.ReinterpretCast<uint32_t>();
+    assert(publishedDescriptor.GetValue(3)==kLlSharedPullDescriptor);
+    assert(LocalTensor<float>{dst.p+480}.GetValue(0)==0.0f); // commit still queued.
+    assert(pendingWrites.size()==1);
     GlobalTensor<uint8_t> second{peers[3].data()+4096};
     pub.PublishSharedReference(second,wire,type);
     pub.RestoreSharedReference(type,2);
     assert(!pendingWrites.empty()); // Final flags need not block Scalar/type restoration.
     RetireWrites(); // Original lane retirement, before any scratch reuse.
-    assert(writes==2*(32+8*32) && type.GetValue(0)==2);
+    assert(writes==2*(32+32) && type.GetValue(0)==2);
     assert(!std::memcmp(dst.p,second.p,4096));
     assert(header.GetValue(0)==9&&header.GetValue(1)==17&&header.GetValue(2)==3&&header.GetValue(3)==3);
     assert(peers[1]==original); // Header rewrite only touched the private UB.
-    for(unsigned b=0;b<8;++b)for(unsigned i=0;i<8;++i){float v;std::memcpy(&v,peers[2].data()+4096+b*512+480+i*4,4);assert(v==1.0f);}
+    for(unsigned b=0;b<8;++b)for(unsigned i=0;i<8;++i){float v;std::memcpy(&v,peers[2].data()+4096+b*512+480+i*4,4);assert(v==(b==0 ? -1.0f : 0.0f));}
     std::vector<uint8_t> loaded(4160);Receiver get{&reader,{}, {loaded.data()}};
-    get.IssueLoad(0,0,false,false);
+    get.IssueLoad(0,0,false,true,false);
     assert(get.pulledTerminal_[0] && reads==32+8*480);
     for(unsigned b=0;b<8;++b)assert(!std::memcmp(loaded.data()+b*480,original.data()+4096+b*512,480));
     auto pulledHeader=LocalTensor<uint8_t>{loaded.data()+3712}.ReinterpretCast<uint32_t>();
@@ -111,9 +116,20 @@ int main(){
     assert(outDestination.GetValue(1)==UINT32_MAX && outDestination.GetValue(2)==UINT32_MAX);
     // A reference remains readable after source flag cleanup, not payload erase.
     for(unsigned b=0;b<8;++b)std::memset(peers[1].data()+4096+b*512+480,0,32);
-    reads=0;get.IssueLoad(0,0,false,false);assert(get.pulledTerminal_[0] && reads==3872);
+    reads=0;get.IssueLoad(0,0,false,true,false);assert(get.pulledTerminal_[0] && reads==3872);
+    // A normal DIRECT already classified by the probe skips the 32B header
+    // inspection, including when shared-pull is enabled for the receiver.
+    std::memcpy(peers[2].data()+8192,original.data()+4096,4096);
+    for(bool enabled:{false,true}) {
+        get.sharedPull_=enabled;
+        reads=0;get.IssueLoad(1,0,false,false,false);
+        assert(!get.pulledTerminal_[0] && reads==3840);
+        for(unsigned b=0;b<8;++b)assert(!std::memcmp(loaded.data()+b*480,peers[2].data()+8192+b*512,480));
+    }
     auto desc=LocalTensor<uint8_t>{peers[2].data()+4096+3936}.ReinterpretCast<uint32_t>();
-    desc.SetValue(4,8);bool rejected=false;try{get.IssueLoad(0,0,false,false);}catch(...){rejected=true;}assert(rejected);
+    desc.SetValue(3,0);bool rejected=false;try{get.IssueLoad(0,0,false,true,false);}catch(...){rejected=true;}assert(rejected);
+    desc.SetValue(3,kLlSharedPullDescriptor);
+    desc.SetValue(4,8);rejected=false;try{get.IssueLoad(0,0,false,true,false);}catch(...){rejected=true;}assert(rejected);
     for(unsigned group:{1U,4U,16U})for(unsigned rank=0;rank<16;++rank)for(unsigned r=0;r<16;++r){
         assert(LlSharedPullAddressValid(rank,r,16,group,4096,4096,8192,4096)==(rank/group==r/group));
     }
