@@ -191,7 +191,7 @@ def test_sample_specific_active_task_results_are_not_common_identity():
 def test_schema13_remains_read_only_with_original_carrier_size():
     legacy=load('sparse_legacy13','tests/ll_stage_timer/test_segments.py')
     data=legacy.raw(send=30,schema=13)
-    assert len(data[0])==80 and timer.SLOTS==8
+    assert len(data[0])==80 and timer.SLOTS==16
     decoded=timer.parse_records(data,'dispatch',1e9)
     assert decoded['schema']==13 and decoded['timer_profile_id']==0
     assert len(timer.STAGES)==108 and 14 not in timer.SEGMENT_SCHEMAS

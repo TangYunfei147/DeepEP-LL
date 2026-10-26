@@ -1,8 +1,9 @@
-当前发送优化候选先用[OFF A/B](../ll_control_opt/SENDER_PREFETCH.md)验证。
-候选移除的Scalar输入等待不会生成TX_INPUT_READY记录，不代表输入依赖零耗时；
-旧MTE3诊断入口继续固定其原源码，不用旧包数推断规则解析新候选。
+当前control-opt按用户选择恢复9027275业务基线，schema17/profile8统计六类发送阶段带宽。
+请用[SEND_BANDWIDTH.md](../ll_control_opt/SEND_BANDWIDTH.md)的一键OFF/observe/完成诊断与单文件报告。
+阶段完成速率含打包、调度和等待；observe提交跨度不代表通信完成，完整task扰动单列。
+旧[Vector-tail OFF A/B](../ll_control_opt/SENDER_PREFETCH.md)继续固定历史候选源码。
 
-control-opt的schema16/profile7专项验证MTE3反压，请用
+历史schema16/profile7专项验证MTE3反压，请用
 [MTE3_BACKPRESSURE.md](../ll_control_opt/MTE3_BACKPRESSURE.md)的一键OFF/observe/TX/RX对照和单文件报告。
 历史schema15的固定源码采集入口仍见[BASELINE_DIAGNOSIS.md](../ll_control_opt/BASELINE_DIAGNOSIS.md)。
 schema7～13保留离线读取。下方分支/格式说明是历史记录，不作为当前构建和采样命令。

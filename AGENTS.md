@@ -1,5 +1,15 @@
 # LL 编译维护约束
 
+## 当前发送阶段带宽诊断（2026-10-26）
+
+- 用户明确选9027275作为保留基线。Vector-tail业务改动已撤销；旧候选指南和MTE3诊断继续固定历史提交，不作为当前源码身份。
+- schema17/profile8/bandwidth为每核1024B、512B对齐，18首次点和6阶段×16字段。六阶段为COUNT_CONTROL、PREFIX_LOCAL、REMOTE_FIRST_HOP、SOURCE_DIRECT、GROUP_LOCAL、RELAY；peer/self、wire/payload、copy次数分别计数。
+- observe无新同步；bandwidth-complete仅stage3 dispatch独立capture。Begin排空旧MTE3，首copy计时，End确认完成后重复空控制。首跳→DIRECT仅该mode flush最后预取包；relay按每次转发循环累计，不画假的连续阶段。
+- OFF/null-buffer不读钟、不加等待、不求值探针参数。七个TU、O2、152B参数、19000+S、原UB/lane及SDK保持；内部bw17符号拒绝旧对象混装。53文件剥离探针后的业务token保留旧不可变guard。
+- profile_bandwidth.py固定同源码OFF/ON、EP16/B=M256/H3584/K8/E384/G4/S30R26预量化FP8、HT OFF、dispatch-only。完整task与阶段完成区间口径分开，平均每核带宽不可当rank/link聚合。指南tests/ll_control_opt/SEND_BANDWIDTH.md，单报告≤65535字节。
+
+以下Vector-tail及schema16是历史实现说明；当前工作遵循上述基线恢复与schema17范围。
+
 ## 当前发送优化候选（2026-10-25）
 
 - 用户要求继续沿输入预取/输出复用方向优化。候选仅在Prequantized、去重、Async且core<S时启用Vector tail；R本组发送、小M非去重、串行fallback、普通/在线量化和combine保持原路径。

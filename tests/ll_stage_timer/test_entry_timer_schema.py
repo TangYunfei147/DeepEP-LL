@@ -20,16 +20,16 @@ timer = load('schema_timer', 'deep_ep/utils/ll_stage_timer.py')
 
 def test_current_timer_schema_passes_st_preflight():
     entry.validate_stage_timer_capability(dict(stage_timer=True, stage_timer_schema=timer.SCHEMA,
-        timer_profile='mte3',timer_profile_id=7,stage_timer_slots=8,stage_timer_fields=8,
-        stage_timer_points=list(timer.POINTS),stage_timer_recording='mte3-backpressure',
-        stage_timer_wait_metrics=list(timer.mte3.METRICS),
-        stage_timer_wait_metric_fields=['sum_ticks','max_ticks','calls','empty_control_ticks'],
-        stage_timer_wait_metric_word_offset=32))
+        timer_profile='bandwidth',timer_profile_id=8,stage_timer_slots=16,stage_timer_fields=8,
+        stage_timer_points=list(timer.POINTS),stage_timer_recording='stage-bandwidth',
+        stage_timer_bandwidth_stages=list(timer.bandwidth.STAGES),
+        stage_timer_bandwidth_fields=list(timer.bandwidth.FIELDS),
+        stage_timer_bandwidth_word_offset=32,stage_timer_bandwidth_record_words=16))
 
 
 @pytest.mark.parametrize('schema', [7, 9, 10, 11, 12, 13, 14, None])
 def test_stale_or_unknown_schema_is_rejected(schema):
-    with pytest.raises(RuntimeError, match=f'timer schema 15 or 16; got {schema}'):
+    with pytest.raises(RuntimeError, match=f'timer schema 15, 16 or 17; got {schema}'):
         entry.validate_stage_timer_capability(dict(stage_timer=True, stage_timer_schema=schema))
 
 

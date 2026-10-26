@@ -195,6 +195,7 @@ public:
         LL_SEG_END(segBegin1, PREPARE_INPUT);
         LL_SEG_END(setupBegin, SEND_SETUP);
         LL_SPARSE_MARK(SEND_PREPARED);
+        LL_BW_BEGIN(enableDedup_ ? LlStageTimer::REMOTE_FIRST_HOP : LlStageTimer::SOURCE_DIRECT,pipe_);
         { LL_SEG_SCOPE(SEND_TOKENS);
         BeginInputPrefetch();
         if (enableDedup_)
@@ -203,6 +204,7 @@ public:
             SendWithoutDedup(input);
         EndInputPrefetch(input);
         }
+        LL_BW_END(LlStageTimer::SOURCE_DIRECT,pipe_);
 
         // Keep metadata sources alive through receive. Only the serial fallback
         // drains here; overlap retires all lane events at final kernel completion.
@@ -285,6 +287,7 @@ public:
         // Only the cooperative overlap path yields. Serial fallback keeps one
         // continuous lookahead stream. Eight tasks amortize the callback/flush.
         cooperate();
+        LL_BW_BEGIN(LlStageTimer::GROUP_LOCAL,pipe_);
         const uint32_t quantum=overlap_.Cooperative() ? 8U:tasks;
         for (uint32_t begin=0;begin<tasks;) {
             const uint32_t end=tasks-begin<quantum ? tasks:begin+quantum;
@@ -300,6 +303,7 @@ public:
             if (begin==tasks) { LL_SEG_SCOPE(SEND_SUBMIT_END); LL_SPARSE_MARK(SOURCE_SUBMIT_DONE); }
             cooperate();
         }
+        LL_BW_END(LlStageTimer::GROUP_LOCAL,pipe_);
         if (!overlap_.Async()) {
         LL_SEG_BEGIN(localDrainBegin, SEND_DRAIN);
         // Retire all reads of packet scratch before RecvCnt overlays that UB.
@@ -366,6 +370,7 @@ public:
             }
         }
 
+        LL_BW_SPLIT_INPUT(input,pipe_);
         // 5. Rotate the existing DIRECT group order by source card and send core.
         // Stable scans within each group retain q, token/k ordering and ownership.
         // 首跳和 DIRECT 共用 packets_ 序号及 lane 环；阶段之间不额外等待全部包发完。
@@ -644,6 +649,10 @@ private:
         LL_SPARSE_MARK(FIRST_SEND);
         LL_SEG_COUNT(TX_PACKETS,1U);
         LL_SEG_BEGIN(segBegin7, TOKEN_SEND_ISSUE);
+        LL_BW_TRANSFER(GetBlockIdx()>=sendCores_ ? LlStageTimer::GROUP_LOCAL :
+                           (mask ? LlStageTimer::REMOTE_FIRST_HOP : LlStageTimer::SOURCE_DIRECT),
+                       destination!=uint32_t(args_->rank),data_.tokenStride,
+                       uint64_t(h_)*(NeedQuantize || Prequantized ? 1U:uint32_t(sizeof(XType)))+data_.scaleBytes);
         DataCopy(destinationGm, out, uint32_t(data_.tokenStride));
         SetFlag<HardEvent::MTE3_V>(lane);
         LL_SEG_END(segBegin7, TOKEN_SEND_ISSUE);

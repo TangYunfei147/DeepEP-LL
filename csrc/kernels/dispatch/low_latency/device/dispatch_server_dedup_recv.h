@@ -499,6 +499,7 @@ private:
             const uint32_t sourceRank = tail.Header().GetValue(0U);
             const uint32_t ranks = uint32_t(args_->rankSize);
             const uint32_t members = tail.ReadIndex().GetValue(0U);
+            LL_BW_BEGIN(LlStageTimer::RELAY,pipe_);
             LL_SEG_RELAY_COMPLETION(pipe_);
             LL_SEG_SCOPE(RELAY_ISSUE);
             LL_SEG_COUNT(RELAY_PACKETS, members);
@@ -513,9 +514,12 @@ private:
                                        DispatchServerDedupDispatchOffset(data_, sourceRank, destinationRank,
                                                                          expertId % localExperts_, q, ranks,
                                                                          localExperts_, bs_));
+                LL_BW_TRANSFER(LlStageTimer::RELAY,destinationRank!=uint32_t(args_->rank),
+                               data_.tokenStride,uint64_t(hiddenBytes_)+data_.scaleBytes);
                 DataCopy(output, wire, uint32_t(data_.tokenStride));
                 if (expertTimer_) expertTimer_->End(expertId, LlExpertTimer::Forward);
             }
+            LL_BW_END(LlStageTimer::RELAY,pipe_);
         }
         LL_SEG_BEGIN(payloadOut,RX_PAYLOAD_OUTPUT);
         if (expertTimer_) expertTimer_->Start(expert, LlExpertTimer::OutputWrite);

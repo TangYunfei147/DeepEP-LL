@@ -65,8 +65,9 @@ uint8_t* stage_timer(py::dict tensors, uint32_t cores, uint32_t& mode, uint32_t 
     if (!tensors.contains("ll_stage_timer") || tensors["ll_stage_timer"].is_none()) return nullptr;
     if (!deepep_ll_stage_timer_enabled()) throw std::invalid_argument("Rebuild with DEEPEP_LL_STAGE_TIMER=ON");
     if (tensors.contains("ll_stage_timer_mode")) mode = tensors["ll_stage_timer_mode"].cast<uint32_t>();
-    if ((mode != 1U && mode != 4U && mode != 5U) || (operation != 1U && mode != 1U))
-        throw std::invalid_argument("MTE3 timer supports observe, mte3-tx and mte3-rx for dispatch; combine supports observe only");
+    if ((mode != 1U && mode != 6U) || (operation != 1U && mode != 1U) ||
+        (mode == 6U && DispatchDedup::kLlOverlapExperimentStage != 3U))
+        throw std::invalid_argument("Bandwidth timer supports observe and bandwidth-complete for stage3 dispatch; combine supports observe only");
     auto timer = py::reinterpret_borrow<py::object>(tensors["ll_stage_timer"]);
     auto device = timer.attr("device");
     if (device.attr("type").cast<std::string>() != "npu" ||
@@ -153,15 +154,17 @@ void bind_low_latency(py::module_& module)
     module.def("low_latency_stage_timer_layout", []() {
         py::dict result;
         result["schema"] = LlStageTimer::kSchema;
-        result["recording"] = "mte3-backpressure";
+        result["recording"] = "stage-bandwidth";
         std::vector<std::string> points;
         for(const auto* point : LlStageTimer::kPointNames) points.emplace_back(point);
         result["points"] = points;
-        std::vector<std::string> waitMetrics;
-        for(const auto* name : LlStageTimer::kWaitMetricNames) waitMetrics.emplace_back(name);
-        result["wait_metrics"] = waitMetrics;
-        result["wait_metric_fields"] = std::vector<std::string>{"sum_ticks", "max_ticks", "calls", "empty_control_ticks"};
-        result["wait_metric_word_offset"] = LlStageTimer::kWaitMetricWordOffset;
+        std::vector<std::string> bandwidthStages, bandwidthFields;
+        for(const auto* name : LlStageTimer::kBandwidthStageNames) bandwidthStages.emplace_back(name);
+        for(const auto* name : LlStageTimer::kBandwidthFieldNames) bandwidthFields.emplace_back(name);
+        result["bandwidth_stages"] = bandwidthStages;
+        result["bandwidth_fields"] = bandwidthFields;
+        result["bandwidth_word_offset"] = LlStageTimer::kBandwidthWordOffset;
+        result["bandwidth_record_words"] = LlStageTimer::kBandwidthRecordWords;
         result["export_words"] = LlStageTimer::kExportWords;
         result["timer_profile"] = LlStageTimer::kProfileName;
         result["timer_profile_id"] = LlStageTimer::kProfileId;
@@ -314,7 +317,7 @@ void bind_low_latency(py::module_& module)
                                                                     format.expandXOutDtype,format.inputMode);
         py::gil_scoped_release release;
         session.invalidate_dispatch_controls();
-        dispatch_server_dedup_kernel_do_mte3_16(reinterpret_cast<void*>(stream_address), &args, variant);
+        dispatch_server_dedup_kernel_do_bw17(reinterpret_cast<void*>(stream_address), &args, variant);
     });
     module.def("combine_low_latency", [](Session& session, py::dict tensors, int b, int h, int k, int e,
                                          const std::string& dtype, uintptr_t stream_address) {
@@ -349,7 +352,7 @@ void bind_low_latency(py::module_& module)
         session.workspace();
         py::gil_scoped_release release;
         session.invalidate_dispatch_controls();
-        combine_server_dedup_kernel_do_mte3_16(reinterpret_cast<void*>(stream_address), &args);
+        combine_server_dedup_kernel_do_bw17(reinterpret_cast<void*>(stream_address), &args);
     });
 }
 }  // namespace deepep

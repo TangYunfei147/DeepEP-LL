@@ -5,12 +5,12 @@
 #pragma once
 #include <cstdint>
 namespace LlStageTimer {
-constexpr uint32_t kSchema = 16U;
+constexpr uint32_t kSchema = 17U;
 constexpr uint64_t kMagic = 0x4c4c5431ULL;
 constexpr uint32_t kTraceRecords = 192U, kMetrics = 108U;
 constexpr uint32_t kRecords = kTraceRecords + kMetrics;
 // Sparse per-core timestamps; legacy stage IDs below remain source identifiers only.
-constexpr uint32_t kSlots = 8U, kFields = 8U;
+constexpr uint32_t kSlots = 16U, kFields = 8U;
 constexpr uint32_t kWordsPerCore = kSlots * kFields;
 constexpr uint32_t kRecordWordOffset = 8U;
 enum Point : uint32_t {
@@ -26,18 +26,25 @@ constexpr const char* kPointNames[] = {
     "FIRST_RECV_PROBE", "FIRST_RECV_READY", "RECV_DONE", "WORK_DONE",
     "SOURCE_SUBMIT_DONE", "PREFIX_WAIT_ENTER", "PREFIX_WAIT_EXIT", "RECV_PENDING_EMPTY"
 };
-// Header/timestamps occupy words0..25; words26..31 are reserved and zero.
-enum WaitMetric : uint32_t {
-    TX_INPUT_READY=0, RX_PREPARE_VS, RX_PAYLOAD_MTE2S, RX_FINAL_ALL,
-    TX_REUSE_MTE3, TX_END_MTE3, RX_REUSE_MTE3, RX_END_MTE3, WaitMetricCount
+// Header/timestamps occupy words0..25; words26..31 remain reserved and zero.
+enum BandwidthStage : uint32_t {
+    COUNT_CONTROL=0, PREFIX_LOCAL, REMOTE_FIRST_HOP, SOURCE_DIRECT, GROUP_LOCAL, RELAY, BandwidthStageCount
 };
-constexpr uint32_t kWaitMetricCount=uint32_t(WaitMetricCount);
-constexpr uint32_t kWaitMetricWordOffset=32U, kWaitMetricFields=4U;
-constexpr const char* kWaitMetricNames[]={
-    "TX_INPUT_READY", "RX_PREPARE_VS", "RX_PAYLOAD_MTE2S", "RX_FINAL_ALL",
-    "TX_REUSE_MTE3", "TX_END_MTE3", "RX_REUSE_MTE3", "RX_END_MTE3"
+enum BandwidthField : uint32_t {
+    PEER_BYTES=0, SELF_BYTES, PEER_PAYLOAD_BYTES, SELF_PAYLOAD_BYTES, PEER_OPERATIONS, SELF_OPERATIONS,
+    FIRST_ISSUE_TICK, LAST_ISSUE_TICK, LAST_COMPLETION_TICK, COMPLETED_ELAPSED_TICKS, COMPLETED_INTERVALS,
+    PRE_DRAIN_TICKS, END_DRAIN_TICKS, EMPTY_CONTROL_TICKS, COMPLETED_OPERATIONS, BANDWIDTH_RESERVED
 };
-// Per metric: sum_ticks, max_ticks, calls, empty_control_ticks (no subtraction).
+constexpr uint32_t kBandwidthStageCount=uint32_t(BandwidthStageCount);
+constexpr uint32_t kBandwidthWordOffset=32U, kBandwidthRecordWords=16U;
+constexpr const char* kBandwidthStageNames[]={
+    "COUNT_CONTROL", "PREFIX_LOCAL", "REMOTE_FIRST_HOP", "SOURCE_DIRECT", "GROUP_LOCAL", "RELAY"
+};
+constexpr const char* kBandwidthFieldNames[]={
+    "peer_bytes", "self_bytes", "peer_payload_bytes", "self_payload_bytes", "peer_operations", "self_operations",
+    "first_issue_tick", "last_issue_tick", "last_completion_tick", "completed_elapsed_ticks", "completed_intervals",
+    "pre_drain_ticks", "end_drain_ticks", "empty_control_ticks", "completed_operations", "reserved"
+};
 constexpr uint32_t kExportWords=kWordsPerCore;
 enum Stage : uint32_t {
     KERNEL = 0,
@@ -263,8 +270,8 @@ constexpr const char* kNames[] = {
 
 
 };
-static_assert(kRecordWordOffset+kPointCount<=kWaitMetricWordOffset, "point/wait layout overlap");
-static_assert(kWaitMetricWordOffset+kWaitMetricCount*kWaitMetricFields==kWordsPerCore, "wait capacity");
+static_assert(kRecordWordOffset+kPointCount<=kBandwidthWordOffset, "point/bandwidth layout overlap");
+static_assert(kBandwidthWordOffset+kBandwidthStageCount*kBandwidthRecordWords==kWordsPerCore, "bandwidth capacity");
 static_assert(kPointCount < 64U, "point validity bitmap");
 static_assert(kWordsPerCore * sizeof(uint64_t) % 512U == 0U, "core alignment");
 }

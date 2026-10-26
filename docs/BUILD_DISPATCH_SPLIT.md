@@ -1,5 +1,35 @@
 # LL dispatch compile partition
 
+## Sending-stage bandwidth diagnostic (2026-10-26, current)
+
+The user selected business baseline `9027275`; the failed Vector-tail candidate
+has been reverted. Schema17/profile8 (`bandwidth`) records six send categories
+in a 1024-byte, 512-byte aligned carrier per core. Observe adds no synchronization.
+Explicit `bandwidth-complete` stage3 dispatch captures isolate local phase
+intervals with MTE3_S, including a first-hop prefetch flush at the DIRECT boundary.
+They change scheduling and are diagnostic, not optimizations.
+
+Seven translation units, all modes, O2/Ascend950, 152-byte launch arguments,
+wire19000+S, SDK identity and production UB/lane budgets remain unchanged.
+Internal `bw17` bridge symbols and Host schema checks reject mixed native objects.
+CPU mocks and the immutable 53-file business-token guard are checked locally;
+the guard is not a CANN code-generation proof. CANN compilation, target NPU
+correctness and performance have not been executed by the assistant.
+
+Validation covers 879 passing CPU checks and two skips (the historical schema13
+source snapshot and POSIX Bash semantics on Windows), with affected compatibility
+fixtures rerun after correction. The current native recorder is exercised OFF/ON,
+including null-buffer argument suppression, exact counters, phase lifecycle,
+completion/empty event pairs, prefetch split gating and all seven selectors.
+The report's byte/operation formula agrees with the production C++ layout and
+count ownership. A complete three-seed, five-capture synthetic report is one
+14,957-byte UTF-8 file; this is workflow validation, not measured NPU performance.
+
+[SEND_BANDWIDTH.md](../tests/ll_control_opt/SEND_BANDWIDTH.md) provides complete
+isolated OFF/ON wheel builds, Host checks and target measurements. The separate
+cold-build procedure later in this document remains available. Earlier sections
+below describe historical revisions, not the current diagnostic identity.
+
 ## Prequantized sender Vector tail candidate (2026-10-25)
 
 The sender candidate moves metadata-tail stores onto the Vector pipeline only

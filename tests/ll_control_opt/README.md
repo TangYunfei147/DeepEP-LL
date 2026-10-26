@@ -1,6 +1,12 @@
 # Control-path candidates: commit-by-commit A/B
 
-For the current sender optimization A/B, use
+The current task restores the user-selected business baseline `9027275` and
+measures six dispatch sending stages with schema17/profile8. Use
+[SEND_BANDWIDTH.md](SEND_BANDWIDTH.md) for matched OFF/observe/completion captures
+and one bounded bandwidth report. Completion rates include diagnostic waits and
+are distinct from full-task-normalized rates and physical-link bandwidth.
+
+For the historical sender optimization A/B, use
 [SENDER_PREFETCH.md](SENDER_PREFETCH.md) and `commits-sender-prefetch.json`:
 baseline versus `prequant-vector-tail`, two complete timer-OFF wheels, three seeds,
 two alternating rounds, dispatch+combine and one bounded return file.

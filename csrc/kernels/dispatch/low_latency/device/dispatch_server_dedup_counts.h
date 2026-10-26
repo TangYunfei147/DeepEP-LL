@@ -245,11 +245,13 @@ __aicore__ inline void ServerDedupCounts::SendCnt()
         else CountByExpert(range.begin,range.end,range.record);
     }
     // Records stay immutable while their DMA overlaps either sender.
+    LL_BW_BEGIN(LlStageTimer::COUNT_CONTROL,tpipe_);
     SyncFunc<HardEvent::S_MTE3>();
     for (uint32_t part=0;part<countPlan_.size;++part) {
         const auto range=countPlan_.ranges[part];
         SendExpertCntRange(range.begin,range.end,range.record);
     }
+    LL_BW_END(LlStageTimer::COUNT_CONTROL,tpipe_);
     LL_SPARSE_MARK(COUNTS_SENT);
 }
 
@@ -349,6 +351,7 @@ __aicore__ inline void ServerDedupCounts::SendExpertCntRange(uint32_t start, uin
         peer.SetGlobalBuffer(reinterpret_cast<__gm__ int32_t*>(args_->peerMems[dst] + stateOffset_ + offset));
         // DataCopy strides are GM count slots: one record per source rank.
         const DataCopyParams copy{uint16_t(count), 1U, 0U, uint16_t(epWorldSize_ * CNT_GM_STRIDE_BLOCKS - 1U)};
+        LL_BW_TRANSFER(LlStageTimer::COUNT_CONTROL,dst!=epRankId_,uint64_t(count)*32U,0U);
         DataCopy<int32_t>(peer, statusTensor_[(record+expert-start) * UB_ALIGN_DATA_COUNT], copy);
         expert += count;
     }
@@ -502,6 +505,7 @@ __aicore__ inline bool ServerDedupCounts::TryRecvCnt()
 __aicore__ inline void ServerDedupCounts::CalRecvAndSetFlag()
 {
     if (aivId_!=kLlSendCoreNum) return;
+    LL_BW_BEGIN(LlStageTimer::PREFIX_LOCAL,tpipe_);
     LL_SEG_SCOPE(BUILD_RECV_CUMSUM);
     auto prefix=gatherMaskOutBuf_.Get<int32_t>();
     // Gather completion and scalar/Vector ownership precede the VF; data-ready
@@ -518,8 +522,10 @@ __aicore__ inline void ServerDedupCounts::CalRecvAndSetFlag()
     output.SetGlobalBuffer(reinterpret_cast<__gm__ int32_t*>(sendCountsOutGM_));
     SyncFunc<HardEvent::S_MTE3>();
     const DataCopyExtParams copy{1U,rscvStatusNum_*4U,0U,0U,0U};
+    LL_BW_TRANSFER(LlStageTimer::PREFIX_LOCAL,false,uint64_t(rscvStatusNum_)*4U,0U);
     DataCopyPad(output,prefix,copy);
     { LL_SEG_SCOPE(BROADCAST_PREFIX);
+      LL_BW_TRANSFER(LlStageTimer::PREFIX_LOCAL,false,uint64_t(rscvStatusNum_)*4U,0U);
       DataCopyPad(workspace,prefix,copy); } // One shared table, no per-core replicas.
     // Finish prefix and count-ready cleanup before releasing a single epoch.
     { LL_SEG_SCOPE(PREFIX_PUBLISH_WAIT); SyncFunc<HardEvent::MTE3_S>(); }
@@ -529,7 +535,9 @@ __aicore__ inline void ServerDedupCounts::CalRecvAndSetFlag()
     SyncFunc<HardEvent::V_S>();
     ready.SetValue(0U,prefixEpoch_);
     SyncFunc<HardEvent::S_MTE3>();
+    LL_BW_TRANSFER(LlStageTimer::PREFIX_LOCAL,false,32U,0U);
     DataCopy(prefixReadyGm_,ready,8U);
+    LL_BW_END(LlStageTimer::PREFIX_LOCAL,tpipe_);
     // Publication source is persistent until Finish (or fallback's PIPE_ALL).
 }
 

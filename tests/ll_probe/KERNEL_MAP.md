@@ -1,14 +1,14 @@
 # 泛化分支生产LL路径
 
-当前发送优化候选为S核预量化FP8的Vector tail：
-`common/ll_prequant_vector_tail.h`定义按位尾部写入，send.h只在去重Async的S核启用。
-保持两input和原lane预算，关闭该路径的Scalar输入依赖；实际收益用
-[SENDER_PREFETCH.md](../ll_control_opt/SENDER_PREFETCH.md)的固定OFF A/B判断。
-
-当前MTE3反压诊断采用schema16/profile7：发送输入就绪、接收表V_S、
-接收payload MTE2_S和最终PIPE_ALL的原等待统计，与S核限定的TX/RX MTE3_S干预。
-完整说明见[../ll_control_opt/MTE3_BACKPRESSURE.md](../ll_control_opt/MTE3_BACKPRESSURE.md)。
-下文schema15及更早打点为历史；原业务分工、wire和lane预算不变。
+当前业务恢复用户指定的9027275基线，失败Vector-tail候选仅保留历史固定源码入口。
+当前schema17/profile8在counts.h、send.h、recv.h的真实DataCopy前统计六类发送，
+由ll_stage_timer_device.h统一保存peer/self字节和显式完成区间。
+observe不加等待；bandwidth-complete仅stage3 capture增加阶段MTE3_S，
+首跳→DIRECT时flush最后预取包只存在于该诊断模式。
+详细范围、统计口径和一键命令见[SEND_BANDWIDTH.md](../ll_control_opt/SEND_BANDWIDTH.md)。
+旧[SENDER_PREFETCH.md](../ll_control_opt/SENDER_PREFETCH.md)和
+[MTE3_BACKPRESSURE.md](../ll_control_opt/MTE3_BACKPRESSURE.md)仍使用各自固定历史提交。
+下文更早打点为历史；业务分工、wire和lane预算不变。
 
 该分支保留MTE传输和DEEPEP_LL_RANKS_PER_GROUP静态可配置分组，默认4。
 不要复制NDR的Session、ll_transport或tiling-key策略来替代这里的实现。

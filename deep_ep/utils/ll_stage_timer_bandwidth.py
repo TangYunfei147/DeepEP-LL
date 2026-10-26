@@ -1,0 +1,185 @@
+"""Schema17: exact issued bytes and deliberately completed sending intervals.
+
+Completion mode serializes phase boundaries. Its rates include packing, issue
+and waiting; they are neither baseline bandwidth nor a physical-link peak.
+"""
+import math
+
+MAGIC = 0x4C4C5431
+POINTS = ('ENTRY', 'INIT_DONE', 'COUNTS_SENT', 'COUNTS_RECEIVED',
+          'PREFIX_LOCAL_DONE', 'PREFIX_READY', 'SEND_PREPARED', 'FIRST_SEND',
+          'SEND_DONE', 'RECV_PREPARED', 'FIRST_RECV_PROBE', 'FIRST_RECV_READY',
+          'RECV_DONE', 'WORK_DONE', 'SOURCE_SUBMIT_DONE', 'PREFIX_WAIT_ENTER',
+          'PREFIX_WAIT_EXIT', 'RECV_PENDING_EMPTY')
+STAGES = ('COUNT_CONTROL', 'PREFIX_LOCAL', 'REMOTE_FIRST_HOP', 'SOURCE_DIRECT', 'GROUP_LOCAL', 'RELAY')
+FIELDS = ('peer_bytes', 'self_bytes', 'peer_payload_bytes', 'self_payload_bytes',
+          'peer_operations', 'self_operations', 'first_issue_tick', 'last_issue_tick',
+          'last_completion_tick', 'completed_elapsed_ticks', 'completed_intervals',
+          'pre_drain_ticks', 'end_drain_ticks', 'empty_control_ticks', 'completed_operations', 'reserved')
+MODES = {1: 'observe', 6: 'bandwidth-complete'}
+ROLES = {1: 'send_token', 2: 'cumsum', 3: 'send_and_recv', 4: 'recv'}
+PAIRS = (
+    ('INIT', 'ENTRY', 'INIT_DONE'), ('KERNEL', 'INIT_DONE', 'WORK_DONE'),
+    ('INIT_TO_SOURCE_SUBMIT_DONE', 'INIT_DONE', 'SOURCE_SUBMIT_DONE'),
+    ('PREFIX_WAIT', 'PREFIX_WAIT_ENTER', 'PREFIX_WAIT_EXIT'),
+    ('BEFORE_FIRST_RECV_POLL', 'INIT_DONE', 'FIRST_RECV_PROBE'),
+    ('FIRST_PROBE_TO_FIRST_READY', 'FIRST_RECV_PROBE', 'FIRST_RECV_READY'),
+    ('FIRST_READY_TO_PENDING_EMPTY', 'FIRST_RECV_READY', 'RECV_PENDING_EMPTY'),
+    ('PENDING_EMPTY_TO_RECV_DONE', 'RECV_PENDING_EMPTY', 'RECV_DONE'),
+    ('RECV_DONE_TO_WORK_DONE', 'RECV_DONE', 'WORK_DONE'))
+
+
+def parse_records(raw, operation, frequency_hz=None):
+    if operation not in ('dispatch', 'combine'):
+        raise ValueError('Expected dispatch or combine')
+    if frequency_hz is not None and (isinstance(frequency_hz, bool) or
+            not isinstance(frequency_hz, (int, float)) or
+            not math.isfinite(frequency_hz) or frequency_hz <= 0):
+        raise ValueError('Counter frequency must be finite and positive')
+    if len(raw) != 56:
+        raise ValueError('Bandwidth capture requires 56 AIV')
+    op = 1 if operation == 'dispatch' else 2
+    records, intervals, milestones, cores, metrics = [], [], [], [], []
+    splits, modes = set(), set()
+    for core, rows in enumerate(raw):
+        if len(rows) != 16 or any(len(row) != 8 for row in rows):
+            raise ValueError('Bandwidth timer shape mismatch')
+        words = [value for row in rows for value in row]
+        if any(type(value) is not int or not 0 <= value < (1 << 64) for value in words):
+            raise ValueError('Invalid bandwidth timer word')
+        h = words[:8]
+        mode, send, role, profile = (h[5] >> shift & 255 for shift in (0, 8, 16, 24))
+        if h[:5] != [MAGIC, 17, op, 56, core] or h[5] >> 32 or mode not in MODES or profile != 8 or not 0 < send < 56:
+            raise ValueError('Incomplete or mismatched bandwidth header')
+        expected_role = (3 if core < send else 2) if op == 1 else (1 if core < send else 4)
+        if role != expected_role:
+            raise ValueError('Unexpected bandwidth core role')
+        send_lanes, recv_lanes = h[7] & 255, (h[7] >> 8) & 255
+        overlap_enabled = bool(h[7] & (1 << 16))
+        lane_limit = 6 if overlap_enabled else 8
+        if h[7] >> 17 or send_lanes > lane_limit or recv_lanes > lane_limit:
+            raise ValueError('Invalid bandwidth lane metadata')
+        if h[6] >> len(POINTS) or any(words[26:32]):
+            raise ValueError('Invalid bandwidth bitmap or reserved words')
+        points = {}
+        for index, name in enumerate(POINTS):
+            if h[6] & (1 << index):
+                points[name] = words[8 + index]
+            elif words[8 + index]:
+                raise ValueError('Timestamp without valid milestone bit')
+        if not {'ENTRY', 'INIT_DONE', 'WORK_DONE'} <= points.keys():
+            raise ValueError('Missing required bandwidth milestones')
+        if not points['ENTRY'] <= points['INIT_DONE'] <= points['WORK_DONE']:
+            raise ValueError('Invalid bandwidth timestamp order')
+        if any(not points['INIT_DONE'] <= tick <= points['WORK_DONE']
+               for name, tick in points.items() if name != 'ENTRY'):
+            raise ValueError('Milestone outside same-core work interval')
+        for chain in (('COUNTS_RECEIVED', 'PREFIX_LOCAL_DONE', 'PREFIX_READY'),
+                      ('SEND_PREPARED', 'FIRST_SEND', 'SOURCE_SUBMIT_DONE', 'SEND_DONE'),
+                      ('PREFIX_WAIT_ENTER', 'PREFIX_WAIT_EXIT'),
+                      ('RECV_PREPARED', 'FIRST_RECV_PROBE', 'FIRST_RECV_READY',
+                       'RECV_PENDING_EMPTY', 'RECV_DONE')):
+            ticks = [points[name] for name in chain if name in points]
+            if ticks != sorted(ticks):
+                raise ValueError('Invalid bandwidth dependency timestamp order')
+        for child, parent in (('PREFIX_WAIT_EXIT', 'PREFIX_WAIT_ENTER'),
+                              ('FIRST_SEND', 'SEND_PREPARED'),
+                              ('FIRST_RECV_READY', 'FIRST_RECV_PROBE')):
+            if child in points and parent not in points:
+                raise ValueError('Missing bandwidth milestone dependency: ' + parent)
+        if op == 2 and (set(points) != {'ENTRY', 'INIT_DONE', 'WORK_DONE'} or h[7] or any(words[32:]) or mode != 1):
+            raise ValueError('Combine only records three observe overview milestones')
+        common = dict(core=core, role=ROLES[role], initial_role=ROLES[role],
+                      timer_profile='bandwidth', timer_profile_id=8)
+        milestones.extend(dict(**common, point=name, tick=tick) for name, tick in points.items())
+        for stage, first, last in PAIRS:
+            if first not in points or last not in points:
+                continue
+            begin, end = points[first], points[last]
+            if end < begin:
+                raise ValueError('Invalid same-core bandwidth interval endpoint order')
+            total = end-begin
+            row = dict(**common, stage=stage, total_ticks=total, calls=1,
+                       average_ticks=total, time_measured=True,
+                       interval_kind='same-core milestone span', start_point=first, end_point=last)
+            if frequency_hz is not None:
+                row.update(total_us=total*1e6/frequency_hz, average_us=total*1e6/frequency_hz)
+            records.append(row)
+            intervals.append(dict(**common, stage=stage, sample=0, first_tick=begin,
+                                  last_tick=end, total_ticks=total, start_point=first,
+                                  end_point=last, interval_kind='same-core milestone span'))
+        measured_ticks = 0
+        for index, stage in enumerate(STAGES):
+            value = dict(zip(FIELDS, words[32+index*16:48+index*16]))
+            if value['reserved']:
+                raise ValueError('Nonzero bandwidth reserved field')
+            ops = value['peer_operations']+value['self_operations']
+            permitted = (stage == 'RELAY' or
+                         (stage in ('REMOTE_FIRST_HOP', 'SOURCE_DIRECT') and core < send) or
+                         (stage in ('COUNT_CONTROL', 'GROUP_LOCAL') and core >= send) or
+                         (stage == 'PREFIX_LOCAL' and core == send))
+            if not permitted and any(value.values()):
+                raise ValueError('Bandwidth stage outside its owning core role')
+            if stage == 'PREFIX_LOCAL' and value['peer_bytes']:
+                raise ValueError('Local prefix cannot send peer bytes')
+            for target in ('peer', 'self'):
+                count, size, useful = (value[target+suffix] for suffix in ('_operations', '_bytes', '_payload_bytes'))
+                if bool(count) != bool(size) or useful > size:
+                    raise ValueError('Invalid bandwidth bytes/operations/payload: '+stage)
+            if index < 2 and (value['peer_payload_bytes'] or value['self_payload_bytes']):
+                raise ValueError('Control bandwidth has no payload bytes')
+            if index >= 2 and any(value[target+'_operations'] and not value[target+'_payload_bytes'] for target in ('peer', 'self')):
+                raise ValueError('Data bandwidth requires useful payload bytes')
+            first, last, done = (value[field] for field in ('first_issue_tick', 'last_issue_tick', 'last_completion_tick'))
+            elapsed, count = value['completed_elapsed_ticks'], value['completed_intervals']
+            if ops:
+                if not points['INIT_DONE'] <= first <= last <= points['WORK_DONE']:
+                    raise ValueError('Bandwidth issue timestamps outside same-core work')
+            elif any(value[field] for field in FIELDS if field not in ('pre_drain_ticks', 'reserved')):
+                raise ValueError('Empty bandwidth stage contains transfer measurements')
+            if mode == 1 and any(value[field] for field in FIELDS[8:15]):
+                raise ValueError('Observe cannot contain completed bandwidth measurements')
+            if mode == 6 and ops:
+                if not 1 <= count <= ops or value['completed_operations'] != ops:
+                    raise ValueError('Incomplete bandwidth operation/interval coverage')
+                if stage != 'RELAY' and count != 1:
+                    raise ValueError('Source/control stage must have one completed interval')
+                if not last <= done <= points['WORK_DONE'] or elapsed > done-first:
+                    raise ValueError('Invalid completed bandwidth interval time')
+                if count == 1 and elapsed != done-first:
+                    raise ValueError('Single completed bandwidth interval differs from endpoints')
+                if value['end_drain_ticks'] > elapsed:
+                    raise ValueError('End drain exceeds completed interval duration')
+            if any(value[field] > points['WORK_DONE']-points['INIT_DONE'] for field in
+                   ('completed_elapsed_ticks', 'pre_drain_ticks', 'end_drain_ticks', 'empty_control_ticks')):
+                raise ValueError('Bandwidth duration exceeds same-core work')
+            measured_ticks += elapsed+value['pre_drain_ticks']+value['empty_control_ticks']
+            if op == 2:
+                continue
+            row = dict(**common, stage=stage, **value, total_operations=ops,
+                       issue_span_ticks=last-first if ops else None,
+                       time_measured=bool(mode == 6 and ops and elapsed))
+            if frequency_hz is not None:
+                row.update(completed_elapsed_us=elapsed*1e6/frequency_hz if mode == 6 and ops else None,
+                           issue_span_us=(last-first)*1e6/frequency_hz if ops else None)
+                for field in ('pre_drain', 'end_drain', 'empty_control'):
+                    row[field+'_us'] = value[field+'_ticks']*1e6/frequency_hz if mode == 6 else None
+                for target in ('peer', 'self'):
+                    for payload in ('', '_payload'):
+                        size = value[target+payload+'_bytes']
+                        row[target+payload+'_gbps'] = size*frequency_hz/elapsed/1e9 if row['time_measured'] and size else None
+            metrics.append(row)
+        if measured_ticks > points['WORK_DONE']-points['INIT_DONE']:
+            raise ValueError('Disjoint bandwidth completion/control durations exceed same-core work')
+        cores.append(dict(**common, valid_bitmap=h[6], milestone_count=len(points),
+                          send_lanes=send_lanes, recv_lanes=recv_lanes, overlap_enabled=overlap_enabled))
+        splits.add(send); modes.add(mode)
+    if len(splits) != 1 or len(modes) != 1:
+        raise ValueError('Mixed bandwidth core splits or modes')
+    return dict(schema=17, operation=operation, active_aiv=56, send_cores=send,
+                recv_cores=56-send, boundary_mode=MODES[mode], timer_profile='bandwidth',
+                timer_profile_id=8, frequency_hz=frequency_hz, recording='stage-bandwidth',
+                points=list(POINTS), records=records, intervals=intervals,
+                milestones=milestones, cores=cores, bandwidth_metrics=metrics,
+                clock='AscendC::GetSystemCycle; no cross-rank clock alignment assumed',
+                interpretation='Observe records exact issued bytes and issue spans only. Completion mode inserts MTE3_S before and after each selected phase interval; measured duration includes phase work, packing, scheduling and waiting. Rates are intervention effective movement rates, not baseline or physical-link bandwidth. Peer bytes exclude same-rank writes, while the phase duration can contain both. No sum of core rates is a rank throughput. Empty controls are separate, never subtracted.')

@@ -50,7 +50,7 @@ def raw(mode,operation='dispatch'):
     return records
 
 
-@pytest.mark.parametrize('mode',timer.DIAGNOSTIC_MODES)
+@pytest.mark.parametrize('mode',('observe','mte3-tx','mte3-rx'))
 def test_schema16_entry_checks_exact_metric_semantics(mode):
     entry.validate_stage_timer_capability(capability(),mode)
     for key,bad in [('stage_timer_wait_metrics',list(reversed(timer.mte3.METRICS))),
@@ -81,7 +81,7 @@ def test_interventions_require_real_capture_profile_and_dispatch_only(mode):
             entry.validate_args(entry.parse_args(common+[f for f in flags if f!=removed]),16)
 
 
-@pytest.mark.parametrize('mode',timer.DIAGNOSTIC_MODES)
+@pytest.mark.parametrize('mode',('observe','mte3-tx','mte3-rx'))
 def test_capture_transmits_mode_keeps_one_launch_and_delays_copy(monkeypatch,tmp_path,mode):
     package=ModuleType('deep_ep');package.__path__=[]
     utils=ModuleType('deep_ep.utils');utils.__path__=[]
