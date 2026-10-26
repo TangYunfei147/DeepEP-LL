@@ -6,6 +6,8 @@
 2026-10-26冗余通信/Scalar清理、独立commit清单和OFF验收命令见
 [OVERHEAD_OPTIMIZATION.md](OVERHEAD_OPTIMIZATION.md)。公开dispatch/combine输入输出保持；
 LL生产轮询不使用GetSystemCycle，锁定SHMEM SDK保持原实现。
+27上当前分支的OFF/ON编译修复、纯Host验证和产物位置见
+[COMPILE_VALIDATION_20261026.md](COMPILE_VALIDATION_20261026.md)。
 
 非去重dispatch的逐函数执行流程、伪代码、EP16与EP32完整例子见
 [NON_DEDUP_DISPATCH_FLOW.md](NON_DEDUP_DISPATCH_FLOW.md)。
