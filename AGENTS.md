@@ -4,11 +4,6 @@
 - MTE准入支持旧4字段、HNS旧5字段、HNS+PI的6字段身份，PI严格int0/1且需HNS_1825成对；Python复用/校验/CMake三处一致。其余版本、补丁、未知字段、完整文件哈希检查及同轮OFF/ON相同SDK要求不放松，不给MTE添加RDMA宏。
 - 带宽诊断固定0ebb65b（原e297d1b仅叠加SDK准入修复，csrc/deep_ep完全相同），旧失败缓存和SDK保留，正常重跑不需要--rebuild。
 
-## 单机 shared-pull 快速穿刺（2026-10-26）
-
-- 新实验仅限 EP16/B=M256/H3584/K8/E384/G4/S30R26、预量化 FP8、timer OFF。默认 mode0 保留原路径；固定 control0c3c150 为 mode1（原转发+生命周期栅栏），pull762b5c6 为 mode2（32B引用+末端同组远端读+同栅栏）。协议分别19000/23000/24000+S，禁止混装。
-- 引用含 owner+offset，验证同组与slot边界；首跳数据通过所有rank单调完成计数保护跨调用生命周期。每引用8次32B flag写、32B描述符和两次MTE3_S是刻意保守开销，不宣称已优化成功；combine算法不变。
-- 固定三版完整OFF、1seed×2轮交替、dispatch+combine，单报告≤65535字节；详见tests/ll_control_opt/SHARED_PULL_PROBE.md。139项相关CPU回归通过，另77项交付检查通过（集合重叠，不相加）；无CANN/设备验证，不连接远端。
 # LL 编译维护约束
 
 ## 当前发送阶段带宽诊断（2026-10-26）

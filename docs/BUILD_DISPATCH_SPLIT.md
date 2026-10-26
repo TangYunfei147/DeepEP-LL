@@ -545,5 +545,3 @@ Main regression log: A5/.tmp/sparse-baseline-final3.log.
 No SSH, CANN compilation or NPU run was performed for this change, following the
 user's updated local-check/direct-push workflow. The target commands and bounded
 single-file handoff are in tests/ll_control_opt/BASELINE_DIAGNOSIS.md.
-
-Shared-pull prototype: see tests/ll_control_opt/SHARED_PULL_PROBE.md. Three complete OFF builds use distinct protocol identities and pinned revisions; the default delivery source selects mode0. Actual publisher/loader/fence method bodies pass CPU mock compilation, but Bisheng compilation and device ordering remain unverified. Timer capture is rejected for experimental modes.
