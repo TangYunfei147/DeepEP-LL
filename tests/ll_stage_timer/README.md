@@ -1,4 +1,9 @@
-当前control-opt按用户选择恢复9027275业务基线，schema17/profile8统计六类发送阶段带宽。
+当前独立systemcycle分支采用schema18/profile9，参考用户ZIP与逐核Excel，
+输出dispatch/combine主阶段和精选重复累计耗时。请使用
+[逐核耗时表指南](../ll_systemcycle/README.md)，原始ticks和真实完整task分开保留。
+下方schema17及更早说明为历史；各旧固定采样入口仍使用其自己的源码。
+
+历史control-opt按用户选择恢复9027275业务基线，schema17/profile8统计六类发送阶段带宽。
 请用[SEND_BANDWIDTH.md](../ll_control_opt/SEND_BANDWIDTH.md)的一键OFF/observe/完成诊断与单文件报告。
 阶段完成速率含打包、调度和等待；observe提交跨度不代表通信完成，完整task扰动单列。
 旧[Vector-tail OFF A/B](../ll_control_opt/SENDER_PREFETCH.md)继续固定历史候选源码。

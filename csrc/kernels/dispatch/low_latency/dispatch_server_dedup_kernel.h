@@ -37,9 +37,12 @@ public:
         counts_.ConfigureOverlap(overlap_);
         sender_.ConfigureOverlap(overlap_);
         receiver_.ConfigureOverlap(overlap_);
+        LL_CYCLE_MARK(LAYOUT_DONE);
         const uint32_t magic = RotateDispatchServerDedupMagic(args_, core_, pipe);
+        LL_CYCLE_MARK(MAGIC_DONE);
         counts_.Init(commArgs, expertIds, expertTokenNumsOut, sendCountsOut, bs, topK, experts, expertTokenNumsType,
                      magic, pipe, timer, enableDedup);
+        LL_CYCLE_MARK(COUNTS_INIT_DONE);
         sender_.Init(args_, x, expertIds, expertScales, sourceMaskOut, expertScalesOut, bs, h, topK, experts, pipe,
                      magic, inputScales, enableDedup);
         receiver_.Init(args_, expandXOut, dynamicScalesOut, tokenTypeOut, destinationIndexOut, relayReadIndexOut,

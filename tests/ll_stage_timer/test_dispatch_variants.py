@@ -44,7 +44,7 @@ def test_variant_inventory_and_timer_lifetimes():
     assert 'SyncAll' not in entry
     host=(ROOT/'csrc/ops/low_latency.cpp').read_text()
     assert host.count('dispatch_format_tiling(dtype)')==2
-    assert 'dispatch_server_dedup_kernel_do_bw17(' in host
+    assert 'dispatch_server_dedup_kernel_do_sc18(' in host
 
 @pytest.mark.parametrize('timer',[False,True])
 def test_real_host_selector_all_modes_and_rejections(tmp_path,timer):

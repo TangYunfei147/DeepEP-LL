@@ -49,7 +49,7 @@ static_assert(offsetof(EpServerDedupKernelArgs, coreNum) == 140, "active cores")
 static_assert(offsetof(EpServerDedupKernelArgs, expertTimer) == 144, "expert timer address");
 }  // namespace deepep
 
-extern "C" void dispatch_server_dedup_kernel_do_bw17(void* stream, const deepep::EpServerDedupKernelArgs* args, uint32_t variant);
+extern "C" void dispatch_server_dedup_kernel_do_sc18(void* stream, const deepep::EpServerDedupKernelArgs* args, uint32_t variant);
 
 extern "C" uint32_t deepep_ll_core_protocol_version();
 extern "C" uint32_t deepep_ll_ranks_per_group();

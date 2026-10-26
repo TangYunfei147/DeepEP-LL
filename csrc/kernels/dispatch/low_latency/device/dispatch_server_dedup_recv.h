@@ -67,6 +67,7 @@ public:
     __aicore__ inline void Prepare(LlStageTimer::DeviceTimer* timer = nullptr)
     {
         timer_ = timer;
+        LL_CYCLE_MARK(RECV_BEGIN);
         LL_SEG_SCOPE(FORMAT_OUTPUT);
         // Overlap retains all send/count DMA sources and shares the already
         // acquired prefix. Only the drained fallback may Reset/reload.
@@ -93,6 +94,7 @@ public:
         }
 
 
+        LL_CYCLE_MARK(RECV_TASKS_DONE);
         // 空任务核没有拥有的接收槽，完成打点后直接返回，无需参与 packet 轮询。
         if (tasks_.Count() == 0U) {
             LL_SPARSE_MARK(RECV_PREPARED);
@@ -126,6 +128,7 @@ public:
         pipe_->InitBuffer(probeIdxBuf_, kProbeBatch * 4U + (probePrefetch_ ? kLlReceiveProbeExtraBytes : 0U));
         pipe_->InitBuffer(lanesBuf_, lanes_ * laneStride_);
         if (!overlap_.enabled) for (uint32_t lane = 0; lane < lanes_; ++lane) SetFlag<HardEvent::MTE3_MTE2>(lane);
+        LL_CYCLE_MARK(RECV_BUFFERS_DONE);
         LL_SPARSE_MARK(RECV_PREPARED);
 
     }

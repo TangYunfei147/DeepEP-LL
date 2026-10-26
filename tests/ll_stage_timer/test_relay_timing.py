@@ -199,7 +199,7 @@ int main(){
  for(unsigned mode:{1U,3U}) {
   using namespace LlStageTimer;
   std::vector<uint64_t> storage(kWordsPerCore,0);
-  DeviceTimer timer;AscendC::TPipe pipe;AscendC::sets=AscendC::waits=0;
+  DeviceTimer timer;auto* timer_=&timer;AscendC::TPipe pipe;AscendC::sets=AscendC::waits=0;
   bool rejected=false;
   auto clock=AscendC::clock;
   try {timer.Init(reinterpret_cast<uint8_t*>(storage.data()),1,mode);}
@@ -214,15 +214,18 @@ int main(){
   timer.Mark<ENTRY>();timer.Mark<INIT_DONE>();
   unsigned sideEffects=0;
   LL_SEG_RELAY_COMPLETION(++sideEffects);
-  LL_SEG_SCOPE(RELAY_ISSUE);LL_SEG_COUNT(RELAY_PACKETS,++sideEffects);
-  AscendC::clock+=50;
+  { LL_SEG_SCOPE(RELAY_ISSUE);LL_SEG_COUNT(RELAY_PACKETS,++sideEffects);
+  AscendC::clock+=50; }
   timer.Mark<WORK_DONE>();timer.Flush();
-  assert(sideEffects==0 && AscendC::sets==0 && AscendC::waits==0);
+  assert(AscendC::sets==0 && AscendC::waits==0);
 #ifdef DEEPEP_LL_STAGE_TIMER
-  assert(AscendC::clock==clock+53 && storage[1]==15 && (storage[5]&255)==1);
+  assert(sideEffects==1 && AscendC::clock==clock+55 && storage[1]==18 && (storage[5]&255)==1);
+  assert(storage[48+CycleMetricIndex(RELAY_ISSUE)*2]==51);
+  assert(storage[49+CycleMetricIndex(RELAY_ISSUE)*2]==1);
+  assert(storage[49+CycleMetricIndex(RELAY_PACKETS)*2]==1);
   assert(storage[6]==((1ULL<<ENTRY)|(1ULL<<INIT_DONE)|(1ULL<<WORK_DONE)));
 #else
-  assert(AscendC::clock==clock+50);
+  assert(sideEffects==0 && AscendC::clock==clock+50);
   for(auto value:storage) assert(value==0);
 #endif
  }

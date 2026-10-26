@@ -1,5 +1,27 @@
 # LL dispatch compile partition
 
+## SystemCycle per-core stage profile branch (2026-10-26)
+
+`kernel/ll-g4-systemcycle-profile` starts at restored baseline78e9fb4 (business9027275).
+It maps the supplied HT SystemCycle profiling pattern to the actual LL stages,
+without importing the HT algorithm, 64-core split or diagnostic rank barrier.
+Schema18/profile9 records 40 milestones and 40 selected elapsed/count metrics in
+the existing 1024-byte per-core carrier. No new pipeline drain, UB, lane or event
+is introduced. Independent OFF/ON wheels keep seven TUs, O2, 152-byte launch
+arguments, communication19000+S and the same SDK. Internal bridges use `_sc18`.
+
+The 53-file immutable business-token comparison passes after removing only
+probe plumbing. Stage-timer regression: 522 passed, 19 skipped (17 missing local
+CMake, one POSIX-only check, one historical snapshot). Runner/report/XLSX CPU
+checks also pass; they are not CANN or target-device validation. A synthetic
+16-rank/56-core workbook was independently reopened, recalculated and rendered
+on all five sheets without formula errors. Real measurements are produced by
+[tests/ll_systemcycle/README.md](../tests/ll_systemcycle/README.md) on the target.
+Final focused entry/report/XLSX/parser/ST regression: 168 passed; historical
+schema15/16/17 report regression: 101 passed. Changing the workbook's frequency
+driver recalculates timings without changing counters or raw uint64 text.
+No remote compilation or NPU execution was performed in this task.
+
 ## HNS PI SDK metadata compatibility (2026-10-26)
 
 The MTE consumer accepts the known `HNS_1825` capability with an optional,

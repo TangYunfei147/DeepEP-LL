@@ -19,11 +19,14 @@ assert native.low_latency_overlap_stage==3
 cfg=native.low_latency_core_config()
 assert native.low_latency_stage_timer_enabled
 assert native.low_latency_core_protocol==19000+cfg["send_cores"]
-assert native.low_latency_stage_timer_layout()==dict(schema=SCHEMA,slots=SLOTS,fields=FIELDS,stages=list(STAGES))
+layout=native.low_latency_stage_timer_layout()
+assert layout['schema']==SCHEMA and layout['slots']==SLOTS and layout['fields']==FIELDS
+assert layout['stages']==list(STAGES) and layout['recording']=='systemcycle-stages'
+assert layout['timer_profile']=='systemcycle' and layout['timer_profile_id']==9
 trace=StageTrace(object(),'dispatch')
 cfg=native.low_latency_core_config()
 assert tuple(trace.tensor.shape)==(cfg['active_aiv'],SLOTS,FIELDS)
 assert trace.tensor.data_ptr()%512==0
 assert trace.tensor.device.index==0 and torch.count_nonzero(trace.tensor).item()==0
 print(f"PASS installed timer ABI/schema and actual device0 allocation ({cfg['active_aiv']} AIV); no LL launch")
-print('Reference segment mode: legacy expert capture is disabled')
+print('SystemCycle capture: legacy expert capture is disabled')

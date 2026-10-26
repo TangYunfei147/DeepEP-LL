@@ -110,6 +110,7 @@ public:
     // 摘要：等待本核全部流水收尾，并恢复初始化前的 CTRL[60] 设置。
     __aicore__ inline void Finish()
     {
+        LL_CYCLE_MARK(FINISH_BEGIN);
         PipeBarrier<PIPE_ALL>();
         // The existing full drain makes asynchronous sender completion visible
         // to Scalar; MTE3_V waits in sender Retire alone do not establish this.
@@ -203,6 +204,7 @@ private:
 // 摘要：统计完整原始路由的专家计数并异步发往专家所属 rank，同时保留仍被 MTE3 使用的记录 UB。
 __aicore__ inline void ServerDedupCounts::SendCnt()
 {
+    LL_CYCLE_MARK(COUNTS_BEGIN);
     statusCntAlign_=countPlan_.count==0U ? 0U : Ceil(countPlan_.count,UB_ALIGN_DATA_COUNT)*UB_ALIGN_DATA_COUNT;
     const uint32_t recordBytes=statusCntAlign_*kEpServerDedupCountRecordBytes;
     if (recordBytes) tpipe_->InitBuffer(statusBuf_,recordBytes);
@@ -362,6 +364,7 @@ __aicore__ inline void ServerDedupCounts::PrepareRecvCnt()
 {
     recStatusNumPerCore_=0U;
     if (aivId_!=kLlSendCoreNum) return;
+    LL_CYCLE_MARK(COUNTS_WAIT_BEGIN);
     LL_SEG_SCOPE(INIT_COUNT_BUFFERS);
     startStatusIndex_=0U;endStatusIndex_=rscvStatusNum_;recStatusNumPerCore_=rscvStatusNum_;
     RecvPool().InitBuffer(scalarBuf_,96U);
@@ -380,6 +383,7 @@ __aicore__ inline void ServerDedupCounts::RecvCnt()
 // 摘要：等待所有前缀片段就绪，加载本核前缀副本，并由首个接收核输出各专家计数。
 __aicore__ inline void ServerDedupCounts::CompleteCumsum()
 {
+    LL_CYCLE_MARK(COMPLETE_PREFIX_BEGIN);
     LL_SEG_SCOPE(PREFIX_COMPLETE);
     const uint32_t receiver=aivId_;
     if (!overlap_.Async()) { LL_SEG_SCOPE(TRANSITION_DRAIN); PipeBarrier<PIPE_ALL>(); }
@@ -419,6 +423,7 @@ __aicore__ inline void ServerDedupCounts::CompleteCumsum()
     }
     // No listening table or payload receive/copy is constructed in this increment.
     LL_SPARSE_MARK(PREFIX_READY);
+    LL_CYCLE_MARK(COMPLETE_PREFIX_RETURN);
 }
 
 // 摘要：对原始路由执行逐专家匹配与归约，得到该专家的路由条数。
@@ -505,6 +510,7 @@ __aicore__ inline bool ServerDedupCounts::TryRecvCnt()
 __aicore__ inline void ServerDedupCounts::CalRecvAndSetFlag()
 {
     if (aivId_!=kLlSendCoreNum) return;
+    LL_CYCLE_MARK(PREFIX_BEGIN);
     LL_BW_BEGIN(LlStageTimer::PREFIX_LOCAL,tpipe_);
     LL_SEG_SCOPE(BUILD_RECV_CUMSUM);
     auto prefix=gatherMaskOutBuf_.Get<int32_t>();
@@ -538,6 +544,7 @@ __aicore__ inline void ServerDedupCounts::CalRecvAndSetFlag()
     LL_BW_TRANSFER(LlStageTimer::PREFIX_LOCAL,false,32U,0U);
     DataCopy(prefixReadyGm_,ready,8U);
     LL_BW_END(LlStageTimer::PREFIX_LOCAL,tpipe_);
+    LL_CYCLE_MARK(PREFIX_RETURN);
     // Publication source is persistent until Finish (or fallback's PIPE_ALL).
 }
 

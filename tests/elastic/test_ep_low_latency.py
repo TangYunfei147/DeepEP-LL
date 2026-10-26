@@ -52,23 +52,23 @@ def validate_stage_timer_capability(capability, mode='observe'):
     if not capability["stage_timer"]:
         raise RuntimeError("All ranks must install a DEEPEP_LL_STAGE_TIMER=ON wheel")
     schema=capability['stage_timer_schema']
-    if schema not in (15,16,17):
-        raise RuntimeError('LL diagnostics require timer schema 15, 16 or 17; '
+    if schema not in (15,16,17,18):
+        raise RuntimeError('LL diagnostics require timer schema 15, 16, 17 or 18; '
                            f'got {capability["stage_timer_schema"]}; '
                            'rebuild/install the matching wheel on every rank')
     layout=runpy.run_path(str(PROJECT_ROOT/'deep_ep/utils/ll_stage_timer.py'))
     slots,profile_id,recording,modes=layout['CAPTURE_SCHEMAS'][schema]
     if mode not in modes:
         raise RuntimeError('MTE3 interventions require matching schema16/profile7; bandwidth completion requires schema17/profile8')
-    if mode=='bandwidth-complete' and capability.get('overlap_stage')!=3:
-        raise RuntimeError('Bandwidth completion requires overlap stage3')
+    if (schema==18 or mode=='bandwidth-complete') and capability.get('overlap_stage')!=3:
+        raise RuntimeError('SystemCycle capture and bandwidth completion require overlap stage3')
     expected = dict(timer_profile=layout['TIMER_PROFILES'][profile_id],
                     timer_profile_id=profile_id,stage_timer_slots=slots,
                     stage_timer_fields=8,
                     stage_timer_recording=recording)
     if any(capability.get(key)!=value for key,value in expected.items()):
         raise RuntimeError('LL diagnostics require a matching schema/profile and carrier layout')
-    points=layout['SPARSE_POINTS' if schema==15 else 'POINTS']
+    points=layout['CAPTURE_POINTS'][schema]
     if capability.get('stage_timer_points')!=list(points):
         raise RuntimeError('Sparse LL milestone names/order differ from this checkout')
     if schema==16:
@@ -83,6 +83,14 @@ def validate_stage_timer_capability(capability, mode='observe'):
                       stage_timer_bandwidth_word_offset=32,stage_timer_bandwidth_record_words=16)
         if any(capability.get(field)!=value for field,value in expected.items()):
             raise RuntimeError('Bandwidth statistic layout differs from this checkout')
+    if schema==18:
+        expected=dict(stage_timer_cycle_metric_names=list(layout['systemcycle'].METRIC_NAMES),
+                      stage_timer_cycle_metric_indices=list(layout['systemcycle'].METRIC_INDICES),
+                      stage_timer_counter_indices=list(layout['systemcycle'].COUNTER_INDICES),
+                      stage_timer_metric_word_offset=48,stage_timer_metric_record_words=2)
+        if any(capability.get(field)!=value for field,value in expected.items()):
+            raise RuntimeError('SystemCycle statistic layout differs from this checkout')
+
 
 
 def installed_source_fingerprint(package):
@@ -1298,6 +1306,11 @@ def worker(local_rank, args):
                       "stage_timer_bandwidth_fields": timer_layout.get('bandwidth_fields'),
                       "stage_timer_bandwidth_word_offset": timer_layout.get('bandwidth_word_offset'),
                       "stage_timer_bandwidth_record_words": timer_layout.get('bandwidth_record_words'),
+                      "stage_timer_cycle_metric_names": timer_layout.get('cycle_metric_names'),
+                      "stage_timer_cycle_metric_indices": timer_layout.get('cycle_metric_indices'),
+                      "stage_timer_counter_indices": timer_layout.get('counter_indices'),
+                      "stage_timer_metric_word_offset": timer_layout.get('metric_word_offset'),
+                      "stage_timer_metric_record_words": timer_layout.get('metric_record_words'),
                       "timer_profile": timer_layout.get('timer_profile'),
                       "timer_profile_id": timer_layout.get('timer_profile_id'),
                       "profile_capture_requested": bool(getattr(args,'ll_profile_capture',False)),

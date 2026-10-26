@@ -156,8 +156,8 @@ int main() {
             assert [actual[key] for key in ('peer_bytes','self_bytes','peer_operations','self_operations')]==expected
 
 
-def test_native_and_python_field_dictionaries_agree():
-    source=(ROOT/'csrc/kernels/dispatch/low_latency/common/ll_stage_timer_layout.h').read_text()
-    for name,expected in [('kPointNames',timer.POINTS),('kBandwidthStageNames',timer.STAGES),('kBandwidthFieldNames',timer.FIELDS)]:
-        body=re.search(name+r'\[\]\s*=\s*\{(.*?)\};',source,re.S).group(1)
-        assert tuple(re.findall(r'"([A-Za-z_]+)"',body))==expected
+def test_historical_bandwidth_dictionary_is_fixed_independently_of_current_native():
+    # Schema17 is an offline format after the current kernel moved to schema18.
+    assert len(timer.POINTS)==18
+    assert timer.STAGES==('COUNT_CONTROL','PREFIX_LOCAL','REMOTE_FIRST_HOP','SOURCE_DIRECT','GROUP_LOCAL','RELAY')
+    assert len(timer.FIELDS)==16 and timer.FIELDS[:4]==('peer_bytes','self_bytes','peer_payload_bytes','self_payload_bytes')

@@ -1,3 +1,14 @@
+## 当前独立SystemCycle逐核表格分支（2026-10-26）
+
+- 用户要求新分支参考其systemcycle-profile ZIP与逐核Excel。当前kernel/ll-g4-systemcycle-profile，独立DeepEP-LL-systemcycle-profile，从恢复baseline78e9fb4创建，业务9027275和SDK PI兼容保留，不带shared-pull。
+- ZIP打点属HT，只借鉴无新增屏障的时点/累计/每核记录/结束导出，阶段重新映射实际LL。schema18/profile9，40时点+34累计耗时+6计数，1024B每核、512B对齐，stage3 observe支持dispatch/combine；旧干预macro关闭。
+- 原7TU/O2/152B/wire19000+S/UB/lane/event/同步不改。OFF/null不读钟，原始uint64保真；父子阶段不可相加，submit不当complete，未测留空不补零。
+- tests/ll_systemcycle/profile.py固定同源OFF/ON，默认EP16B=M256H3584K8E384G4S30R26，FP8 dispatch+BF16combine，3seed、ON5capture。实际路由沿本基线seed+2如实记录；不混small_bs采样规则。
+- 导出stage-times.xlsx五页，默认末capture/可全量，完整表留目标机，仅回传一个<=60000UTF-8字节stage-report.txt。指南tests/ll_systemcycle/README.md。不SSH/CANN/NPU，本地检查后提交推送。
+- 子模块仅初始化/复制SHMEM及其必要子模块，不拉CATLASS；显式命令使用git submodule update --init --recursive --depth 1 -- third-party/shmem。
+
+下方其他打点格式/候选为历史说明，当前新采样以本节为准。
+
 ## MTE 消费 HNS PI 编译变体（2026-10-26）
 
 - 用户要求兼容固件 PI on chip 对 SHMEM 编译身份的影响；实际报错为 SDK 的合法额外字段 hns_1825_pi_on_chip=0，CANN版本/timestamp与环境一致。

@@ -22,7 +22,7 @@ entry=load('bw_capture_entry','tests/elastic/test_ep_low_latency.py')
 
 def layout():
     return dict(schema=17,slots=16,fields=8,stages=list(timer.STAGES),
-        points=list(timer.POINTS),recording='stage-bandwidth',
+        points=list(timer.bandwidth.POINTS),recording='stage-bandwidth',
         timer_profile='bandwidth',timer_profile_id=8,
         bandwidth_stages=list(timer.bandwidth.STAGES),bandwidth_fields=list(timer.bandwidth.FIELDS),
         bandwidth_word_offset=32,bandwidth_record_words=16)
@@ -42,7 +42,7 @@ def raw(mode):
         words=[0]*128
         words[:8]=[timer.MAGIC,17,1,56,core,mode|(30<<8)|((3 if core<30 else 2)<<16)|(8<<24),0,0]
         for name,tick in [('ENTRY',100),('INIT_DONE',200),('WORK_DONE',1000)]:
-            index=timer.POINTS.index(name);words[6]|=1<<index;words[8+index]=tick
+            index=timer.bandwidth.POINTS.index(name);words[6]|=1<<index;words[8+index]=tick
         result.append([words[i:i+8] for i in range(0,128,8)])
     return result
 

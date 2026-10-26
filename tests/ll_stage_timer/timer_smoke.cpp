@@ -14,7 +14,6 @@ extern "C" [[bisheng::core_ratio(0, 1)]] __global__ __aicore__ void ll_timer_smo
     timer.Mark<LlStageTimer::INIT_DONE>();
     for (uint32_t i=0;i<3;++i) {
         timer.Mark<LlStageTimer::FIRST_RECV_PROBE>();
-        volatile uint64_t cycle=GetSystemCycle(); (void)cycle;
     }
     timer.Mark<LlStageTimer::FIRST_RECV_READY>();
     timer.Mark<LlStageTimer::RECV_DONE>();

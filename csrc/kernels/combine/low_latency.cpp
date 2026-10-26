@@ -15,7 +15,7 @@
 #include "low_latency/launch.hpp"
 
 // 中文审计：ElasticBuffer._combine_low_latency → csrc/ops/low_latency.cpp
-// → combine_server_dedup_kernel_do_bw17 → 本入口。输入依赖匹配dispatch handle的路由/计数/权重。
+// → combine_server_dedup_kernel_do_sc18 → 本入口。输入依赖匹配dispatch handle的路由/计数/权重。
 // profiler中的combine_server_dedup_kernel包含下层准备、控制通知、回传与最终归约。
 extern "C" [[bisheng::core_ratio(0, 1)]] __global__ __aicore__ void combine_server_dedup_kernel(
     GM_ADDR commArgs, GM_ADDR expertOut, GM_ADDR destinationIndex, GM_ADDR sendCounts, GM_ADDR expertScales,
@@ -32,12 +32,14 @@ extern "C" [[bisheng::core_ratio(0, 1)]] __global__ __aicore__ void combine_serv
 #ifdef DEEPEP_LL_STAGE_TIMER
     timer.MarkAt<LlStageTimer::ENTRY>(sparseEntry);
 #endif
+    LL_CYCLE_LOCAL_MARK(timer,ENTRY_SETUP_DONE);
     uint32_t magic;
     {
         AscendC::TPipe pipe;
         // 与dispatch共用每核窗口轮转规则；即使本核没有有效token也必须参加本次轮转。
         magic = DispatchDedup::RotateDispatchServerDedupMagic(args, AscendC::GetBlockIdx(), &pipe);
     }
+    LL_CYCLE_LOCAL_MARK(timer,MAGIC_DONE);
     const auto* td = reinterpret_cast<const volatile __gm__ CombineDedup::EpServerDedupCombineTilingData*>(tilingData);
     const bool enableDedup = DispatchDedup::EpServerDedupEnabled(td->numMaxTokensPerRank);
     CombineDedup::CombineMemoryServerDedupKernel kernel;
@@ -49,7 +51,7 @@ extern "C" [[bisheng::core_ratio(0, 1)]] __global__ __aicore__ void combine_serv
     timer.Mark<LlStageTimer::WORK_DONE>();
     timer.Flush();
 }
-extern "C" DEEPEP_EXPORT void combine_server_dedup_kernel_do_bw17(void* stream,
+extern "C" DEEPEP_EXPORT void combine_server_dedup_kernel_do_sc18(void* stream,
                                                              const deepep::EpServerDedupCombineKernelArgs* args)
 {
     const auto& a = *args;

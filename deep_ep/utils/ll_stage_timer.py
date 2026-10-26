@@ -1,7 +1,7 @@
-"""Schema17 sending bandwidth diagnostics; earlier recordings remain readable.
+"""Schema18 SystemCycle milestones and cumulative stages, with historical readers.
 
-The 1024B carrier holds milestones, exact bytes and completed phase intervals.
-Explicit completion waits change scheduling and are never performance baselines.
+Capture preserves existing pipeline boundaries. Cumulative detail intervals may
+nest and have no per-call timeline; formal performance uses unattached kernels.
 """
 from contextlib import contextmanager
 import importlib.util
@@ -12,11 +12,11 @@ import struct
 import threading
 
 MAGIC = 0x4C4C5431
-SCHEMA, SLOTS, FIELDS = 17, 16, 8
+SCHEMA, SLOTS, FIELDS = 18, 16, 8
 TRACE_RECORDS, METRICS, RECORDS = 192, 108, 300
 SCHEMA_SLOTS = {7:72,9:72,10:72,11:72,12:72,13:80}
 SCHEMA_METRICS = {7:64,9:66,10:70,11:78,12:81,13:108}
-TIMER_PROFILES = ('full','overview','prepare','prefix','send','recv','sparse','mte3','bandwidth')
+TIMER_PROFILES = ('full','overview','prepare','prefix','send','recv','sparse','mte3','bandwidth','systemcycle')
 DEFAULT_FREQUENCY_HZ = 1_000_000_000
 STAGES = ('KERNEL', 'SEND_TOKENS', 'CAL_CUMSUM', 'PREPARE_INPUT', 'SEND_COUNTS', 'INIT_COUNT_BUFFERS', 'WAIT_RECV_COUNTS', 'CLEAR_RECV_STATUS', 'GATHER_RECV_COUNTS', 'GET_CUMSUM', 'BUILD_RECV_CUMSUM', 'WAIT_CUMSUM', 'LOCAL_WINDOW_COPY', 'FORMAT_OUTPUT', 'BUILD_EXPERT_TASKS', 'CLEAR_LOCAL_FLAGS', 'TOKEN_INPUT', 'TOKEN_QUANT', 'TOKEN_METADATA', 'TOKEN_BUFFER_WAIT', 'TOKEN_PACK', 'TOKEN_SEND_ISSUE', 'COUNT_COMPUTE', 'COUNT_SEND_ISSUE', 'POLL_CORE_SUMS', 'REDUCE_CORE_PREFIX', 'CLEAR_CORE_SUMS', 'BROADCAST_PREFIX', 'PUBLISH_PREFIX_FLAGS', 'RECV_POLL', 'RECV_COPY', 'SEND_DRAIN', 'COMBINE_SEND', 'COMBINE_INIT_RECV', 'COMBINE_RECV', 'COMBINE_INPUT', 'COMBINE_PACK_QUANT', 'COMBINE_SEND_ISSUE', 'COMBINE_SEND_FINISH', 'COMBINE_RECV_POLL', 'COMBINE_DEQUANT_REDUCE', 'COMBINE_PROCESS_TOKEN', 'COMBINE_TOKEN_INIT', 'COMBINE_CLEAR_FLAGS', 'COMBINE_SHARED_EXPERT', 'COMBINE_SPECIAL_EXPERT', 'COMBINE_RMSNORM', 'FINAL_DRAIN', 'POLL_RECV_COUNTS', 'WRITE_COUNTS_OUTPUT', 'INIT', 'POLL_CORE_SUMS_ITERATIONS', 'POLL_RECV_COUNTS_ITERATIONS', 'WAIT_CUMSUM_ITERATIONS', 'RECV_READY_TOKENS', 'COMBINE_READY_SLOTS', 'COMBINE_QUANT', 'COMBINE_BUFFER_WAIT', 'COMBINE_COPY_PACK', 'RECV_BUFFER_WAIT', 'RECV_INPUT', 'RECV_OUTPUT', 'CAL_TOKEN', 'COMBINE_INDEX_INPUT', 'TOKEN_INPUT_WAIT', 'TOKEN_QUANT_WAIT', 'RELAY_ISSUE', 'RELAY_PRE_DRAIN', 'RELAY_COMPLETE', 'RELAY_PACKETS','SEND_COMPLETE_WAIT','TRANSITION_DRAIN','RECV_PREPARE','SEND_SUBMIT_END','OVERLAP_PATH','SERIAL_FALLBACK','SEND_LANES','RECV_LANES','PREFIX_COMPLETE','PREFIX_LOAD','RECV_COMPLETE_WAIT','SEND_SETUP','Q_SEED_SUBMIT','Q_SEED_WAIT','Q_LOCAL_UPDATE','ROUTE_CLASSIFY','DIRECT_PLAN','SEND_RETIRE_WAIT','RX_FLAG_ISSUE','RX_FLAG_WAIT','RX_FLAG_REDUCE','RX_FLAG_DECODE','RX_LANE_REUSE_WAIT','RX_PAYLOAD_READY_WAIT','RX_METADATA','RX_PAYLOAD_OUTPUT','RX_META_OUTPUT','TX_PACK_READY_WAIT','TX_METADATA_PUBLISH','BEFORE_FIRST_SEND','BEFORE_FIRST_RECV_POLL','PREFIX_PUBLISH_WAIT','RX_PENDING_UPDATE','TX_PACKETS','RX_PROBED','RX_READY','RX_EMPTY_POLLS','RX_PACKETS')
 COUNTERS = frozenset((*range(51,56),69,*range(74,78),*range(103,108)))
@@ -33,12 +33,17 @@ _mte3_spec=importlib.util.spec_from_file_location('_ll_stage_mte3',Path(__file__
 mte3=importlib.util.module_from_spec(_mte3_spec);_mte3_spec.loader.exec_module(mte3)
 _bandwidth_spec=importlib.util.spec_from_file_location('_ll_stage_bandwidth',Path(__file__).with_name('ll_stage_timer_bandwidth.py'))
 bandwidth=importlib.util.module_from_spec(_bandwidth_spec);_bandwidth_spec.loader.exec_module(bandwidth)
+_systemcycle_spec=importlib.util.spec_from_file_location('_ll_stage_systemcycle',Path(__file__).with_name('ll_stage_timer_systemcycle.py'))
+systemcycle=importlib.util.module_from_spec(_systemcycle_spec);_systemcycle_spec.loader.exec_module(systemcycle)
 SPARSE_POINTS=sparse.POINTS
-POINTS=bandwidth.POINTS
+POINTS=systemcycle.POINTS
+CAPTURE_PARSERS={15:sparse,16:mte3,17:bandwidth,18:systemcycle}
+CAPTURE_POINTS={schema:parser.POINTS for schema,parser in CAPTURE_PARSERS.items()}
 DIAGNOSTIC_MODES={'observe':1,'mte3-tx':4,'mte3-rx':5,'bandwidth-complete':6}
 CAPTURE_SCHEMAS={15:(8,6,'sparse-milestones',('observe',)),
                  16:(8,7,'mte3-backpressure',('observe','mte3-tx','mte3-rx')),
-                 17:(16,8,'stage-bandwidth',('observe','bandwidth-complete'))}
+                 17:(16,8,'stage-bandwidth',('observe','bandwidth-complete')),
+                 18:(16,9,'systemcycle-stages',('observe',))}
 SEGMENT_SCHEMAS=tuple(SCHEMA_SLOTS)
 CURRENT_SCHEMAS=(*SEGMENT_SCHEMAS,*CAPTURE_SCHEMAS)
 
@@ -47,6 +52,8 @@ def parse_records(raw, operation, frequency_hz=None):
     if not raw or not raw[0] or len(raw[0][0])!=8:
         raise ValueError('Missing timer header')
     schema=raw[0][0][1]
+    if schema==18:
+        return systemcycle.parse_records(raw,operation,frequency_hz)
     if schema==17:
         return bandwidth.parse_records(raw,operation,frequency_hz)
     if schema==16:
@@ -199,7 +206,7 @@ def chrome_trace(saved_records, frequency_hz=None, lane_layout='core', show_repe
         origin=min(row['first_tick'] for row in report['intervals'])
         lanes=set()
         for row in sorted(report['intervals'],key=lambda row:(row['core'],row['first_tick'],-row['last_tick'])):
-            parsers={15:sparse,16:mte3,17:bandwidth}
+            parsers=CAPTURE_PARSERS
             stage_names = [p[0] for p in parsers[report['schema']].PAIRS] if report['schema'] in CAPTURE_SCHEMAS else STAGES
             tid=row['core'] if lane_layout=='core' else row['core']*METRICS+stage_names.index(row['stage'])
             if tid not in lanes:
@@ -221,7 +228,8 @@ def chrome_trace(saved_records, frequency_hz=None, lane_layout='core', show_repe
                          timer_profile=report['timer_profile'],timer_profile_id=report['timer_profile_id']))
     return dict(traceEvents=events,metadata=dict(format=report.get('recording','dc_seg sampled intervals') if report['schema'] in CAPTURE_SCHEMAS else 'dc_seg sampled intervals',sampled_calls_per_stage=None if report['schema'] in CAPTURE_SCHEMAS else 2,
                 timer_profile=report['timer_profile'],timer_profile_id=report['timer_profile_id'],
-                all_calls_in_metrics=report['schema'] not in CAPTURE_SCHEMAS,cores=info,clock='Rank-local origins; no cross-rank alignment'))
+                all_calls_in_metrics=report['schema']==18 or report['schema'] not in CAPTURE_SCHEMAS,
+                cumulative_metrics_have_no_timeline=report['schema']==18,cores=info,clock='Rank-local origins; no cross-rank alignment'))
 
 
 def reference_binary(raw,operation):
@@ -257,10 +265,10 @@ class StageTrace:
         if schema_number not in CAPTURE_SCHEMAS or mode not in CAPTURE_SCHEMAS[schema_number][3]:
             raise RuntimeError('LL timer Python/native schema mismatch')
         slots,expected_profile,recording,_=CAPTURE_SCHEMAS[schema_number]
-        if mode=='bandwidth-complete' and getattr(native,'low_latency_overlap_stage',None)!=3:
-            raise RuntimeError('Bandwidth completion requires overlap stage3')
+        if (schema_number==18 or mode=='bandwidth-complete') and getattr(native,'low_latency_overlap_stage',None)!=3:
+            raise RuntimeError('SystemCycle capture and bandwidth completion require overlap stage3')
         expected=dict(schema=schema_number, slots=slots, fields=FIELDS, stages=list(STAGES),
-                      points=list(SPARSE_POINTS if schema_number==15 else POINTS),
+                      points=list(CAPTURE_POINTS[schema_number]),
                       recording=recording)
         if schema_number==16:
             expected.update(wait_metrics=list(mte3.METRICS),
@@ -270,6 +278,11 @@ class StageTrace:
             expected.update(bandwidth_stages=list(bandwidth.STAGES),
                             bandwidth_fields=list(bandwidth.FIELDS),
                             bandwidth_word_offset=32,bandwidth_record_words=16)
+        if schema_number==18:
+            expected.update(cycle_metric_names=list(systemcycle.METRIC_NAMES),
+                            cycle_metric_indices=list(systemcycle.METRIC_INDICES),
+                            counter_indices=list(systemcycle.COUNTER_INDICES),
+                            metric_word_offset=48,metric_record_words=2)
         profile_id=schema.get('timer_profile_id')
         if (any(schema.get(key)!=value for key,value in expected.items()) or
                 type(profile_id) is not int or profile_id!=expected_profile or

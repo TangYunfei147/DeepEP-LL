@@ -19,7 +19,7 @@
 #define LL_VARIANT_JOIN_(a,b) a##b
 #define LL_VARIANT_JOIN(a,b) LL_VARIANT_JOIN_(a,b)
 #define LL_VARIANT_KERNEL LL_VARIANT_JOIN(dispatch_server_dedup_kernel_,DEEPEP_LL_VARIANT_NAME)
-#define LL_VARIANT_LAUNCH LL_VARIANT_JOIN(dispatch_server_dedup_launch_bw17_,DEEPEP_LL_VARIANT_NAME)
+#define LL_VARIANT_LAUNCH LL_VARIANT_JOIN(dispatch_server_dedup_launch_sc18_,DEEPEP_LL_VARIANT_NAME)
 namespace {
 #if DEEPEP_LL_VARIANT_MODE == 0
 using LlVariantInput = uint8_t;
@@ -49,7 +49,7 @@ constexpr bool kWireFp8 = true, kE4M3 = false, kPrequantized = false;
 
 // One specialization per translation unit; unchanged algorithm and timers.
 // 调用链：ElasticBuffer._dispatch_low_latency → csrc/ops/low_latency.cpp
-// → dispatch_server_dedup_kernel_do_bw17 → 本设备入口 → DispatchMemoryServerDedupKernel。
+// → dispatch_server_dedup_kernel_do_sc18 → 本设备入口 → DispatchMemoryServerDedupKernel。
 // profiler匹配本入口任务名；下层计数/发送/接收是同一kernel内的阶段，不是独立task。
 // Host selects one pure-AIV entry; the configured S/R split is unchanged.
 extern "C" [[bisheng::core_ratio(0, 1)]] __global__ __aicore__ void LL_VARIANT_KERNEL(
@@ -85,6 +85,7 @@ extern "C" [[bisheng::core_ratio(0, 1)]] __global__ __aicore__ void LL_VARIANT_K
         AscendC::Trap(); return;
     }
     AscendC::TPipe pipe;
+    LL_CYCLE_LOCAL_MARK(timer,ENTRY_SETUP_DONE);
     {
         DispatchDedup::DispatchMemoryServerDedupKernel<LlVariantInput,kWireFp8,kE4M3,kPrequantized> kernel;
         kernel.Init(commArgs,x,expertIds,expertScales,expandXOut,dynamicScalesOut,expertTokenNumsOut,sendCountsOut,

@@ -23,7 +23,7 @@ entry=load('mte3_capture_entry','tests/elastic/test_ep_low_latency.py')
 
 def layout():
     return dict(schema=16,slots=8,fields=8,stages=list(timer.STAGES),
-        points=list(timer.POINTS),recording='mte3-backpressure',timer_profile='mte3',timer_profile_id=7,
+        points=list(timer.mte3.POINTS),recording='mte3-backpressure',timer_profile='mte3',timer_profile_id=7,
         wait_metrics=list(timer.mte3.METRICS),
         wait_metric_fields=['sum_ticks','max_ticks','calls','empty_control_ticks'],
         wait_metric_word_offset=32)
@@ -44,7 +44,7 @@ def raw(mode,operation='dispatch'):
         words[:8]=[timer.MAGIC,16,1 if operation=='dispatch' else 2,56,core,
                    mode | (30<<8) | (role<<16) | (7<<24),0,0]
         for point,value in [('ENTRY',100),('INIT_DONE',200),('WORK_DONE',2000)]:
-            index=timer.POINTS.index(point)
+            index=timer.mte3.POINTS.index(point)
             words[6] |= 1<<index;words[8+index]=value+core
         records.append([words[i:i+8] for i in range(0,64,8)])
     return records

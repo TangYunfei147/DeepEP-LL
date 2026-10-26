@@ -113,10 +113,13 @@ public:
     __aicore__ inline void Process()
     {
         if (enableDedup_) {
+            LL_CYCLE_MARK(COMBINE_PREPARE_BEGIN);
             LL_SEG_BEGIN(segBegin1, PREPARE_INPUT);
             CopyLocalPendingTokens();
             LL_SEG_END(segBegin1, PREPARE_INPUT);
+            LL_CYCLE_MARK(COMBINE_PREPARE_END);
         }
+        LL_CYCLE_MARK(COMBINE_ROLE_BEGIN);
         if (core_ >= sendCores_) {
             if (enableDedup_) {
                 if (core_ >= notifyBegin_) {
@@ -147,6 +150,7 @@ public:
             PipeBarrier<PIPE_ALL>();
             LL_SEG_END(segBegin8, COMBINE_SEND);
         }
+        LL_CYCLE_MARK(COMBINE_ROLE_END);
         // Retires prepare publication, both zero sources and server notification;
         // no arena/pipe reset or exit may precede completion of their DMA reads.
         LL_SEG_BEGIN(segBegin9, FINAL_DRAIN);

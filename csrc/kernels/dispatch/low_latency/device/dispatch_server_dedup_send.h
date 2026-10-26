@@ -65,10 +65,12 @@ public:
     // Consume outstanding sender events only after receiving. Sources remain
     // allocated until the caller's final PIPE_ALL. Empty senders have zero lanes.
     __aicore__ inline void Retire() {
+        LL_CYCLE_MARK(RETIRE_BEGIN);
         if (overlap_.Async()) {
             LL_SEG_SCOPE(SEND_RETIRE_WAIT);
             for (uint32_t lane=0;lane<lanes_;++lane) WaitFlag<HardEvent::MTE3_V>(lane);
         }
+        LL_CYCLE_MARK(RETIRE_END);
     }
     __aicore__ inline void ConfigureOverlap(LlOverlapLayout plan) { overlap_=plan; }
     // 摘要：执行本核发送主流程：准备 UB、优先发送去重首跳、再发送 DIRECT，最后写回源端元数据。
@@ -79,6 +81,7 @@ public:
         // reservedBytes 对应仍可能被计数发送读取的 UB，不能当作可用空间覆盖。
         if (enableDedup_ && count_ == 0U) return;
         timer_ = timer;
+        LL_CYCLE_MARK(SOURCE_BEGIN);
         LL_SEG_BEGIN(setupBegin, SEND_SETUP);
         LL_SEG_BEGIN(segBegin1, PREPARE_INPUT);
         scratch_ = &scratch;
@@ -227,6 +230,7 @@ public:
         Sync<HardEvent::MTE3_S>();
         LL_SPARSE_AFTER(FIRST_SEND,SEND_DONE);
         }
+        LL_CYCLE_MARK(SOURCE_RETURN);
     }
 
 
@@ -241,6 +245,7 @@ public:
     {
         if (!tasks) return;
         timer_=timer;
+        LL_CYCLE_MARK(SOURCE_BEGIN);
         LL_SEG_BEGIN(localSetupBegin, SEND_SETUP);
         LL_SEG_BEGIN(localPrepareBegin, PREPARE_INPUT);
         scratch_=&scratch;
@@ -318,6 +323,7 @@ public:
         LL_SEG_END(localDrainBegin, SEND_DRAIN);
         LL_SPARSE_AFTER(FIRST_SEND,SEND_DONE);
         }
+        LL_CYCLE_MARK(SOURCE_RETURN);
 
     }
 

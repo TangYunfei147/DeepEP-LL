@@ -17,6 +17,7 @@ def business_tokens(source):
     source=re.sub(r'LL_(?:SEG_(?:BEGIN|END|COUNT|SCOPE|FIRST|RELAY_COMPLETION)|SPARSE_(?:MARK|AFTER|WHEN))\([^;]*?\);','',source)
     source=re.sub(r'LL_MTE3_[A-Z_]+\([^;]*?\);','',source)
     source=re.sub(r'LL_BW_[A-Z_]+\([^;]*?\);','',source)
+    source=re.sub(r'LL_CYCLE_[A-Z_]+\([^;]*?\);','',source)
     source=source.replace('#include "../common/ll_stage_timer_device.h"','') if 'class ServerDedupReceiveTasks' in source else source
     source=source.replace(',\n                                 LlStageTimer::DeviceTimer* timer_ = nullptr','')
     source=source.replace('(void)timer_;','')
@@ -26,9 +27,9 @@ def business_tokens(source):
     source=re.sub(r'const uint64_t (?:initBegin|kernelBegin) = timer.Begin\([^;]*\);','',source)
     source=re.sub(r'timer\.(?:End\([^;]*\)|Mark<LlStageTimer::\w+>\(\)|Flush\(\));','',source)
     source=source.replace('timer.Enabled() ? &timer : nullptr','&timer')
-    source=source.replace('dispatch_server_dedup_launch_bw17_','dispatch_server_dedup_launch_')
-    source=source.replace('dispatch_server_dedup_kernel_do_bw17','dispatch_server_dedup_kernel_do_v2')
-    source=source.replace('combine_server_dedup_kernel_do_bw17','combine_server_dedup_kernel_do')
+    source=source.replace('dispatch_server_dedup_launch_sc18_','dispatch_server_dedup_launch_')
+    source=source.replace('dispatch_server_dedup_kernel_do_sc18','dispatch_server_dedup_kernel_do_v2')
+    source=source.replace('combine_server_dedup_kernel_do_sc18','combine_server_dedup_kernel_do')
     source=re.sub(r'extern "C" uint32_t deepep_ll_stage_timer_(?:schema|profile_id)\(\);','',source)
     return re.findall(r'[A-Za-z_]\w*|0[xX][0-9a-fA-F]+|\d+|[^\s]',source)
 
@@ -39,32 +40,28 @@ def test_business_sources_match_ed1_after_probe_removal():
         current=business_tokens((ROOT/relative).read_text(encoding='utf-8'))
         assert hashlib.sha256(' '.join(current).encode()).hexdigest()==expected,relative
 
-def test_bandwidth_recorder_isolates_only_explicit_completion_intervals():
+def test_systemcycle_recorder_has_no_new_waits_and_disabled_legacy_diagnostics():
     source=(COMMON/'ll_stage_timer_device.h').read_text(encoding='utf-8')
-    for removed in ('ProfileIndex','ProfileEnabled','sums_[','calls_[','events_[','cycles_[','SyncAll','PipeBarrier'):
-        assert removed not in source
-    assert 'ticks_[kPointCount]' in source
-    assert 'operation_==1U && mode_==6U' in source
-    assert 'kLlOverlapExperimentStage != 3U' in source
-    assert source.count('WaitFlag<AscendC::HardEvent::MTE3_S>')==3
-    assert 'offset<kExportWords;offset+=8U' in source
-    for macro in ('SCOPE','BEGIN','END','COUNT','RELAY_COMPLETION','FIRST'):
-        assert re.search(r'#define LL_SEG_'+macro+r'\([^\n]*\) do \{\} while\(false\)',source)
+    code=re.sub(r'//[^\n]*','',source)
+    for removed in ('SetFlag<','WaitFlag<','SyncAll<','PipeBarrier<','InitBuffer(','FetchEventID'):
+        assert removed not in code
+    assert 'ticks_[kPointCount]' in source and 'metrics_[kCycleMetricCount][2]' in source
+    assert 'metricValid_<<24U' in source and 'offset<kExportWords;offset+=8U' in source
     for macro in ('WAIT_BEGIN','WAIT_END','DRAIN','DRAIN_WHEN'):
         assert re.search(r'#define LL_MTE3_'+macro+r'\([^\n]*\) do \{\} while\(false\)',source)
-    split=next(line for line in source.splitlines() if line.startswith('#define LL_BW_SPLIT_INPUT') and 'CompletionEnabled' in line)
-    ordered=('CompletionEnabled()', 'EndInputPrefetch(input)', 'EndStage(', 'BeginStage(', 'BeginInputPrefetch()')
-    assert [split.index(x) for x in ordered]==sorted(split.index(x) for x in ordered)
+    for macro in ('BEGIN','END','TRANSFER','SPLIT_INPUT'):
+        assert re.search(r'#define LL_BW_'+macro+r'\([^\n]*\) do \{\} while\(false\)',source)
+    assert 'CycleMetricSelected(stage)' in source and 'CycleMetricCounter(stage)' in source
 
 def test_sparse_layout_host_identity_and_entry_lifetimes():
     layout=(COMMON/'ll_stage_timer_layout.h').read_text(encoding='utf-8')
-    assert 'kSchema = 17U' in layout and 'kSlots = 16U' in layout
-    assert 'kPointCount < 64U' in layout
+    assert 'kSchema = 18U' in layout and 'kSlots = 16U' in layout
+    assert 'kPointCount==40U' in layout
     host=(ROOT/'csrc/ops/low_latency.cpp').read_text(encoding='utf-8')
     assert 'deepep_ll_stage_timer_schema()!=LlStageTimer::kSchema' in host
     assert 'deepep_ll_stage_timer_profile_id()!=LlStageTimer::kProfileId' in host
-    assert 'combine supports observe only' in host
-    assert 'result["recording"] = "stage-bandwidth"' in host and 'result["points"] = points' in host
+    assert 'observe capture only on stage3 dispatch/combine' in host
+    assert 'result["recording"] = "systemcycle-stages"' in host and 'result["points"] = points' in host
     assert 'module.attr("low_latency_implementation") = "g4-r0-prefix"' in host
     assert 'small_b_prefix' not in host
     for path in ('csrc/kernels/dispatch/low_latency/dispatch_variant_kernel.h','csrc/kernels/combine/low_latency.cpp'):
@@ -77,7 +74,7 @@ def test_sparse_layout_host_identity_and_entry_lifetimes():
         assert 'timer.Enabled() ? &timer : nullptr' in source
     entry=(ROOT/'csrc/kernels/dispatch/low_latency/dispatch_variant_kernel.h').read_text(encoding='utf-8')
     assert 'LL_VARIANT_JOIN(dispatch_server_dedup_kernel_,DEEPEP_LL_VARIANT_NAME)' in entry
-    assert 'LL_VARIANT_JOIN(dispatch_server_dedup_launch_bw17_,DEEPEP_LL_VARIANT_NAME)' in entry
+    assert 'LL_VARIANT_JOIN(dispatch_server_dedup_launch_sc18_,DEEPEP_LL_VARIANT_NAME)' in entry
     assert {p.stem for p in (COMMON.parent/'variants').glob('*.cpp')}==set(MODES)
 
 def test_c1_pair_and_serial_receive_record_only_observed_ready():
@@ -148,16 +145,11 @@ def run_sparse_recorder_mock(tmp_path,enabled):
 #define __gm__
 using GM_ADDR=uint8_t*;
 namespace AscendC {
-inline uint64_t clock=1; inline uint32_t core=0; inline unsigned flushes=0;
-inline unsigned sets=0,waits=0,fetches=0; inline bool outstanding=false; inline uint64_t queued=0;
-inline uint64_t GetSystemCycle(){return clock++;}
+inline uint64_t clock=0; inline uint32_t core=0; inline unsigned flushes=0,reads=0;
+inline uint64_t GetSystemCycle(){++reads;return clock;}
 inline uint32_t GetBlockIdx(){return core;}
 inline uint32_t GetBlockNum(){return 56;}
 inline void Trap(){throw std::runtime_error("trap");}
-enum class HardEvent { MTE3_S };
-struct TPipe { int FetchEventID(HardEvent){++fetches;return 3;} };
-template<HardEvent E> void SetFlag(int id){if(id!=3 || outstanding) throw std::runtime_error("event collision");outstanding=true;++sets;}
-template<HardEvent E> void WaitFlag(int id){if(id!=3 || !outstanding) throw std::runtime_error("event ownership");outstanding=false;++waits;clock+=2+queued;queued=0;}
 enum class CacheLine{SINGLE_CACHE_LINE};enum class DcciDst{CACHELINE_OUT};
 template<class T>struct GlobalTensor{void SetGlobalBuffer(T*,unsigned){}};
 template<class T,CacheLine C,DcciDst D>void DataCacheCleanAndInvalid(GlobalTensor<T>&){++flushes;}
@@ -169,136 +161,79 @@ template<class T,CacheLine C,DcciDst D>void DataCacheCleanAndInvalid(GlobalTenso
 #include <vector>
 #include "csrc/kernels/dispatch/low_latency/common/ll_stage_timer_device.h"
 using namespace LlStageTimer;
-struct SplitProbe {
- DeviceTimer* timer_; unsigned flush=0,begin=0;
- void EndInputPrefetch(int){++flush;timer_->Transfer(REMOTE_FIRST_HOP,true,4096,3696);}
- void BeginInputPrefetch(){++begin;}
- void Split(AscendC::TPipe* p){(void)p;LL_BW_SPLIT_INPUT(0,p);}
-};
 int main(){
- static_assert(kSchema==17 && kWordsPerCore*8==1024 && kPointCount==18 && kExportWords==128);
- static_assert(kBandwidthStageCount==6 && kBandwidthRecordWords==16 && kBandwidthWordOffset==32);
+ static_assert(kSchema==18 && kWordsPerCore*8==1024 && kPointCount==40 && kExportWords==128);
+ static_assert(kCycleMetricCount==40 && kCycleMetricWordOffset==48 && kCycleMetricRecordWords==2);
+ static_assert(CycleMetricIndex(COMBINE_READY_SLOTS)==39 && CycleMetricIndex(KERNEL)==40);
  static_assert(DispatchDedup::kLlSendCoreNum==30 && DispatchDedup::kLlRecvCoreNum==26);
  static_assert(DispatchDedup::kLlCoreProtocolVersion==19030 && DispatchDedup::kLlDispatchUbBytes==230*1024);
  std::vector<uint64_t> words(56*kWordsPerCore+64,0);
  std::fill(words.end()-64,words.end(),0x12345678ULL);
  AscendC::core=55;
  DeviceTimer timer;timer.Init(reinterpret_cast<uint8_t*>(words.data()),1,1);
- auto* timer_=&timer;AscendC::TPipe pipe;
- unsigned sideEffects=0; auto clock=AscendC::clock;
+ auto* timer_=&timer;unsigned sideEffects=0;const auto initialReads=AscendC::reads;
  LL_SEG_SCOPE(INIT);LL_SEG_BEGIN(old,KERNEL);LL_SEG_END(old,KERNEL);
- LL_SEG_COUNT(TX_PACKETS,++sideEffects);LL_SEG_RELAY_COMPLETION(++sideEffects);LL_SEG_FIRST(BEFORE_FIRST_SEND);
+ LL_SEG_COUNT(RX_EMPTY_POLLS,++sideEffects);LL_SEG_RELAY_COMPLETION(++sideEffects);LL_SEG_FIRST(BEFORE_FIRST_SEND);
  LL_MTE3_WAIT_BEGIN(gone);LL_MTE3_WAIT_END(gone,TX_INPUT_READY);
  LL_MTE3_DRAIN_WHEN(++sideEffects,RX_REUSE_MTE3,5,++sideEffects);
- assert(sideEffects==0 && AscendC::clock==clock);
- timer.MarkAt<ENTRY>(clock);timer.Mark<INIT_DONE>();LL_SPARSE_WHEN(false,FIRST_RECV_READY);
+ LL_BW_BEGIN(++sideEffects,++sideEffects);LL_BW_END(++sideEffects,++sideEffects);
+ LL_BW_TRANSFER(++sideEffects,++sideEffects,++sideEffects,++sideEffects);LL_BW_SPLIT_INPUT(++sideEffects,++sideEffects);
+ assert(sideEffects==0 && AscendC::reads==initialReads);
+ timer.MarkAt<ENTRY>(0);timer.Mark<INIT_DONE>();LL_SPARSE_WHEN(false,FIRST_RECV_READY);
+ LL_SEG_BEGIN(zero,TOKEN_PACK);LL_SEG_END(zero,TOKEN_PACK);
+ AscendC::clock=10;
+ { LL_SEG_SCOPE(TOKEN_PACK);AscendC::clock=20;
+   { LL_SEG_SCOPE(TOKEN_PACK);AscendC::clock=30; }
+   AscendC::clock=40;
+ }
+ LL_SEG_COUNT(TX_PACKETS,++sideEffects);LL_SEG_COUNT(COMBINE_READY_SLOTS,0U);
+ LL_MTE3_SEND_LANES(6,true);LL_MTE3_RECV_LANES(4,true);
  timer.MarkIfSeen<FIRST_SEND,SEND_DONE>();LL_SPARSE_MARK(FIRST_SEND);
- auto afterFirst=AscendC::clock;
+ const auto afterFirst=AscendC::reads;
  for(unsigned i=0;i<10000;++i) LL_SPARSE_MARK(FIRST_SEND);
- assert(AscendC::clock==afterFirst);
+ assert(AscendC::reads==afterFirst);
+ LL_CYCLE_MARK(SOURCE_RETURN);LL_CYCLE_LOCAL_MARK(timer,COMBINE_ROLE_END);
  LL_SPARSE_AFTER(FIRST_SEND,SEND_DONE);timer.Mark<WORK_DONE>();
  assert(std::all_of(words.begin(),words.end()-64,[](auto value){return value==0;}));
  assert(AscendC::flushes==0);timer.Flush();
 #ifdef DEEPEP_LL_STAGE_TIMER
- assert(AscendC::clock==clock+4 && AscendC::flushes==16);
+ assert(sideEffects==1 && AscendC::flushes==16);
  auto* row=words.data()+55*kWordsPerCore;
- assert(((row[5]>>24)&255)==8 && ((row[5]>>8)&255)==30);
- assert(row[0]==kMagic && row[1]==17 && row[7]==0);
- assert(row[6]==((1ULL<<ENTRY)|(1ULL<<INIT_DONE)|(1ULL<<FIRST_SEND)|(1ULL<<SEND_DONE)|(1ULL<<WORK_DONE)));
- assert(row[8+ENTRY]<=row[8+INIT_DONE] && row[8+INIT_DONE]<row[8+FIRST_SEND]);
- assert(row[8+FIRST_SEND]<row[8+WORK_DONE] && row[8+RECV_DONE]==0);
+ assert(((row[5]>>24)&255)==9 && ((row[5]>>8)&255)==30);
+ assert(row[0]==kMagic && row[1]==18);
+ const uint64_t valid=(1ULL<<ENTRY)|(1ULL<<INIT_DONE)|(1ULL<<FIRST_SEND)|(1ULL<<SEND_DONE)|
+     (1ULL<<WORK_DONE)|(1ULL<<SOURCE_RETURN)|(1ULL<<COMBINE_ROLE_END);
+ assert(row[6]==valid && row[8+ENTRY]==0 && row[8+RECV_DONE]==0);
+ const auto selected=CycleMetricIndex(TOKEN_PACK);
+ assert(row[48+selected*2]==40 && row[49+selected*2]==3);
+ assert(row[48+34*2]==0 && row[49+34*2]==1);
+ assert(row[48+39*2]==0 && row[49+39*2]==0);
+ assert(row[7]==(6U|(4U<<8)|(1U<<16)|((1ULL<<selected|1ULL<<34|1ULL<<39)<<24)));
+ assert(row[7]>>63==1);
  assert(std::all_of(words.begin(),words.begin()+55*kWordsPerCore,[](auto value){return value==0;}));
- assert(std::all_of(row+24,row+kWordsPerCore,[](auto value){return value==0;}));
 #else
- (void)timer_;assert(AscendC::flushes==0 && AscendC::clock==clock);
+ (void)timer_;assert(sideEffects==0 && AscendC::flushes==0 && AscendC::reads==initialReads);
 #endif
- // Exact peer/self counters, observe without events, complete with one empty
- // control per nonempty interval, and no fake completed interval for empty work.
- for(unsigned mode: {1U,6U}) for(unsigned core: {0U,29U,30U,55U}) {
-   AscendC::core=core;AscendC::queued=9;
-   timer.Init(reinterpret_cast<uint8_t*>(words.data()),1,mode);
-   timer.SendLanes(6,true);timer.RecvLanes(4,true);timer.SendLanes(6,true);
-   auto before=AscendC::clock;auto events=AscendC::waits;
-   timer.BeginStage(RELAY,&pipe);
-   timer.Transfer(RELAY,true,4096,3696);AscendC::clock+=5;
-   timer.Transfer(RELAY,false,8192,7392);AscendC::queued=20;
-   timer.EndStage(RELAY,&pipe);
-   timer.BeginStage(RELAY,&pipe);timer.Transfer(RELAY,true,4096,3696);timer.EndStage(RELAY,&pipe);
-   timer.BeginStage(SOURCE_DIRECT,&pipe);timer.EndStage(SOURCE_DIRECT,&pipe);
-   timer.Flush();
+ timer.Init(nullptr,1,1);sideEffects=0;const auto before=AscendC::reads;
+ LL_SEG_COUNT(TX_PACKETS,++sideEffects);LL_MTE3_SEND_LANES(++sideEffects,false);
+ LL_MTE3_RECV_LANES(4,++sideEffects);LL_SPARSE_WHEN(++sideEffects,FIRST_RECV_READY);
+ { LL_SEG_SCOPE(TOKEN_PACK);LL_SEG_BEGIN(n,TOKEN_METADATA);LL_SEG_END(n,TOKEN_METADATA); }
+ timer.Mark<ENTRY>();timer.Flush();assert(!sideEffects && AscendC::reads==before);
 #ifdef DEEPEP_LL_STAGE_TIMER
-   auto* row=words.data()+core*kWordsPerCore;auto* stat=row+32+RELAY*16;
-   assert(row[7]==(6U|(4U<<8)|(1U<<16)) && (row[5]&255)==mode);
-   assert(stat[PEER_BYTES]==8192 && stat[SELF_BYTES]==8192);
-   assert(stat[PEER_PAYLOAD_BYTES]==7392 && stat[SELF_PAYLOAD_BYTES]==7392);
-   assert(stat[PEER_OPERATIONS]==2 && stat[SELF_OPERATIONS]==1);
-   assert(stat[FIRST_ISSUE_TICK]<=stat[LAST_ISSUE_TICK] && stat[BANDWIDTH_RESERVED]==0);
-   if(mode==6) {
-     assert(AscendC::waits-events==7 && stat[COMPLETED_INTERVALS]==2 && stat[COMPLETED_OPERATIONS]==3);
-     assert(stat[PRE_DRAIN_TICKS]==15 && stat[END_DRAIN_TICKS]==26 && stat[EMPTY_CONTROL_TICKS]==6);
-     assert(stat[LAST_COMPLETION_TICK]>=stat[LAST_ISSUE_TICK]);
-     assert(stat[COMPLETED_ELAPSED_TICKS]>=stat[END_DRAIN_TICKS]);
-     auto* empty=row+32+SOURCE_DIRECT*16;
-     assert(empty[PRE_DRAIN_TICKS]>0);
-     for(unsigned f=0;f<16;++f) if(f!=PRE_DRAIN_TICKS) assert(empty[f]==0);
-   } else {
-     assert(AscendC::waits==events);
-     for(unsigned f=LAST_COMPLETION_TICK;f<16;++f) assert(stat[f]==0);
-   }
-#else
-   assert(AscendC::waits==events && AscendC::clock==before+5);
-#endif
-   // Runtime-disabled and OFF paths must not evaluate any new macro argument.
-   timer.Init(nullptr,1,mode);before=AscendC::clock;events=AscendC::waits;
-   LL_BW_BEGIN(BandwidthStage(++sideEffects),&pipe);
-   LL_BW_TRANSFER(BandwidthStage(++sideEffects),true,32,0);
-   LL_BW_TRANSFER(RELAY,++sideEffects,32,0);
-   LL_BW_TRANSFER(RELAY,true,++sideEffects,0);
-   LL_BW_TRANSFER(RELAY,true,32,++sideEffects);
-   LL_BW_END(BandwidthStage(++sideEffects),&pipe);
-   SplitProbe noCapture{&timer};noCapture.Split(&pipe);
-   assert(!noCapture.flush && !noCapture.begin && sideEffects==0);
-   timer.Mark<ENTRY>();timer.Flush();assert(AscendC::clock==before && AscendC::waits==events);
- }
- // The phase split flushes its pending FIRST_HOP before opening SOURCE_DIRECT.
- for(unsigned mode: {1U,6U}) {
-   timer.Init(reinterpret_cast<uint8_t*>(words.data()),1,mode);
-   timer.BeginStage(REMOTE_FIRST_HOP,&pipe);SplitProbe split{&timer};split.Split(&pipe);
-#ifdef DEEPEP_LL_STAGE_TIMER
-   assert(split.flush==(mode==6) && split.begin==(mode==6));
-#else
-   assert(!split.flush && !split.begin);
-#endif
-   timer.EndStage(SOURCE_DIRECT,&pipe);timer.Flush();
- }
-#ifdef DEEPEP_LL_STAGE_TIMER
- AscendC::core=0;
- timer.Init(reinterpret_cast<uint8_t*>(words.data()),1,1);timer.RecvLanes(3,true);timer.SendLanes(5,true);timer.Flush();
- assert(words[7]==(5U|(3U<<8)|(1U<<16)));
- bool bad=false;try{timer.SendLanes(5,false);}catch(const std::runtime_error&){bad=true;}assert(bad);
- for(unsigned mode: {0U,2U,3U,4U,5U,7U}) {
+ for(unsigned mode: {0U,2U,3U,4U,5U,6U,7U}) {
    bool bad=false;try{timer.Init(reinterpret_cast<uint8_t*>(words.data()),1,mode);}catch(const std::runtime_error&){bad=true;}assert(bad);
  }
- bool badCombine=false;try{timer.Init(reinterpret_cast<uint8_t*>(words.data()),2,6);}catch(const std::runtime_error&){badCombine=true;}assert(badCombine);
- timer.Init(reinterpret_cast<uint8_t*>(words.data()),2,1);timer.Transfer(RELAY,true,4096,3696);timer.Flush();
- assert(std::all_of(words.begin()+32,words.begin()+128,[](auto v){return v==0;}));
- // Corrupt accounting lifecycle must fail rather than silently mix phases.
- for(unsigned fault: {0U,1U,2U,3U}) {
-   timer.Init(reinterpret_cast<uint8_t*>(words.data()),1,6);timer.BeginStage(RELAY,&pipe);
-   bool bad=false;try{
-     if(fault==0) timer.BeginStage(SOURCE_DIRECT,&pipe);
-     if(fault==1) timer.Transfer(SOURCE_DIRECT,true,32,0);
-     if(fault==2) timer.EndStage(SOURCE_DIRECT,&pipe);
-     if(fault==3) timer.Flush();
-   }catch(const std::runtime_error&){bad=true;}assert(bad);
- }
+ AscendC::core=0;timer.Init(reinterpret_cast<uint8_t*>(words.data()),2,1);
+ { LL_SEG_SCOPE(COMBINE_SEND); }
+ LL_SEG_COUNT(COMBINE_READY_SLOTS,4U);timer.Flush();
+ assert(words[2]==2 && words[49+39*2]==4 && words[49+CycleMetricIndex(COMBINE_SEND)*2]==1);
 #endif
  assert(std::all_of(words.end()-64,words.end(),[](auto v){return v==0x12345678ULL;}));
 }
 ''')
     executable=tmp_path/'check'
     subprocess.run([compiler,'-std=c++17','-Wall','-Wextra','-Werror',
-                    *(['-DDEEPEP_LL_STAGE_TIMER=1'] if enabled else []),'-DDEEPEP_LL_TIMER_PROFILE_ID=8',
+                    *(['-DDEEPEP_LL_STAGE_TIMER=1'] if enabled else []),'-DDEEPEP_LL_TIMER_PROFILE_ID=9',
                     '-DDEEPEP_LL_SEND_CORES=30','-DDEEPEP_LL_RECV_CORES=26',
                     '-I',str(tmp_path),'-I',str(ROOT),str(source),'-o',str(executable)],check=True)
     subprocess.run([str(executable)],check=True,timeout=30)
@@ -315,7 +250,7 @@ def run_sparse_host_selector_mock(tmp_path,enabled):
 #include "csrc/kernels/dispatch/low_latency/launch.hpp"
 using namespace DispatchDedup;
 static unsigned calls=0,selected=99;
-#define STUB(name,n) extern "C" void dispatch_server_dedup_launch_bw17_##name(void*,const deepep::EpServerDedupKernelArgs*) {++calls;selected=n;}
+#define STUB(name,n) extern "C" void dispatch_server_dedup_launch_sc18_##name(void*,const deepep::EpServerDedupKernelArgs*) {++calls;selected=n;}
 STUB(prequant_e4m3,0) STUB(fp16,1) STUB(fp16_e4m3,2) STUB(fp16_e5m2,3)
 STUB(bf16,4) STUB(bf16_e4m3,5) STUB(bf16_e5m2,6)
 int main() {
@@ -329,14 +264,14 @@ int main() {
  }
  deepep::EpServerDedupKernelArgs args{};
  static_assert(sizeof(args)==152);
- for(unsigned m=0;m<7;++m) {calls=0;dispatch_server_dedup_kernel_do_bw17(nullptr,&args,m);assert(calls==1 && selected==m);}
+ for(unsigned m=0;m<7;++m) {calls=0;dispatch_server_dedup_kernel_do_sc18(nullptr,&args,m);assert(calls==1 && selected==m);}
  for(unsigned m:{7U,255U,0xffffffffU}) {
-   calls=0;bool threw=false;try {dispatch_server_dedup_kernel_do_bw17(nullptr,&args,m);}catch(const std::invalid_argument&){threw=true;}
+   calls=0;bool threw=false;try {dispatch_server_dedup_kernel_do_sc18(nullptr,&args,m);}catch(const std::invalid_argument&){threw=true;}
    assert(threw && !calls);
  }
- bool threw=false;try {dispatch_server_dedup_kernel_do_bw17(nullptr,nullptr,0);}catch(const std::invalid_argument&){threw=true;}assert(threw);
+ bool threw=false;try {dispatch_server_dedup_kernel_do_sc18(nullptr,nullptr,0);}catch(const std::invalid_argument&){threw=true;}assert(threw);
  assert(deepep_ll_core_protocol_version()==19030 && deepep_ll_ranks_per_group()==4);
- assert(deepep_ll_stage_timer_schema()==17 && deepep_ll_stage_timer_profile_id()==8);
+ assert(deepep_ll_stage_timer_schema()==18 && deepep_ll_stage_timer_profile_id()==9);
 #ifdef DEEPEP_LL_STAGE_TIMER
  assert(deepep_ll_stage_timer_enabled()==1);
 #else
@@ -359,7 +294,7 @@ def test_non_sparse_profile_cannot_compile(tmp_path):
     source.write_text('#include "csrc/kernels/dispatch/low_latency/common/ll_stage_timer_profile.h"\n',encoding='utf-8')
     result=subprocess.run([compiler,'-std=c++17','-DDEEPEP_LL_TIMER_PROFILE_ID=0','-I',str(ROOT),
                            '-c',str(source),'-o',str(tmp_path/'profile.o')],capture_output=True,text=True)
-    assert result.returncode!=0 and 'supports stage-bandwidth diagnostics only' in result.stderr
+    assert result.returncode!=0 and 'supports SystemCycle stages only' in result.stderr
 
 @pytest.mark.parametrize('corruption',[None,'missing_point','unused_tail'])
 def test_device_smoke_offline_contract(tmp_path,corruption):
@@ -371,13 +306,13 @@ def test_device_smoke_offline_contract(tmp_path,corruption):
     for core in range(56):
         words=[0]*128
         role=3 if core<30 else 2
-        words[:8]=[0x4c4c5431,17,1,56,core,1|(30<<8)|(role<<16)|(8<<24),0,0]
+        words[:8]=[0x4c4c5431,18,1,56,core,1|(30<<8)|(role<<16)|(9<<24),0,0]
         for sequence,name in enumerate(visited):
             index=points.index(name)
             words[6]|=1<<index;words[8+index]=100+sequence
         if core==0 and corruption=='missing_point':
             index=points.index('RECV_DONE');words[6]&=~(1<<index);words[8+index]=0
-        if core==0 and corruption=='unused_tail':words[26]=1
+        if core==0 and corruption=='unused_tail':words[127]=1
         output.append([words[i:i+8] for i in range(0,128,8)])
     (tmp_path/'raw-1-1.json').write_text(json.dumps(output),encoding='utf-8')
     result=subprocess.run([sys.executable,str(ROOT/'tests/ll_stage_timer/check_device.py'),str(tmp_path)],

@@ -1,5 +1,11 @@
 # 泛化分支生产LL路径
 
+当前独立 `kernel/ll-g4-systemcycle-profile` 基于恢复baseline78e9fb4，业务9027275。
+schema18/profile9采用40主时点与40项精选累计/计数，保留原同步，末尾每核独立写出。
+入口及阶段点为 `LL_CYCLE_*`，精选旧 `LL_SEG_*` 映射由 `common/ll_stage_timer_layout.h` 定义。
+新一键采样、阶段字典、Excel导出见 [../ll_systemcycle/README.md](../ll_systemcycle/README.md)。
+下方schema17/旧候选为历史指南，不作为本分支当前native格式。
+
 当前业务恢复用户指定的9027275基线，失败Vector-tail候选仅保留历史固定源码入口。
 当前schema17/profile8在counts.h、send.h、recv.h的真实DataCopy前统计六类发送，
 由ll_stage_timer_device.h统一保存peer/self字节和显式完成区间。

@@ -1,49 +1,105 @@
 // Copyright (c) 2025 Huawei Technologies Co., Ltd.
-// Adapted from graph_dc_debug_seg@e58ece1, mc2/common/op_kernel/dc_seg_profiler.h.
+// Legacy stage identifiers adapted from graph_dc_debug_seg@e58ece1,
+// mc2/common/op_kernel/dc_seg_profiler.h.
 // Licensed under CANN Open Software License Agreement Version 2.0;
 // see docs/licenses/CANN-Open-Software-License-2.0.txt. Provided AS IS without warranties.
+// SystemCycle scalar milestones and selected cumulative intervals.
 #pragma once
 #include <cstdint>
 namespace LlStageTimer {
-constexpr uint32_t kSchema = 17U;
+constexpr uint32_t kSchema = 18U;
 constexpr uint64_t kMagic = 0x4c4c5431ULL;
+// Legacy source IDs remain stable; only kCycleMetricStages are collected.
 constexpr uint32_t kTraceRecords = 192U, kMetrics = 108U;
 constexpr uint32_t kRecords = kTraceRecords + kMetrics;
-// Sparse per-core timestamps; legacy stage IDs below remain source identifiers only.
 constexpr uint32_t kSlots = 16U, kFields = 8U;
 constexpr uint32_t kWordsPerCore = kSlots * kFields;
 constexpr uint32_t kRecordWordOffset = 8U;
 enum Point : uint32_t {
-    ENTRY=0, INIT_DONE, COUNTS_SENT, COUNTS_RECEIVED, PREFIX_LOCAL_DONE,
-    PREFIX_READY, SEND_PREPARED, FIRST_SEND, SEND_DONE, RECV_PREPARED,
-    FIRST_RECV_PROBE, FIRST_RECV_READY, RECV_DONE, WORK_DONE,
-    SOURCE_SUBMIT_DONE, PREFIX_WAIT_ENTER, PREFIX_WAIT_EXIT, RECV_PENDING_EMPTY, PointCount
+    ENTRY=0,
+    INIT_DONE,
+    COUNTS_SENT,
+    COUNTS_RECEIVED,
+    PREFIX_LOCAL_DONE,
+    PREFIX_READY,
+    SEND_PREPARED,
+    FIRST_SEND,
+    SEND_DONE,
+    RECV_PREPARED,
+    FIRST_RECV_PROBE,
+    FIRST_RECV_READY,
+    RECV_DONE,
+    WORK_DONE,
+    SOURCE_SUBMIT_DONE,
+    PREFIX_WAIT_ENTER,
+    PREFIX_WAIT_EXIT,
+    RECV_PENDING_EMPTY,
+    ENTRY_SETUP_DONE,
+    LAYOUT_DONE,
+    MAGIC_DONE,
+    COUNTS_INIT_DONE,
+    COUNTS_BEGIN,
+    SOURCE_BEGIN,
+    SOURCE_RETURN,
+    COUNTS_WAIT_BEGIN,
+    PREFIX_BEGIN,
+    PREFIX_RETURN,
+    COMPLETE_PREFIX_BEGIN,
+    COMPLETE_PREFIX_RETURN,
+    RECV_BEGIN,
+    RECV_TASKS_DONE,
+    RECV_BUFFERS_DONE,
+    RETIRE_BEGIN,
+    RETIRE_END,
+    FINISH_BEGIN,
+    COMBINE_PREPARE_BEGIN,
+    COMBINE_PREPARE_END,
+    COMBINE_ROLE_BEGIN,
+    COMBINE_ROLE_END,
+    PointCount
 };
 constexpr uint32_t kPointCount=uint32_t(PointCount);
-constexpr const char* kPointNames[] = {
-    "ENTRY", "INIT_DONE", "COUNTS_SENT", "COUNTS_RECEIVED", "PREFIX_LOCAL_DONE",
-    "PREFIX_READY", "SEND_PREPARED", "FIRST_SEND", "SEND_DONE", "RECV_PREPARED",
-    "FIRST_RECV_PROBE", "FIRST_RECV_READY", "RECV_DONE", "WORK_DONE",
-    "SOURCE_SUBMIT_DONE", "PREFIX_WAIT_ENTER", "PREFIX_WAIT_EXIT", "RECV_PENDING_EMPTY"
-};
-// Header/timestamps occupy words0..25; words26..31 remain reserved and zero.
-enum BandwidthStage : uint32_t {
-    COUNT_CONTROL=0, PREFIX_LOCAL, REMOTE_FIRST_HOP, SOURCE_DIRECT, GROUP_LOCAL, RELAY, BandwidthStageCount
-};
-enum BandwidthField : uint32_t {
-    PEER_BYTES=0, SELF_BYTES, PEER_PAYLOAD_BYTES, SELF_PAYLOAD_BYTES, PEER_OPERATIONS, SELF_OPERATIONS,
-    FIRST_ISSUE_TICK, LAST_ISSUE_TICK, LAST_COMPLETION_TICK, COMPLETED_ELAPSED_TICKS, COMPLETED_INTERVALS,
-    PRE_DRAIN_TICKS, END_DRAIN_TICKS, EMPTY_CONTROL_TICKS, COMPLETED_OPERATIONS, BANDWIDTH_RESERVED
-};
-constexpr uint32_t kBandwidthStageCount=uint32_t(BandwidthStageCount);
-constexpr uint32_t kBandwidthWordOffset=32U, kBandwidthRecordWords=16U;
-constexpr const char* kBandwidthStageNames[]={
-    "COUNT_CONTROL", "PREFIX_LOCAL", "REMOTE_FIRST_HOP", "SOURCE_DIRECT", "GROUP_LOCAL", "RELAY"
-};
-constexpr const char* kBandwidthFieldNames[]={
-    "peer_bytes", "self_bytes", "peer_payload_bytes", "self_payload_bytes", "peer_operations", "self_operations",
-    "first_issue_tick", "last_issue_tick", "last_completion_tick", "completed_elapsed_ticks", "completed_intervals",
-    "pre_drain_ticks", "end_drain_ticks", "empty_control_ticks", "completed_operations", "reserved"
+constexpr const char* kPointNames[]={
+    "ENTRY",
+    "INIT_DONE",
+    "COUNTS_SENT",
+    "COUNTS_RECEIVED",
+    "PREFIX_LOCAL_DONE",
+    "PREFIX_READY",
+    "SEND_PREPARED",
+    "FIRST_SEND",
+    "SEND_DONE",
+    "RECV_PREPARED",
+    "FIRST_RECV_PROBE",
+    "FIRST_RECV_READY",
+    "RECV_DONE",
+    "WORK_DONE",
+    "SOURCE_SUBMIT_DONE",
+    "PREFIX_WAIT_ENTER",
+    "PREFIX_WAIT_EXIT",
+    "RECV_PENDING_EMPTY",
+    "ENTRY_SETUP_DONE",
+    "LAYOUT_DONE",
+    "MAGIC_DONE",
+    "COUNTS_INIT_DONE",
+    "COUNTS_BEGIN",
+    "SOURCE_BEGIN",
+    "SOURCE_RETURN",
+    "COUNTS_WAIT_BEGIN",
+    "PREFIX_BEGIN",
+    "PREFIX_RETURN",
+    "COMPLETE_PREFIX_BEGIN",
+    "COMPLETE_PREFIX_RETURN",
+    "RECV_BEGIN",
+    "RECV_TASKS_DONE",
+    "RECV_BUFFERS_DONE",
+    "RETIRE_BEGIN",
+    "RETIRE_END",
+    "FINISH_BEGIN",
+    "COMBINE_PREPARE_BEGIN",
+    "COMBINE_PREPARE_END",
+    "COMBINE_ROLE_BEGIN",
+    "COMBINE_ROLE_END",
 };
 constexpr uint32_t kExportWords=kWordsPerCore;
 enum Stage : uint32_t {
@@ -270,8 +326,102 @@ constexpr const char* kNames[] = {
 
 
 };
-static_assert(kRecordWordOffset+kPointCount<=kBandwidthWordOffset, "point/bandwidth layout overlap");
-static_assert(kBandwidthWordOffset+kBandwidthStageCount*kBandwidthRecordWords==kWordsPerCore, "bandwidth capacity");
-static_assert(kPointCount < 64U, "point validity bitmap");
-static_assert(kWordsPerCore * sizeof(uint64_t) % 512U == 0U, "core alignment");
+constexpr uint32_t kCycleMetricCount=40U, kCycleMetricWordOffset=48U, kCycleMetricRecordWords=2U;
+constexpr uint32_t kCycleCounterBegin=34U;
+constexpr Stage kCycleMetricStages[]={
+    COUNT_COMPUTE,
+    Q_SEED_SUBMIT,
+    Q_SEED_WAIT,
+    Q_LOCAL_UPDATE,
+    ROUTE_CLASSIFY,
+    DIRECT_PLAN,
+    TOKEN_INPUT_WAIT,
+    TOKEN_QUANT_WAIT,
+    TOKEN_METADATA,
+    TOKEN_PACK,
+    TOKEN_SEND_ISSUE,
+    RECV_POLL,
+    RX_FLAG_WAIT,
+    RX_FLAG_REDUCE,
+    RX_FLAG_DECODE,
+    RX_PAYLOAD_READY_WAIT,
+    RX_METADATA,
+    RELAY_ISSUE,
+    RX_PAYLOAD_OUTPUT,
+    RX_META_OUTPUT,
+    RX_PENDING_UPDATE,
+    FINAL_DRAIN,
+    COMBINE_SEND,
+    COMBINE_RECV,
+    COMBINE_SEND_FINISH,
+    COMBINE_INDEX_INPUT,
+    COMBINE_INPUT,
+    COMBINE_BUFFER_WAIT,
+    COMBINE_COPY_PACK,
+    COMBINE_SEND_ISSUE,
+    COMBINE_RECV_POLL,
+    COMBINE_DEQUANT_REDUCE,
+    COMBINE_PROCESS_TOKEN,
+    COMBINE_CLEAR_FLAGS,
+    TX_PACKETS,
+    RX_PACKETS,
+    RELAY_PACKETS,
+    RX_PROBED,
+    RX_READY,
+    COMBINE_READY_SLOTS,
+};
+constexpr const char* kCycleMetricNames[]={
+    "COUNT_COMPUTE",
+    "Q_SEED_SUBMIT",
+    "Q_SEED_WAIT",
+    "Q_LOCAL_UPDATE",
+    "ROUTE_CLASSIFY",
+    "DIRECT_PLAN",
+    "TOKEN_INPUT_WAIT",
+    "TOKEN_QUANT_WAIT",
+    "TOKEN_METADATA",
+    "TOKEN_PACK",
+    "TOKEN_SEND_ISSUE",
+    "RECV_POLL",
+    "RX_FLAG_WAIT",
+    "RX_FLAG_REDUCE",
+    "RX_FLAG_DECODE",
+    "RX_PAYLOAD_READY_WAIT",
+    "RX_METADATA",
+    "RELAY_ISSUE",
+    "RX_PAYLOAD_OUTPUT",
+    "RX_META_OUTPUT",
+    "RX_PENDING_UPDATE",
+    "FINAL_DRAIN",
+    "COMBINE_SEND",
+    "COMBINE_RECV",
+    "COMBINE_SEND_FINISH",
+    "COMBINE_INDEX_INPUT",
+    "COMBINE_INPUT",
+    "COMBINE_BUFFER_WAIT",
+    "COMBINE_COPY_PACK",
+    "COMBINE_SEND_ISSUE",
+    "COMBINE_RECV_POLL",
+    "COMBINE_DEQUANT_REDUCE",
+    "COMBINE_PROCESS_TOKEN",
+    "COMBINE_CLEAR_FLAGS",
+    "TX_PACKETS",
+    "RX_PACKETS",
+    "RELAY_PACKETS",
+    "RX_PROBED",
+    "RX_READY",
+    "COMBINE_READY_SLOTS",
+};
+constexpr uint32_t CycleMetricIndex(Stage stage) {
+    for(uint32_t i=0;i<kCycleMetricCount;++i) if(kCycleMetricStages[i]==stage) return i;
+    return kCycleMetricCount;
+}
+constexpr bool CycleMetricSelected(Stage stage) { return CycleMetricIndex(stage)<kCycleMetricCount; }
+constexpr bool CycleMetricCounter(Stage stage) {
+    return CycleMetricSelected(stage) && CycleMetricIndex(stage)>=kCycleCounterBegin;
+}
+static_assert(kRecordWordOffset+kPointCount==kCycleMetricWordOffset, "point/metric layout");
+static_assert(kCycleMetricWordOffset+kCycleMetricCount*kCycleMetricRecordWords==kWordsPerCore, "metric capacity");
+static_assert(kPointCount==40U && kCycleMetricCount==40U, "validity bitmap widths");
+static_assert(kWordsPerCore*sizeof(uint64_t)%512U==0U, "core alignment");
 }
