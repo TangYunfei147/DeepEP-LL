@@ -22,8 +22,11 @@ __aicore__ inline bool RemoteWrite(const __gm__ Args* a, uint32_t peer) { return
 __aicore__ inline void Check(const __gm__ Args* a, uint32_t peer, uint64_t offset, uint64_t bytes) {
     if (peer >= uint32_t(a->rankSize) || offset > a->peerMemBytes || bytes > a->peerMemBytes - offset) Trap();
 }
+__aicore__ inline GM_ADDR RemoteAddress(const __gm__ Args* a, uint32_t peer, uint64_t offset) {
+    return a->reservedAddresses[0] + uint64_t(peer) * 1024U + offset;
+}
 __aicore__ inline GM_ADDR Address(const __gm__ Args* a, uint32_t peer, uint64_t offset) {
-    return RemoteWrite(a, peer) ? a->reservedAddresses[0] + uint64_t(peer) * 1024U + offset : a->peerMems[peer] + offset;
+    return RemoteWrite(a, peer) ? RemoteAddress(a, peer, offset) : a->peerMems[peer] + offset;
 }
 __aicore__ inline GlobalTensor<uint8_t> Tensor(GM_ADDR p, bool uncached=false) {
     GlobalTensor<uint8_t> t; t.SetGlobalBuffer(p);

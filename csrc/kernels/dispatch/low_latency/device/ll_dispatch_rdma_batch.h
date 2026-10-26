@@ -9,8 +9,9 @@ class DispatchRdmaBatch {
     const __gm__ Args* args_ = nullptr;
     uint32_t bytes_ = 0, slotBytes_ = 0, capacity_ = 0, count_ = 0;
     bool gated_ = false;
+    GM_ADDR stageBase_ = nullptr;
     uint32_t peers_[kMaxPackets]{};
-    uint64_t offsets_[kMaxPackets]{};
+    GM_ADDR destinations_[kMaxPackets]{};
     LlStageTimer::DeviceTimer* timer_ = nullptr;
 
     __aicore__ inline bool FirstPeer(uint32_t index) const {
@@ -39,6 +40,10 @@ public:
         gated_ = slotBytes_ <= LlRdma::kCoreBytes;
         const uint32_t slots = gated_ ? LlRdma::kCoreBytes / slotBytes_ : 1U;
         capacity_ = slots < kMaxPackets ? slots : kMaxPackets;
+        // EP16 has no ROCE staging allocation and never enqueues remote writes.
+        // The multi-host stage/QP contract and base are fixed for this kernel.
+        if (uint32_t(args_->rankSize) > DispatchDedup::kLlPhysicalRanksPerHost)
+            stageBase_ = Stage(args_, gated_ ? capacity_ * slotBytes_ : bytes_);
     }
     __aicore__ inline bool Pending() const { return count_ != 0U; }
 
@@ -47,22 +52,23 @@ public:
     // SDK scratch may clobber the packet's first 128B after staging: sender
     // repacks all body bytes on reuse, while flags at 480+512*n remain intact.
     __aicore__ inline void Enqueue(uint32_t peer, uint64_t offset, LocalTensor<uint8_t> packet) {
-        if (!capacity_ || count_ >= capacity_ || !RemoteWrite(args_, peer)) { Trap(); return; }
-        Check(args_, peer, offset, bytes_);
         // Preserve the original helper's extreme 128KiB input capability when
         // no gate copy fits. Admitted sender UB layouts are smaller than this.
         if (!gated_) { Packet(args_, peer, offset, packet, bytes_, 7U, timer_); return; }
-        auto base = Stage(args_, capacity_ * slotBytes_);
-        auto stage = base + uint64_t(count_) * slotBytes_;
+        // The sender already selected RemoteWrite; Flush at capacity owns the
+        // private slot count. Only the route-dependent range needs checking.
+        Check(args_, peer, offset, bytes_);
+        auto stage = stageBase_ + uint64_t(count_) * slotBytes_;
         if (timer_) timer_->Start(LlStageTimer::SendRdmaStage);
         DataCopy(Tensor(stage, true), packet, bytes_);
         DataCopy(Tensor(stage + bytes_, true), packet[480U], 32U);
         Sync<HardEvent::MTE3_S>(7U);
         ClearBodyGate(stage);
         if (timer_) timer_->End(LlStageTimer::SendRdmaStage);
-        peers_[count_] = peer; offsets_[count_] = offset;
+        peers_[count_] = peer;
         if (timer_) timer_->Start(LlStageTimer::SendRdmaBodyPost);
-        auto dst = Address(args_, peer, offset);
+        auto dst = RemoteAddress(args_, peer, offset);
+        destinations_[count_] = dst;
         // Receiver sums every 32B flag block. With the first block zero, even
         // an arbitrarily reordered/partially visible body cannot signal ready.
         Put(args_, peer, dst, stage, bytes_, packet);
@@ -81,11 +87,10 @@ public:
         if (timer_) timer_->Start(LlStageTimer::SendRdmaBodyWait);
         for (uint32_t i = 0; i < count_; ++i) if (FirstPeer(i)) Quiet(peers_[i], scratch);
         if (timer_) timer_->End(LlStageTimer::SendRdmaBodyWait);
-        auto base = Stage(args_, capacity_ * slotBytes_);
         if (timer_) timer_->Start(LlStageTimer::SendRdmaFlagPost);
         for (uint32_t i = 0; i < count_; ++i) {
-            auto dst = Address(args_, peers_[i], offsets_[i]);
-            auto gate = base + uint64_t(i) * slotBytes_ + bytes_;
+            auto dst = destinations_[i];
+            auto gate = stageBase_ + uint64_t(i) * slotBytes_ + bytes_;
             // Only the original first flag is published after all bodies quiet.
             // Other flags were transported in the body; final wire bytes match.
             Put(args_, peers_[i], dst + 480U, gate, 32U, scratch);

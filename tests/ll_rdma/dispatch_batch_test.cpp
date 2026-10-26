@@ -136,10 +136,12 @@ int main() {
     try { failedGate.Flush({ub.data()}); } catch(const std::runtime_error&) { caught=true; }
     assert(caught && failedGate.Pending());
     Model::pending.clear();Model::before={};
-    // Invalid destinations and shapes fail rather than using a wrong staging view.
+    // The sender chooses MTE versus RDMA once. The internal batch accepts only
+    // that remote branch, retaining checks for route-dependent peer/range bounds.
     LlTransport::DispatchRdmaBatch batch;batch.Init(&args,4096,nullptr);
+    assert(!LlTransport::RemoteWrite(&args,1) && LlTransport::RemoteWrite(&args,16));
     caught=false;
-    try { batch.Enqueue(1,0,{ub.data()}); } catch(const std::runtime_error&) { caught=true; }
+    try { batch.Enqueue(uint32_t(args.rankSize),0,{ub.data()}); } catch(const std::runtime_error&) { caught=true; }
     assert(caught);
     // Switching to the extreme fallback cannot silently forget pending data.
     batch.Init(&args,4096,nullptr);
