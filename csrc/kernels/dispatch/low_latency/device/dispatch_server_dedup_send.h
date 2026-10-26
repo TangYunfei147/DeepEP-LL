@@ -16,7 +16,6 @@
 #include "../common/ep_memory_server_dedup_protocol.h"
 #include "../common/ll_send_order.h"
 #include "../common/ll_input_prefetch.h"
-#include "../common/ll_prequant_vector_tail.h"
 #include "../common/ll_local_q.h"
 #include "../../../common/ep_packet_receive_layout.h"
 
@@ -50,9 +49,6 @@ public:
         k_ = k;
         localExperts_ = experts / args->rankSize;
         const uint32_t core = GetBlockIdx();
-        // ConfigureOverlap precedes Init. Decide once, before either sender
-        // path allocates events; R/local, serial and other modes stay unchanged.
-        vectorTail_ = LlUsePrequantVectorTail(Prequantized, enableDedup_, overlap_.Async(), core, sendCores_);
         const uint32_t base = bs / sendCores_, remainder = bs % sendCores_;
         count_ = base + (core < remainder ? 1U : 0U);
         start_ = core * base + (core < remainder ? core : remainder);
@@ -524,39 +520,6 @@ private:
             }
         index.SetValue(0U, entries);
     }
-    struct VectorTailWriter {
-        LocalTensor<uint8_t> payload;
-        __aicore__ inline void Word(uint32_t byteOffset, uint32_t value) {
-            const auto store = LlPlanTailWordStore(byteOffset);
-            uint64_t mask[2] = {store.mask, 0U};
-            Duplicate<uint32_t>(payload.template ReinterpretCast<uint32_t>()[store.blockByteOffset / 4U],
-                                value, mask, 1U, 1U, 8U);
-        }
-    };
-    struct VectorTailMetadata {
-        ServerDedupSender& sender;
-        __aicore__ inline uint32_t Expert(uint32_t routeIndex) {
-            return uint32_t(sender.routeIds_.GetValue(routeIndex));
-        }
-        __aicore__ inline uint32_t Q(uint32_t expert, uint32_t routeIndex) {
-            return sender.CalTokenSendExpertCnt(expert, routeIndex);
-        }
-        __aicore__ inline uint32_t WeightBits(uint32_t localIndex) {
-            return sender.routeWeights_.template ReinterpretCast<uint32_t>().GetValue(localIndex);
-        }
-    };
-    __aicore__ inline void FillVectorTail(LocalTensor<uint8_t> payload, uint32_t token,
-                                         uint32_t firstK, uint32_t mask)
-    {
-        VectorTailWriter writer{payload};
-        VectorTailMetadata metadata{*this};
-        LlEmitPrequantVectorTail(writer, metadata, uint32_t(data_.headerPayloadOffset),
-            uint32_t(data_.readIndexPayloadOffset), uint32_t(args_->rank), token, firstK, mask, start_, k_);
-        // All packet writes now belong to V. DeQue's MTE2_V and FreeTensor's
-        // V_MTE2 protect current DMA and old input readers; no scalar payload
-        // store can run ahead of those dependencies when MTE3 stalls a lane.
-        PipeBarrier<PIPE_V>();
-    }
     // The generator retains its original ordering; only execution is delayed
     // by one descriptor so next-input MTE2 can overlap current compute/pack.
     __aicore__ inline void SendPacket(TQue<QuePosition::VECIN,1>& input,uint32_t token,uint32_t firstK,
@@ -571,10 +534,8 @@ private:
         inputPrefetch_.Reset();
         inputsIssued_=0U;
         if constexpr (!NeedQuantize) {
-            if (!vectorTail_) {
-                inputReady_[0]=overlap_.enabled ? TEventID(6) : pipe_->AllocEventID<HardEvent::MTE2_S>();
-                inputReady_[1]=overlap_.enabled ? TEventID(7) : pipe_->AllocEventID<HardEvent::MTE2_S>();
-            }
+            inputReady_[0]=overlap_.enabled ? TEventID(6) : pipe_->AllocEventID<HardEvent::MTE2_S>();
+            inputReady_[1]=overlap_.enabled ? TEventID(7) : pipe_->AllocEventID<HardEvent::MTE2_S>();
         }
     }
     __aicore__ inline void EndInputPrefetch(TQue<QuePosition::VECIN,1>& input)
@@ -582,9 +543,9 @@ private:
         PrefetchOps ops{*this,input};
         inputPrefetch_.Flush(ops); // Includes singleton and final packet.
         if constexpr (!NeedQuantize) {
-            if (!vectorTail_ && !overlap_.enabled) {
-                pipe_->ReleaseEventID<HardEvent::MTE2_S>(inputReady_[0]);
-                pipe_->ReleaseEventID<HardEvent::MTE2_S>(inputReady_[1]);
+            if (!overlap_.enabled) {
+            pipe_->ReleaseEventID<HardEvent::MTE2_S>(inputReady_[0]);
+            pipe_->ReleaseEventID<HardEvent::MTE2_S>(inputReady_[1]);
             }
         }
     }
@@ -603,10 +564,8 @@ private:
             DataCopyPad(scale,inputScales_[uint64_t(token)*data_.scaleBytes],
                         {1U,uint32_t(data_.scaleBytes),0U,0U,0U},{false,0U,0U,uint8_t(0)});
         }
-        if constexpr (!NeedQuantize) {
-            if (!vectorTail_)
-                SetFlag<HardEvent::MTE2_S>(inputReady_[inputsIssued_&1U]);
-        }
+        if constexpr (!NeedQuantize)
+            SetFlag<HardEvent::MTE2_S>(inputReady_[inputsIssued_&1U]);
         input.EnQue(x);
         ++inputsIssued_;
         LL_SEG_END(segBegin2, TOKEN_INPUT);
@@ -642,22 +601,19 @@ private:
             LL_MTE3_WAIT_END(txQuantWait,TX_INPUT_READY);
             LL_SEG_END(quantWaitBegin, TOKEN_QUANT_WAIT);
         } else {
-            if (!vectorTail_) {
-                LL_SEG_BEGIN(inputWaitBegin, TOKEN_INPUT_WAIT);
-                // This marker precedes the NEXT input's DMA. A fresh SetFlag here
-                // would instead wait for both inputs and destroy the overlap.
-                LL_MTE3_WAIT_BEGIN(txInputWait);
-                WaitFlag<HardEvent::MTE2_S>(inputReady_[pendingReady_]);
-                LL_MTE3_WAIT_END(txInputWait,TX_INPUT_READY);
-                LL_SEG_END(inputWaitBegin, TOKEN_INPUT_WAIT);
-            }
+            LL_SEG_BEGIN(inputWaitBegin, TOKEN_INPUT_WAIT);
+            // This marker precedes the NEXT input's DMA. A fresh SetFlag here
+            // would instead wait for both inputs and destroy the overlap.
+            LL_MTE3_WAIT_BEGIN(txInputWait);
+            WaitFlag<HardEvent::MTE2_S>(inputReady_[pendingReady_]);
+            LL_MTE3_WAIT_END(txInputWait,TX_INPUT_READY);
+            LL_SEG_END(inputWaitBegin, TOKEN_INPUT_WAIT);
             payload = x.template ReinterpretCast<uint8_t>();
         }
         LL_SEG_BEGIN(segBegin5, TOKEN_METADATA);
-        if (vectorTail_) FillVectorTail(payload, token, firstK, mask);
-        else FillTail(payload, token, firstK, mask);
+        FillTail(payload, token, firstK, mask);
         LL_SEG_END(segBegin5, TOKEN_METADATA);
-        if (!vectorTail_) Sync<HardEvent::S_V>();
+        Sync<HardEvent::S_V>();
         const uint32_t lane = packets_ % lanes_;
         LL_SEG_BEGIN(segBegin6, TOKEN_BUFFER_WAIT);
         LL_MTE3_DRAIN_WHEN(packets_>=lanes_,TX_REUSE_MTE3,4U,pipe_);
@@ -698,7 +654,6 @@ private:
     TPipe* pipe_ = nullptr;
     LlStageTimer::DeviceTimer* timer_ = nullptr;
     bool enableDedup_ = false;
-    bool vectorTail_ = false;
     LlQShard qShard_{};
     LocalTensor<uint32_t> qTable_;
     TBufPool<TPosition::VECCALC, 16>* scratch_ = nullptr;
