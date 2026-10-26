@@ -187,14 +187,15 @@ def installed_identity(a):
 
 
 def peer_identity(identity):
-    """Require the same source/protocol and HNS mode for this experiment."""
+    """Compare shared run facts while retaining each node's local PI mode."""
     shared = json.loads(json.dumps(identity))
     build = shared["sdk_build"]
-    mode = build.get("hns_1825_pi_on_chip")
+    mode = build.pop("hns_1825_pi_on_chip", None)
     if type(mode) is not int or mode not in (0, 1):
         raise RuntimeError("Missing validated local HNS doorbell mode")
-    # The experiment requires equal PI mode across hosts as well as each
-    # node's SDK/wheel consistency. Do not normalize this field away.
+    # PI mode configures the local NIC doorbell. installed_identity still
+    # requires this node's SDK and wheel to match, and identity.json retains
+    # its actual mode. Only the comparison copy omits this single field.
     return shared
 
 
