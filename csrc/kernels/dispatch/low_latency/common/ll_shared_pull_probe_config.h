@@ -3,7 +3,7 @@
 namespace DispatchDedup {
 // Frozen per candidate commit: 0=original, 1=lifetime fence control, 2=shared pull.
 #ifndef DEEPEP_LL_SHARED_PULL_PROBE_MODE
-#define DEEPEP_LL_SHARED_PULL_PROBE_MODE 0
+#define DEEPEP_LL_SHARED_PULL_PROBE_MODE 2
 #endif
 constexpr uint32_t kLlSharedPullProbeMode = DEEPEP_LL_SHARED_PULL_PROBE_MODE;
 #define DEEPEP_LL_SHARED_PULL_WIRE_REVISION 1
