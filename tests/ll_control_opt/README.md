@@ -1,3 +1,5 @@
+Shared-pull quick prototype: [SHARED_PULL_PROBE.md](SHARED_PULL_PROBE.md). Default mode0 preserves the baseline; the manifest pins separate lifetime-control and pull builds. No device speedup is established.
+
 # Control-path candidates: commit-by-commit A/B
 
 The current task restores the user-selected business baseline `9027275` and

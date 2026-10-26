@@ -1,3 +1,5 @@
+单机 shared-pull 穿刺入口见 [SHARED_PULL_PROBE.md](../ll_control_opt/SHARED_PULL_PROBE.md)。默认mode0保留原路径；两个固定实验提交分别启用生命周期控制与末端直接读，尚无设备性能结论。
+
 # 泛化分支生产LL路径
 
 当前业务恢复用户指定的9027275基线，失败Vector-tail候选仅保留历史固定源码入口。
