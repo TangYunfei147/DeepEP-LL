@@ -3,6 +3,7 @@
 本实验按用户选择保留 `9027275b31a28608296b1b71c93fa6e2bb456db5` 的业务算法。
 失败的 Vector-tail 已撤销。新的诊断源码由 `profile_bandwidth.py` 的
 `DIAGNOSTIC_REVISION` 固定，OFF/ON 两份完整 wheel 使用同一源码、同一 SDK。
+本次冻结诊断源码为 `e297d1be86472e303508a597b3e4de56ed0c7f06`。
 报告同时记录业务参考、实际诊断源码、runner、实际加载库和 SDK 的身份。
 
 固定配置：EP16、B=M256、H3584、K8、E384、G4、S30/R26、HT OFF、MTE、
