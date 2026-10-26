@@ -329,6 +329,157 @@ def test_existing_csv_task_start_intervals_are_bounded_and_not_duration_differen
     assert "intervals_unavailable" in evidence["files"][1]["tasks"][0]
 
 
+def test_render_long_csv_header_keeps_each_task_interval_and_missing_values():
+    header = ["Name", "Start Time(us)", "Duration(us)"] + [f"Long profiler metadata column {index}" for index in range(46)]
+    record = dict(path="/existing results/rank_000/kernel_details.csv", header=header, tasks=[
+        dict(full_task_name="dispatch_server_dedup_kernel()", N=50, starts_complete=True, durations_complete=True,
+             first_to_second_start_us=123456.25, first_end_to_second_start_us=123446.25,
+             later_adjacent_start_gaps_us=dict(N=48, min=20, p50=20.5, max=22)),
+        dict(kernel="combine_server_dedup_kernel", N=1, starts_complete=False, durations_complete=True,
+             intervals_unavailable="missing start column")])
+    text = "\n".join(inspection._task_interval_lines(record))
+    assert text.splitlines()[0] == "CSV " + record["path"]
+    assert 'header_columns=49; task columns=["Name","Start Time(us)","Duration(us)"]' in text
+    assert "Long profiler metadata" not in text
+    for value in ("dispatch_server_dedup_kernel()", "N=50; starts_complete=True; durations_complete=True",
+                  "first_to_second_start_us=123456.25", "first_end_to_second_start_us=123446.25",
+                  "N=48; min=20; p50=20.5; max=22", "combine_server_dedup_kernel",
+                  "first_to_second_start_us=unknown", "unavailable=missing start column"):
+        assert value in text
+
+
+def test_render_build_long_includes_do_not_hide_last_optimization_or_core_defines(tmp_path):
+    includes = " ".join(f"-I/path/to/a/very/long/ordinary/include/directory/{index}" for index in range(80))
+    path = write(tmp_path, "build/variant/device/CMakeFiles/deepep_kernels.dir/flags.make",
+                 "CXX_DEFINES = -DCATLASS_ARCH=3510 -DDEEPEP_LL_SEND_CORES=40 -DDEEPEP_LL_RECV_CORES=16\n" +
+                 f"CXX_INCLUDES = {includes} -I/actual/sdk/shmem/install/include\n" +
+                 "C_FLAGS = -fPIC\nCXX_FLAGS = -O3 -DNDEBUG --npu-arch=dav-3510 -O2\n")
+    records = inspection.collect_build(tmp_path)["files"]
+    assert len(records) == 1
+    text = "\n".join(inspection._build_lines(records[0]))
+    assert text.splitlines()[0] == "BUILD " + str(path)
+    assert "optimization compile flags[4]: -O3 -> -O2" in text
+    assert "-DDEEPEP_LL_SEND_CORES=40" in text and "-DDEEPEP_LL_RECV_CORES=16" in text
+    assert "SHMEM includes (1 unique)=[\"-I/actual/sdk/shmem/install/include\"]" in text
+    assert "other includes (80 unique; first2)=" in text
+    assert len(text) < 1600
+
+
+def test_render_cache_and_link_optimization_cannot_be_mistaken_for_compile_flags():
+    cache = dict(path="/build/device/CMakeCache.txt", commands=[], values={
+        "CMAKE_BUILD_TYPE": "Release", "CMAKE_CXX_COMPILER": "/toolchain/bisheng", "SHMEM_ROOT": "/sdk/shmem",
+        "CMAKE_CXX_FLAGS_RELEASE": "-O3 -DNDEBUG", "CMAKE_CXX_FLAGS_RELWITHDEBINFO": "-O2 -g"})
+    linked = dict(path="/build/device/link.txt", values={}, commands=[dict(compiler="/toolchain/bisheng", flags=["-O3"])])
+    cache_text = "\n".join(inspection._build_lines(cache))
+    link_text = "\n".join(inspection._build_lines(linked))
+    assert 'CMAKE_BUILD_TYPE="Release"' in cache_text and 'SHMEM_ROOT="/sdk/shmem"' in cache_text
+    assert "optimization cache CMAKE_CXX_FLAGS_RELEASE: -O3" in cache_text
+    assert "optimization cache CMAKE_CXX_FLAGS_RELWITHDEBINFO: -O2" in cache_text
+    assert "optimization link only[1]: -O3" in link_text
+    assert "compile flags" not in cache_text + link_text
+
+
+def test_repeated_optimization_flags_keep_order_in_new_evidence_and_render(tmp_path):
+    write(tmp_path, "build/device/compile_commands.json", json.dumps([
+        dict(command="/bin/bisheng -O2 -O3 -O2 source.cpp", file="source.cpp")]))
+    record = inspection.collect_build(tmp_path)["files"][0]
+    command = record["commands"][0]
+    assert command["flags"] == ["-O2", "-O3", "-O2"]
+    assert command["order_preserved"] is True
+    assert "optimization compile flags[1]: -O2 -> -O3 -> -O2; order_preserved=True" in "\n".join(inspection._build_lines(record))
+    del command["order_preserved"]
+    assert "order_preserved=unknown" in "\n".join(inspection._build_lines(record))
+
+
+def test_reexport_reads_only_saved_evidence_and_shares_original_budget(tmp_path, monkeypatch):
+    controller, reference, _, argv = fixture(tmp_path)
+    mock_git(monkeypatch)
+    original = inspection.inspect(inspection.make_plan(inspection.parser().parse_args(argv), root=controller))
+    evidence_path = original.parent / "evidence.json"
+    saved = json.loads(evidence_path.read_text())
+    saved["cann"]["note"] = "Offline rendering sentinel"
+    evidence_path.write_text(json.dumps(saved), encoding="utf-8")
+    evidence_bytes = evidence_path.read_bytes()
+    source_before = snapshot(reference)
+    for name in ("collect_source", "collect_results", "collect_installed", "collect_build", "collect_cann", "collect_task_intervals", "git_read", "file_hash"):
+        monkeypatch.setattr(inspection, name, lambda *a, **k: pytest.fail("reexport must not collect or read target files"))
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: pytest.fail("reexport must not execute a subprocess"))
+    actual_json = inspection._json
+    read_json = []
+    def read_saved(path):
+        assert path == evidence_path
+        read_json.append(path)
+        return actual_json(path)
+    monkeypatch.setattr(inspection, "_json", read_saved)
+    for index in (1, 2):
+        args = inspection.parser().parse_args(["--reexport-evidence", str(evidence_path.relative_to(controller)), "--run-name", f"offline{index}"])
+        plan = inspection.make_plan(args, root=controller)
+        output = inspection.reexport(plan)
+        assert "Offline rendering sentinel" in output.read_text()
+        assert "OFFLINE SNAPSHOT REEXPORT" in output.read_text()
+        assert "Reference files were not reread and the current deployment was not checked." in output.read_text()
+        assert output.parent != original.parent and not (output.parent / "evidence.json").exists()
+        assert not (output.parent / "triage/send_budget.json").exists()
+        origin = json.loads((output.parent / "reexport_origin.json").read_text())
+        assert origin["evidence"] == str(evidence_path) and origin["budget_group"] == str(original.parent)
+        assert len(output.read_bytes()) + output.read_text().count("\n") <= 60000
+    assert read_json == [evidence_path, evidence_path]
+    assert evidence_path.read_bytes() == evidence_bytes and snapshot(reference) == source_before
+    ledger = json.loads((original.parent / "triage/send_budget.json").read_text())
+    assert len(ledger["artifacts"]) == 2  # identical reexport has no second charge
+
+
+def test_reexport_refuses_new_report_when_original_budget_is_full(tmp_path, monkeypatch):
+    controller, _, _, argv = fixture(tmp_path)
+    mock_git(monkeypatch)
+    original = inspection.inspect(inspection.make_plan(inspection.parser().parse_args(argv), root=controller))
+    evidence_path = original.parent / "evidence.json"
+    saved = json.loads(evidence_path.read_text())
+    saved["cann"]["note"] = "Changed report needs one more slot"
+    evidence_path.write_text(json.dumps(saved), encoding="utf-8")
+    budget = inspection._transfer_budget()
+    with budget.transaction(original.parent, "detail", [hashlib.sha256(f"detail{i}".encode()).hexdigest() for i in range(9)]):
+        pass
+    ledger_path = original.parent / "triage/send_budget.json"
+    before = ledger_path.read_bytes()
+    args = inspection.parser().parse_args(["--reexport-evidence", str(evidence_path), "--run-name", "budget_full"])
+    plan = inspection.make_plan(args, root=controller)
+    with pytest.raises(ValueError, match="transmission limit is 10"):
+        inspection.reexport(plan)
+    assert not Path(plan["group"]).exists() and ledger_path.read_bytes() == before
+
+
+@pytest.mark.parametrize("case", ["results", "outside", "source", "overlap", "linked_budget", "invalid_format"])
+def test_reexport_rejects_unsafe_or_mixed_input_without_output(tmp_path, monkeypatch, case):
+    controller, reference, _, argv = fixture(tmp_path)
+    evidence_path = write(controller, "diagnostic-runs/saved/evidence.json", "{}")
+    extra = []
+    if case == "results":
+        extra = ["--results", "anything"]
+    elif case == "outside":
+        evidence_path = write(reference, "evidence.json", "{}")
+    elif case == "source":
+        evidence_path = write(controller, "tests/evidence.json", "{}")
+    elif case == "overlap":
+        extra = ["--output-root", str(evidence_path.parent)]
+    elif case == "linked_budget":
+        real_link = inspection._link
+        monkeypatch.setattr(inspection, "_link", lambda path: path == evidence_path.parent / "triage" or real_link(path))
+    args = inspection.parser().parse_args(["--reexport-evidence", str(evidence_path), "--run-name", "refused", *extra])
+    with pytest.raises(ValueError):
+        plan = inspection.make_plan(args, root=controller)
+        inspection.reexport(plan)
+    assert not list(controller.rglob("SEND_FIRST.txt"))
+
+
+def test_reexport_and_reference_are_mutually_exclusive_and_results_is_required():
+    with pytest.raises(SystemExit):
+        inspection.parser().parse_args(["--reexport-evidence", "evidence.json", "--reference-root", "reference", "--run-name", "unused"])
+    args = inspection.parser().parse_args(["--reference-root", "reference", "--run-name", "unused"])
+    with pytest.raises(ValueError, match="--results is required"):
+        inspection.make_plan(args)
+
+
 def test_root_summary_is_prioritized_before_many_sample_files(tmp_path, monkeypatch):
     summary = tmp_path / "summary.json"
     samples = [tmp_path / f"case_{i:05d}/normal/dispatch/rank_000/samples.json" for i in range(600)]
@@ -379,10 +530,15 @@ def test_typical_fourteen_cases_keep_all_evidence_categories_under_transfer_limi
                    for i in range(40)]
     build_files += [dict(path=str(reference / "build/host/CMakeCache.txt"), values={"CMAKE_BUILD_TYPE": "Release"}, commands=[]),
                     dict(path=str(reference / "third-party/shmem/build/CMakeCache.txt"), values={"SOC_TYPE": "Ascend950"}, commands=[])]
-    csvs = [dict(path=str(results / f"case_{i:05d}/rank_000/kernel_details.csv"), header=["Name", "Start Time(us)", "Duration(us)"],
+    build_files.append(dict(path=str(reference / "build/variant/device/CMakeFiles/deepep_kernels.dir/flags.make"), values={}, commands=[
+        dict(compiler=None, flags=["-DDEEPEP_LL_SEND_CORES=40", "-DDEEPEP_LL_RECV_CORES=16"]),
+        dict(compiler=None, flags=[f"-I/long/ordinary/include/directory/{i}" for i in range(80)] + ["-I/actual/sdk/shmem/include"]),
+        dict(compiler=None, flags=["-O3", "-DNDEBUG", "-O2"])]))
+    header = ["Name", "Start Time(us)", "Duration(us)"] + [f"Long profiler metadata column {i}" for i in range(46)]
+    csvs = [dict(path=str(results / f"case_{i:05d}/rank_000/kernel_details.csv"), header=header,
                  tasks=[dict(kernel="dispatch_server_dedup_kernel", N=50, starts_complete=True,
                     first_to_second_start_us=1000, later_adjacent_start_gaps_us=dict(N=48, min=22, p50=23, max=24))]) for i in range(16)]
-    evidence = dict(reference=str(reference), result_path=str(results), source=source,
+    evidence = dict(reference=str(reference), result_path=str(results), source=source, offline_snapshot=True,
         results=dict(reports=[report], auxiliary=[], loaded_libraries=[], issues=[]),
         installed=[dict(reported_path="/old/deep_ep/__init__.py", build_info=dict(arch="Ascend950"), libraries=[])],
         build=dict(files=build_files, issues=[]), cann=dict(note="CURRENT_CANN_SENTINEL"),
@@ -391,9 +547,14 @@ def test_typical_fourteen_cases_keep_all_evidence_categories_under_transfer_limi
     assert len(output.encode()) + output.count("\n") < 60000
     assert "REPORT SIZE LIMIT" not in output
     for required in ("B32", "CURRENT INSTALLED FILES", "CURRENT BUILD METADATA", "CURRENT_CANN_SENTINEL",
-                     "LIMITS / MISSING EVIDENCE", "EXISTING TASK START INTERVALS", "displayed=12"):
+                     "LIMITS / MISSING EVIDENCE", "EXISTING TASK START INTERVALS", "displayed=12",
+                     "optimization compile flags[3]: -O3 -> -O2", "-I/actual/sdk/shmem/include"):
         assert required in output
+    assert output.count("header_columns=49") == 16
+    assert output.count("first_to_second_start_us=1000") == 16
+    assert output.count("later_adjacent_start_gaps_us: N=48; min=22; p50=23; max=24") == 16
+    assert "Long profiler metadata column" not in output
     displayed, unique = inspection._build_display(build_files)
-    assert len(displayed) == 12 and unique == 42
+    assert len(displayed) == 12 and unique == 43
     assert any("third-party" in item["path"] for item in displayed)
     assert any("build/host" in Path(item["path"]).as_posix() for item in displayed)

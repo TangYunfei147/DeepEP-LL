@@ -60,8 +60,10 @@ SECRET = re.compile(r"(?i)(password|passwd|token|secret|credential|private.key|a
 
 def parser():
     p = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
-    p.add_argument("--reference-root", required=True, type=Path)
-    p.add_argument("--results", required=True, type=Path, help="Existing result directory or JSON file; relative to reference root")
+    mode = p.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--reference-root", type=Path)
+    mode.add_argument("--reexport-evidence", type=Path, help="Render an existing current-project evidence.json only; no reference files or tools are read/run")
+    p.add_argument("--results", type=Path, help="Required with --reference-root; existing result directory or JSON file relative to reference root")
     p.add_argument("--run-name", required=True)
     p.add_argument("--output-root", type=Path, default=Path("diagnostic-runs"))
     return p
@@ -77,11 +79,35 @@ def _link(path):
 
 def make_plan(args, root=ROOT):
     root = Path(root).resolve()
-    supplied_reference = args.reference_root.expanduser()
-    reference = (supplied_reference if supplied_reference.is_absolute() else root / supplied_reference).resolve()
-    results = (args.results if args.results.is_absolute() else reference / args.results).resolve()
-    if not reference.is_dir():
-        raise ValueError("--reference-root must be an existing source directory")
+    reexport = getattr(args, "reexport_evidence", None)
+    if reexport is not None:
+        if args.results is not None:
+            raise ValueError("--reexport-evidence cannot be combined with --results")
+        supplied = reexport.expanduser()
+        evidence_path = supplied if supplied.is_absolute() else root / supplied
+        for ancestor in (*reversed(evidence_path.absolute().parents), evidence_path.absolute()):
+            if _link(ancestor):
+                raise ValueError("Evidence may not traverse a symlink or junction")
+        evidence_path = evidence_path.resolve()
+        if (not evidence_path.is_relative_to(root) or evidence_path.name != "evidence.json"
+                or not evidence_path.is_file() or evidence_path.parent == root):
+            raise ValueError("--reexport-evidence must name an existing evidence.json group inside the current project")
+        if evidence_path.relative_to(root).parts[0] in {".git", "csrc", "deep_ep", "tests", "scripts", "cmake", "third-party", "build", "benchmarks", "experiments"}:
+            raise ValueError("Evidence must be in a diagnostic directory, not a source/dependency directory")
+        budget_group = evidence_path.parent
+        for relative in ("triage", "triage/send_budget.json", "triage/send_budget.lock"):
+            if _link(budget_group / relative):
+                raise ValueError("Evidence budget may not traverse a symlink or junction")
+        inputs = (budget_group,)
+    else:
+        if args.results is None:
+            raise ValueError("--results is required with --reference-root")
+        supplied_reference = args.reference_root.expanduser()
+        reference = (supplied_reference if supplied_reference.is_absolute() else root / supplied_reference).resolve()
+        results = (args.results if args.results.is_absolute() else reference / args.results).resolve()
+        if not reference.is_dir():
+            raise ValueError("--reference-root must be an existing source directory")
+        inputs = (reference, results)
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,95}", args.run_name):
         raise ValueError("--run-name must be a fresh ASCII directory name")
     parent = args.output_root if args.output_root.is_absolute() else root / args.output_root
@@ -94,11 +120,13 @@ def make_plan(args, root=ROOT):
         raise ValueError("Output must remain inside the current script's project")
     if group.relative_to(root).parts[0] in {".git", "csrc", "deep_ep", "tests", "scripts", "cmake", "third-party", "build", "benchmarks", "experiments"}:
         raise ValueError("Output must be in a diagnostic directory, not a source/dependency directory")
-    for supplied in (reference, results):
+    for supplied in inputs:
         if group.is_relative_to(supplied) or supplied.is_relative_to(group):
             raise ValueError("Output must not overlap the inspected source or results; run this helper from a separate current checkout")
     if group.exists():
         raise ValueError("Output group already exists; choose a fresh --run-name")
+    if reexport is not None:
+        return dict(root=str(root), evidence=str(evidence_path), budget_group=str(budget_group), group=str(group))
     return dict(root=str(root), reference=str(reference), results=str(results), group=str(group))
 
 
@@ -609,7 +637,7 @@ def _extract_flags(command):
             if token in {"-I", "-L", "-D", "-x"} and index + 1 < len(tokens):
                 value += " " + tokens[index + 1]
             selected.append(_safe_flag_text(value))
-    return dict(compiler=compiler, flags=list(dict.fromkeys(selected)))
+    return dict(compiler=compiler, flags=selected, order_preserved=True)
 
 
 def collect_build(reference):
@@ -749,9 +777,92 @@ def _build_display(records):
     return selected[:12], len(selected)
 
 
+def _task_interval_lines(record):
+    lines = ["CSV " + record["path"]]
+    header = record.get("header") or []
+    used = {"name", "opname", "taskname", "starttime(us)", "taskstarttime(us)", "duration(us)", "taskduration(us)"}
+    columns = [value for value in header if re.sub(r"[ _]", "", str(value).lower()) in used]
+    lines.append(f"  header_columns={len(header)}; task columns=" + _compact(columns, 400))
+    if record.get("unavailable"):
+        lines.append("  unavailable=" + str(record["unavailable"]))
+    for task in record.get("tasks", []):
+        lines.append("  task=" + _compact(task.get("full_task_name", task.get("kernel")), 500))
+        lines.append(f"    N={_fmt(task.get('N'))}; starts_complete={_fmt(task.get('starts_complete'))}; "
+                     f"durations_complete={_fmt(task.get('durations_complete'))}")
+        later = task.get("later_adjacent_start_gaps_us") or {}
+        lines.append("    first_to_second_start_us=" + _fmt(task.get("first_to_second_start_us")) +
+                     "; first_end_to_second_start_us=" + _fmt(task.get("first_end_to_second_start_us")))
+        lines.append("    later_adjacent_start_gaps_us: " + "; ".join(
+            f"{key}={_fmt(later.get(key))}" for key in ("N", "min", "p50", "max")))
+        if task.get("intervals_unavailable"):
+            lines.append("    unavailable=" + str(task["intervals_unavailable"]))
+    if not record.get("tasks") and not record.get("unavailable"):
+        lines.append("  No matching LL tasks recorded in this CSV.")
+    return lines
+
+
+def _build_lines(record):
+    """Give important fields independent space; long includes cannot hide flags."""
+    path, values, commands = record["path"], record["values"], record["commands"]
+    filename = Path(path).name
+    lines = ["BUILD " + path]
+    for key in ("CMAKE_BUILD_TYPE", "CMAKE_CXX_COMPILER", "CMAKE_C_COMPILER", "SHMEM_ROOT", "ASCEND_HOME_PATH"):
+        if key in values:
+            lines.append(f"  {key}=" + _compact(values[key], 350))
+    remaining = {key: value for key, value in values.items()
+                 if key.startswith("DEEPEP_") or key in {"SOC_TYPE", "ACLSHMEM_RDMA_BACKEND"}}
+    if remaining:
+        lines.append("  cache definitions=" + _compact(remaining, 500))
+    flag_rows = []
+    for key, value in values.items():
+        if re.fullmatch(r"CMAKE_(?:CXX|C|SHARED_LINKER)_FLAGS(?:_[A-Z]+)?", key):
+            parsed = _extract_flags(str(value))
+            flag_rows.append(("cache " + key, parsed["flags"], True))
+    kind = "link only" if filename == "link.txt" else ("compile flags" if filename in {"flags.make", "compile_commands.json"} else "build command")
+    for index, command in enumerate(commands, 1):
+        flag_rows.append((f"{kind}[{index}]", command.get("flags", []), command.get("order_preserved")))
+    compilers = list(dict.fromkeys(command["compiler"] for command in commands if command.get("compiler")))
+    if compilers:
+        lines.append("  command compiler=" + _compact(compilers, 400))
+    optimizations = []
+    for origin, flags, order_preserved in flag_rows:
+        options = [flag for flag in flags if re.fullmatch(r"-O(?:[0-9]+|s|z|g|fast)?", flag)]
+        if options:
+            optimizations.append((origin, options, order_preserved))
+    # Preserve the end as well as the beginning when an unusual build has many
+    # distinct records. The common flags.make DEFINES/INCLUDES/FLAGS triplet is
+    # always inspected in full, including FLAGS after arbitrarily long includes.
+    shown = optimizations if len(optimizations) <= 10 else optimizations[:5] + optimizations[-5:]
+    for origin, options, order_preserved in shown:
+        ordered = options if len(options) <= 10 else options[:5] + ["[middle omitted]"] + options[-5:]
+        lines.append(f"  optimization {origin}: " + " -> ".join(ordered) + "; order_preserved=" + _fmt(order_preserved))
+    if len(shown) != len(optimizations):
+        lines.append(f"  optimization records shown={len(shown)}/{len(optimizations)}; complete records in evidence.json")
+    if not optimizations:
+        lines.append("  optimization: no -O option recorded")
+    flags = list(dict.fromkeys(flag for _, row, _ in flag_rows for flag in row))
+    definitions = [flag for flag in flags if flag.startswith("-D")]
+    definitions.sort(key=lambda flag: (not bool(re.search(r"DEEPEP_LL_(?:SEND_CORES|RECV_CORES|DISPATCH_IMPL|STAGE_TIMER)", flag)),
+                                        not flag.startswith("-DDEEPEP_")))
+    if definitions:
+        lines.append(f"  defines ({len(definitions)} unique)=" + _compact(definitions, 650))
+    includes = [flag for flag in flags if flag.startswith("-I")]
+    shmem = [flag for flag in includes if "shmem" in flag.lower()]
+    other = [flag for flag in includes if flag not in shmem]
+    if shmem:
+        lines.append(f"  SHMEM includes ({len(shmem)} unique)=" + _compact(shmem, 600))
+    if other:
+        lines.append(f"  other includes ({len(other)} unique; first2)=" + _compact(other[:2], 300))
+    relevant = [flag for flag in flags if flag.startswith(("--npu-arch", "-std=", "-x"))]
+    if relevant:
+        lines.append("  architecture/language=" + _compact(relevant, 200))
+    return lines
+
+
 def render(evidence):
     source, results = evidence["source"], evidence["results"]
     lines = ["REFERENCE SOURCE / PROFILER INSPECTION -- SEND THIS ONE FILE ONLY", "No NPU work, imports of the inspected package, SDK loading, compiler execution, or rerun was performed.",
+             *( ["OFFLINE SNAPSHOT REEXPORT: This report rearranges previously saved evidence only. Reference files were not reread and the current deployment was not checked."] if evidence.get("offline_snapshot") else []),
              f"Reference source: {evidence['reference']}", f"Existing results: {evidence['result_path']}",
              "Current files/build metadata are not assumed to be those used during the historical run.",
              "Raw evidence and complete key-file diffs stay in this new diagnostic group; no source/results were modified.", "", "GIT / SOURCE",
@@ -813,7 +924,7 @@ def render(evidence):
     intervals = evidence.get("task_intervals", {})
     lines.append(_compact({k: intervals.get(k) for k in ("total_matching_csv", "scanned", "note")}))
     for file in intervals.get("files", []):
-        lines.append(_compact(file, 900))
+        lines.extend(_task_interval_lines(file))
     lines += ["", "CURRENT INSTALLED FILES FROM RESULT package PATH (not imported; not necessarily historical files)"]
     for package in evidence["installed"][:4]:
         lines.append(_compact(package, 2000))
@@ -833,8 +944,9 @@ def render(evidence):
     lines += ["", "CURRENT BUILD METADATA (filtered; compiler tools were not executed)"]
     displayed, unique = _build_display(evidence["build"]["files"])
     lines.append(f"Recorded build files={len(evidence['build']['files'])}; unique flag/cache signatures={unique}; displayed={len(displayed)}; all omitted/duplicate entries stay in evidence.json.")
+    lines.append("Optimization options are shown as recorded within each source. Cache defaults, compile flags and link-only flags are separate evidence. Unmarked historical flag lists may deduplicate repeated options; order_preserved=True marks new collection. These are not reconstructed effective compiler commands.")
     for item in displayed:
-        lines.append(_compact(dict(path=item["path"], values=item["values"], commands=item["commands"][:3]), 800))
+        lines.extend(_build_lines(item))
     lines += ["CANN/version/compiler file evidence: " + _compact(evidence["cann"], 3500), "", "LIMITS / MISSING EVIDENCE"]
     issues = source["skipped"] + results["issues"] + evidence["build"]["issues"] + [f"{key}: {value}" for key, value in source["git"].items() if key.endswith("_unavailable")]
     lines.extend(str(value) for value in issues[:40])
@@ -856,6 +968,40 @@ def render(evidence):
                  "This is a bounded read-only inspection, not a rerun, new qualification or proof of historical environment identity."]
         content = "\n".join(kept) + "\n"
     return content
+
+
+def _transfer_budget():
+    helper = Path(__file__).with_name("transfer_budget.py")
+    budget = types.ModuleType("reference_inspection_transfer_budget")
+    exec(compile(helper.read_text(encoding="utf-8"), str(helper), "exec"), budget.__dict__)
+    return budget
+
+
+def reexport(plan):
+    """Read saved evidence only; all exports share the original group's quota."""
+    evidence_path, group = Path(plan["evidence"]), Path(plan["group"])
+    if group.exists():
+        raise ValueError("Output group already exists")
+    evidence, error = _json(evidence_path)
+    if error or not isinstance(evidence, dict) or evidence.get("format") != "reference-read-only-inspection-v1":
+        raise ValueError("Cannot reexport this evidence.json: " + str(error or "unrecognized inspection format"))
+    try:
+        content = render(dict(evidence, offline_snapshot=True))
+    except (KeyError, TypeError, AttributeError) as error:
+        raise ValueError("Incomplete or malformed saved inspection evidence") from error
+    raw = content.encode("utf-8")
+    if len(raw) + content.count("\n") > LIMIT:
+        raise ValueError("Inspection summary exceeds the UTF-8/CRLF transfer limit")
+    budget = _transfer_budget()
+    with budget.transaction(Path(plan["budget_group"]), "summary", [hashlib.sha256(raw).hexdigest()]):
+        group.mkdir(parents=True, exist_ok=False)
+        # Do not copy evidence.json into a fresh quota namespace. Repeated
+        # reexports always point to and charge the original evidence group.
+        origin = dict(evidence=str(evidence_path), budget_group=plan["budget_group"],
+                      note="Offline rendering only; reuse the original evidence.json for later exports")
+        (group / "reexport_origin.json").write_text(json.dumps(origin, ensure_ascii=True, indent=2) + "\n", encoding="utf-8")
+        (group / "SEND_FIRST.txt").write_bytes(raw)
+    return group / "SEND_FIRST.txt"
 
 
 def inspect(plan):
@@ -880,9 +1026,7 @@ def inspect(plan):
     for label in REFS:
         difference = "\n".join(value for key, value in source["reference_diffs"].items() if key.startswith(label + ":"))
         (group / f"working_vs_{label}.diff").write_text(difference, encoding="utf-8")
-    helper = Path(__file__).with_name("transfer_budget.py")
-    budget = types.ModuleType("reference_inspection_transfer_budget")
-    exec(compile(helper.read_text(encoding="utf-8"), str(helper), "exec"), budget.__dict__)
+    budget = _transfer_budget()
     with budget.transaction(group, "summary", [hashlib.sha256(raw).hexdigest()]):
         (group / "SEND_FIRST.txt").write_bytes(raw)
     return group / "SEND_FIRST.txt"
@@ -891,7 +1035,8 @@ def inspect(plan):
 def main(argv=None):
     args = parser().parse_args(argv)
     try:
-        destination = inspect(make_plan(args))
+        plan = make_plan(args)
+        destination = reexport(plan) if "evidence" in plan else inspect(plan)
         print(destination)
         print(f"Return only SEND_FIRST.txt ({destination.stat().st_size} UTF-8 bytes); detailed evidence stays local.")
         return 0

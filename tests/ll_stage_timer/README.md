@@ -1,6 +1,6 @@
 # LL稀疏诊断：当前入口
 
-当前步骤是[可复现独立工程的非NPU只读检查](REFERENCE_INSPECTION.md)：检查`small_bs-DeepEP`及`results/cbd04eb/10261635_18whtneo`，不重编、不加载NPU。已确认Git中的cbd04eb旧采样为5/50/尾30及连续dispatch，cb59bff改为10/100/尾50、每轮Exp+scalar all-reduce；先核对目标实际代码/config，再比较性能。
+当前步骤是[可复现独立工程的非NPU只读检查](REFERENCE_INSPECTION.md)：返回报告已确认`small_bs-DeepEP`的实际源码和measure为cbd04eb，运行5/50/尾30、seed0、dispatch+combine及连续调用尾段；cb59复测为10/100/尾50、每轮Exp+scalar all-reduce且dispatch-only。安装库与运行记录匹配，CANN/编译器身份相同。采样差异已证实，但全部性能差距尚未因果归因；保持快wheel，不因检查而重编或加载NPU。
 
 原始cb59复现入口见[CB59_ORIGINAL.md](CB59_ORIGINAL.md)：small run003仍比历史值慢3.94–4.81us，先独立重建原提交OFF，保留原SDK/页/单入口，按seed0/2反序复测并只回传一份报告。当前ST已修复多轮正确性后实际沿用seed+2采样的问题；新报告记录实际seed及完整路由指纹。
 

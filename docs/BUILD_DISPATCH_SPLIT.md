@@ -1,5 +1,45 @@
 # LL dispatch compile partition
 
+## Returned cbd04eb inspection and report-display correction (2026-10-26)
+
+The target report confirms the reference checkout and measurement AST match
+cbd04eb, with no tracked changes in the inspected scope. Actual settings are
+5/50/tail30, seed0, dispatch+combine, Exp-before0 and Exp-after1000; all14
+operation/case results have50 raw samples per16 ranks and reproduce the saved
+tail statistics. Dispatch tail30 ranges17.5557–22.5794us. The previous cb59
+reproduction instead used10/100/tail50 and dispatch-only. Sampling and call
+context therefore differ; the full gap has not yet been causally attributed.
+
+The installed core/kernel library bytes match all16 ranks' saved load records.
+CANN9.2.0 timestamp20260930_161523958 and Host/device compiler hashes match
+the earlier original-code reconstruction; the SDK source remains4dd80e2.
+Several existing build caches contain different include roots and S/R defines,
+but none is thereby proven to have generated the loaded library. Cache/link
+Release-O3 also cannot stand in for the complete device compile flag sequence.
+
+The first report's generic prefix truncation let long CSV headers hide task
+intervals and long include lists hide record paths and optimization flags.
+The full evidence JSON retained those values. The report renderer is corrected
+to separate paths and essential numeric fields from optional metadata, label
+cache/compile/link options distinctly, and retain recorded option order.
+No kernel, SDK, sampling code or target performance data is modified.
+Full conclusions and the distinction between old all50 and new tail50 are in
+[REFERENCE_INSPECTION.md](../tests/ll_stage_timer/REFERENCE_INSPECTION.md).
+
+The optional --reexport-evidence path reads only an existing project-local
+snapshot and writes a fresh output group, using the original inspection's
+transfer quota. It does not collect reference files or execute subprocesses.
+The report visibly identifies offline rendering. Fresh collection also preserves
+duplicate compiler options in order; old snapshots without that guarantee are
+not treated as full effective command lines.
+
+Local regression:116 passed,2 missing-native-compiler skips in1.90s;
+`.tmp/reference-report-render-001.log`. Long49-column CSV headers, long include
+lists before final optimization options, duplicate -O2/-O3/-O2 options, full
+14-case report bounds, immutable evidence/reference inputs, subprocess-free
+re-export, shared/idempotent quota accounting and full-budget rejection are
+covered. No target execution, recompilation or resampling occurred.
+
 ## Reproducible cbd04eb deployment: inspect before further changes (2026-10-26)
 
 The user found a reproducible independent small_bs-DeepEP deployment with

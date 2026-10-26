@@ -2,6 +2,9 @@
 
 ## 可复现独立版本只读检查（2026-10-26，当前步骤）
 
+- 返回报告已确认参考HEAD/关键源码/measure均为cbd04eb、tracked code/build/test无修改，actual5/50/尾30、seed0、dispatch+combine、Exp before0/after1000；14case/op×16rank×50样本重算一致。安装_C/kernel库hash与16rank运行记录一致；CANNtimestamp及编译器hash与此前cb59重建相同，SDK旧4dd80e2。差距仍同时含采样协议、dispatch-only上下文及timer ABI二进制差异，不能宣称全部由采样造成。
+- 当前检查报告长CSV header/include造成显示截断，原数值留evidence.json；修复导出布局须优先保留task间隔/路径/优化flag顺序，不要求重采。后续若做因果实验，应冻结这套快wheel/SDK，只换measure协议且两侧都dispatch+combine；本轮仍只读、没有NPU授权或新采样实现。
+
 - 用户确认可复现目录/home/t30064812/small_bs-DeepEP、结果results/cbd04eb/10261635_18whtneo，CANN相同；明确助手无法直接连接，要求在当前分支提供非NPU检查脚本，由用户执行。不得SSH、构建/安装、设备查询、导入Torch/torch_npu/deep_ep或执行被检查源码。
 - inspect_reference.py只读指定源码/结果及明确关联的构建、安装元信息，输出到当前脚本工程的新diagnostic-runs目录；不写参考目录，不改SDK，不恢复SHMEM准入校验。只回传一个≤60000字节报告，详细证据留目标机。
 - 本地Git证实cbd04eb与此前重建cb59bff不只打点有差异：旧ST默认5/50/尾30，首dispatch后1000Exp+一次all-reduce再连续dispatch；cb59为10/100/尾50且每轮Exp+scalar all-reduce。kernel_durations/sample_stats/summarize_kernel统计逻辑相同。结果目录名和默认值不能代替目标实际Git/config证据；离线统一tail也不能消除调用前序差异。
