@@ -76,7 +76,7 @@ public:
     {
         CalRecvAndSetFlag();
     }
-    // 摘要：等待所有前缀片段就绪，加载本核前缀副本，并由首个接收核输出各专家计数。
+    // 摘要：等待所有前缀片段就绪，仅首个接收核加载前缀并输出各专家计数。
     __aicore__ inline void CompleteCumsum();
     // 摘要：返回后续阶段可复用的 UB 池；在途计数发送使用的 statusBuf_ 不在复用范围内。
     __aicore__ inline TBufPool<TPosition::VECCALC, 16>& ScratchPool()
@@ -87,12 +87,6 @@ public:
     __aicore__ inline uint32_t ReservedBytes() const
     {
         return statusCntAlign_ * kEpServerDedupCountRecordBytes;
-    }
-    // Valid after CompleteCumsum and until this core's TPipe is reset.
-    // 摘要：返回完整前缀的 UB 视图，仅在 CompleteCumsum 完成后且 TPipe 重置前有效。
-    __aicore__ inline LocalTensor<int32_t> Prefix()
-    {
-        return prefixBuf_.Get<int32_t>();
     }
     // 摘要：等待本核全部流水收尾，并恢复初始化前的 CTRL[60] 设置。
     __aicore__ inline void Finish()
@@ -364,7 +358,7 @@ __aicore__ inline void ServerDedupCounts::RecvCnt()
     activeCumSumCores_ = rscvStatusNum_ < aivUsedCumSum_ ? rscvStatusNum_ : aivUsedCumSum_;
     stagePool_.InitBuffer(scalarBuf_, 3U * UB_ALIGN);
     const uint32_t receiver = aivId_ - aivUsedAllToAll_;
-    // Inactive receivers only consume the final prefix in CompleteCumsum.
+    // Inactive receivers still join prefix readiness in CompleteCumsum.
     if (receiver >= activeCumSumCores_) return;
     SplitToCore(rscvStatusNum_, aivUsedCumSum_, receiver, startStatusIndex_, endStatusIndex_, recStatusNumPerCore_);
     stagePool_.InitBuffer(waitStatusBuf_, Ceil(recStatusNumPerCore_ * UB_ALIGN + SIZE_ALIGN_256, SIZE_ALIGN_256) * SIZE_ALIGN_256);
@@ -380,30 +374,32 @@ __aicore__ inline void ServerDedupCounts::RecvCnt()
     WaitDispatch();
 }
 
-// 摘要：等待所有前缀片段就绪，加载本核前缀副本，并由首个接收核输出各专家计数。
+// 摘要：等待所有前缀片段就绪，仅首个接收核加载前缀并输出各专家计数。
 __aicore__ inline void ServerDedupCounts::CompleteCumsum()
 {
     // Convert the physical AIV index to its receive-group index.
-    // 前缀完成阶段：把物理 AIV 编号转成接收组编号，为本核加载完整前缀副本。
+    // All receivers join readiness; only receiver0 needs a count-stage prefix.
     const uint32_t receiver = aivId_ - aivUsedAllToAll_;
     stagePool_.InitBuffer(readyBuf_, Ceil(activeCumSumCores_ * UB_ALIGN + SIZE_ALIGN_256, SIZE_ALIGN_256) * SIZE_ALIGN_256);
     stagePool_.InitBuffer(cleanBuf_, activeCumSumCores_ * UB_ALIGN);
-    stagePool_.InitBuffer(prefixBuf_, Ceil(rscvStatusNum_ * sizeof(int32_t), UB_ALIGN) * UB_ALIGN);
     statusFp32Tensor_ = readyBuf_.Get<float>();
     statusCleanFp32Tensor_ = cleanBuf_.Get<float>();
     // 各核先写前缀再发完成标记；全部标记到齐后，读取才不会混入未更新片段。
     WaitCumSumFlag();
-    LocalTensor<int32_t> prefix = prefixBuf_.Get<int32_t>();
-    GlobalTensor<int32_t> workspace;
-    workspace.SetGlobalBuffer(reinterpret_cast<__gm__ int32_t*>(recvCntWorkspaceGM_));
-    const DataCopyExtParams copy{1U, rscvStatusNum_ * uint32_t(sizeof(int32_t)), 0U, 0U, 0U};
-    const DataCopyPadExtParams<int32_t> pad{false, 0U, 0U, 0};
-    DataCopyPad(prefix, workspace[receiver * rscvStatusNum_], copy, pad);
-    SyncFunc<HardEvent::MTE2_S>();
     // 仅接收组的第 0 核写公开专家计数，避免多核重复写同一输出。
     // 每个专家最后一个来源 rank 的前缀即该专家结束位置；type=0 输出累计数，
     // 其他已验证类型输出与上一专家累计数之差，即该专家自己的接收条数。
     if (receiver == 0U) {
+        // Receiver::Process resets the count UB and loads its own prefix.
+        // Other cores have no consumer for an additional count-stage copy.
+        stagePool_.InitBuffer(prefixBuf_, Ceil(rscvStatusNum_ * sizeof(int32_t), UB_ALIGN) * UB_ALIGN);
+        LocalTensor<int32_t> prefix = prefixBuf_.Get<int32_t>();
+        GlobalTensor<int32_t> workspace;
+        workspace.SetGlobalBuffer(reinterpret_cast<__gm__ int32_t*>(recvCntWorkspaceGM_));
+        const DataCopyExtParams copy{1U, rscvStatusNum_ * uint32_t(sizeof(int32_t)), 0U, 0U, 0U};
+        const DataCopyPadExtParams<int32_t> pad{false, 0U, 0U, 0};
+        DataCopyPad(prefix, workspace[receiver * rscvStatusNum_], copy, pad);
+        SyncFunc<HardEvent::MTE2_S>();
         stagePool_.InitBuffer(tokenNumBuf_, Ceil(moeExpertNumPerRank_ * sizeof(int64_t), UB_ALIGN) * UB_ALIGN);
         LocalTensor<int64_t> expertCounts = tokenNumBuf_.Get<int64_t>();
         int64_t previous = 0;
