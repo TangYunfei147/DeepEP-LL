@@ -55,6 +55,8 @@ BF16和预量化FP8分别运行，不把不同dtype/shape合成一个表。
 
 run位于 `results/ll-ndr/ndr-reference-001-reference/`。
 自动分析每个case/route，生成 `core_stage_timings.xlsx`、CSV、JSON及紧凑回传报告。
+默认导出根为run下的`reference-analysis/`；一个case时Excel直接在导出根，多个case时按
+原case/route相对目录分别保存。只回传导出根的`return_report.md`，它汇总本机该run全部case。
 已有新格式样本重新导出无需重编或重采；旧 schema3 数据不能转换为这些缺失的参考边界。
 
 ```bash
@@ -105,5 +107,7 @@ Excel/原始样本可能超过回传上限，留在目标机查看；只回传�
 ## 验证范围
 
 CPU检查覆盖记录完整性、阶段换算、空任务/真零、动态核数、大整数精度、构建互斥与Excel导出。
-编译/Host导入验证另行记录；设备正确性、实际性能和打点扰动必须在目标机测量。
+当前365项CPU回归通过、2项无Torch跳过；REF/OFF/旧ON完整wheel在27编译及纯Host导入通过，
+全程未使用NPU，详见[验证记录](COMPILE_VALIDATION_20261026.md)。
+设备正确性、实际性能和打点扰动必须在目标机测量。
 不得把CPU模拟样本或表格预览作为实测结果。
