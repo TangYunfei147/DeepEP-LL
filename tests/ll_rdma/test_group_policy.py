@@ -73,7 +73,7 @@ def test_diagnostic_metadata_uses_selected_group(monkeypatch, tmp_path):
     monkeypatch.setattr(ll_stage_timer, "capture", capture)
     monkeypatch.setattr(ll_stage_timer, 'StageTrace', lambda *a: SimpleNamespace(
         complete=lambda: None, save=lambda path, meta: saved.append(meta)))
-    monkeypatch.setattr(st, 'sampling_prelude', lambda *a: None)
+    monkeypatch.setattr(st, 'enqueue_exp_prefix', lambda *a: None)
     monkeypatch.setattr(st, "completion_boundary", lambda *a: None)
     monkeypatch.setattr(st, "agree_check", lambda action, *a: action())
     monkeypatch.setattr(st, "case_config", lambda *a: {"B": 32})

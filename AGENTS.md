@@ -1,5 +1,16 @@
 # 目标RoCE通信契约
 
+## NDR采样方式（2026-10-27最新用户要求）
+
+本分支ST采用`initial-reduce-exp100-batch-v3`：每个操作的采样批次只在开始all_reduce一次，
+预热同步后、进入active的profiler.step前固定100次Exp，再连续调用算子；循环内没有Exp或
+采样all_reduce。独立timer/reference同样为初始all_reduce、预热、100次Exp、连续稳定/capture。
+perf后附加打点时另排100次Exp，共用perf初始all_reduce；不在Exp前缀后额外同步。
+正确性/批次边界和算子内部必要复用协调保留，kernel/SDK不改。新旧采样协议不能混作同条件A/B。
+详见tests/ll_probe/PROFILING.md；本条覆盖本分支旧“每轮Exp+all_reduce”采样说明。
+
+## SO发布
+
 2026-10-27用户明确提供：跨机RoCE每个WQE的尾片具有SO特性，保证该SO之前的数据
 先到达，且片内保序；单片默认2KB。后续本项目通信设计以此目标硬件契约为依据。
 

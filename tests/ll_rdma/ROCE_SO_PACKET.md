@@ -1,5 +1,10 @@
 # RoCE SO整包发布（核心协议10）
 
+后续采样更新：当前ST已按用户要求切换为`initial-reduce-exp100-batch-v3`，每批初始一次
+all_reduce、active profiler.step前固定100次Exp，循环内不再插入采样通信。
+旧协议9/10的历史结果若采用逐轮Exp+all_reduce，不能直接与新结果作为同条件A/B；
+比较SO kernel时，两版须使用一致的新采样脚本重测。参见[采样协议](../ll_probe/PROFILING.md)。
+
 2026-10-27，基于用户提供的[目标SO契约](ROCE_SO_CONTRACT.md)，优化dispatch和combine
 跨机packet发送。对照源码为`dea6124`。SDK固定8e3fc610，不改SDK实现或QP配置。
 

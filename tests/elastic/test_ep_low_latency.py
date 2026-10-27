@@ -36,6 +36,10 @@ def validate_stage_timer_capability(requested, capability):
         raise RuntimeError("LL byte diagnostics require timer schema 3; rebuild/install the matching wheel on every rank")
 
 
+EXP_PREFIX_REPEATS = 100
+SAMPLING_PROTOCOL = 'initial-reduce-exp100-batch-v3'
+
+
 def diagnostic_requested(args):
     return args.ll_stage_timer or getattr(args, 'll_reference_profile', False)
 
@@ -95,7 +99,8 @@ def compiled_group(native, world):
 def comparison_metadata(args, world, m):
     runtime=getattr(args,'runtime_identity',None)
     if runtime is None: return None  # CPU fixtures / legacy custom callers.
-    return dict(**runtime, comparison_schema=1, sampling_protocol='exp-reduce-stable-tail-v2',
+    return dict(**runtime, comparison_schema=1, sampling_protocol=SAMPLING_PROTOCOL,
+                exp_prefix_repeats=EXP_PREFIX_REPEATS, per_iteration_exp=0, per_iteration_all_reduce=False,
                 perf_enabled=not args.skip_perf_test, world_size=world,
                 local_world_size=int(os.environ.get('LOCAL_WORLD_SIZE',args.num_processes)),
                 case=case_config(args,m), route=args.route, seed=args.seed,
@@ -199,7 +204,7 @@ def make_parser():
     parser.add_argument("--delay-rows", type=int, default=118260)
     parser.add_argument("--delay-cols", type=int, default=30720)
     parser.add_argument(
-        "--delay-exp-before", type=int, default=None, help="Compatibility: exactly one Exp before each captured call"
+        "--delay-exp-before", type=int, default=None, help="Compatibility: only 100 is accepted; fixed Exp prefix once per batch"
     )
     parser.add_argument(
         "--delay-exp-after", type=int, default=None, help="Compatibility: zero post-call Exp"
@@ -466,7 +471,7 @@ def launch_config(args, environ):
 
 
 def resolve_delay_counts(args):
-    for name, default in (("delay_exp_before", 1), ("delay_exp_after", 0)):
+    for name, default in (("delay_exp_before", EXP_PREFIX_REPEATS), ("delay_exp_after", 0)):
         if getattr(args, name) is None:
             setattr(args, name, default)
 
@@ -517,8 +522,8 @@ def validate_args(args, world):
         raise ValueError("num-bytes must be 2 MiB aligned and between 2 MiB and 32 GiB")
     if args.delay_rows <= 0 or args.delay_cols <= 0 or min(args.delay_exp_before, args.delay_exp_after) < 0:
         raise ValueError("Delay tensor dimensions must be positive and exp counts nonnegative")
-    if (args.delay_exp_before, args.delay_exp_after) != (1, 0):
-        raise ValueError("Reference profiler requires delay-exp-before=1 and delay-exp-after=0")
+    if (args.delay_exp_before, args.delay_exp_after) != (EXP_PREFIX_REPEATS, 0):
+        raise ValueError("Reference profiler requires fixed batch delay-exp-before=100 and delay-exp-after=0; remove old per-iteration delay flags")
     if not 0 <= args.perf_tail <= args.num_iters:
         raise ValueError("Require 0 <= perf-tail <= num-iters")
     if args.output and Path(args.output).exists():
@@ -750,15 +755,11 @@ def record_case_progress(args, rank, m, mode, phase, error=None):
         print("[LL ST] " + json.dumps(entry, ensure_ascii=False), flush=True)
 
 
-def sampling_prelude(delay, alignment, args):
-    """The same Exp + scalar collective before normal and diagnostic samples."""
+def enqueue_exp_prefix(delay):
+    """Queue the fixed batch prefix, without a host wait or collective after it."""
     import torch
-    import torch.distributed as dist
-    torch.exp(delay, out=delay)
-    alignment.fill_(1)
-    if args.group_backend == 'gloo':
-        torch.npu.synchronize()
-    dist.all_reduce(alignment, op=dist.ReduceOp.SUM, async_op=False)
+    for _ in range(EXP_PREFIX_REPEATS):
+        torch.exp(delay, out=delay)
 
 
 def measure(invoke, args, operation, profile_dir, progress=None, after_profile=None):
@@ -788,9 +789,11 @@ def measure(invoke, args, operation, profile_dir, progress=None, after_profile=N
         for _ in range(args.warmup):
             output = invoke()
         torch.npu.synchronize()
+        # Submit the padding while the profiler is still in its warmup step.
+        # Do not synchronize after it: Host should enqueue the active batch.
+        enqueue_exp_prefix(delay)
         profiler.step()
         for _ in range(args.num_iters):
-            sampling_prelude(delay, alignment, args)
             output = invoke()
         dist.barrier()
         torch.npu.synchronize()
@@ -869,14 +872,16 @@ def diagnostic_calls(buffer, invoke, check, args, operation, rank, m, mode,
         for _ in range(args.warmup):
             output = invoke()
         torch.npu.synchronize()
+        enqueue_exp_prefix(delay)
         for _ in range(args.num_iters):
-            sampling_prelude(delay, alignment, args)
             output = invoke()
     else:
         delay, alignment = prelude_buffers
+        # Profiler export can leave an idle gap. Prefix the diagnostic batch
+        # once, sharing the original startup all_reduce, not adding another.
+        enqueue_exp_prefix(delay)
     pending = []
     for iteration, trace in enumerate(prepared):
-        sampling_prelude(delay, alignment, args)
         with capture(buffer, operation, capture_mode, args.ll_timer_frequency_hz,
                      prepared=trace, defer_complete=True):
             output = invoke()
@@ -892,10 +897,14 @@ def diagnostic_calls(buffer, invoke, check, args, operation, rank, m, mode,
                         run_id=Path(args.run_directory).name, seed=args.seed, route=mode, case_id=args.case_id,
                         correctness="passed", config={**case_config(args, m),
                         "logical_group_size": logical_group},
-                        protocol="stabilized diagnostic tail; Exp+scalar all_reduce; deferred validation/export; excluded from profiler",
+                        protocol="initial scalar all_reduce; fixed Exp100 batch prefix; no per-iteration prelude; deferred validation/export; excluded from profiler",
                         sampling=dict(after_perf=after_perf, warmup=args.warmup, settle_iters=args.num_iters,
                                       diagnostic_iters=args.ll_timer_iters, delay_rows=args.delay_rows,
                                       delay_cols=args.delay_cols, group_backend=args.group_backend,
+                                      sampling_protocol=SAMPLING_PROTOCOL, exp_prefix_repeats=EXP_PREFIX_REPEATS,
+                                      prefix_before='diagnostic_capture' if after_perf else 'settle_batch',
+                                      initial_all_reduce='shared_with_perf' if after_perf else 'before_warmup',
+                                      per_iteration_exp=0, per_iteration_all_reduce=False,
                                       expert_timer=bool(getattr(args,'ll_expert_timer',False)),
                                       reference_profile=reference))
         if reference:
@@ -1276,7 +1285,7 @@ def worker(local_rank, args):
                 "config": vars(args),
                 "package": deep_ep.__file__,
                 "measurement": "torch_npu profiler kernel tasks; per-rank statistics and slowest rank mean",
-                "alignment": "separate dispatch/combine captures: all_reduce + exp padding; Gloo combine uses completion boundaries",
+                "alignment": "separate dispatch/combine batches: one initial all_reduce; fixed Exp100 before active profiler.step; no per-iteration prelude; operator-required coordination retained",
                 "results": results,
             }
             write_reports(args.run_directory, report)
@@ -1326,7 +1335,9 @@ def main(argv=None):
         cases = [
             {"case_id": i, **case_config(case, validate_args(case, world))} for i, case in enumerate(matrix_cases(args))
         ]
-        print(json.dumps({"world_size": world, "case_count": len(cases), "cases": cases}, indent=2))
+        print(json.dumps({"world_size": world, "case_count": len(cases), "cases": cases,
+                          "sampling": dict(protocol=SAMPLING_PROTOCOL, exp_prefix_repeats=EXP_PREFIX_REPEATS,
+                                           per_iteration_exp=0, per_iteration_all_reduce=False)}, indent=2))
         return
     configure_endpoints(args, os.environ)
     if local is not None:

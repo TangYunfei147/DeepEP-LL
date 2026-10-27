@@ -61,7 +61,7 @@ Git checkout中只纳入已跟踪测试文件，其他分支遗留的未跟踪�
 实际构建目录中的源码/头文件仍完整计入。根目录的 `core` 文件从未参与该指纹。
 
 默认timer模式：ON wheel，10次预热、100次稳定调用、5轮独立observe采样。
-每轮保持Exp+scalar all_reduce；默认Exp约13.53GiB/卡。此模式不运行正式profiler。
+每个批次只在开始做一次all_reduce；预热后固定100次Exp，再连续稳定调用和capture，算子之间无采样all_reduce/Exp。默认Exp缓冲约13.53GiB/卡，此模式不运行正式profiler。
 
 结果目录：`results/ll-ndr/<run名>-timer/`。
 每机的报告在其下 `stage-analysis/`；多case有 `REPORT_INDEX.md`。

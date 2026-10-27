@@ -12,7 +12,8 @@ ROOT = Path(__file__).resolve().parents[2]
 
 @pytest.mark.parametrize('after_perf', [False, True])
 @pytest.mark.parametrize('operation', ['dispatch', 'combine'])
-def test_tail_has_prelude_and_defers_all_checks(monkeypatch, tmp_path, after_perf, operation):
+@pytest.mark.parametrize('backend', ['hccl', 'gloo'])
+def test_tail_has_prelude_and_defers_all_checks(monkeypatch, tmp_path, after_perf, operation, backend):
     from tests.elastic import test_ep_low_latency as st
     from deep_ep.utils import ll_stage_timer as timer
     from deep_ep import _native
@@ -52,16 +53,21 @@ def test_tail_has_prelude_and_defers_all_checks(monkeypatch, tmp_path, after_per
         events.append('check')
     args=SimpleNamespace(run_directory=str(tmp_path), case_id=0, ll_timer_iters=2,
                          ll_timer_mode='observe', ll_timer_frequency_hz=1e9, seed=0,
-                         warmup=2, num_iters=3, delay_rows=1, delay_cols=1, group_backend='hccl')
+                         warmup=2, num_iters=3, delay_rows=1, delay_cols=1, group_backend=backend)
     st.diagnostic_calls(object(), invoke, check, args, operation, 0, 256, 'normal',
                         prelude_buffers=(Tensor(), Tensor()) if after_perf else None)
     prefix=['allocate']*2
     if not after_perf:
         prefix += ['boundary', 'reduce'] + ['invoke']*2 + ['sync']
-        prefix += ['exp', 'fill', 'reduce', 'invoke']*3
-    assert events == prefix + ['exp', 'fill', 'reduce', 'capture', 'invoke', 'wait']*2 + ['boundary'] + ['copy', 'check', 'save']*2
+        prefix += ['exp']*100 + ['invoke']*3
+    else:
+        prefix += ['exp']*100
+    assert events == prefix + ['capture', 'invoke', 'wait']*2 + ['boundary'] + ['copy', 'check', 'save']*2
     assert [item['iteration'] for item in saved]==[0, 1]
     assert all(item['sampling']['after_perf']==after_perf for item in saved)
+    assert events.count('reduce') == (0 if after_perf else 1)
+    assert all(item['sampling']['sampling_protocol'] == 'initial-reduce-exp100-batch-v3' for item in saved)
+    assert all(item['sampling']['exp_prefix_repeats'] == 100 and not item['sampling']['per_iteration_all_reduce'] for item in saved)
 
 
 def test_deferred_context_preserves_records_until_complete(monkeypatch):

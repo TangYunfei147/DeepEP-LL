@@ -213,8 +213,8 @@ class SamplingTests(unittest.TestCase):
             stack.enter_context(patch.object(st, 'case_config', return_value=dict(B=8)))
             st.diagnostic_calls(buffer, invoke, lambda _: events.append('check'), args, 'dispatch', 17, 256, 'normal')
         expected = ['allocate'] * 2 + ['boundary', 'reduce'] + ['invoke'] * 2 + ['sync']
-        expected += ['exp', 'fill', 'reduce', 'invoke'] * 3
-        expected += ['exp', 'fill', 'reduce', 'invoke', 'wait'] * 2
+        expected += ['exp'] * 100 + ['invoke'] * 3
+        expected += ['invoke', 'wait'] * 2
         expected += ['boundary'] + ['copy', 'check', 'save'] * 2
         self.assertEqual(events, expected)
         self.assertEqual([item['iteration'] for item in metadata], [0, 1])
