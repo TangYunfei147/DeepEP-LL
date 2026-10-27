@@ -19,7 +19,8 @@ RANK_ENV = ("RANK", "WORLD_SIZE", "LOCAL_RANK", "LOCAL_WORLD_SIZE", "GROUP_RANK"
 
 
 def parse_args(argv=None):
-    p = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
+    p = argparse.ArgumentParser(description=__doc__, allow_abbrev=False,
+        epilog='Offline export: bash tests/ll_rdma/one_click.sh --analyze-only RUN_DIR [--output-dir NEW_DIR] [--iteration last|N]. No CANN required.')
     p.add_argument("node_rank", type=int, choices=(0, 1))
     p.add_argument("master_addr", help="Reachable numeric IPv4 address of node 0; identical on both hosts")
     p.add_argument("run_name", help="New shared name; the script appends -timer or -perf")
@@ -278,12 +279,8 @@ def main(argv=None):
                          peer_identity(json.loads(identity_path.read_text())), a.ready_timeout)
     (logs / "agreement.json").write_text(json.dumps(agreed, indent=2) + "\n", encoding="utf-8")
     run_logged([python, *test_command], env, logs / "30-test.log")
-    if a.mode == "timer":
-        run_logged([python, "tests/ll_stage_timer/analyze.py", result,
-                    "--trace-iteration", str(a.timer_iters - 1), "--frequency-hz", "1000000000"],
-                   env, logs / "40-analysis.log")
-    elif a.mode == "reference":
-        run_logged([python, "tests/ll_reference_profile/analyze.py", result, "--iteration", "last"],
+    if a.mode in ("timer", "reference"):
+        run_logged([python, "tests/ll_rdma/analyze.py", result, "--iteration", "last"],
                    env, logs / "40-analysis.log")
     print(f"PASS node {a.node_rank}: {result}\nLogs: {logs}", flush=True)
     return 0

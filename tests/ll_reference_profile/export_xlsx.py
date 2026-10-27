@@ -57,7 +57,11 @@ def _number(value):
     return str(value)
 
 
-def _sheet(archive, number, rows, count, columns, widths, header=1, freeze=0, numeric_from=None):
+def _sheet(archive, number, rows, count, columns, widths, header=1, freeze=0, numeric_from=None, explanatory=None):
+    if explanatory is None:
+        explanatory = number in (1, 3)
+    if count > 1048576 or columns > 16384:
+        raise ValueError('Excel worksheet capacity exceeded')
     with archive.open(f'xl/worksheets/sheet{number}.xml', 'w') as stream:
         def write(value):
             stream.write(value.encode('utf-8'))
@@ -73,8 +77,8 @@ def _sheet(archive, number, rows, count, columns, widths, header=1, freeze=0, nu
         actual = 0
         for r, values in enumerate(rows, 1):
             actual = r
-            height = 60 if r == header else (44 if number in (1, 3) else 22)
-            wrapped = list(enumerate(values)) if number in (1, 3) else list(enumerate(values[:1]))
+            height = 60 if r == header else (44 if explanatory else 22)
+            wrapped = list(enumerate(values)) if explanatory else list(enumerate(values[:1]))
             if r != header:
                 for c, value in wrapped:
                     if isinstance(value, str):
@@ -86,10 +90,10 @@ def _sheet(archive, number, rows, count, columns, widths, header=1, freeze=0, nu
                 if r == header:
                     style = 1
                 else:
-                    stripe = number in (2, 4) and r % 2 == 0
+                    stripe = not explanatory and r % 2 == 0
                     numeric = numeric_from is not None and c >= numeric_from
                     style = (4 if stripe else 3) if numeric else (2 if stripe else 0)
-                    if number in (1, 3):
+                    if explanatory:
                         style = 5  # wrapped explanatory cells, no truncation
                     elif c == 1:
                         style = 7 if stripe else 5
@@ -98,19 +102,22 @@ def _sheet(archive, number, rows, count, columns, widths, header=1, freeze=0, nu
         if actual != count:
             raise ValueError('Spreadsheet row count mismatch')
         write('</sheetData>')
-        if number in (2, 4):
+        if not explanatory:
             write(f'<autoFilter ref="A{header}:{column(columns)}{count}"/>')
         write('</worksheet>')
 
 
-def _package(archive):
-    types = ''.join(f'<Override PartName="/xl/worksheets/sheet{i}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>' for i in range(1, 5))
+def _package(archive, names=SHEET_NAMES):
+    if not names or len(set(names)) != len(names) or any(not n or len(n)>31 or any(c in n for c in '[]:*?/\\') for n in names):
+        raise ValueError('Invalid or duplicate worksheet names')
+    numbers = range(1, len(names)+1)
+    types = ''.join(f'<Override PartName="/xl/worksheets/sheet{i}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>' for i in numbers)
     archive.writestr('[Content_Types].xml', '<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>'+types+'</Types>')
     archive.writestr('_rels/.rels', '<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="'+REL+'/officeDocument" Target="xl/workbook.xml"/></Relationships>')
-    sheets = ''.join(f'<sheet name="{name}" sheetId="{i}" r:id="rId{i}"/>' for i, name in enumerate(SHEET_NAMES, 1))
+    sheets = ''.join(f'<sheet name="{escape(name, {chr(34): "&quot;"})}" sheetId="{i}" r:id="rId{i}"/>' for i, name in enumerate(names, 1))
     archive.writestr('xl/workbook.xml', f'<?xml version="1.0" encoding="UTF-8"?><workbook xmlns="{NS}" xmlns:r="{REL}"><bookViews><workbookView/></bookViews><sheets>{sheets}</sheets><calcPr calcMode="auto" fullCalcOnLoad="1"/></workbook>')
-    relations = ''.join(f'<Relationship Id="rId{i}" Type="{REL}/worksheet" Target="worksheets/sheet{i}.xml"/>' for i in range(1, 5))
-    archive.writestr('xl/_rels/workbook.xml.rels', f'<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">{relations}<Relationship Id="rId5" Type="{REL}/styles" Target="styles.xml"/></Relationships>')
+    relations = ''.join(f'<Relationship Id="rId{i}" Type="{REL}/worksheet" Target="worksheets/sheet{i}.xml"/>' for i in numbers)
+    archive.writestr('xl/_rels/workbook.xml.rels', f'<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">{relations}<Relationship Id="rId{len(names)+1}" Type="{REL}/styles" Target="styles.xml"/></Relationships>')
     archive.writestr('xl/styles.xml', f'''<?xml version="1.0" encoding="UTF-8"?><styleSheet xmlns="{NS}">
 <numFmts count="1"><numFmt numFmtId="164" formatCode="0.000"/></numFmts>
 <fonts count="2"><font><sz val="10"/><name val="Arial"/><color rgb="FF172B3A"/></font><font><b/><sz val="10"/><name val="Arial"/><color rgb="FFFFFFFF"/></font></fonts>

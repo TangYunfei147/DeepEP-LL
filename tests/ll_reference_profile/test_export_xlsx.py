@@ -90,7 +90,8 @@ def test_process_outputs_all_rounds_and_default_last_cli_from_other_cwd(tmp_path
     output = source/'reference-analysis'
     report = json.loads((output/'summary.json').read_text(encoding='utf-8'))
     assert report['selected_iteration'] == 1 and report['sample_count'] == 32
-    assert (output/'stages.csv').read_text(encoding='utf-8-sig').count('\n') > 16*16*2
+    assert (output/'stages.csv').read_text(encoding='utf-8-sig').count('\n') == 16*16+1
+    assert (output/'stages_long.csv').read_text(encoding='utf-8-sig').count('\n') > 16*16*2
     assert 0 < (output/'return_report.md').stat().st_size <= 60000
     assert (output/'core_stage_timings.xlsx').is_file()
     again = subprocess.run([sys.executable,str(script),str(source)],cwd=tmp_path,capture_output=True,text=True)

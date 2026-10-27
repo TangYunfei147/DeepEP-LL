@@ -117,7 +117,8 @@ def test_schema3_both_operations_from_moved_checkout(tmp_path):
     import subprocess
     import sys
     moved = tmp_path / "moved project with spaces"
-    for relative in ("deep_ep/utils/ll_stage_timer.py", "deep_ep/utils/ll_expert_timer.py", "tests/ll_stage_timer/analyze.py"):
+    for relative in ("deep_ep/utils/ll_stage_timer.py", "deep_ep/utils/ll_expert_timer.py", "tests/ll_stage_timer/analyze.py",
+                     "tests/ll_rdma/report_tables.py", "tests/ll_reference_profile/export_xlsx.py"):
         target = moved / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(ROOT / relative, target)

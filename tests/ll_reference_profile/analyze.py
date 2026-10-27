@@ -186,7 +186,7 @@ def process_directory(source, output=None, frequency_hz=None, iteration='last', 
     with (output/'summary.json').open('x', encoding='utf-8') as stream:
         json.dump(report, stream, ensure_ascii=False, indent=2)
     fields = ('rank','iteration','core','role','stage','label','first_tick','last_tick','total_ticks','total_us','calls','task_count','batch_count')
-    with (output/'stages.csv').open('x', encoding='utf-8-sig', newline='') as stream:
+    with (output/'stages_long.csv').open('x', encoding='utf-8-sig', newline='') as stream:
         writer = csv.DictWriter(stream, fieldnames=fields)
         writer.writeheader()
         for path in paths:
@@ -197,6 +197,11 @@ def process_directory(source, output=None, frequency_hz=None, iteration='last', 
                 writer.writerow(dict(record, rank=parsed['rank'], iteration=saved['metadata']['iteration'],
                                      label=timer.STAGE_INFO[record['stage']]['label'],
                                      task_count=core['task_count'], batch_count=core['batch_count']))
+    tables = _load('ll_reference_tables', ROOT/'tests/ll_rdma/report_tables.py')
+    stages, headers, wide, calls, _ = tables.wide_records(selected, timer, report['frequency_hz'])
+    tables.csv_table(output/'stages.csv', headers, wide)
+    tables.csv_table(output/'stages_mean.csv', headers, tables.mean_rows(report, headers, stages))
+    tables.csv_table(output/'stage_calls.csv', headers, calls)
     exporter.export_workbook(output/'core_stage_timings.xlsx', report, selected, timer)
     (output/'return_report.md').write_text(text, encoding='utf-8')
     print(f'{source} -> {output} (dispatch; all iterations summarized; selected {chosen})')
@@ -232,14 +237,19 @@ def main():
     if output.exists():
         raise FileExistsError('Report directory already exists; use a new --output-dir')
     directories = discover(source)
-    reports = []
+    reports, workbooks = [], []
     for directory in directories:
         destination = output if len(directories) == 1 else output/directory.relative_to(source)
-        reports.append(process_directory(directory, destination, args.frequency_hz, args.iteration, args.require_all_ranks))
+        report = process_directory(directory, destination, args.frequency_hz, args.iteration, args.require_all_ranks)
+        reports.append(report)
+        workbooks.append((destination/'core_stage_timings.xlsx', report, 'reference'))
     if len(reports) > 1:
         with (output/'return_report.md').open('x', encoding='utf-8') as stream:
             stream.write(run_report(reports))
     print(f'Return this one file: {output / "return_report.md"}')
+    tables = _load('reference_run_tables', ROOT/'tests/ll_rdma/report_tables.py')
+    tables.merge_workbooks(output/'stage-times.xlsx', workbooks)
+    print(f'Combined workbook: {output / "stage-times.xlsx"}')
 
 
 if __name__ == '__main__':

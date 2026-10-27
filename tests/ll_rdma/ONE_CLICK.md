@@ -64,7 +64,11 @@ Git checkout中只纳入已跟踪测试文件，其他分支遗留的未跟踪�
 每个批次只在开始做一次all_reduce；预热后固定100次Exp，再连续稳定调用和capture，算子之间无采样all_reduce/Exp。默认Exp缓冲约13.53GiB/卡，此模式不运行正式profiler。
 
 结果目录：`results/ll-ndr/<run名>-timer/`。
-每机的报告在其下 `stage-analysis/`；多case有 `REPORT_INDEX.md`。
+每机的报告在其下`table-analysis/`，统一打开`stage-times.xlsx`；多个case按sheet前缀区分，
+详细索引为`TABLE_INDEX.json`。`stages.csv`改为所选末轮每核一行、阶段为列，
+多轮均值另存`stages_mean.csv`，原长表保留`stages_long.csv`。
+已有样本只重导出：`bash tests/ll_rdma/one_click.sh --analyze-only RUN_DIR --output-dir NEW_DIR`，
+无需CANN或重编/重采。完整说明见[TABLE_EXPORT.md](TABLE_EXPORT.md)。
 命令及各步日志在 `.logs/ndr-one-click/<run名>-timer/node-0|1/execute/`。
 原始样本、错误日志保留，已有run或日志目录拒绝覆盖，重跑使用新run名。
 

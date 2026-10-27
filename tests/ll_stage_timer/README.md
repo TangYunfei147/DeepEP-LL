@@ -247,7 +247,9 @@ python tests/ll_stage_timer/analyze.py \
   --output-dir results/ll-stage-summary-001
 ```
 
-输出`summary.json`与`stages.csv`，按rank/core/stage给出mean/min/max/P50/P90/P99；JSON另有各rank逐次取core最大阶段累计值的统计。后者不是跨核全局跨度。重复阶段用sum而不是first到last的跨度。嵌套父子阶段、不同核并行阶段不能直接相加；不跨rank相减时间戳。缺rank、缺轮次、损坏/未闭合记录及混配置会报错。
+输出`summary.json`与`stages_long.csv`，按rank/core/stage给出mean/min/max/P50/P90/P99；JSON另有各rank逐次取core最大阶段累计值的统计。后者不是跨核全局跨度。重复阶段用sum而不是first到last的跨度。嵌套父子阶段、不同核并行阶段不能直接相加；不跨rank相减时间戳。缺rank、缺轮次、损坏/未闭合记录及混配置会报错。
+`stages.csv`现为末轮逐核宽表，`stages_mean.csv`为全部轮次均值宽表；同run全部表合入根目录`stage-times.xlsx`。
+`--trace-iteration last`为默认，也可指定轮次。入口与sheet说明见[统一表格导出](../ll_rdma/TABLE_EXPORT.md)。
 
 ## 验证范围
 

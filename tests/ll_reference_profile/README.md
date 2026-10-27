@@ -54,9 +54,11 @@ BF16和预量化FP8分别运行，不把不同dtype/shape合成一个表。
 ## 结果和离线导出
 
 run位于 `results/ll-ndr/ndr-reference-001-reference/`。
-自动分析每个case/route，生成 `core_stage_timings.xlsx`、CSV、JSON及紧凑回传报告。
-默认导出根为run下的`reference-analysis/`；一个case时Excel直接在导出根，多个case时按
-原case/route相对目录分别保存。只回传导出根的`return_report.md`，它汇总本机该run全部case。
+one_click自动分析每个case/route，统一生成`table-analysis/stage-times.xlsx`多sheet主文件，
+各case的CSV、JSON和中间Excel保留子目录。只回传导出根的`return_report.md`。
+下方独立解析命令默认仍使用`reference-analysis/`，也在根目录输出合并的`stage-times.xlsx`。
+`stages.csv`为所选轮逐核宽表，原全部轮次长表移至`stages_long.csv`；
+`stages_mean.csv`单独保存多轮均值。详见[统一表格导出](../ll_rdma/TABLE_EXPORT.md)。
 已有新格式样本重新导出无需重编或重采；旧 schema3 数据不能转换为这些缺失的参考边界。
 
 ```bash

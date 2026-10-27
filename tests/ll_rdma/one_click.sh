@@ -3,6 +3,10 @@
 set -e -o pipefail
 NDR_ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)
 NDR_PYTHON=${PYTHON:-python3}
+if [[ "${1:-}" == "--analyze-only" ]]; then
+    shift
+    exec "$NDR_PYTHON" "$NDR_ROOT/tests/ll_rdma/analyze.py" "$@"
+fi
 for arg in "$@"; do
     case "$arg" in
         --plan|--help|-h)

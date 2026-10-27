@@ -437,6 +437,9 @@ def process_directory(source, output, frequency_hz, trace_iteration, lane_layout
         paths=[path for path in paths if json.loads(path.read_text())['operation']==operation]
         if not paths: raise ValueError(f'No {operation} diagnostic samples in {source}')
     report = analyze(paths, frequency_hz, require_all_ranks)
+    trace_iteration = (max(row['iteration'] for row in report['diagnostics']['longest_core_samples'])
+                       if trace_iteration == 'last' else int(trace_iteration))
+    report['selected_iteration'] = trace_iteration
     selected = []
     for path in paths:
         item = json.loads(path.read_text())
@@ -452,7 +455,7 @@ def process_directory(source, output, frequency_hz, trace_iteration, lane_layout
     (output/'summary.json').write_text(json.dumps(report, indent=2))
     (output/'bottleneck_summary.md').write_text(render_bottleneck_report(report), encoding='utf-8')
     rows = report['per_rank_core_stage']
-    with (output/'stages.csv').open('w', newline='') as stream:
+    with (output/'stages_long.csv').open('w', encoding='utf-8-sig', newline='') as stream:
         writer = csv.DictWriter(stream, fieldnames=list(rows[0]))
         writer.writeheader(); writer.writerows(rows)
     if trace is not None:
@@ -469,7 +472,11 @@ def process_directory(source, output, frequency_hz, trace_iteration, lane_layout
             with (output/filename).open('w',newline='') as stream:
                 writer=csv.DictWriter(stream,fieldnames=list(values[0]))
                 writer.writeheader();writer.writerows(values)
-    print(f'{source} -> {output} (all samples summarized; trace iteration {trace_iteration}; bottleneck_summary.md)')
+    tables_spec = importlib.util.spec_from_file_location('ll_report_tables', ROOT/'tests/ll_rdma/report_tables.py')
+    tables = importlib.util.module_from_spec(tables_spec); tables_spec.loader.exec_module(tables)
+    tables.native_workbook(output, report, selected, timer)
+    print(f'{source} -> {output} (core_stage_timings.xlsx; wide stages.csv; selected iteration {trace_iteration})')
+    return report
 
 
 def main():
@@ -480,7 +487,7 @@ def main():
     parser.add_argument('--latest',action='store_true',help='Select newest child run by cases.json creation mtime')
     parser.add_argument('--frequency-hz',type=float,default=None,
                         help='Override recorded counter frequency; missing frequency retains ticks without rates or trace')
-    parser.add_argument('--trace-iteration',type=int,default=0,help='Timeline iteration; statistics always include all iterations')
+    parser.add_argument('--trace-iteration',default='last',help='Selected timeline/table iteration: last (default) or zero-based N; statistics include all iterations')
     parser.add_argument('--lane-layout',choices=('core','stage'),default='core',help='One track per AIV (default), or separate stage tracks')
     parser.add_argument('--show-repeated',action='store_true',help='Restore the six repeated sender envelopes (statistics are always retained)')
     parser.add_argument('--output-dir',type=Path,help='Default: stage-analysis under selected source; existing reports rejected')
@@ -490,16 +497,21 @@ def main():
     output = (args.output_dir if args.output_dir.is_absolute() else ROOT/args.output_dir) if args.output_dir else source/('stage-analysis-'+args.operation if args.operation else 'stage-analysis')
     if len(directories)>1 and (output/'REPORT_INDEX.md').exists():
         raise FileExistsError('Report index already exists; use a new output directory')
-    documents = []
+    documents, workbooks = [], []
     for directory in directories:
         destination = output if len(directories)==1 else output/directory.relative_to(source)
-        process_directory(directory, destination, args.frequency_hz, args.trace_iteration, args.lane_layout, args.show_repeated, args.operation, args.require_all_ranks)
+        report = process_directory(directory, destination, args.frequency_hz, args.trace_iteration, args.lane_layout, args.show_repeated, args.operation, args.require_all_ranks)
+        workbooks.append((destination/'core_stage_timings.xlsx', report, 'timer'))
         documents.append((directory.relative_to(source), (destination/'bottleneck_summary.md').relative_to(output)))
     if len(documents) > 1:
         from urllib.parse import quote
         with (output/'REPORT_INDEX.md').open('x', encoding='utf-8') as stream:
             stream.write('# LL各case瓶颈报告\n\n不同shape/路由单独分析，不合并统计。\n\n' +
                 '\n'.join(f'- [{str(case).replace(chr(93), "")}]({quote(path.as_posix())})' for case,path in documents) + '\n')
+    spec = importlib.util.spec_from_file_location('stage_run_tables', ROOT/'tests/ll_rdma/report_tables.py')
+    tables = importlib.util.module_from_spec(spec); spec.loader.exec_module(tables)
+    tables.merge_workbooks(output/'stage-times.xlsx', workbooks)
+    print(f'Combined workbook: {output / "stage-times.xlsx"}')
 
 
 if __name__=='__main__':main()
