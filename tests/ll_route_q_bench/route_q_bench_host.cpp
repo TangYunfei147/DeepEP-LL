@@ -40,6 +40,14 @@ uint32_t ParseUint(const char* text)
     return uint32_t(value);
 }
 
+// device 0 合法，不能用 ParseUint 的“非零”约束。
+int ParseDevice(const char* text)
+{
+    const long value = std::strtol(text, nullptr, 0);
+    if (value < 0 || value > 1024) throw std::invalid_argument(std::string("bad device: ") + text);
+    return int(value);
+}
+
 Options Parse(int argc, char** argv)
 {
     Options opt;
@@ -49,7 +57,7 @@ Options Parse(int argc, char** argv)
             if (i + 1 >= argc) throw std::invalid_argument("missing value for " + key);
             return argv[++i];
         };
-        if (key == "--device") opt.device = int(ParseUint(next()));
+        if (key == "--device") opt.device = ParseDevice(next());
         else if (key == "--tokens") opt.tokens = ParseUint(next());
         else if (key == "--topk") opt.topK = ParseUint(next());
         else if (key == "--experts") opt.experts = ParseUint(next());
