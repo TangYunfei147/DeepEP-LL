@@ -165,7 +165,8 @@ int main(int argc, char** argv)
         Check(aclrtMalloc(&routeDev, uint64_t(experts) * stride * sizeof(int32_t), ACL_MEM_MALLOC_HUGE_FIRST),
               "route alloc");
         Check(aclrtMalloc(&countDev, uint64_t(experts) * sizeof(int32_t), ACL_MEM_MALLOC_HUGE_FIRST), "count alloc");
-        Check(aclrtMalloc(&cycleDev, uint64_t(maxCores) * opt.reps * sizeof(uint64_t), ACL_MEM_MALLOC_HUGE_FIRST),
+        Check(aclrtMalloc(&cycleDev, uint64_t(maxCores) * (opt.reps + 1U) * sizeof(uint64_t),
+                          ACL_MEM_MALLOC_HUGE_FIRST),
               "cycle alloc");
         std::vector<int32_t> idsHost(idsItems, -1);
         std::copy(ids.begin(), ids.end(), idsHost.begin());
@@ -177,7 +178,7 @@ int main(int argc, char** argv)
 
         std::vector<int32_t> routeHost(uint64_t(experts) * stride);
         std::vector<int32_t> countHost(experts);
-        std::vector<uint64_t> cycleHost(uint64_t(maxCores) * opt.reps);
+        std::vector<uint64_t> cycleHost(uint64_t(maxCores) * (opt.reps + 1U));
 
         std::ofstream csv(opt.out);
         if (!csv) throw std::runtime_error("cannot write " + opt.out);
@@ -204,8 +205,8 @@ int main(int argc, char** argv)
                 Check(aclrtMemcpy(countHost.data(), countHost.size() * sizeof(int32_t), countDev,
                                   countHost.size() * sizeof(int32_t), ACL_MEMCPY_DEVICE_TO_HOST),
                       "count download");
-                Check(aclrtMemcpy(cycleHost.data(), uint64_t(useCores) * opt.reps * sizeof(uint64_t), cycleDev,
-                                  uint64_t(useCores) * opt.reps * sizeof(uint64_t), ACL_MEMCPY_DEVICE_TO_HOST),
+                const uint64_t cycleBytes = uint64_t(useCores) * (opt.reps + 1U) * sizeof(uint64_t);
+                Check(aclrtMemcpy(cycleHost.data(), cycleBytes, cycleDev, cycleBytes, ACL_MEMCPY_DEVICE_TO_HOST),
                       "cycle download");
 
                 for (uint32_t expert = 0; expert < experts; ++expert) {
@@ -219,12 +220,13 @@ int main(int argc, char** argv)
                 }
 
                 // 每一轮取“最慢核”的周期数作为该轮的 kernel 时延；只用后一半采样做统计。
+                const uint32_t cycleStride = opt.reps + 1U;
                 std::vector<uint64_t> samples;
                 samples.reserve(usedReps);
                 for (uint32_t rep = opt.reps - usedReps; rep < opt.reps; ++rep) {
                     uint64_t slowest = 0U;
                     for (uint32_t core = 0U; core < useCores; ++core)
-                        slowest = std::max(slowest, cycleHost[uint64_t(core) * opt.reps + rep]);
+                        slowest = std::max(slowest, cycleHost[uint64_t(core) * cycleStride + rep]);
                     samples.push_back(slowest);
                 }
                 std::vector<uint64_t> sorted = samples;

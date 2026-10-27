@@ -21,7 +21,7 @@ __aicore__ inline void SyncEvent(uint32_t id)
 
 // routeAddress：experts * stride 个 int32，每专家一段升序路由下标。
 // countAddress：experts 个 int32，每专家实际条数。
-// cycleAddress：reps 个 uint64 / 核，记录每一轮的周期数（core*reps + rep）。
+// cycleAddress：每核 reps+1 个 uint64；前 reps 个是每轮周期数，最后一个是防优化校验和。
 // 每一轮都把路由表从 GM 重新读入（L2 提示关闭），因此单轮时间包含真实取数。
 extern "C" [[bisheng::core_ratio(0, 1)]] __global__ __aicore__ void ll_route_q_bench_kernel(
     GM_ADDR idsAddress, GM_ADDR routeAddress, GM_ADDR countAddress, GM_ADDR cycleAddress, uint32_t routes,
@@ -45,6 +45,10 @@ extern "C" [[bisheng::core_ratio(0, 1)]] __global__ __aicore__ void ll_route_q_b
     auto ids = idsBuf.Get<int32_t>();
     auto table = tableBuf.Get<int32_t>();
     auto counts = countBuf.Get<int32_t>();
+    // 标量分支直接走 UB 指针，避免 LocalTensor 访问器每轮的开销污染算法比较。
+    __ubuf__ int32_t* idsRaw = reinterpret_cast<__ubuf__ int32_t*>(ids.GetPhyAddr());
+    __ubuf__ int32_t* tableRaw = reinterpret_cast<__ubuf__ int32_t*>(table.GetPhyAddr());
+    __ubuf__ int32_t* countsRaw = reinterpret_cast<__ubuf__ int32_t*>(counts.GetPhyAddr());
 
     GlobalTensor<int32_t> idsGm;
     idsGm.SetGlobalBuffer(reinterpret_cast<__gm__ int32_t*>(idsAddress));
@@ -52,6 +56,9 @@ extern "C" [[bisheng::core_ratio(0, 1)]] __global__ __aicore__ void ll_route_q_b
     idsGm.SetL2CacheHint(CacheMode::CACHE_MODE_DISABLE);
     // 计时结果按标量直写 GM（与 device profile 的做法一致，避免 64 位 GlobalTensor 下标写入）。
     __gm__ uint64_t* cycleOut = reinterpret_cast<__gm__ uint64_t*>(cycleAddress);
+    const uint32_t cycleStride = reps + 1U;
+    uint32_t guard = 0U;
+
     for (uint32_t rep = 0; rep < reps; ++rep) {
         // 上一轮的 UB 读者必须先退出，才允许 MTE2 覆盖同一块 ids。
         if (rep != 0U) {
@@ -70,20 +77,25 @@ extern "C" [[bisheng::core_ratio(0, 1)]] __global__ __aicore__ void ll_route_q_b
         if (mode == 0U) {
             for (uint32_t expert = 0; expert < owned; ++expert) {
                 const int32_t target = int32_t(begin + expert);
-                const uint32_t slot = expert * stride;
+                __ubuf__ int32_t* slot = tableRaw + expert * stride;
                 uint32_t found = 0U;
                 for (uint32_t i = 0; i < routes; ++i)
-                    if (ids.GetValue(i) == target) table.SetValue(slot + found++, int32_t(i));
-                counts.SetValue(expert, int32_t(found));
+                    if (idsRaw[i] == target) slot[found++] = int32_t(i);
+                countsRaw[expert] = int32_t(found);
             }
         } else {
             MegaMoeImpl::RelayCompactRoutesVF(
                 reinterpret_cast<__ubuf__ int32_t*>(ids.GetPhyAddr()),
                 reinterpret_cast<__ubuf__ int32_t*>(table.GetPhyAddr()),
                 reinterpret_cast<__ubuf__ int32_t*>(counts.GetPhyAddr()), routes, 8U, int32_t(begin), owned, stride);
+            // __simd_vf__ 是异步发射：必须等向量真正完成，否则测到的是发射开销。
+            SyncEvent<HardEvent::V_S>(1U);
         }
-        cycleOut[uint64_t(core) * reps + rep] = GetSystemCycle() - repStart;
+        cycleOut[uint64_t(core) * cycleStride + rep] = GetSystemCycle() - repStart;
+        // 循环携带依赖，阻止编译器把整段计算提到循环外。
+        if (owned != 0U) guard += uint32_t(countsRaw[0]);
     }
+    cycleOut[uint64_t(core) * cycleStride + reps] = guard;
 
     if (mode == 0U)
         SyncEvent<HardEvent::S_MTE3>(1U);
