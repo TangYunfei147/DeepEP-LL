@@ -1,5 +1,8 @@
 # 一个run、一个Excel、逐核宽表
 
+各阶段的先后、父子包含关系、同核可加总清单及与kernel的对账公式见
+[阶段顺序与核总耗时对账](STAGE_TIMELINE.md)。不要将宽表所有耗时列直接SUM。
+
 `one_click.sh`的timer/reference模式在测试成功后自动离线解析，主文件为
 `results/ll-ndr/RUN_NAME-MODE/table-analysis/stage-times.xlsx`。
 同一次run的各case/route全部进入这个Excel，以`C001_`、`C002_`区分sheet，报告索引记录对应配置。

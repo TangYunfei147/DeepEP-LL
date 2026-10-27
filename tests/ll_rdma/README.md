@@ -1,5 +1,8 @@
 # HNS_1825 混合 MTE / NDR LL（核心协议10）
 
+阶段耗时为何不能整行相加、timer/reference的先后关系与总耗时对账公式，见
+[阶段顺序与核总耗时对账](STAGE_TIMELINE.md)。
+
 2026-10-27目标RoCE的WQE尾片SO语义及“单消息末尾32B FLAG”设计约束见
 [ROCE_SO_CONTRACT.md](ROCE_SO_CONTRACT.md)。协议10已把dispatch/combine跨机packet改为
 整包单WQE及一次源完成等待，复用既有末尾32B flag；见[实现与测试命令](ROCE_SO_PACKET.md)。

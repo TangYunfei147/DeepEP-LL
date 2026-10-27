@@ -1,5 +1,8 @@
 # LL dispatch 参考式逐核打点与 Excel
 
+主阶段与子阶段的先后、w0..w57对账公式、阶段和超过核总耗时的原因见
+[阶段顺序与核总耗时对账](../ll_rdma/STAGE_TIMELINE.md)。
+
 本入口只测 LL dispatch。阶段与用户提供的逐核 Excel 对齐：29 项耗时，
 原始记录每核 64 个 uint64；实际核数仍由平台与当前设备查询，保持原收发分工。
 参考 ZIP 的 HT dispatch 使用每点一次 GetSystemCycle 和一次独占 GM scalar 写；
