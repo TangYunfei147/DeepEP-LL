@@ -35,7 +35,7 @@ DEVICE_FLAGS=(-O2 -std=c++17 -xasc --npu-arch=dav-3510 --cce-auto-infer-kernel-t
 
 bisheng "${DEVICE_FLAGS[@]}" "${INC[@]}" -c "$HERE/route_q_bench_kernel.cpp" -o "$OUT/route_q_bench_kernel.o"
 bisheng -O2 -std=c++17 "${INC[@]}" "$HERE/route_q_bench_host.cpp" "$OUT/route_q_bench_kernel.o" --cce-fatobj-link \
-    -L"$ASCEND_HOME_PATH/lib64" -lascendcl -lruntime -o "$OUT/route_q_bench"
+    -L"$ASCEND_HOME_PATH/lib64" -lascendcl -lruntime -lm -o "$OUT/route_q_bench"
 
 "$OUT/route_q_bench" --device "${DEVICE_ID:-0}" --out "$OUT/route_q_bench.csv" "$@"
 python3 "$HERE/plot_route_q.py" "$OUT/route_q_bench.csv" --out "$OUT/route_q_bench.png"
