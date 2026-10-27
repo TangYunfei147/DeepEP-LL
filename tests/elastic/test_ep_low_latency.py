@@ -38,6 +38,15 @@ def validate_stage_timer_capability(requested, capability):
 
 EXP_PREFIX_REPEATS = 100
 SAMPLING_PROTOCOL = 'initial-reduce-exp100-batch-v3'
+BALANCED_ROUTE_SEED = 20261014
+
+
+def routing_metadata(world, b, e, seed, route):
+    balanced = route == 'normal'
+    return dict(generator='balanced-rank-distinct-roundrobin-v1' if balanced else 'hotspot-expert-sample-v1',
+                seed_offset=seed, base_seed=BALANCED_ROUTE_SEED if balanced else None,
+                rng_seed=BALANCED_ROUTE_SEED + seed + b * 1000 + 2 if balanced else seed,
+                physical_stride=e // world, hot_multiplier_x2=2 if balanced else None)
 
 
 def diagnostic_requested(args):
@@ -104,6 +113,8 @@ def comparison_metadata(args, world, m):
                 perf_enabled=not args.skip_perf_test, world_size=world,
                 local_world_size=int(os.environ.get('LOCAL_WORLD_SIZE',args.num_processes)),
                 case=case_config(args,m), route=args.route, seed=args.seed,
+                routing=routing_metadata(world, args.num_tokens, args.num_experts, args.seed, args.route),
+                route_sha256=getattr(args, 'sample_route_sha256', None),
                 warmup=args.warmup, num_iters=args.num_iters, perf_tail=args.perf_tail,
                 delay_rows=args.delay_rows, delay_cols=args.delay_cols, group_backend=args.group_backend,
                 timer_mode=('reference' if getattr(args, 'll_reference_profile', False) else args.ll_timer_mode) if diagnostic_requested(args) else None,
@@ -532,13 +543,42 @@ def validate_args(args, world):
 
 
 def make_routes(world, b, k, e, seed, route="normal"):
-    """Independent CPU routes: no repeated experts within any token."""
+    """Default: user's exact rank quotas, distinct ranks, round-robin experts.
+
+    seed is an offset from 20261014. Offset zero reproduces the supplied
+    generator with hot_multiplier_x2=2 and physical_stride=E/EP.
+    """
+    if world < 1 or b < 1 or e < world or e % world or not 1 <= k <= world:
+        raise ValueError('Routes require B>0, E divisible by EP, and 1<=K<=EP')
+    if route not in ('normal', 'hotspot'):
+        raise ValueError('Unknown routing mode')
+    if route == 'normal':
+        local_experts = e // world
+        remaining = [b * k] * world
+        occurrences = [0] * world
+        rng = random.Random(BALANCED_ROUTE_SEED + seed + b * 1000 + 2)
+        result = [[] for _ in range(world)]
+        for global_token in range(world * b):
+            tokens_left = world * b - global_token
+            chosen = [rank for rank, count in enumerate(remaining) if count == tokens_left]
+            while len(chosen) < k:
+                candidates = [rank for rank, count in enumerate(remaining)
+                              if count > 0 and rank not in chosen]
+                chosen.append(rng.choices(candidates, weights=[remaining[rank] for rank in candidates])[0])
+            rng.shuffle(chosen)
+            result[global_token // b].append([
+                rank * local_experts + occurrences[rank] % local_experts for rank in chosen])
+            for rank in chosen:
+                remaining[rank] -= 1
+                occurrences[rank] += 1
+        assert not any(remaining)
+        return result
     rng = random.Random(seed)
     result = []
     for _ in range(world):
         rows = []
         for _ in range(b):
-            pool = e if route == "normal" else min(e, max(k, 2 * (e // world)))
+            pool = min(e, max(k, 2 * (e // world)))
             chosen = rng.sample(range(pool), k)
             rows.append(chosen)
         result.append(rows)
@@ -895,6 +935,7 @@ def diagnostic_calls(buffer, invoke, check, args, operation, rank, m, mode,
         metadata = dict(rank=rank, world_size=world, iteration=iteration,
                         comparison=comparison_metadata(args,world,m),
                         run_id=Path(args.run_directory).name, seed=args.seed, route=mode, case_id=args.case_id,
+                        routing=routing_metadata(world, args.num_tokens, args.num_experts, args.seed, mode),
                         correctness="passed", config={**case_config(args, m),
                         "logical_group_size": logical_group},
                         protocol="initial scalar all_reduce; fixed Exp100 batch prefix; no per-iteration prelude; deferred validation/export; excluded from profiler",
@@ -1013,21 +1054,24 @@ def run_case(buffer, args, rank, world, m, mode):
             event.current_stream_wait()
             torch.npu.synchronize()
             agree_check(lambda: verify_dispatch(recv, handle, entries, args, world, m), args, rank)
+    # Restore the declared route after changed-seed correctness probes, for both
+    # reference and full dispatch/combine performance sampling.
+    if getattr(args, 'll_reference_profile', False) or (not args.skip_check and args.correctness_repeats > 1):
+        # Correctness probes varied the seed above; capture the declared route.
+        completion_boundary(args)
+        routes = make_routes(world, args.num_tokens, args.num_topk, args.num_experts, args.seed, mode)
+        entries = expert_entries(routes, args.num_experts, world, rank)
+        counts = [len(rows) for rows in entries]
+        indices = torch.tensor(routes[rank], dtype=torch.int64, device='npu')
+        recv, recv_idx, recv_weights, handle, event = dispatch()
+        event.current_stream_wait()
+        torch.npu.synchronize()
+        agree_check(lambda: verify_dispatch(recv, handle, entries, args, world, m), args, rank)
+    args.reference_profile_seed = args.seed
+    args.sample_route_sha256 = hashlib.sha256(
+        json.dumps(routes, separators=(',', ':')).encode('utf-8')).hexdigest()
+    args.reference_route_sha256 = args.sample_route_sha256
     if args.dispatch_only:
-        if getattr(args, 'll_reference_profile', False):
-            # Correctness probes varied the seed above; capture the declared route.
-            completion_boundary(args)
-            routes = make_routes(world, args.num_tokens, args.num_topk, args.num_experts, args.seed, mode)
-            args.reference_profile_seed = args.seed
-            args.reference_route_sha256 = hashlib.sha256(
-                json.dumps(routes, separators=(',', ':')).encode('utf-8')).hexdigest()
-            entries = expert_entries(routes, args.num_experts, world, rank)
-            counts = [len(rows) for rows in entries]
-            indices = torch.tensor(routes[rank], dtype=torch.int64, device='npu')
-            recv, recv_idx, recv_weights, handle, event = dispatch()
-            event.current_stream_wait()
-            torch.npu.synchronize()
-            agree_check(lambda: verify_dispatch(recv, handle, entries, args, world, m), args, rank)
         result = {
             "case_id": args.case_id,
             "route": mode,

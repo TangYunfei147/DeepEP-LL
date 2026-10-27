@@ -20,7 +20,7 @@ def _load(name, path):
 timer = _load('ll_reference_profile_parser', ROOT/'deep_ep/utils/ll_reference_profile_parse.py')
 exporter = _load('ll_reference_profile_exporter', Path(__file__).with_name('export_xlsx.py'))
 COMMON_KEYS = ('world_size', 'config', 'run_id', 'case_id', 'seed', 'sampling', 'route',
-               'comparison', 'source', 'profile_seed', 'route_sha256')
+               'comparison', 'source', 'profile_seed', 'route_sha256', 'routing')
 
 
 def stats(values):
@@ -142,6 +142,7 @@ def compact_report(report, selected_iteration):
                 row = stages[name]
                 lines.append(f"| {rank['rank']} | {core} | {timer.STAGE_INFO[name]['label']} | {row['samples']} | {row['mean']:.6g} |")
     lines += ['', f"源码指纹：{report['comparison']['installed_source_sha256']}；实际seed={report['profile_seed']}；路由SHA256={report['route_sha256']}。",
+              '负载构造：`'+json.dumps(report.get('routing'), ensure_ascii=False, sort_keys=True)+'`',
               '配置：`'+json.dumps(report['config'], ensure_ascii=False, sort_keys=True)+'`',
               '采样：`'+json.dumps(report['sampling'], ensure_ascii=False, sort_keys=True)+'`', '',
               '原始sample与完整core_stage_timings.xlsx、summary.json、stages.csv保留目标机。此文件省略逐核原始cycle及未展示核的阶段明细。']

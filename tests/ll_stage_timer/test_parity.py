@@ -58,6 +58,13 @@ def test_old_per_iteration_reduce_cannot_be_compared_with_exp100_batch():
         comparison.compare(left, right, 'stage')
 
 
+def test_old_random_normal_cannot_be_compared_with_balanced_normal():
+    left, right = reports()
+    left['comparison'].pop('routing')
+    with pytest.raises(ValueError, match='routing'):
+        comparison.compare(left, right, 'stage')
+
+
 def test_only_matching_stages_receive_ratios():
     left,right=reports()
     right['per_rank_core_stage'].append(dict(operation='dispatch',rank=0,core=28,stage='send_rdma_body_wait',unit='us',mean=2))

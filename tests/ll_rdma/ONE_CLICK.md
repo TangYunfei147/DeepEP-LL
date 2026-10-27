@@ -10,6 +10,9 @@
 
 默认 EP32，每机设备0..15，B8/M256/H3584/K8/E384，BF16和预量化FP8两组，
 默认仅dispatch，正确性检查保留；`--mode perf`执行dispatch+combine，FP8配置的combine仍是BF16。
+默认 `--route normal` 已改为用户指定的严格均衡构造：每rank接收 `B*K` 条路由，每token选K个不同rank，rank内专家轮转；固定 `hot_multiplier_x2=2`。步长自动取 `E/EP`（默认EP32为12，EP64/E384为6）。基础seed为20261014，`--seed`默认0、作为偏移，抽样seed为 `20261014 + seed + B*1000 + 2`。旧 `hotspot` 的专家随机采样保持不变。
+
+结果的 `routing.generator=balanced-rank-distinct-roundrobin-v1` 标识新normal；comparison及reference样本保留seed/步长和实际路由SHA256。多轮正确性后恢复声明seed及匹配handle再测量。旧normal是独立专家随机采样，不能与新normal当作同负载A/B；历史结果不改写。路由在CPU准备阶段构造，不计入kernel采样。
 此NDR性能分支仅编译LL，跳过与当前SHMEM内部UDMA接口不匹配的HT路径；
 不会初始化CATLASS子模块。HT调用明确拒绝。
 

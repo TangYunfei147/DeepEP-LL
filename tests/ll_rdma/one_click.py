@@ -33,6 +33,7 @@ def parse_args(argv=None):
     p.add_argument("--topk", type=int, default=8)
     p.add_argument("--experts", type=int, default=384)
     p.add_argument("--route", choices=("normal", "hotspot"), default="normal")
+    p.add_argument("--seed", type=int, default=0, help="Routing seed offset; normal uses base 20261014")
     p.add_argument("--reference-iters", type=int, default=1)
     p.add_argument("--master-port", type=int, default=29500)
     p.add_argument("--shmem-port", type=int, default=29501)
@@ -86,7 +87,7 @@ def test_arguments(a):
               "--num-max-tokens-per-rank", str(a.capacity), "--hidden", str(a.hidden),
               "--num-topk", str(a.topk), "--num-experts", str(a.experts), "--dtype", *a.dtype,
               "--fp8-scale-dtype", "int32", "--do-cpu-sync", "0", "--group-backend", "hccl",
-              "--use-1g-huge-pages", "0", "--route", a.route,
+              "--use-1g-huge-pages", "0", "--route", a.route, "--seed", str(a.seed),
               "--warmup", "10", "--num-iters", "100", "--perf-tail", "50",
               "--correctness-repeats", "3", "--repeat-combine", "3", "--num-cpu-timeout-secs", "300",
               "--output-dir", "results/ll-ndr", "--run-name", run_id(a)]

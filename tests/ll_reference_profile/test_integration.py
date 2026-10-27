@@ -200,7 +200,7 @@ class SamplingTests(unittest.TestCase):
             return (SimpleNamespace(current_stream_wait=lambda: events.append('wait')),)
         args = SimpleNamespace(run_directory=str(ROOT / '.tmp/reference-cpu'), case_id=0,
                                ll_reference_profile=True, ll_timer_iters=2, ll_timer_mode='observe',
-                               ll_timer_frequency_hz=1e9, seed=0, warmup=2, num_iters=3,
+                               ll_timer_frequency_hz=1e9, seed=0, num_tokens=8, num_experts=384, warmup=2, num_iters=3,
                                delay_rows=1, delay_cols=1, group_backend='hccl',
                                reference_profile_seed=0, reference_route_sha256='a' * 64)
         with ExitStack() as stack:

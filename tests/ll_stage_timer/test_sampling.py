@@ -52,7 +52,7 @@ def test_tail_has_prelude_and_defers_all_checks(monkeypatch, tmp_path, after_per
         assert output in invoked[-2:]
         events.append('check')
     args=SimpleNamespace(run_directory=str(tmp_path), case_id=0, ll_timer_iters=2,
-                         ll_timer_mode='observe', ll_timer_frequency_hz=1e9, seed=0,
+                         ll_timer_mode='observe', ll_timer_frequency_hz=1e9, seed=0, num_tokens=8, num_experts=384,
                          warmup=2, num_iters=3, delay_rows=1, delay_cols=1, group_backend=backend)
     st.diagnostic_calls(object(), invoke, check, args, operation, 0, 256, 'normal',
                         prelude_buffers=(Tensor(), Tensor()) if after_perf else None)
