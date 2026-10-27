@@ -20,8 +20,8 @@ flowchart TD
   s1 --> s2["w6 SendCnt开始 → w7 计数统计/发送提交结束"]
   s2 --> s3["w8 Sender.Process开始；w43记录分配的route数量"]
   s3 --> empty{"本核有发送任务？"}
-  empty -->|有| s4["缓冲与路由加载 → w38"]
-  s4 --> s5["SendWithDedup / SendWithoutDedup → w39"]
+  empty -->|有| s4["缓冲、路由加载与跨机归属计划 → w38"]
+  s4 --> s5["跨机8核归属发送与原机内发送 → w39"]
   s5 --> s6["input释放、尾RDMA batch Flush、lane回收、source元数据写出、MTE3_S → w40"]
   s6 --> s7["w9 Sender.Process返回"]
   empty -->|无，w38/39/40缺失| s7
@@ -29,7 +29,7 @@ flowchart TD
   s8 --> s9["退出kernel对象作用域 → w57 Finish开始 → 诊断记录发布"]
 ```
 
-`sender = w9-w8` 包含三段 `w38-w8`、`w39-w38`、`w40-w39`，还包含 `w9-w40` 的返回间隙。w39之前的发送循环可能已经执行满批次 Flush；最后未满的 RDMA 批次在 w39→w40 中完成。w43为分配的逻辑路由数量，不能当作去重后实际网络包数。
+`sender = w9-w8` 包含三段 `w38-w8`、`w39-w38`、`w40-w39`，还包含 `w9-w40` 的返回间隙。w39之前的发送循环可能已经执行满批次 Flush；最后未满的 RDMA 批次在 w39→w40 中完成。w43保持本核原source路由/元数据分片任务数，不能当作实际网络包数；跨机归属计划包含在w8→w38，8核轮转发送包含在w38→w39。
 
 ### 2.2 R 核
 
@@ -154,8 +154,8 @@ flowchart TD
 | `recv_load_consume` / 加载/消费提交累计 | `w34/1000` | IssueLoad / ConsumeLoaded / RemovePending 区间累积 | 接收 payload 完成的细分 |
 | `recv_loop_clear` / 接收循环/清标记提交 | `(w35-w32)/1000` | 包含 packet 循环、lane 等待指令和 ClearFlags 提交 | 接收 payload 完成的细分 |
 | `recv_final_drain` / 接收最终 PIPE_ALL | `(w36-w35)/1000` | 接收输出、转发及标记清理的现有完成屏障 | 接收 payload 完成的细分 |
-| `send_buffers_routes` / 发送缓冲/路由加载 | `(w38-w8)/1000` | Sender UB/lane 分配及路由加载，含已有同步 | 发送 payload/元数据完成的细分 |
-| `send_packets` / 路由/packet 发送提交 | `(w39-w38)/1000` | SendWithDedup / SendWithoutDedup，包含已有 lane 依赖 | 发送 payload/元数据完成的细分 |
+| `send_buffers_routes` / 发送缓冲/路由加载 | `(w38-w8)/1000` | Sender UB/lane 分配、路由加载及协议11跨机归属计划，含已有同步 | 发送 payload/元数据完成的细分 |
+| `send_packets` / 路由/packet 发送提交 | `(w39-w38)/1000` | 协议11跨机8核归属发送及 SendWithDedup / SendWithoutDedup 机内发送，包含已有 lane 依赖 | 发送 payload/元数据完成的细分 |
 | `send_drain_metadata` / 发送 drain/元数据完成 | `(w40-w39)/1000` | 尾 RDMA batch Flush（消息完成quiet）、lane 回收、source metadata 写回及已有 MTE3_S；无尾批次时不执行 Flush | 发送 payload/元数据完成的细分 |
 | `recv_first_packet` / 首次 packet 就绪等待 | `(w42-w32)/1000` | 接收缓冲准备完至首个 packet batch ready | 接收 payload 完成的细分 |
 
@@ -169,6 +169,6 @@ R核的 `receiver` 包含前缀加载、任务构建、缓冲准备、循环清�
 
 ## 5. 构建与历史数据
 
-两台目标机拉取同一提交后正常运行 `one_click.sh`，默认重编reference完整wheel；不要对旧wheel使用 `--skip-build`。`--reference-iters N` 控制capture轮数；`--mode perf` 仍测试完整dispatch+BF16 combine。SDK、协议10、launch结构大小、采样协议initial-reduce-exp100-batch-v3保持不变。
+两台目标机拉取同一提交后正常运行 `one_click.sh`，默认重编reference完整wheel；不要对旧wheel使用 `--skip-build`。`--reference-iters N` 控制capture轮数；`--mode perf` 仍测试完整dispatch+BF16 combine。SDK、launch结构大小、采样协议initial-reduce-exp100-batch-v3保持不变；当前通信协议11，详见[路由SO与8QP](ROCE_SO_ROUTE_8QP.md)。
 
 旧timer结果仅保留离线解码支持，可用 `one_click.sh --analyze-only RUN_DIR --output-dir NEW_DIR`。历史47阶段不是当前29阶段，不能跨格式直接A/B。

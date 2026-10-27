@@ -8,14 +8,14 @@ namespace deepep {
 // This is separate from LL's 72-core control storage capacity.
 constexpr uint32_t kLlNativeRoceQpLimit = 56;
 
-inline void validate_ll_rdma_qps(uint32_t active_aivs, bool cross_host_rdma)
+inline void validate_ll_rdma_qps(uint32_t qps, bool cross_host_rdma)
 {
-    if (cross_host_rdma && active_aivs > kLlNativeRoceQpLimit) {
+    if (cross_host_rdma && (qps == 0U || qps > kLlNativeRoceQpLimit)) {
         throw std::runtime_error(
-            "Cross-host RDMA LL requires one independent ROCE QP per actual AIV: actual AIV count=" +
-            std::to_string(active_aivs) + ", pinned SHMEM native QP limit=" +
+            "Cross-host RDMA QP count=" +
+            std::to_string(qps) + ", pinned SHMEM native QP limit=" +
             std::to_string(kLlNativeRoceQpLimit) +
-            "; unsupported before SHMEM initialization (no QP sharing or automatic core reduction)");
+            "; unsupported before SHMEM initialization");
     }
 }
 }  // namespace deepep

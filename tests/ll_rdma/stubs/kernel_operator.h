@@ -50,6 +50,7 @@ inline void Trap() { throw std::runtime_error("device trap"); }
 template<int> inline void PipeBarrier() {}
 template<class T> struct LocalTensor {
     T* p;
+    void SetValue(uint32_t index,T value) { p[index]=value; }
     LocalTensor<T> operator[](uint32_t index) { return {p + index}; }
     T* GetPhyAddr() { return p; }
     template<class U> LocalTensor<U> ReinterpretCast() { return {reinterpret_cast<U*>(p)}; }

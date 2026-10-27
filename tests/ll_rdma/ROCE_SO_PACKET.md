@@ -1,5 +1,7 @@
 # RoCE SO整包发布（核心协议10）
 
+> 2026-10-28更新：当前协议11，路由表同WQE尾FLAG发布，每对跨机卡共8个QP；本文旧QP/独立commit描述作为历史记录。当前实现见 [ROCE_SO_ROUTE_8QP.md](ROCE_SO_ROUTE_8QP.md)。
+
 后续采样更新：当前ST已按用户要求切换为`initial-reduce-exp100-batch-v3`，每批初始一次
 all_reduce、active profiler.step前固定100次Exp，循环内不再插入采样通信。
 旧协议9/10的历史结果若采用逐轮Exp+all_reduce，不能直接与新结果作为同条件A/B；

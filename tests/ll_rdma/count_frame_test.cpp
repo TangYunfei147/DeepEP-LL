@@ -34,7 +34,7 @@ int main() {
     Model::local=local.data();Model::remote=remote.data();
     DispatchDedup::CommArgs a;a.rank=0;a.rankSize=32;a.reserved0=16;a.peerMemBytes=512*1024;
     a.reservedAddresses[0]=local.data();a.reservedAddresses[1]=stage.data();a.reservedConfig[0]=LlRdma::kBackend;
-    a.reservedConfig[1]=16;core=0;cores=16;
+    a.reservedConfig[1]=8;a.reservedAddresses[2]=stage.data()+16U*LlRdma::kCoreBytes;core=0;cores=16;
     unsigned totalFrames=0;
     for(unsigned dst=16;dst<32;++dst) {
       std::fill(remote.begin(),remote.end(),0);

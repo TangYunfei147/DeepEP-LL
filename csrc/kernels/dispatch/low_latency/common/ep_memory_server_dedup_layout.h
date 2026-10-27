@@ -43,9 +43,9 @@ struct EpServerDedupAllocation {
 
 // Host-only layout validation; the device entry uses the queried runtime core split.
 int BuildDispatchServerDedupLayout(int64_t rankSize, int64_t bs, int64_t h, int64_t topK, int64_t moeExpertNum,
-                                   EpMemoryServerDedupLayout* out, bool quantized = false, uint32_t coreNum = kLlDefaultPlanCoreNum);
+                                   EpMemoryServerDedupLayout* out, bool quantized = false, uint32_t coreNum = kLlDefaultPlanCoreNum, bool rdma = false);
 int BuildDispatchServerDedupLayout(int64_t rankSize, int64_t bs, int64_t h, int64_t topK, int64_t moeExpertNum,
-                                   EpMemoryServerDedupLayout* out, EpServerDedupInputMode mode, uint32_t coreNum = kLlDefaultPlanCoreNum);
+                                   EpMemoryServerDedupLayout* out, EpServerDedupInputMode mode, uint32_t coreNum = kLlDefaultPlanCoreNum, bool rdma = false);
 int ValidateDispatchServerDedupAllocations(const EpServerDedupAllocation* allocations, std::size_t count,
                                            int32_t deviceId);
 
@@ -57,6 +57,7 @@ int ValidateDispatchServerDedupAllocations(const EpServerDedupAllocation* alloca
 #include "comm_args.h"
 #include "ep_memory_server_dedup_protocol.h"
 #include "ep_memory_server_dedup_count_layout.h"
+#include "ll_count_ownership.h"
 #include "dispatch_dedup_types.h"
 
 namespace DispatchDedup {
@@ -74,7 +75,7 @@ bool MultiplyBytes(uint64_t lhs, uint64_t rhs, uint64_t* out)
 }  // namespace
 
 inline int BuildDispatchServerDedupLayout(int64_t rankSize, int64_t bs, int64_t h, int64_t topK, int64_t moeExpertNum,
-                                          EpMemoryServerDedupLayout* out, EpServerDedupInputMode mode, uint32_t coreNum)
+                                          EpMemoryServerDedupLayout* out, EpServerDedupInputMode mode, uint32_t coreNum, bool rdma)
 {
     if (out == nullptr || !LlCoreCountValid(coreNum)) {
         return DispatchDedup::DISPATCH_DEDUP_ERROR_PARA_CHECK_FAIL;
@@ -89,8 +90,7 @@ inline int BuildDispatchServerDedupLayout(int64_t rankSize, int64_t bs, int64_t 
         return DispatchDedup::DISPATCH_DEDUP_ERROR_PARA_CHECK_FAIL;
     }
 
-    const uint32_t countCores =
-        bs < kEpServerDedupAllCoreCountBsThreshold ? coreNum : coreNum / 2U;
+    const uint32_t countCores = LlCountProducerCores(coreNum, uint32_t(bs), uint32_t(rankSize), uint64_t(bs) * topK, rdma);
     if (DispatchServerDedupCountSendUbBytes(uint64_t(bs) * topK, uint32_t(moeExpertNum), countCores) >
         kEpServerDedupCountUbBytes) {
         return DispatchDedup::DISPATCH_DEDUP_ERROR_PARA_CHECK_FAIL;
@@ -132,11 +132,11 @@ inline int BuildDispatchServerDedupLayout(int64_t rankSize, int64_t bs, int64_t 
 }
 
 inline int BuildDispatchServerDedupLayout(int64_t rankSize, int64_t bs, int64_t h, int64_t topK, int64_t moeExpertNum,
-                                          EpMemoryServerDedupLayout* out, bool quantized, uint32_t coreNum)
+                                          EpMemoryServerDedupLayout* out, bool quantized, uint32_t coreNum, bool rdma)
 {
     return BuildDispatchServerDedupLayout(
         rankSize, bs, h, topK, moeExpertNum, out,
-        quantized ? EpServerDedupInputMode::Quantize16 : EpServerDedupInputMode::Plain16, coreNum);
+        quantized ? EpServerDedupInputMode::Quantize16 : EpServerDedupInputMode::Plain16, coreNum, rdma);
 }
 
 inline int ValidateDispatchServerDedupAllocations(const EpServerDedupAllocation* allocations, std::size_t count,
@@ -171,13 +171,15 @@ inline int ValidateDispatchServerDedupAllocations(const EpServerDedupAllocation*
 namespace DispatchDedup {
 // Matches each input mode, including quantization scratch or packed scale staging.
 inline bool DispatchDedupPacketUbFits(const EpMemoryServerDedupLayout& layout, int64_t b, int64_t k,
-                                      int64_t num_experts, int64_t world_size, uint32_t coreNum = kLlDefaultPlanCoreNum)
+                                      int64_t num_experts, int64_t world_size, uint32_t coreNum = kLlDefaultPlanCoreNum, bool rdma = false)
 {
     if (!LlCoreCountValid(coreNum)) return false;
     const auto align = [](uint64_t n, uint64_t a) { return (n + a - 1) / a * a; };
-    const uint64_t cores = b < kEpServerDedupAllCoreCountBsThreshold ? coreNum : coreNum / 2U;
+    const uint64_t cores = LlCountProducerCores(coreNum, uint32_t(b), uint32_t(world_size), uint64_t(b) * k, rdma);
+    const bool remoteCountOwners = rdma && world_size > 16 &&
+        !(world_size == 32 && uint64_t(b) * k <= kRouteExchangeMaxBytes / sizeof(int32_t));
     const uint64_t reserved =
-        b < kEpServerDedupAllCoreCountBsThreshold ? align((num_experts + cores - 1) / cores, 8) * 32 : 0;
+        (remoteCountOwners || b < kEpServerDedupAllCoreCountBsThreshold) ? align((num_experts + cores - 1) / cores, 8) * 32 : 0;
     const uint64_t tokens = (b + coreNum / 2U - 1U) / (coreNum / 2U);
     const uint64_t groups = std::min<uint64_t>(world_size / LlGroupForWorld(uint32_t(world_size)) - 1, k / 2);
     const bool needQuantize = layout.inputMode == EpServerDedupInputMode::Quantize16;

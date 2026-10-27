@@ -20,7 +20,10 @@ extern "C" [[bisheng::core_ratio(0,1)]] __global__ __aicore__ void ll_rdma_smoke
     pipe.InitBuffer(controlBuf,128U); pipe.InitBuffer(scratchBuf,128U);
     auto packet=packetBuf.Get<uint8_t>(), received=readBuf.Get<uint8_t>();
     auto record=controlBuf.Get<uint32_t>(); auto scratch=scratchBuf.Get<uint8_t>();
-    const uint32_t core=GetBlockIdx(), rank=uint32_t(a->rank), peer=1U-rank;
+    const uint32_t rank=uint32_t(a->rank), peer=1U-rank;
+    const uint32_t workers=LlTransport::RemoteWrite(a,peer)?LlRdma::kQpCount:GetBlockNum();
+    if(GetBlockIdx()>=workers) return;
+    for(uint32_t core=GetBlockIdx();core<GetBlockNum();core+=workers) {
     const uint32_t writer=epoch%2U;
     const uint64_t slot=uint64_t(core)*kSlot;
     uint32_t error=0;
@@ -83,6 +86,7 @@ extern "C" [[bisheng::core_ratio(0,1)]] __global__ __aicore__ void ll_rdma_smoke
     record.SetValue(0,error); Sync<HardEvent::S_MTE3>();
     GlobalTensor<uint32_t> result; result.SetGlobalBuffer(reinterpret_cast<__gm__ uint32_t*>(resultAddress));
     DataCopy(result[core*8U],record,8U); PipeBarrier<PIPE_ALL>();
+    }
 }
 extern "C" void ll_rdma_smoke_launch(uint32_t cores, void* stream, void* args, void* result,
                                       uint32_t mode,uint32_t epoch,uint32_t bytes) {

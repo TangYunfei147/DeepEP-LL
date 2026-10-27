@@ -158,7 +158,7 @@ def test_bad_shape_rejected_before_any_preparation(tokens, monkeypatch):
 
 
 @pytest.mark.parametrize("mode", ["perf", "reference"])
-@pytest.mark.parametrize("fault", [None, "timer", "source", "sdk", "firmware", "library", "branch", "protocol", "reference", "reference_metadata"])
+@pytest.mark.parametrize("fault", [None, "timer", "source", "sdk", "firmware", "library", "branch", "protocol", "qps", "reference", "reference_metadata"])
 def test_installed_check_rejects_stale_or_mixed_builds(tmp_path, monkeypatch, mode, fault):
     root = tmp_path / "project"
     root.mkdir()
@@ -174,7 +174,8 @@ def test_installed_check_rejects_stale_or_mixed_builds(tmp_path, monkeypatch, mo
     (package / "_build_info.json").write_text(json.dumps(info))
     native = SimpleNamespace(
         low_latency_implementation="wrong" if fault == "branch" else "ndr-hns1825",
-        low_latency_core_protocol=9 if fault == "protocol" else 10, low_latency_rdma_enabled=True,
+        low_latency_core_protocol=10 if fault == "protocol" else 11, low_latency_rdma_enabled=True,
+        low_latency_roce_qps_per_peer=4 if fault == "qps" else 8,
         low_latency_stage_timer_enabled=(mode == "timer") != (fault == "timer"),
         low_latency_reference_profile_enabled=(mode == "reference") != (fault == "reference"),
         low_latency_reference_profile_layout=lambda: dict(schema=1, slots=8, fields=8,

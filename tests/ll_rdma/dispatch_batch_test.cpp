@@ -28,7 +28,8 @@ int main() {
     DispatchDedup::CommArgs args;
     args.rank=0; args.rankSize=32; args.reserved0=16; args.peerMemBytes=3U<<20;
     args.reservedAddresses[0]=local.data(); args.reservedAddresses[1]=stages.data();
-    args.reservedConfig[0]=LlRdma::kBackend; args.reservedConfig[1]=16;
+    args.reservedConfig[0]=LlRdma::kBackend; args.reservedConfig[1]=8;
+    args.reservedAddresses[2]=stages.data()+16U*LlRdma::kCoreBytes;
     cores=16; core=3;
     unsigned cases=0;
     for (uint32_t bytes : {512U,4096U,15872U,65536U,131072U}) {

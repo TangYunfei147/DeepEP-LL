@@ -3,7 +3,7 @@
 
 namespace LlTransport {
 // One SO-ordered WQE per packet. Several immutable registered GM sources
-// amortize CQ retirement per distinct peer; each core exclusively owns its QPs.
+// amortize CQ retirement per distinct peer; each remote sender exclusively owns its QP.
 class DispatchRdmaBatch {
     static constexpr uint32_t kMaxPackets = 8U;
     const __gm__ Args* args_ = nullptr;

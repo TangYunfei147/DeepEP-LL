@@ -13,7 +13,7 @@ int main() {
     a.peerMems[0]=local.data(); a.peerMems[1]=remote.data()+1024; // All remote MTE mappings deliberately absent.
     unsigned cases=0;
     for (cores=16;cores<=72;cores+=2) {
-        a.reservedConfig[1]=cores;
+        a.reservedConfig[1]=8; a.reservedAddresses[2]=stages.data()+uint64_t(cores)*LlRdma::kCoreBytes;
         for (core=0;core<cores;++core) {
             for (uint32_t bytes : {512U,1536U,2048U,2560U,4096U,7680U,15872U}) {
                 for (unsigned epoch=1;epoch<=3;++epoch) {
@@ -25,12 +25,12 @@ int main() {
                     auto saved=packet;
                     uint8_t* target=remote.data()+16384;
                     Model::before=[&](const Model::Request& r) {
-                        assert(r.qp==core && r.peer==16);
+                        assert(r.qp==core%8 && r.peer==16);
                         assert(r.bytes==bytes);
                         SoModel::Deliver(r);
                     };
                     unsigned q=Model::quiets;
-                    LlTransport::Packet(&a,16,0,{packet.data()},bytes);
+                    LlTransport::Packet(&a,16,0,{packet.data()},bytes,7U,true,core%8);
                     assert(Model::quiets-q==1 && Model::pending.empty());
                     assert(std::memcmp(target,saved.data(),bytes)==0 && packet==saved);
                     ++cases;
@@ -38,7 +38,7 @@ int main() {
             }
         }
     }
-    Model::before={}; core=0; cores=72; a.reservedConfig[1]=72;
+    Model::before={}; core=0; cores=72; a.reservedConfig[1]=8; a.reservedAddresses[2]=stages.data()+72U*LlRdma::kCoreBytes;
     // Single-use combine packets retain wire contents and completion while
     // allowing the SDK to consume their UB prefix. Each new call repacks it.
     for (uint32_t turn=0;turn<3;++turn) {

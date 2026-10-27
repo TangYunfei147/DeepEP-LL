@@ -39,12 +39,10 @@ static uint32_t ReadWord(uint8_t* p) {
 // delivery uses reverse eligible order and never assumes cross-QP ordering.
 // Every inbox overwrite checks that all readers of its previous body retired.
 class Network {
-    enum Kind { Body,Commit };
     struct Flight {
         Model::Request request;
         unsigned side,epoch;
         uint64_t bank;
-        Kind kind;
         std::vector<uint8_t> source;
         std::chrono::steady_clock::time_point due;
         bool done=false;
@@ -68,7 +66,7 @@ class Network {
             }
             if(next==flights.size()) {cv.wait_for(guard,100us);continue;}
             auto& f=flights[next];
-            if(f.kind==Body) {
+            {
                 auto& target=inbox[1U-f.side][f.bank/bankBytes];
                 assert(!target.epoch || target.retired==target.readers);
                 target={f.epoch,ConsumerMask(1U-f.side,shapes.at(f.epoch-1U)),0U};
@@ -76,9 +74,15 @@ class Network {
             {
                 std::lock_guard<std::mutex> memoryGuard(memoryMutex);
                 assert(std::memcmp(f.request.src,f.source.data(),f.source.size())==0);
-                std::memcpy(f.request.dst,f.request.src,f.request.bytes);
+                const uint32_t body=f.request.bytes-kRouteFlagBytes;
+                // Adversarial fragment order inside one WQE; SO tail last.
+                for(uint32_t end=body;end;) {
+                    const uint32_t begin=end>2048U?end-2048U:0U;
+                    std::memcpy(f.request.dst+begin,f.request.src+begin,end-begin);end=begin;
+                }
+                std::memcpy(f.request.dst+body,f.request.src+body,kRouteFlagBytes);
             }
-            if(failBody && f.kind==Body) f.error="injected body CQ failure";
+            if(failBody) f.error="injected body CQ failure";
             f.done=true;cv.notify_all();
         }
     }
@@ -93,22 +97,16 @@ public:
         std::lock_guard<std::mutex> guard(mutex);
         const uint64_t offset=uint64_t(request.dst-remoteBase)-uint64_t(request.peer)*1024U;
         const uint64_t bank=offset/bankBytes*bankBytes;
-        Kind kind;
-        if(offset-bank==kRouteRx) kind=Body;
-        else {assert(offset-bank==kRouteCommit);kind=Commit;}
-        const unsigned epoch=ReadWord(localBase+side*16U*1024U+bank+kRouteSequence);
+        assert(offset-bank==kRouteRx && request.bytes>=64U && request.bytes%32U==0U);
+        const unsigned epoch=ReadWord(request.src+request.bytes-kRouteFlagBytes+4U);
         assert(epoch && request.qp==0U);
-        if(kind==Commit) {
-            bool completed=false;
-            for(const auto& f:flights) if(f.side==side && f.bank==bank && f.epoch==epoch && f.kind==Body)
-                completed=f.done && f.error.empty();
-            assert(completed); // Failed/unfinished body must never publish.
-        }
+        for(unsigned word=0;word<8;++word)
+            assert(ReadWord(request.src+request.bytes-kRouteFlagBytes+word*4U)==(word%2?epoch:kRouteFlagMagic));
         std::vector<uint8_t> source(request.bytes);
         {std::lock_guard<std::mutex> memoryGuard(memoryMutex);std::memcpy(source.data(),request.src,request.bytes);}
-        const auto delay=kind==Body?(side?2ms:1ms):(side?4ms:1ms);
+        const auto delay=side?2ms:1ms;
         request.id=flights.size();
-        flights.push_back({request,side,epoch,bank,kind,std::move(source),std::chrono::steady_clock::now()+delay});
+        flights.push_back({request,side,epoch,bank,std::move(source),std::chrono::steady_clock::now()+delay});
         cv.notify_all();
     }
     void RetireRead(unsigned side,unsigned cpuCore,unsigned epoch,uint64_t bank) {
@@ -151,7 +149,7 @@ public:
 };
 static CommArgs Args(unsigned side,std::vector<uint8_t>& local) {
     CommArgs a{};a.rank=side*16U;a.rankSize=32;a.reserved0=16;a.peerMemBytes=4U<<20;
-    a.reservedConfig[0]=LlRdma::kBackend;a.reservedConfig[1]=cores;
+    a.reservedConfig[0]=LlRdma::kBackend;a.reservedConfig[1]=8;
     a.reservedAddresses[0]=local.data();a.peerMems[a.rank]=local.data()+a.rank*1024U;
     return a;
 }
@@ -177,7 +175,7 @@ static void TestEpochs(bool interleaveCombine) {
             network.Attach(side,memory[side].data(),memory[1U-side].data());
             auto a=Args(side,memory[side]);
             std::vector<int32_t> data(kRouteExchangeMaxBytes/4U);
-            std::array<uint8_t,256> postScratch{},commitScratch{},finishScratch{};
+            std::array<uint8_t,256> postScratch{},finishScratch{};
             unsigned magic=0;
             for(unsigned iteration=0;iteration<rounds;++iteration) {
                 const unsigned routes=shapes[iteration].b*shapes[iteration].k;
@@ -189,20 +187,14 @@ static void TestEpochs(bool interleaveCombine) {
                 const bool consumes=(ConsumerMask(side,shapes[iteration])&(1U<<cpuCore))!=0U;
                 if(consumes || cpuCore==0U) {
                     if(cpuCore==0U && side==1U && iteration%2U) std::this_thread::sleep_for(3ms);
-                    exchange.PostBody({data.data()},{postScratch.data()});
+                    exchange.PostFrame({data.data()},{postScratch.data()});
                     if(cpuCore==0U) {
-                        assert(Model::puts==iteration*2U+1U && Model::quiets==iteration*2U);
+                        assert(Model::puts==iteration+1U && Model::quiets==iteration);
                         assert(postScratch[0]==0xa5 && postScratch[127]==0xa5 && postScratch[128]==0);
                         std::fill(data.begin(),data.end(),-1);
                         postScratch.fill(0xc9); // Put retains GM, never the UB scratch.
                         network.Wait(Model::pending[0].id); // Progress without quiet.
-                        assert(Model::quiets==iteration*2U);
-                    }
-                    exchange.PublishCommit({commitScratch.data()});
-                    if(cpuCore==0U) {
-                        assert(Model::puts==iteration*2U+2U && Model::quiets==iteration*2U+1U);
-                        assert(Model::pending.size()==1U);
-                        commitScratch.fill(0xd7);
+                        assert(Model::quiets==iteration);
                     }
                     if(consumes) {
                         // Delayed readers exercise the inbox overwrite check.
@@ -232,13 +224,13 @@ static void TestEpochs(bool interleaveCombine) {
                 }
             }
             assert(Model::gets==0U);
-            assert(Model::puts==(cpuCore==0U?rounds*2U:0U));
-            assert(Model::quiets==(cpuCore==0U?rounds*2U:0U));
+            assert(Model::puts==(cpuCore==0U?rounds:0U));
+            assert(Model::quiets==(cpuCore==0U?rounds:0U));
         });
     }
     for(auto& worker:workers) worker.join();
     std::cout<<"PASS paired route exchange: "<<(interleaveCombine?"existing combine completion boundary":"alternating dispatch banks without rank barrier")
-        <<", delayed/empty readers, variable B/K/E, zero remote routes, inbox reuse checked; 2 puts / 2 quiets per rank\n";
+        <<", delayed/empty readers, variable B/K/E, zero remote routes, inbox reuse checked; 1 put / 1 quiet per rank\n";
 }
 
 static void TestFinishDoesNotJoinReaders() {
@@ -249,17 +241,16 @@ static void TestFinishDoesNotJoinReaders() {
         auto a=Args(1,local);
         std::vector<int32_t> data(8,11);std::array<uint8_t,256> scratch{};
         PairedRouteExchange exchange;exchange.Init(&a,8,0);
-        exchange.PostBody({data.data()},{scratch.data()});
-        exchange.PublishCommit({scratch.data()});
+        exchange.PostFrame({data.data()},{scratch.data()});
         exchange.FinishSend({scratch.data()});
         // No peer publication and no other local core has even initialized.
-        assert(ReadWord(local.data()+16U*1024U+kRouteCommit)==0U);
-        assert(Model::pending.empty() && Model::puts==2U && Model::quiets==2U);
+        assert(ReadWord(local.data()+16U*1024U+kRouteRx+32U)==0U);
+        assert(Model::pending.empty() && Model::puts==1U && Model::quiets==1U);
         core=3U;exchange.FinishSend({}); // Empty nonowner needs no scratch.
-        assert(Model::puts==2U && Model::quiets==2U);
+        assert(Model::puts==1U && Model::quiets==1U);
     });
     assert(finish.wait_for(1s)==std::future_status::ready);finish.get();
-    std::cout<<"PASS FinishSend retires outbound commit without peer or local-reader join\n";
+    std::cout<<"PASS FinishSend retires outbound SO frame without peer or local-reader join\n";
 }
 
 static void TestBodyFailure() {
@@ -269,18 +260,40 @@ static void TestBodyFailure() {
     auto a=Args(0,local);
     std::vector<int32_t> data(64,1);std::array<uint8_t,256> scratch{};
     PairedRouteExchange exchange;exchange.Init(&a,8,0);
-    exchange.PostBody({data.data()},{scratch.data()});
+    exchange.PostFrame({data.data()},{scratch.data()});
     bool failed=false;
-    try {exchange.PublishCommit({scratch.data()});}
+    try {exchange.FinishSend({scratch.data()});}
     catch(const std::runtime_error& e) {failed=std::string(e.what())=="injected body CQ failure";}
     assert(failed && Model::puts==1U && Model::quiets==1U);
-    assert(Model::pending.size()==1U && Model::pending[0].bytes==32U);
-    assert(ReadWord(remote.data()+16U*1024U+kRouteCommit)==0U);
+    assert(Model::pending.size()==1U && Model::pending[0].bytes==64U);
+    assert(ReadWord(remote.data()+16U*1024U+kRouteRx+32U)==kRouteFlagMagic);
     Model::pending.clear();
-    std::cout<<"PASS body CQ failure prevents commit\n";
+    std::cout<<"PASS CQ failure retains source even after SO readiness\n";
+}
+
+static void TestShorterFrameRejectsOldExpertIds() {
+    std::vector<uint8_t> local(5U<<20);
+    auto* words=reinterpret_cast<uint32_t*>(local.data()+kRouteRx);
+    for(unsigned i=0;i<32;++i)words[i]=3U;
+    *reinterpret_cast<uint32_t*>(local.data()+kRouteEpoch+512U)=2U;
+    auto reader=std::async(std::launch::async,[&] {
+        core=1;cores=testCores;auto a=Args(0,local);
+        std::array<int32_t,8> data{};
+        PairedRouteExchange exchange;exchange.Init(&a,8,0);
+        exchange.ReadPeerAsync({data.data()});LlTransport::Sync<HardEvent::MTE2_V>(7U);
+        for(auto value:data)assert(value==123);
+    });
+    assert(reader.wait_for(20ms)==std::future_status::timeout);
+    {
+        std::lock_guard<std::mutex> guard(memoryMutex);
+        for(unsigned i=0;i<8;++i)words[i]=123U;
+        for(unsigned i=0;i<8;++i)words[8+i]=i%2?3U:kRouteFlagMagic;
+    }
+    assert(reader.wait_for(1s)==std::future_status::ready);reader.get();
+    std::cout<<"PASS changing B/K rejects stale IDs equal to the current epoch\n";
 }
 
 int main() {
     assert(DispatchServerDedupCountLayout(1024,72).stateBytes < 1024U*1024U);
-    TestEpochs(false);TestEpochs(true);TestFinishDoesNotJoinReaders();TestBodyFailure();
+    TestEpochs(false);TestEpochs(true);TestFinishDoesNotJoinReaders();TestBodyFailure();TestShorterFrameRejectsOldExpertIds();
 }

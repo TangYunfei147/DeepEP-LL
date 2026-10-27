@@ -17,7 +17,7 @@ int main() {
   for(unsigned b: {1U,8U,16U,31U,32U,33U})
    for(unsigned m: {32U,64U,256U}) {
     if(b>m) continue;
-    assert(DispatchDedup::EpServerDedupEnabled(m,b,world)==(m>32 || (world>16 && b<32)));
+    assert(DispatchDedup::EpServerDedupEnabled(m,b,world)==(m>32 || world>16));
     if(world>16) assert(DispatchDedup::LlGroupForWorld(world)==16);
    }
 }

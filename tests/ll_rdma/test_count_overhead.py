@@ -56,9 +56,9 @@ def test_paired_count_records_live_until_the_existing_reuse_barrier():
     assert "return stagePool_;" in _block(counts, "ScratchPool()")
     assert "PipeBarrier<PIPE_ALL>();" in _block(counts, "void Finish()")
     kernel = (DEVICE.parent / "dispatch_server_dedup_kernel.h").read_text(encoding="utf-8")
-    assert "sender_.Process(counts_.ScratchPool(), counts_.ReservedBytes(), timer_, profile_)" in kernel
+    assert "sender_.Process(counts_.ScratchPool(), counts_.ReservedBytes(), profile_)" in kernel
     complete = kernel.index("counts_.CompleteCumsum();")
-    consume = kernel.index("receiver_.Process(timer_, profile_);")
+    consume = kernel.index("receiver_.Process(profile_);")
     assert "PipeBarrier<PIPE_ALL>();" in kernel[complete:consume]
 
 
@@ -66,7 +66,7 @@ def test_only_the_route_owner_waits_for_scalar_body_preparation():
     send = _block(_source("dispatch_server_dedup_counts.h"), "void ServerDedupCounts::SendCnt()")
     owner = _block(send, "if (pairedRoutes_ && aivId_ == 0U)")
     assert "SyncFunc<HardEvent::MTE2_S>();" in owner
-    assert owner.index("SyncFunc<HardEvent::MTE2_S>();") < owner.index("routeExchange_.PostBody")
+    assert owner.index("SyncFunc<HardEvent::MTE2_S>();") < owner.index("routeExchange_.PostFrame")
     assert send.count("SyncFunc<HardEvent::MTE2_S>();") == 1
     # All count workers still acquire input for Vector before their first use.
     loaded = send.index("DataCopyPad(validExpertIdsTensor_, expertIdsGMTensor_")
@@ -76,7 +76,7 @@ def test_only_the_route_owner_waits_for_scalar_body_preparation():
 
 def test_async_route_load_is_acquired_by_its_vector_consumer():
     route = _block(_source("ll_route_exchange.h"), "void ReadPeerAsync(")
-    assert route.index("Wait(bank_+kRouteCommit,epoch_)") < route.index("DataCopy(")
+    assert route.index("WaitFrame()") < route.index("DataCopy(")
     assert "HardEvent::S_MTE2" in route
     assert "HardEvent::MTE2_S" not in route
     send = _block(_source("dispatch_server_dedup_counts.h"), "void ServerDedupCounts::SendCnt()")

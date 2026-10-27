@@ -18,6 +18,7 @@
 #include "../common/ll_fullmesh_first_hop.h"
 #include "../common/ll_sender_route_plan.h"
 #include "../common/ll_sender_input_reuse.h"
+#include "../common/ll_dispatch_packet_plan.h"
 #include "../../../common/ep_packet_receive_layout.h"
 
 namespace DispatchDedup {
@@ -44,6 +45,7 @@ public:
         sendCores_ = (coreNum == 0U ? GetBlockNum() : coreNum) / 2U;
         pipe_ = pipe;
         enableDedup_ = enableDedup;
+        networkRoundRobin_ = LlTransport::Rdma(args) && args->rankSize > int(kLlPhysicalRanksPerHost);
         fullMeshFirstHop_ = Group == 16U && args->rankSize == 32 && LlTransport::Rdma(args);
         bs_ = bs;
         h_ = h;
@@ -68,17 +70,18 @@ public:
     __aicore__ inline void Process(TBufPool<TPosition::VECCALC, 16>& scratch, uint32_t reservedBytes,
                                    LlReferenceProfile::DeviceProfile* profile = nullptr)
     {
-        // Count assigned original routes, not deduplicated packets. Auto splits
-        // flat routes independently of the token slice used for output weights.
-        if (profile && profile->Enabled()) {
-            const uint32_t routes = bs_ * k_;
-            const uint32_t assigned = enableDedup_ ? count_ * k_ :
-                routes / sendCores_ + (GetBlockIdx() < routes % sendCores_ ? 1U : 0U);
-            profile->Value<43>(assigned);  // w43: send_route_count
-        }
+        const uint32_t routes = bs_ * k_;
+        const uint32_t assigned = enableDedup_ ? count_ * k_ :
+            routes / sendCores_ + (GetBlockIdx() < routes % sendCores_ ? 1U : 0U);
+        const bool networkOwner = networkRoundRobin_ && GetBlockIdx() < LlRdma::kQpCount;
+        if (profile) profile->Value<43>(assigned);  // w43: send_route_count
         // 1. 无 token 分片的发送核直接返回；有任务的核复用 SendCnt 释放出的 scratch。
         // reservedBytes 对应仍可能被计数发送读取的 UB，不能当作可用空间覆盖。
-        if (!LlSenderHasWork(enableDedup_, count_, bs_ * k_, GetBlockIdx())) return;
+        // Cross-host dedup emits at most one packet/token to a given peer.
+        // Thus peer ordinal i requires B>i; an empty original token owner
+        // among S0..S7 cannot own a remote packet either. Keep w43's original
+        // source-route/metadata meaning and avoid waking empty B1 cores.
+        if (!LlSenderHasWork(enableDedup_, count_, routes, GetBlockIdx())) return;
 
         if (LlTransport::Rdma(args_)) rdmaBatch_.Init(args_, uint32_t(data_.tokenStride));
 
@@ -150,6 +153,11 @@ public:
         // is reused as a bounded key/count table; qWork stays read-only below.
         LlBuildRouteQ(routeIds_, bs_ * k_, k_, experts_, qDstBuf_.Get<uint32_t>(), qSubBuf_.Get<uint32_t>(),
                       qWorkBuf_.Get<uint32_t>(), qBytes / sizeof(uint32_t));
+        if (networkOwner) {
+            LlBuildRemotePacketOwners(routeIds_, qWorkBuf_.Get<uint32_t>(),
+                qSubBuf_.Get<uint32_t>(), routes, k_, localExperts_, uint32_t(args_->rank), Group,
+                enableDedup_, fullMeshFirstHop_, GetBlockIdx());
+        }
         // Quantization reuses the first hash array on V. Retire its Scalar
         // stores once here, replacing repeated vector-prefix reductions.
         if constexpr (NeedQuantize) {
@@ -168,6 +176,7 @@ public:
 
         if (profile) profile->Mark<38>();  // w38: send_buffers_routes_ready
 
+        if (networkOwner) SendRemotePackets(input);
         if (enableDedup_)
             SendWithDedup(input);
         else
@@ -190,7 +199,7 @@ public:
         // 最后的 MTE3_S 依赖确保这两份源端输出完成后再返回。
         for (uint32_t lane = 0; lane < lanes_; ++lane) WaitFlag<HardEvent::MTE3_V>(lane);
         Sync<HardEvent::S_MTE3>();
-        if (enableDedup_) DataCopyPad(maskOut_[start_], sourceMasks_, {1U, count_ * 4U, 0U, 0U, 0U});
+        if (enableDedup_ && count_ != 0U) DataCopyPad(maskOut_[start_], sourceMasks_, {1U, count_ * 4U, 0U, 0U, 0U});
         if (count_ != 0U)
             DataCopyPad(weightOut_[uint64_t(start_) * k_], enableDedup_ ? sourceWeights_ : routeWeights_,
                         {1U, count_ * k_ * 4U, 0U, 0U, 0U});
@@ -226,7 +235,8 @@ public:
                 }
                 const uint32_t index = (start_ + token) * k_ + firstK;
                 const uint32_t expert = uint32_t(routeIds_.GetValue(index));
-                SendPacket(input, start_ + token, firstK, expert, CalTokenSendExpertCnt(expert, index), mask);
+                if (OwnsLocalPacket(expert))
+                    SendPacket(input, start_ + token, firstK, expert, CalTokenSendExpertCnt(expert, index), mask);
                 sourceMask |= uint32_t(1) << firstK;
                 // 源端仅标记实际发出的首跳路由；该位置输出权重 1，原路由权重另存包尾。
                 sourceWeights_.SetValue(token * k_ + firstK, 1.0f);
@@ -266,7 +276,7 @@ public:
                 const uint32_t token = directTasks_.GetValue(task * 4U);
                 const uint32_t k = directTasks_.GetValue(task * 4U + 1U);
                 const uint32_t q = CalTokenSendExpertCnt(expert, (start_ + token) * k_ + k);
-                SendPacket(input, start_ + token, k, expert, q, 0U);
+                if (OwnsLocalPacket(expert)) SendPacket(input, start_ + token, k, expert, q, 0U);
                 sourceWeights_.SetValue(token * k_ + k, routeWeights_.GetValue(token * k_ + k));
             }
         }
@@ -284,7 +294,7 @@ public:
         if (serverNum < 16U) {
             for (uint32_t i = begin; i < begin + count; ++i) {
                 const uint32_t expert = uint32_t(routeIds_.GetValue(i));
-                SendPacket(input, i / k_, i % k_, expert, CalTokenSendExpertCnt(expert, i), 0U);
+                if (OwnsLocalPacket(expert)) SendPacket(input, i / k_, i % k_, expert, CalTokenSendExpertCnt(expert, i), 0U);
             }
             return;
         }
@@ -298,12 +308,33 @@ public:
             const uint32_t server = EpServerOrder::ServerDedupDispatchDirectOrder(serverNum, ownServer, step);
             for (uint32_t i = serverState_.GetValue(server); i != UINT32_MAX; i = nextRoute.GetValue(i)) {
                 const uint32_t expert = uint32_t(routeIds_.GetValue(i));
-                SendPacket(input, i / k_, i % k_, expert, CalTokenSendExpertCnt(expert, i), 0U);
+                if (OwnsLocalPacket(expert)) SendPacket(input, i / k_, i % k_, expert, CalTokenSendExpertCnt(expert, i), 0U);
             }
         }
     }
 
 private:
+    __aicore__ inline bool OwnsLocalPacket(uint32_t expert) const {
+        return !networkRoundRobin_ || LlTransport::SameHost(args_, expert / localExperts_);
+    }
+    __aicore__ inline void SendRemotePackets(TQue<QuePosition::VECIN, 1>& input) {
+        remoteIssue_ = true;
+        auto q = qWorkBuf_.Get<uint32_t>();
+        for (uint32_t index = 0; index < bs_ * k_; ++index) {
+            if (!LlOwnsRemotePacket(q.GetValue(index), GetBlockIdx())) continue;
+            const uint32_t expert = uint32_t(routeIds_.GetValue(index));
+            const auto packet = LlPacketForRoute(routeIds_, index, k_, localExperts_,
+                uint32_t(args_->rank), Group, enableDedup_, fullMeshFirstHop_);
+            SendPacket(input, index / k_, index % k_, expert, CalTokenSendExpertCnt(expert, index), packet.mask);
+        }
+        remoteIssue_ = false;
+    }
+    __aicore__ inline float RouteWeight(uint32_t token, uint32_t k) {
+        // Remote packet ownership differs from the original contiguous source
+        // metadata slice. Immutable GM weights avoid another live UB buffer.
+        return remoteIssue_ ? weights_.GetValue(uint64_t(token) * k_ + k) :
+                              routeWeights_.GetValue((token - start_) * k_ + k);
+    }
     // 摘要：通过指定流水硬事件建立先后依赖，等待前序操作满足后续流水的访问要求。
     template <HardEvent event>
     __aicore__ inline void Sync()
@@ -354,7 +385,7 @@ private:
     __aicore__ inline uint32_t CalTokenSendExpertCnt(uint32_t expert, uint32_t index)
     {
         (void)expert;
-        return qWorkBuf_.Get<uint32_t>().GetValue(index);
+        return qWorkBuf_.Get<uint32_t>().GetValue(index) & kLlRouteQMask;
     }
     template <class Fp8Type>
     // 摘要：以每 32 元素为一组生成 MXFP8 scale 和量化数据，复用 q 计算的临时 UB。
@@ -388,18 +419,17 @@ private:
             return;
         }
         auto weights = index.template ReinterpretCast<float>();
-        token -= start_;
-        weights.SetValue(1U, routeWeights_.GetValue(token * k_ + firstK));
+        weights.SetValue(1U, RouteWeight(token, firstK));
         uint32_t entries = 0U;
         const uint32_t members = LlRelayMemberMask(mask, firstK);
         for (uint32_t k = 0U; members != 0U && k < k_; ++k)
             if (members & (uint32_t(1) << k)) {
-                const uint32_t routeIndex = (start_ + token) * k_ + k;
+                const uint32_t routeIndex = token * k_ + k;
                 const uint32_t expert = uint32_t(routeIds_.GetValue(routeIndex));
                 const uint32_t q = CalTokenSendExpertCnt(expert, routeIndex);
                 ++entries;
                 index.SetValue(entries * 2U, expert | (q << 16U));
-                weights.SetValue(entries * 2U + 1U, routeWeights_.GetValue(token * k_ + k));
+                weights.SetValue(entries * 2U + 1U, RouteWeight(token, k));
             }
         if constexpr (Prequantized) {
             LlClearStalePrequantTail(index, cachedTailEntries_, entries);
@@ -533,6 +563,7 @@ private:
     LocalTensor<uint8_t> cachedPayload_;
     uint32_t cachedTailEntries_ = 0U;
     bool enableDedup_ = false, fullMeshFirstHop_ = false;
+    bool networkRoundRobin_ = false, remoteIssue_ = false;
     TBufPool<TPosition::VECCALC, 16>* scratch_ = nullptr;
     uint32_t sendCores_ = 0;
     uint32_t bs_ = 0, h_ = 0, k_ = 0, experts_ = 0, localExperts_ = 0, start_ = 0, count_ = 0;

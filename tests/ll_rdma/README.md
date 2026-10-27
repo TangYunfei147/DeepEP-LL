@@ -1,5 +1,7 @@
 # HNS_1825 混合 MTE / NDR LL（核心协议10）
 
+> 当前协议11：路由SO整帧、每对卡8QP、按实际目标rank在8个发送核间轮转。部署与所有权说明见 [ROCE_SO_ROUTE_8QP.md](ROCE_SO_ROUTE_8QP.md)。
+
 > 当前仅保留 reference dispatch 设备打点，one_click 默认 reference；旧 stage/expert 插桩已删除，旧结果仍可离线解析。详见 [阶段与源码对照](../ll_rdma/STAGE_TIMELINE.md)。
 
 阶段耗时为何不能整行相加、timer/reference的先后关系与总耗时对账公式，见

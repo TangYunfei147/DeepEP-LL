@@ -1206,6 +1206,7 @@ def worker(local_rank, args):
         capability = {"active_aiv": core_config["active_aiv"],
                       "transport": backend,
                       "rdma_compiled": bool(getattr(native, "low_latency_rdma_enabled", False)),
+                      "roce_qps_per_peer": getattr(native, "low_latency_roce_qps_per_peer", None),
                       "logical_group": compiled_group(native,world),
                       "implementation": implementation,
                       "combine_host_protocol": getattr(deep_ep.ElasticBuffer, "ll_combine_host_protocol", 0),

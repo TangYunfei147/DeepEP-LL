@@ -16,6 +16,8 @@
 此NDR性能分支仅编译LL，跳过与当前SHMEM内部UDMA接口不匹配的HT路径；
 不会初始化CATLASS子模块。HT调用明确拒绝。
 
+当前通信实现为[协议11：路由SO与8QP](ROCE_SO_ROUTE_8QP.md)，全rank更新完整wheel，不能混装旧协议。
+
 ## 使用
 
 两机的工程绝对路径必须相同，使用相同分支/提交、run名及参数。
@@ -49,7 +51,7 @@ bash tests/ll_rdma/one_click.sh 1 192.0.2.10 ndr-b8-001 --rebuild-shmem
 
 1. 创建/复用工程 `.venv-ll-rdma`，继承目标已有torch/torch_npu。
 2. 获取锁定子模块、校验/显式重建SDK、安装构建依赖和完整wheel。
-3. 检查当前源码fingerprint、SDK版本/实际PI模式、安装包NDR协议10、G16及reference模式。
+3. 检查当前源码fingerprint、SDK版本/实际PI模式、安装包NDR协议11、每peer 8个RoCE QP、G16及reference模式。
 4. 用既有ST生成CPU计划，执行RDMA环境前检。
 5. 两机核对工程路径、Git版本、源码、SDK与完整测试参数，一致后进入原HCCL入口。
 6. 运行测试；reference模式成功后自动分析各自本机16rank，不要求复制另一机样本。

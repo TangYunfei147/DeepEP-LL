@@ -31,8 +31,8 @@ int main(int argc,char** argv) {
         int64_t available=0; Check(aclrtGetDeviceInfo(device,ACL_DEV_ATTR_VECTOR_CORE_NUM,&available),"AIV query");
         if(cores==0) cores=uint32_t(available);
         if(cores<16 || cores>72 || cores%2 || cores>uint32_t(available)) throw std::invalid_argument("cores must be even, 16..72, <=available");
-        deepep::validate_ll_rdma_qps(cores, ranksPerHost==1);
-        if(ranksPerHost==1) Check(aclshmemx_set_qp_num(ACLSHMEM_DATA_OP_ROCE,cores),"ROCE QP configuration");
+        deepep::validate_ll_rdma_qps(LlRdma::kQpCount, ranksPerHost==1);
+        if(ranksPerHost==1) Check(aclshmemx_set_qp_num(ACLSHMEM_DATA_OP_ROCE,LlRdma::kQpCount),"ROCE QP configuration");
         constexpr uint64_t logical=8ULL<<20, guard=4096;
         const uint64_t needed=logical+guard+uint64_t(cores)*LlRdma::kCoreBytes;
         const uint64_t bytes=(needed+(2U<<20)-1U)/(2U<<20)*(2U<<20);
@@ -55,7 +55,8 @@ int main(int argc,char** argv) {
             args.peerMems[peer]+=peer*1024U;
         } args.reservedAddresses[0]=memory;
         args.reservedAddresses[1]=memory+logical+guard; args.reservedConfig[0]=LlRdma::kBackend;
-        args.reservedConfig[1]=cores; args.fftsVal=shmemx_get_ffts_config();
+        args.reservedConfig[1]=LlRdma::kQpCount;
+        args.reservedAddresses[2]=args.reservedAddresses[1]+uint64_t(cores)*LlRdma::kCoreBytes; args.fftsVal=shmemx_get_ffts_config();
         void *deviceArgs=nullptr,*result=nullptr; aclrtStream stream=nullptr;
         Check(aclrtMalloc(&deviceArgs,sizeof(args),ACL_MEM_MALLOC_HUGE_FIRST),"args allocation");
         Check(aclrtMalloc(&result,cores*32U,ACL_MEM_MALLOC_HUGE_FIRST),"result allocation");
