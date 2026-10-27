@@ -99,6 +99,8 @@ extern "C" void ll_route_q_bench_launch(uint32_t cores, void* stream, void* ids,
                                         void* cycles, uint32_t routeItems, uint32_t experts, uint32_t stride,
                                         uint32_t mode, uint32_t reps)
 {
-    ll_route_q_bench_kernel<<<cores, nullptr, stream>>>((GM_ADDR)ids, (GM_ADDR)routes, (GM_ADDR)counts,
-                                                        (GM_ADDR)cycles, routeItems, experts, stride, mode, reps);
+    // Host 侧不要用 (GM_ADDR) 转换：那会把 __gm__ 属性带到 host 类型上并告警。
+    ll_route_q_bench_kernel<<<cores, nullptr, stream>>>(static_cast<uint8_t*>(ids), static_cast<uint8_t*>(routes),
+                                                        static_cast<uint8_t*>(counts), static_cast<uint8_t*>(cycles),
+                                                        routeItems, experts, stride, mode, reps);
 }
