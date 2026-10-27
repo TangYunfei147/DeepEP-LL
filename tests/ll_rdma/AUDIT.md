@@ -1,10 +1,11 @@
-# LL 混合 MTE / NDR 协议审计（核心协议9）
+# LL 混合 MTE / NDR 协议审计（核心协议10）
 
 分支 `kernel/ll-ndr-hns1825`。
 
 2026-10-27：用户提供目标RoCE的WQE尾片SO保证（片内保序、默认2KB分片）。
 后续可用同一WQE的消息尾32B FLAG发布就绪，见[ROCE_SO_CONTRACT.md](ROCE_SO_CONTRACT.md)。
-下文两阶段put/quiet描述现有实现，不应再被解释为该目标硬件上唯一正确的发布方案；本次未改kernel。
+协议10已实现[SO整包发布](ROCE_SO_PACKET.md)，复用已有尾32B flag。下文旧两阶段payload
+描述由该实现覆盖；路由/计数独立commit继续保留。源暂存quiet和窗口生命周期仍受保护。
 
 最新两机EP32(B*K<=8192)初始路由改为rank^16配对交换，gateway重建计数并机内MTE发布，
 route body/epoch采用独立控制区，覆盖下文旧跨机计数描述。

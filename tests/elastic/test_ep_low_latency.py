@@ -1180,7 +1180,7 @@ def worker(local_rank, args):
             raise RuntimeError('Requested RDMA is not compiled in this wheel; no MTE fallback')
         validate_stage_timer_capability(args.ll_stage_timer, capability)
         validate_reference_profile_capability(getattr(args, 'll_reference_profile', False), capability)
-        if args.ll_expert_timer and capability['core_protocol'] not in (5, 6, 7, 8, 9):
+        if args.ll_expert_timer and capability['core_protocol'] not in (5, 6, 7, 8, 9, 10):
             raise RuntimeError('Expert diagnostics require ABI 5 on every rank')
         args.ll_stage_timer_capabilities = capabilities
         run_directory = [None]

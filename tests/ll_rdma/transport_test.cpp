@@ -3,6 +3,7 @@
 #include <vector>
 #define DEEPEP_LL_RDMA 1
 #include "kernels/dispatch/low_latency/device/ll_transport.h"
+#include "roce_so_model.h"
 using namespace AscendC;
 int main() {
     std::vector<uint64_t> timers(72U*LlStageTimer::kWordsPerCore);
@@ -15,17 +16,19 @@ int main() {
     for (cores=16;cores<=72;cores+=2) {
         a.reservedConfig[1]=cores;
         for (core=0;core<cores;++core) {
-            for (uint32_t bytes : {512U,1536U,15872U}) {
+            for (uint32_t bytes : {512U,1536U,2048U,2560U,4096U,7680U,15872U}) {
                 for (unsigned epoch=1;epoch<=3;++epoch) {
-                    std::fill(remote.begin(),remote.end(),0);
+                    // Reused receive slots retain old payload; only flags clear.
+                    std::fill(remote.begin(),remote.end(),0x99);
+                    for(uint32_t b=0;b<bytes;b+=512U) std::memset(remote.data()+16384+b+480U,0,32U);
                     for (uint32_t i=0;i<bytes;++i) packet[i]=uint8_t((i+epoch*17+core)%251+1);
+                    SoModel::Flags(packet.data(),bytes,epoch%2!=0);
                     auto saved=packet;
                     uint8_t* target=remote.data()+16384;
                     Model::before=[&](const Model::Request& r) {
                         assert(r.qp==core && r.peer==16);
-                        if (r.bytes==32) { // Every flag must observe ALL completed bodies.
-                            for (uint32_t b=0;b<bytes;b+=512) assert(std::memcmp(target+b,saved.data()+b,480)==0);
-                        }
+                        assert(r.bytes==bytes);
+                        SoModel::Deliver(r);
                     };
                     unsigned q=Model::quiets;
 #ifdef DEEPEP_LL_STAGE_TIMER
@@ -37,14 +40,15 @@ int main() {
                     LlTransport::Packet(&a,16,0,{packet.data()},bytes,7U,&timer);
                     timer.End(LlStageTimer::Kernel); timer.Finish();
                     for(auto stage : {LlStageTimer::SendRdmaStage, LlStageTimer::SendRdmaBodyPost,
-                         LlStageTimer::SendRdmaBodyWait, LlStageTimer::SendRdmaFlagPost,
-                         LlStageTimer::SendRdmaFlagWait, LlStageTimer::SendRdmaRestore})
+                         LlStageTimer::SendRdmaBodyWait, LlStageTimer::SendRdmaRestore})
                         assert(counters[LlStageTimer::StageOffset(stage)+3U]==1U);
+                    assert(counters[LlStageTimer::StageOffset(LlStageTimer::SendRdmaFlagPost)+3U]==0U);
+                    assert(counters[LlStageTimer::StageOffset(LlStageTimer::SendRdmaFlagWait)+3U]==0U);
                     assert(counters[LlStageTimer::StageOffset(LlStageTimer::SendMteWrite)+3U]==0U);
 #else
                     LlTransport::Packet(&a,16,0,{packet.data()},bytes);
 #endif
-                    assert(Model::quiets-q==2 && Model::pending.empty());
+                    assert(Model::quiets-q==1 && Model::pending.empty());
                     assert(std::memcmp(target,saved.data(),bytes)==0 && packet==saved);
                     ++cases;
                 }
@@ -61,7 +65,7 @@ int main() {
         LlTransport::Packet(&a,16,0,{packet.data()},1536,7U,nullptr,false);
         assert(std::memcmp(remote.data()+16384,expected.data(),1536)==0);
         assert(std::memcmp(packet.data(),expected.data(),128)!=0);
-        assert(Model::quiets-oldQuiets==2U && Model::pending.empty());
+        assert(Model::quiets-oldQuiets==1U && Model::pending.empty());
     }
     std::vector<uint8_t> records(96),scratch(128),received(16000);
     for (uint32_t i=0;i<records.size();++i) records[i]=uint8_t(i+1);
@@ -109,7 +113,7 @@ int main() {
     Model::before=[](const Model::Request&) { throw std::runtime_error("injected CQ failure"); };
     p=Model::puts; trapped=false;
     try { LlTransport::Packet(&a,16,0,{packet.data()},1536); } catch(const std::runtime_error&) { trapped=true; }
-    assert(trapped && Model::puts-p==3U); // bodies only; no flags after a CQ failure
+    assert(trapped && Model::puts-p==1U); // one message; source cannot be released after failed CQ
     for(unsigned b=0;b<1536;b+=512) assert(remote[16384+b+480]==0);
     Model::before={}; Model::pending.clear();
     std::cout << "PASS " << cases << " packet publications across AIV 16..72, records/local-read/cross-read-rejection/self/reuse/range/QP; CPU model only\n";

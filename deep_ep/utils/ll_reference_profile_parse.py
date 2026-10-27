@@ -41,7 +41,7 @@ STAGE_INFO = {
     'recv_final_drain': {'label': '接收最终 PIPE_ALL', 'start': 35, 'end': 36, 'kind': 'difference', 'boundary': '接收输出、转发及标记清理的现有完成屏障', 'relationship': '接收 payload 完成的细分', 'reference_formula': '(w36-w35)/1000'},
     'send_buffers_routes': {'label': '发送缓冲/路由加载', 'start': 8, 'end': 38, 'kind': 'difference', 'boundary': 'Sender UB/lane 分配及路由加载，含已有同步', 'relationship': '发送 payload/元数据完成的细分', 'reference_formula': '(w38-w8)/1000'},
     'send_packets': {'label': '路由/packet 发送提交', 'start': 38, 'end': 39, 'kind': 'difference', 'boundary': 'SendWithDedup / SendWithoutDedup，包含已有 lane 依赖', 'relationship': '发送 payload/元数据完成的细分', 'reference_formula': '(w39-w38)/1000'},
-    'send_drain_metadata': {'label': '发送 drain/元数据完成', 'start': 39, 'end': 40, 'kind': 'difference', 'boundary': '尾 RDMA batch Flush（body/flag quiet）、lane 回收、source metadata 写回及已有 MTE3_S；无尾批次时不执行 Flush', 'relationship': '发送 payload/元数据完成的细分', 'reference_formula': '(w40-w39)/1000'},
+    'send_drain_metadata': {'label': '发送 drain/元数据完成', 'start': 39, 'end': 40, 'kind': 'difference', 'boundary': '尾 RDMA batch Flush（消息完成quiet）、lane 回收、source metadata 写回及已有 MTE3_S；无尾批次时不执行 Flush', 'relationship': '发送 payload/元数据完成的细分', 'reference_formula': '(w40-w39)/1000'},
     'recv_first_packet': {'label': '首次 packet 就绪等待', 'start': 32, 'end': 42, 'kind': 'difference', 'boundary': '接收缓冲准备完至首个 packet batch ready', 'relationship': '接收 payload 完成的细分', 'reference_formula': '(w42-w32)/1000'},
 }
 

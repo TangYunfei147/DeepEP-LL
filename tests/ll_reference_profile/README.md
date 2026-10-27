@@ -10,7 +10,7 @@
 使用独立构建 `DEEPEP_LL_REFERENCE_PROFILE=ON`，同时固定
 `DEEPEP_LL_STAGE_TIMER=OFF`。两个开关不能同时开启；旧阶段和专家计时在本构建中
 完全关闭。普通 OFF 和原有 timer 入口继续可用，新记录有独立格式、schema 和能力检查。
-SDK、通信协议9、公开 dispatch 输入输出以及原有流水依赖保持。
+SDK、公开 dispatch 输入输出以及原有流水依赖保持；当前通信协议10采用SO整包发布。
 
 - 每个固定边界只记录一次时间戳，不做旧计时器的 first/start/sum/count GM 读改写。
 - packet ready 的空扫描不插点；每个有就绪包的批次只读三次时钟，计算轮询和消费累计。
@@ -89,7 +89,7 @@ Excel/原始样本可能超过回传上限，留在目标机查看；只回传�
 与参考阶段一一对应，但实际NDR业务依赖按当前源码解释：
 
 - `w39` 紧接 SendWithDedup/SendWithoutDedup 返回；`w40-w39` 包含现有输入复用退休、
-  尾 RDMA batch 的 body/flag quiet、lane回收及source metadata完成。不能把这些业务成本排除。
+  尾 RDMA batch 的 消息完成quiet、lane回收及source metadata完成。不能把这些业务成本排除。
 - packed-count ready 后的dense记录加载属于RecvCnt剩余部分；clear-status位于当前
   CalcCumsum中GetCumSum之后，不虚称全部清理都在RecvCnt里。
 - `w21-w0` 是核入口至 Counts.Finish 已有最终PIPE_ALL/CTRL恢复，不含末尾诊断发布；

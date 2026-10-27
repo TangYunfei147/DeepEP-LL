@@ -168,6 +168,8 @@ private:
         // independent of payload compute/output, so do not wait for that Vector
         // work before issuing the next flag read. Inactive slot flags stay zero.
         const uint32_t flags = k_ * blocks_;
+        // Include each packet's final flag block: RoCE SO makes its arrival
+        // a whole-message prerequisite. MTE and mask-inactive slot rules stay unchanged.
         auto src = resultFlags_[uint64_t(token) * k_ * packetBytes_ / 4U + 120U];
         DataCopy(flags_, src, {uint16_t(flags), 1U, 15U, 0U});
         Sync<HardEvent::MTE2_V>();

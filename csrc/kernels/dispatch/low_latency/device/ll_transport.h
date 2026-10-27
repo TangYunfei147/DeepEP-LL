@@ -52,10 +52,11 @@ __aicore__ inline void Quiet(uint32_t peer, LocalTensor<uint8_t> scratch, uint32
     Trap();
 #endif
 }
-// A packet is a bounded batch: all 480B bodies complete before any 32B flag
-// writes are submitted. No cross-QP ordering is assumed. The second quiet owns
-// staging reuse. This conservative first implementation serializes packets;
-// its completion and WQE costs must be measured before introducing a ring.
+// Target RoCE SO orders all preceding fragments before the final fragment;
+// each fragment is itself ordered. The last existing 32B flag is the tail.
+// All-flag receive checks include it, so one WQE publishes the complete packet.
+// Quiet still owns registered source reuse, not receiver consumption.
+// See ROCE_SO_CONTRACT.md. No cross-WQE/QP ordering is assumed.
 __aicore__ inline void Packet(const __gm__ Args* a, uint32_t peer, uint64_t offset,
                               LocalTensor<uint8_t> packet, uint32_t bytes, uint32_t syncId=7U,
                               LlStageTimer::DeviceTimer* timer=nullptr, bool preservePacket=true) {
@@ -75,17 +76,11 @@ __aicore__ inline void Packet(const __gm__ Args* a, uint32_t peer, uint64_t offs
     Sync<HardEvent::MTE3_S>(syncId); // registered GM complete before Scalar posts NIC WQEs
     if (timer) timer->End(LlStageTimer::SendRdmaStage);
     if (timer) timer->Start(LlStageTimer::SendRdmaBodyPost);
-    for (uint32_t b = 0; b < bytes; b += 512U) Put(a, peer, dst + b, stage + b, 480U, packet, syncId);
+    Put(a, peer, dst, stage, bytes, packet, syncId);
     if (timer) timer->End(LlStageTimer::SendRdmaBodyPost);
     if (timer) timer->Start(LlStageTimer::SendRdmaBodyWait);
     Quiet(peer, packet, syncId);
     if (timer) timer->End(LlStageTimer::SendRdmaBodyWait);
-    if (timer) timer->Start(LlStageTimer::SendRdmaFlagPost);
-    for (uint32_t b = 0; b < bytes; b += 512U) Put(a, peer, dst + b + 480U, stage + b + 480U, 32U, packet, syncId);
-    if (timer) timer->End(LlStageTimer::SendRdmaFlagPost);
-    if (timer) timer->Start(LlStageTimer::SendRdmaFlagWait);
-    Quiet(peer, packet, syncId);
-    if (timer) timer->End(LlStageTimer::SendRdmaFlagWait);
     if (preservePacket) {
         if (timer) timer->Start(LlStageTimer::SendRdmaRestore);
         // Multi-destination callers retain the packet. Single-use callers

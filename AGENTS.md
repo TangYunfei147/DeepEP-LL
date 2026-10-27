@@ -9,6 +9,11 @@
 
 SO不替代发送源缓冲生命周期、接收消费完成、旧FLAG清理或epoch/双bank复用证明。
 修改前核对实际SDK WQE拆分/SO覆盖和尾FLAG布局，并同步接收端与协议版本；SDK保持
-既有实现，不能为该假设擅改SDK。此次只持久化，不代表kernel已迁移或性能已经验证。
+既有实现，不能为该假设擅改SDK。
+
+协议10已实现跨机payload整包单WQE：复用现有packet最后32B flag，接收端保留完整flag
+检查（包含尾flag）；内部wire/机内MTE不改。dispatch删除gate副本/清gate/独立gate put，
+每批每peer一次quiet；combine Packet每包一次put+quiet。独立路由/计数commit不因单WQE
+SO被删。全rank更新完整wheel；具体实现及验证边界见tests/ll_rdma/ROCE_SO_PACKET.md。
 
 详细记录及现有实现区别见[ROCE_SO_CONTRACT.md](tests/ll_rdma/ROCE_SO_CONTRACT.md)。

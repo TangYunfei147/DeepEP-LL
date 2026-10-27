@@ -9,6 +9,7 @@ import sys
 from types import SimpleNamespace
 
 import pytest
+from deep_ep.utils.ll_reference_profile_parse import WORDS
 
 ROOT = Path(__file__).resolve().parents[2]
 spec = importlib.util.spec_from_file_location("ndr_one_click", Path(__file__).with_name("one_click.py"))
@@ -172,11 +173,11 @@ def test_installed_check_rejects_stale_or_mixed_builds(tmp_path, monkeypatch, mo
     (package / "_build_info.json").write_text(json.dumps(info))
     native = SimpleNamespace(
         low_latency_implementation="wrong" if fault == "branch" else "ndr-hns1825",
-        low_latency_core_protocol=8 if fault == "protocol" else 9, low_latency_rdma_enabled=True,
+        low_latency_core_protocol=9 if fault == "protocol" else 10, low_latency_rdma_enabled=True,
         low_latency_stage_timer_enabled=(mode == "timer") != (fault == "timer"),
         low_latency_reference_profile_enabled=(mode == "reference") != (fault == "reference"),
         low_latency_reference_profile_layout=lambda: dict(schema=1, slots=8, fields=8,
-            words=list(__import__('deep_ep.utils.ll_reference_profile_parse', fromlist=['WORDS']).WORDS)),
+                words=list(WORDS)),
         low_latency_ranks_per_group=lambda world: 16,
         low_latency_stage_timer_layout=lambda: {"schema": 3},
         shmem_library_path=lambda: str(root / ("wrong.so" if fault == "library" else "third-party/shmem/install/shmem/lib/libshmem.so")))

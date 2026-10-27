@@ -1,7 +1,9 @@
-# HNS_1825 混合 MTE / NDR LL（核心协议9）
+# HNS_1825 混合 MTE / NDR LL（核心协议10）
 
 2026-10-27目标RoCE的WQE尾片SO语义及“单消息末尾32B FLAG”设计约束见
-[ROCE_SO_CONTRACT.md](ROCE_SO_CONTRACT.md)。这是用户提供的目标硬件契约；当前kernel尚未迁移。
+[ROCE_SO_CONTRACT.md](ROCE_SO_CONTRACT.md)。协议10已把dispatch/combine跨机packet改为
+整包单WQE及一次源完成等待，复用既有末尾32B flag；见[实现与测试命令](ROCE_SO_PACKET.md)。
+独立路由/计数commit保持原协议依赖，SDK不改。
 
 当前分支用于LL性能穿刺，只构建LL Host/Device，HT notify/dispatch/combine不编译；
 误调用HT入口会明确报错。CATLASS已移出子模块，普通LL构建不需要它。
@@ -71,7 +73,7 @@ python -m pip install -v --force-reinstall --no-build-isolation --no-deps .
 bash tests/ll_rdma/build_smoke.sh
 ```
 
-SDK 默认构建 HNS_1825，并自动校验复用已有匹配产物，无需 `--if-needed`；身份不一致时先停止使用该 SDK 的任务，再显式 `--rebuild`。仅使用仓内 `third-party/shmem/install/shmem`。全 rank 必须匹配核心协议9；移除旧的 `DEEPEP_LL_RANKS_PER_GROUP` 编译定义，G 不再通过编辑全局宏设置。
+SDK 默认构建 HNS_1825，并自动校验复用已有匹配产物，无需 `--if-needed`；身份不一致时先停止使用该 SDK 的任务，再显式 `--rebuild`。仅使用仓内 `third-party/shmem/install/shmem`。全 rank 必须匹配核心协议10；移除旧的 `DEEPEP_LL_RANKS_PER_GROUP` 编译定义，G 不再通过编辑全局宏设置。
 
 环境脚本不默认选卡，runner 要显式 `--devices`，日志/缓存/临时文件保持工程内。后续代码、脚本和指南通过 Git 更新，原始数据与构建产物不提交。
 

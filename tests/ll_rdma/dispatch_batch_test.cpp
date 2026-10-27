@@ -3,7 +3,7 @@
 #include <vector>
 #define DEEPEP_LL_RDMA 1
 #include "kernels/dispatch/low_latency/device/ll_dispatch_rdma_batch.h"
-#include "kernels/common/ep_packet_receive_layout.h"
+#include "roce_so_model.h"
 using namespace AscendC;
 namespace Receive = DispatchDedup::PacketReceiveLayout;
 static Receive::State probe(const uint8_t* packet, uint32_t bytes) {
@@ -47,39 +47,12 @@ int main() {
                 batch.Init(&args,bytes,timerPtr);
                 std::fill(remote.begin(),remote.end(),0);
                 std::vector<std::vector<uint8_t>> saved;
-                const bool gated=bytes+32U<=LlRdma::kCoreBytes;
-                uint32_t capacity=gated ? std::min(8U,LlRdma::kCoreBytes/(bytes+32U)) : 1U;
+                uint32_t capacity=std::min(8U,LlRdma::kCoreBytes/bytes);
                 auto quiets=Model::quiets, puts=Model::puts;
-                uint32_t batchBegin=0;
                 Model::before=[&](const Model::Request& req) {
                     assert(req.qp==core && req.peer>=16);
-                    if(gated && req.bytes==bytes) {
-                        // NIC may expose later fragments/flags before earlier body.
-                        // The first complete flag block remains zero throughout.
-                        for(uint32_t end=bytes;end;end-=32) {
-                            std::memcpy(req.dst+end-32,req.src+end-32,32);
-                            assert(probe(req.dst,bytes)==Receive::State::Pending);
-                        }
-                        return;
-                    }
-                    if(req.bytes!=32) return;
-                    // Even adversarial flags may only observe completed bodies.
-                    for(uint32_t j=batchBegin;j<saved.size();++j) {
-                        auto dst=remote.data()+uint64_t(16+j%peerCount)*1024+uint64_t(j)*(bytes+8192U);
-                        for(uint32_t b=0;b<bytes;b+=512)
-                            assert(std::memcmp(dst+b,saved[j].data()+b,480)==0);
-                    }
-                    if(gated) {
-                        auto packet=req.dst-480;
-                        assert(probe(packet,bytes)==Receive::State::Pending);
-                        // Publish in words, marker last; no atomic packet write.
-                        for(uint32_t word=8;word;--word) {
-                            std::memcpy(req.dst+(word-1)*4,req.src+(word-1)*4,4);
-                            if(word>1) assert(probe(packet,bytes)==Receive::State::Pending);
-                        }
-                        float marker;std::memcpy(&marker,req.src,4);
-                        assert(probe(packet,bytes)==(marker==1.5f ? Receive::State::KeepFlags : Receive::State::Compact));
-                    }
+                    assert(req.bytes==bytes);
+                    SoModel::Deliver(req);
                 };
                 for(uint32_t i=0;i<total;++i) {
                     for(uint32_t b=0;b<bytes;++b) ub[b]=uint8_t((i*13+b)%251+1);
@@ -90,7 +63,6 @@ int main() {
                     assert(std::memcmp(ub.data()+480,saved.back().data()+480,32)==0);
                     // No CQ wait until full; destroy UB immediately to test source lifetime.
                     if((i+1)%capacity) assert(Model::quiets==q);
-                    else batchBegin=i+1;
                     std::fill(ub.begin(),ub.end(),0xcc);
                 }
                 batch.Flush({ub.data()});
@@ -102,23 +74,23 @@ int main() {
                 }
                 uint32_t expectedQuiets=0;
                 for(uint32_t i=0;i<total;i+=capacity)
-                    expectedQuiets+=2*std::min(peerCount,std::min(capacity,total-i));
+                    expectedQuiets+=std::min(peerCount,std::min(capacity,total-i));
                 assert(Model::quiets-quiets==expectedQuiets);
-                assert(Model::puts-puts==total*(gated ? 2U : (bytes/512)*2U));
+                assert(Model::puts-puts==total);
 #ifdef DEEPEP_LL_STAGE_TIMER
                 timer.End(LlStageTimer::Kernel);timer.Finish();
                 auto counters=timerWords.data()+core*LlStageTimer::kWordsPerCore;
                 assert(counters[LlStageTimer::StageOffset(LlStageTimer::SendRdmaStage)+3U]==total);
                 assert(counters[LlStageTimer::StageOffset(LlStageTimer::SendRdmaBodyWait)+3U]==(total+capacity-1)/capacity);
-                assert(counters[LlStageTimer::StageOffset(LlStageTimer::SendRdmaFlagPost)+3U]==(total+capacity-1)/capacity);
-                assert(counters[LlStageTimer::StageOffset(LlStageTimer::SendRdmaFlagWait)+3U]==(total+capacity-1)/capacity);
-                assert(counters[LlStageTimer::StageOffset(LlStageTimer::SendRdmaRestore)+3U]==(gated ? 0U : total));
+                assert(counters[LlStageTimer::StageOffset(LlStageTimer::SendRdmaFlagPost)+3U]==0U);
+                assert(counters[LlStageTimer::StageOffset(LlStageTimer::SendRdmaFlagWait)+3U]==0U);
+                assert(counters[LlStageTimer::StageOffset(LlStageTimer::SendRdmaRestore)+3U]==0U);
 #endif
                 ++cases;
             }
         }
     }
-    // CQ failure must prevent flags and must not recycle descriptors/staging.
+    // CQ failure must not recycle sources. Readiness may already be visible.
     LlTransport::DispatchRdmaBatch failed;failed.Init(&args,4096,nullptr);
     Model::before={}; std::fill(ub.begin(),ub.end(),9);
     failed.Enqueue(16,0,{ub.data()});
@@ -128,14 +100,25 @@ int main() {
     try { failed.Flush({ub.data()}); } catch(const std::runtime_error&) { caught=true; }
     assert(caught && failed.Pending() && Model::puts==puts);
     Model::pending.clear();Model::before={};
-    // A commit CQ error cannot retire the GM slot either.
-    LlTransport::DispatchRdmaBatch failedGate;failedGate.Init(&args,4096,nullptr);
-    flags(ub.data(),4096,true);failedGate.Enqueue(16,0,{ub.data()});
-    Model::before=[](const Model::Request& r) { if(r.bytes==32)throw std::runtime_error("gate CQ failed"); };
-    caught=false;
-    try { failedGate.Flush({ub.data()}); } catch(const std::runtime_error&) { caught=true; }
-    assert(caught && failedGate.Pending());
-    Model::pending.clear();Model::before={};
+    // Receiver may observe a complete message before the sender's CQ retires.
+    // Its staging is nevertheless retained until quiet, not reused on arrival.
+    LlTransport::DispatchRdmaBatch eager;eager.Init(&args,4096,nullptr);
+    std::fill(remote.begin(),remote.end(),0);
+    flags(ub.data(),4096,true); const auto expected=ub;
+    Model::onPost=[](Model::Request& r) { SoModel::Deliver(r); };
+    auto q=Model::quiets;
+    eager.Enqueue(16,0,{ub.data()});
+    assert(eager.Pending() && Model::quiets==q && !Model::pending.empty());
+    assert(probe(remote.data()+16384,4096)==Receive::State::KeepFlags);
+    std::fill(ub.begin(),ub.end(),0xdc);
+    assert(std::memcmp(stages.data()+uint64_t(core)*LlRdma::kCoreBytes,expected.data(),4096)==0);
+    Model::onPost={}; eager.Flush({ub.data()});
+    assert(!eager.Pending() && Model::pending.empty());
+    // Without the target SO contract, sending all flag bytes first is unsafe.
+    std::vector<uint8_t> unsafe(4096,0);
+    for(uint32_t b=0;b<4096;b+=512) std::memcpy(unsafe.data()+b+480,expected.data()+b+480,32);
+    assert(probe(unsafe.data(),4096)==Receive::State::KeepFlags);
+    assert(std::memcmp(unsafe.data(),expected.data(),4096)!=0);
     // The sender chooses MTE versus RDMA once. The internal batch accepts only
     // that remote branch, retaining checks for route-dependent peer/range bounds.
     LlTransport::DispatchRdmaBatch batch;batch.Init(&args,4096,nullptr);
@@ -143,7 +126,7 @@ int main() {
     caught=false;
     try { batch.Enqueue(uint32_t(args.rankSize),0,{ub.data()}); } catch(const std::runtime_error&) { caught=true; }
     assert(caught);
-    // Switching to the extreme fallback cannot silently forget pending data.
+    // Reconfiguration cannot silently forget pending data.
     batch.Init(&args,4096,nullptr);
     flags(ub.data(),4096,true);batch.Enqueue(16,0,{ub.data()});
     caught=false;
@@ -166,5 +149,5 @@ int main() {
     batch.Enqueue(16,0,{ub.data()});batch.Flush({ub.data()});
     assert(Model::pending.size()==1 && Model::pending[0].qp==core+1);
     Model::pending.clear();
-    std::cout<<"PASS "<<cases<<" batch cases: gated partial/reordered visibility, Compact/KeepFlags, source lifetime, reuse, multi-peer, QP isolation, fallback and failure\n";
+    std::cout<<"PASS "<<cases<<" batch cases: SO final-fragment partial visibility, Compact/KeepFlags, source lifetime, reuse, multi-peer, QP isolation, full-stage capacity and failure\n";
 }

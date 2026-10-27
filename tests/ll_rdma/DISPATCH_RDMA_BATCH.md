@@ -1,5 +1,8 @@
 # Dispatch 跨机 packet 批处理
 
+2026-10-27：当前协议10已由[SO整包发布](ROCE_SO_PACKET.md)替代首gate两阶段发布。
+下文保留旧批处理实现的历史设计与对照，不作为当前gate/quiet数量依据。
+
 范围：NDR dispatch sender的FIRST_HOP/DIRECT。计数Records、接收relay、combine、
 SHMEM源码/SDK、QP数量、包格式、路由及q槽位不变。基线提交为74e7160。
 
