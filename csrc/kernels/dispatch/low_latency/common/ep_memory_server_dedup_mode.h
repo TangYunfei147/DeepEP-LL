@@ -17,7 +17,7 @@ __aicore__ inline
     constexpr bool
     EpServerDedupEnabled(uint32_t numMaxTokensPerRank, uint32_t actualBs = 32U, uint32_t world = 16U)
 {
-    return numMaxTokensPerRank > kEpServerDedupDedupThreshold || (world > 16U && actualBs < 32U);
+    return (world > 16U) || (numMaxTokensPerRank > kEpServerDedupDedupThreshold);
 }
 }  // namespace DispatchDedup
 #endif
