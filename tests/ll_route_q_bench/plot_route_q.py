@@ -7,9 +7,11 @@
 import csv
 import sys
 
-SERIES = ("scalar", "vf")
-COLOR = {"scalar": "#c0392b", "vf": "#1f6feb"}
-MARKER = {"scalar": "o", "vf": "s"}
+SERIES = ("scalar", "vf", "prod")
+COLOR = {"scalar": "#c0392b", "vf": "#1f6feb", "prod": "#2e7d32"}
+MARKER = {"scalar": "o", "vf": "s", "prod": "^"}
+MODE_NAME = {"0": "scalar", "1": "vf", "2": "prod"}
+LABEL = {"scalar": "scalar (expert scan)", "vf": "VF (expert scan)", "prod": "production q (histogram)"}
 
 
 def load(path):
@@ -17,7 +19,7 @@ def load(path):
     shape = ""
     with open(path, newline="") as handle:
         for row in csv.DictReader(handle):
-            name = "scalar" if row["mode"] == "0" else "vf"
+            name = MODE_NAME[row["mode"]]
             data[name].append((float(row["cores"]), float(row["us_avg"]), float(row["us_p99"])))
             shape = "routes=%s experts=%s" % (row["routes"], row["experts"])
     for values in data.values():
@@ -38,9 +40,9 @@ def plot_matplotlib(data, shape, out_png, out_svg):
             continue
         xs = [p[0] for p in points]
         axis.plot(xs, [p[1] for p in points], color=COLOR[name], marker=MARKER[name], linewidth=1.8,
-                  markersize=4, label="%s avg" % name)
+                  markersize=4, label="%s avg" % LABEL[name])
         axis.plot(xs, [p[2] for p in points], color=COLOR[name], linestyle="--", linewidth=1.1, alpha=0.85,
-                  label="%s p99" % name)
+                  label="%s p99" % LABEL[name])
         for x, avg, _ in points:
             axis.annotate("%.2f" % avg, (x, avg), textcoords="offset points", xytext=(0, 7), ha="center",
                           fontsize=7, color=COLOR[name])
@@ -92,7 +94,7 @@ def plot_svg(data, shape, out_svg):
         for x, y, _ in data[name]:
             parts.append('<circle cx="%.1f" cy="%.1f" r="3" fill="%s"/>' % (px(x), py(y), COLOR[name]))
         parts.append('<text x="%d" y="%d" font-size="12" fill="%s">%s</text>'
-                     % (width - pad - 60, pad + 16 * (1 + SERIES.index(name)), COLOR[name], name))
+                     % (width - pad - 90, pad + 16 * (1 + SERIES.index(name)), COLOR[name], name))
     for x in xs:
         parts.append('<text x="%.1f" y="%d" font-size="10" text-anchor="middle">%d</text>'
                      % (px(x), height - pad + 16, int(x)))

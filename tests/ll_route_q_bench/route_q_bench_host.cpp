@@ -14,8 +14,8 @@
 #include <vector>
 
 extern "C" void ll_route_q_bench_launch(uint32_t cores, void* stream, void* ids, void* routes, void* counts,
-                                        void* cycles, uint32_t routeItems, uint32_t experts, uint32_t stride,
-                                        uint32_t mode, uint32_t reps);
+                                        void* cycles, void* q, uint32_t routeItems, uint32_t experts, uint32_t topK,
+                                        uint32_t stride, uint32_t mode, uint32_t reps);
 
 namespace {
 void Check(aclError status, const char* what)
@@ -121,6 +121,19 @@ Reference BuildReference(const std::vector<int32_t>& ids, uint32_t experts)
     }
     return ref;
 }
+
+// 生产 LlBuildRouteQ 口径：q[i] 为同专家在此前出现次数，首个 token 一律为 0。
+std::vector<int32_t> BuildQReference(const std::vector<int32_t>& ids, uint32_t experts, uint32_t topK)
+{
+    std::vector<int32_t> q(ids.size(), 0);
+    std::vector<uint32_t> seen(experts, 0U);
+    for (uint32_t i = 0; i < uint32_t(ids.size()); ++i) {
+        const uint32_t expert = uint32_t(ids[i]);
+        q[i] = i < topK ? 0 : int32_t(seen[expert]);
+        ++seen[expert];
+    }
+    return q;
+}
 }  // namespace
 
 int main(int argc, char** argv)
@@ -161,10 +174,12 @@ int main(int argc, char** argv)
         void* routeDev = nullptr;
         void* countDev = nullptr;
         void* cycleDev = nullptr;
+        void* qDev = nullptr;
         Check(aclrtMalloc(&idsDev, uint64_t(idsItems) * sizeof(int32_t), ACL_MEM_MALLOC_HUGE_FIRST), "ids alloc");
         Check(aclrtMalloc(&routeDev, uint64_t(experts) * stride * sizeof(int32_t), ACL_MEM_MALLOC_HUGE_FIRST),
               "route alloc");
         Check(aclrtMalloc(&countDev, uint64_t(experts) * sizeof(int32_t), ACL_MEM_MALLOC_HUGE_FIRST), "count alloc");
+        Check(aclrtMalloc(&qDev, uint64_t(routeItems) * sizeof(int32_t), ACL_MEM_MALLOC_HUGE_FIRST), "q alloc");
         Check(aclrtMalloc(&cycleDev, uint64_t(maxCores) * (opt.reps + 1U) * sizeof(uint64_t),
                           ACL_MEM_MALLOC_HUGE_FIRST),
               "cycle alloc");
@@ -178,7 +193,9 @@ int main(int argc, char** argv)
 
         std::vector<int32_t> routeHost(uint64_t(experts) * stride);
         std::vector<int32_t> countHost(experts);
+        std::vector<int32_t> qHost(routeItems);
         std::vector<uint64_t> cycleHost(uint64_t(maxCores) * (opt.reps + 1U));
+        const std::vector<int32_t> qRef = BuildQReference(ids, experts, topK);
 
         std::ofstream csv(opt.out);
         if (!csv) throw std::runtime_error("cannot write " + opt.out);
@@ -187,36 +204,51 @@ int main(int argc, char** argv)
         std::cout << "shape: routes=" << routeItems << " experts=" << experts << " stride=" << stride
                   << " reps=" << opt.reps << " available_aiv=" << available << "\n";
         // 预热一次，避免首启开销落进任一配置。
-        ll_route_q_bench_launch(1U, stream, idsDev, routeDev, countDev, cycleDev, routeItems, experts, stride, 1U, 1U);
+        ll_route_q_bench_launch(1U, stream, idsDev, routeDev, countDev, cycleDev, qDev, routeItems, experts, topK,
+                                stride, 1U, 1U);
         Check(aclrtSynchronizeStream(stream), "warmup");
 
-        for (uint32_t mode = 0U; mode <= 1U; ++mode) {
+        for (uint32_t mode = 0U; mode <= 2U; ++mode) {
             for (uint32_t useCores : cores) {
                 Check(aclrtMemset(routeDev, uint64_t(experts) * stride * sizeof(int32_t), 0xff,
                                   uint64_t(experts) * stride * sizeof(int32_t)), "clear route");
                 Check(aclrtMemset(countDev, uint64_t(experts) * sizeof(int32_t), 0xff,
                                   uint64_t(experts) * sizeof(int32_t)), "clear count");
-                ll_route_q_bench_launch(useCores, stream, idsDev, routeDev, countDev, cycleDev, routeItems, experts,
-                                        stride, mode, opt.reps);
+                Check(aclrtMemset(qDev, uint64_t(routeItems) * sizeof(int32_t), 0xff,
+                                  uint64_t(routeItems) * sizeof(int32_t)), "clear q");
+                ll_route_q_bench_launch(useCores, stream, idsDev, routeDev, countDev, cycleDev, qDev, routeItems,
+                                        experts, topK, stride, mode, opt.reps);
                 Check(aclrtSynchronizeStream(stream), "bench kernel");
-                Check(aclrtMemcpy(routeHost.data(), routeHost.size() * sizeof(int32_t), routeDev,
-                                  routeHost.size() * sizeof(int32_t), ACL_MEMCPY_DEVICE_TO_HOST),
-                      "route download");
-                Check(aclrtMemcpy(countHost.data(), countHost.size() * sizeof(int32_t), countDev,
-                                  countHost.size() * sizeof(int32_t), ACL_MEMCPY_DEVICE_TO_HOST),
-                      "count download");
                 const uint64_t cycleBytes = uint64_t(useCores) * (opt.reps + 1U) * sizeof(uint64_t);
                 Check(aclrtMemcpy(cycleHost.data(), cycleBytes, cycleDev, cycleBytes, ACL_MEMCPY_DEVICE_TO_HOST),
                       "cycle download");
 
-                for (uint32_t expert = 0; expert < experts; ++expert) {
-                    if (uint32_t(countHost[expert]) != ref.counts[expert])
-                        throw std::runtime_error("count mismatch: mode=" + std::to_string(mode) + " cores=" +
-                                                 std::to_string(useCores) + " expert=" + std::to_string(expert));
-                    for (uint32_t item = 0; item < ref.counts[expert]; ++item)
-                        if (uint32_t(routeHost[uint64_t(expert) * stride + item]) != ref.lists[expert][item])
-                            throw std::runtime_error("route mismatch: mode=" + std::to_string(mode) + " cores=" +
+                if (mode == 2U) {
+                    // 生产口径只产 q，直接与 Host 参考逐项比对。
+                    Check(aclrtMemcpy(qHost.data(), qHost.size() * sizeof(int32_t), qDev,
+                                      qHost.size() * sizeof(int32_t), ACL_MEMCPY_DEVICE_TO_HOST),
+                          "q download");
+                    for (uint32_t i = 0; i < routeItems; ++i)
+                        if (qHost[i] != qRef[i])
+                            throw std::runtime_error("q mismatch: cores=" + std::to_string(useCores) + " index=" +
+                                                     std::to_string(i));
+                } else {
+                    Check(aclrtMemcpy(routeHost.data(), routeHost.size() * sizeof(int32_t), routeDev,
+                                      routeHost.size() * sizeof(int32_t), ACL_MEMCPY_DEVICE_TO_HOST),
+                          "route download");
+                    Check(aclrtMemcpy(countHost.data(), countHost.size() * sizeof(int32_t), countDev,
+                                      countHost.size() * sizeof(int32_t), ACL_MEMCPY_DEVICE_TO_HOST),
+                          "count download");
+                    for (uint32_t expert = 0; expert < experts; ++expert) {
+                        if (uint32_t(countHost[expert]) != ref.counts[expert])
+                            throw std::runtime_error("count mismatch: mode=" + std::to_string(mode) + " cores=" +
                                                      std::to_string(useCores) + " expert=" + std::to_string(expert));
+                        for (uint32_t item = 0; item < ref.counts[expert]; ++item)
+                            if (uint32_t(routeHost[uint64_t(expert) * stride + item]) != ref.lists[expert][item])
+                                throw std::runtime_error("route mismatch: mode=" + std::to_string(mode) + " cores=" +
+                                                         std::to_string(useCores) + " expert=" +
+                                                         std::to_string(expert));
+                    }
                 }
 
                 // 每一轮取“最慢核”的周期数作为该轮的 kernel 时延；只用后一半采样做统计。
@@ -240,12 +272,14 @@ int main(int argc, char** argv)
                 csv << mode << ',' << useCores << ',' << opt.reps << ',' << usedReps << ',' << routeItems << ','
                     << experts << ',' << avgUs << ',' << p50Us << ',' << p99Us << '\n';
                 csv.flush();
-                std::cout << (mode == 0U ? "scalar" : "vf    ") << " cores=" << useCores << " avg=" << avgUs
-                          << "us p50=" << p50Us << "us p99=" << p99Us << "us\n";
+                const char* label = mode == 0U ? "scalar" : (mode == 1U ? "vf" : "prod");
+                std::cout << label << " cores=" << useCores << " avg=" << avgUs << "us p50=" << p50Us
+                          << "us p99=" << p99Us << "us\n";
             }
         }
 
         Check(aclrtDestroyStream(stream), "destroy stream");
+        Check(aclrtFree(qDev), "free q");
         Check(aclrtFree(cycleDev), "free cycles");
         Check(aclrtFree(countDev), "free counts");
         Check(aclrtFree(routeDev), "free routes");
