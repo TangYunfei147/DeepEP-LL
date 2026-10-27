@@ -1,5 +1,8 @@
 # HNS_1825 混合 MTE / NDR LL（核心协议9）
 
+2026-10-27目标RoCE的WQE尾片SO语义及“单消息末尾32B FLAG”设计约束见
+[ROCE_SO_CONTRACT.md](ROCE_SO_CONTRACT.md)。这是用户提供的目标硬件契约；当前kernel尚未迁移。
+
 当前分支用于LL性能穿刺，只构建LL Host/Device，HT notify/dispatch/combine不编译；
 误调用HT入口会明确报错。CATLASS已移出子模块，普通LL构建不需要它。
 

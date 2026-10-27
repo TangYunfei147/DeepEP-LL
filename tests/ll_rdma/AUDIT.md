@@ -2,6 +2,10 @@
 
 分支 `kernel/ll-ndr-hns1825`。
 
+2026-10-27：用户提供目标RoCE的WQE尾片SO保证（片内保序、默认2KB分片）。
+后续可用同一WQE的消息尾32B FLAG发布就绪，见[ROCE_SO_CONTRACT.md](ROCE_SO_CONTRACT.md)。
+下文两阶段put/quiet描述现有实现，不应再被解释为该目标硬件上唯一正确的发布方案；本次未改kernel。
+
 最新两机EP32(B*K<=8192)初始路由改为rank^16配对交换，gateway重建计数并机内MTE发布，
 route body/epoch采用独立控制区，覆盖下文旧跨机计数描述。
 2026-10-26删除路由ACK、每核done汇合和lastSent复用轮询；保留body/commit完成等待。
