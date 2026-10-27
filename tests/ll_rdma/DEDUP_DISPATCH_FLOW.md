@@ -1,8 +1,14 @@
 # NDR去重dispatch执行流程
 
-本文对应`kernel/ll-ndr-hns1825@7a7cac8`，其kernel内容与`92cbf68`一致：核心协议9、
-阶段schema3，采用完整packet的FIRST_HOP转发。以下按正常通信、timer OFF说明，所有下标从0开始。
+本文于2026-10-27按`kernel/ll-ndr-hns1825@1d54829`更新：核心协议10、
+阶段schema3/reference schema1，跨机payload采用SO整包单WQE，FIRST_HOP仍转发完整packet。
+以下按正常通信、timer OFF说明，所有下标从0开始。文中构造例子用于解释路由和计数，不是设备实测。
 配套的[非去重dispatch文档](NON_DEDUP_DISPATCH_FLOW.md)保留在独立文件中。
+
+**EP32不是无条件走本文：合法输入中仅B=M=32走非去重，其余走去重。**
+一键脚本默认M=256，因此该默认容量下的所有合法EP32/B均适用本文；
+显式设置B32/M32时应查非去重文档。两路径共享SO传输helper，不代表路由、任务分片和combine算法相同。
+非去重文档中的历史跨机发布描述，以本文第9节和[当前SO实现](ROCE_SO_PACKET.md)为准。
 
 去重发生在**一个源token发往同一个异组的多条expert路由之间**：源端只发一个FIRST_HOP包给
 该组内某个真实目标expert，它的接收核再把完整token转发给同组其他成员。所有原始expert任务仍需
@@ -27,10 +33,14 @@ enable_dedup = (M > 32) or (P > 16 and B < 32)
 | 16 | 2 | 2 | 非去重 |
 | 32 | 8 | 256 | 去重 |
 | 32 | 8 | 8 | 仍去重，由P>16且B<32触发 |
+| 32 | 31 | 32 | 去重，由B<32触发 |
 | 32 | 32 | 32 | 非去重 |
 | 32 | 32 | 256 | 去重 |
+| 32 | 33 | 33 | 去重，由M>32触发 |
+| 32 | 256 | 256 | 去重 |
 
 这个判定不读取backend。`M`不是实际发送token数；数据分片、q和工作区中每expert/source的槽数使用B。
+EP32非去重要求M≤32且B≥32，结合合法输入B≤M，只有B=M=32这一种情况。
 
 逻辑去重组G由tiling选择：P=16时G4，P>16时G16。物理机界另按16个连续rank划分：
 
@@ -83,7 +93,7 @@ relay包数 = sum(max(m_g-1,0))
 同组的多条路由仍逐条DIRECT；异组单条也直接DIRECT。两个成员落在同一目标rank上，只要expert不同，
 仍是两个专家任务，不能合并最终输出行。
 
-源码：[角色定义](../../csrc/kernels/dispatch/low_latency/common/ep_memory_server_dedup_protocol.h#L22)。
+源码：[角色定义](../../csrc/kernels/dispatch/low_latency/common/ep_memory_server_dedup_protocol.h)。
 
 ## 3 Host入口和每核整体流程
 
@@ -124,9 +134,11 @@ def process_one_core(core):
 
 各核独立推进。某发送核完成自己的CountSend后即可发送；它不等待所有接收核完成prefix。
 没有“全rank先完成所有FIRST_HOP”的统一屏障。不同核之间不能拼出一个固定的全局发包次序。
+CalcCumsum之后的CompleteCumsum等待本rank前缀就绪，随后PIPE_ALL保护本地count UB复用；
+这里没有统一等待全部payload RDMA完成的Quiet。进入Receiver后仍需逐批检查packet flags。
 
-源码：[Host选择与launch](../../csrc/ops/low_latency.cpp#L268)、
-[kernel.Process](../../csrc/kernels/dispatch/low_latency/dispatch_server_dedup_kernel.h#L49)。
+源码：[Host选择与launch](../../csrc/ops/low_latency.cpp)、
+[kernel.Process](../../csrc/kernels/dispatch/low_latency/dispatch_server_dedup_kernel.h)。
 
 ## 4 计数和prefix为什么仍按全部路由计算
 
@@ -154,13 +166,15 @@ T = prefix[E-1]                          # 本rank有效输出行数
 
 EP32配对控制仍为每rank两次put和两次quiet，没有路由消费ACK。**配对控制peer不一定是payload首跳peer**。
 例子B中rank0交换路由的peer是16，payload首跳却是20。
+协议10的SO优化目前只合并payload，路由body与commit仍在独立区域；计数frame的独立commit也未合并。
+不能把下文payload一次put的数量套到控制消息上。
 
 各接收核对逻辑计数快照做片内prefix和subtotal，再加之前片段总和。当前只发布一份共享只读GM prefix；
 `send_counts`保存相同累计前缀。prefix-ready保留NDR的R×R矩阵容量，实际生产核为`min(E,R)`。
 各消费者等待并清自己的ready行，然后读取prefix；不要替换成其他分支的ready协议。
 
-源码：[计数选择与发送](../../csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_counts.h#L46)、
-[prefix发布](../../csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_counts.h#L633)、
+源码：[计数选择与发送](../../csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_counts.h)、
+[prefix发布](../../csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_counts.h)、
 [配对路由说明](PAIRED_ROUTE_EXCHANGE.md)。
 
 ## 5 Sender按token分片并预计算q
@@ -193,8 +207,8 @@ for i in range(B*K):
 输入缓存只属于当前核，缓存最近token的body；命中时用V→S依赖保护上一次pack读取，再改本包Scalar尾部。
 cache miss保留TQue出队及MTE2→S或量化后的V→S依赖。源packet仍各自重新填header、打包和发送。
 
-源码：[Sender初始化](../../csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_send.h#L44)、
-[q实现](../../csrc/kernels/dispatch/low_latency/common/ll_sender_route_plan.h#L42)、
+源码：[Sender初始化](../../csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_send.h)、
+[q实现](../../csrc/kernels/dispatch/low_latency/common/ll_sender_route_plan.h)、
 [输入复用](../../csrc/kernels/dispatch/low_latency/common/ll_sender_input_reuse.h)。
 
 ## 6 Classify怎样形成DIRECT和FIRST_HOP
@@ -230,7 +244,7 @@ FIRST_HOP列表在异组**第二次命中时**建立，不按group编号排序�
 分类按expert交付条数计数。同一异组的两个expert即使在同一张卡，也会形成FIRST_HOP加一个成员；
 同组路由则无论多少条都保持DIRECT。
 
-源码：[Classify](../../csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_send.h#L314)。
+源码：[Classify](../../csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_send.h)。
 
 ## 7 如何选择首跳expert和安排发送顺序
 
@@ -285,7 +299,7 @@ finish_lanes_and_publish_source_metadata()
 sourceMask覆盖每个DIRECT和每个FIRST_HOP owner；其余member位为0。
 sourceWeights只有mask为1的位置有消费语义：DIRECT为原权重，FIRST_HOP为1；其余位置未定义，不能当成0。
 
-源码：[SendWithDedup](../../csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_send.h#L193)、
+源码：[SendWithDedup](../../csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_send.h)、
 [fullmesh选择](../../csrc/kernels/dispatch/low_latency/common/ll_fullmesh_first_hop.h)、
 [发送轮转](../../csrc/kernels/dispatch/low_latency/common/ll_send_order.h)。
 
@@ -327,7 +341,7 @@ wire每512B由480B payload和32B flags组成，每flag块有8个FP32值。第一
 若包有n个wire块，flag和为`8*n`表示Compact就绪，为`8*n+0.5`表示KeepFlags就绪。
 因此Compact不等同于DIRECT；TERMINAL同样是Compact。
 
-源码：[FillTail](../../csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_send.h#L366)、
+源码：[FillTail](../../csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_send.h)、
 [角色与tail格式](../../csrc/kernels/dispatch/low_latency/common/ep_memory_server_dedup_protocol.h)、
 [布局hint](../../csrc/kernels/common/ep_packet_receive_layout.h)。
 
@@ -343,34 +357,39 @@ offset = bank_offset + dispatch_offset_within_bank + slot * tokenStride
 Init后的`data_.dispatchOffset`已包含bank，调用时不能再重复加bank。
 同物理机和self目的地走MTE；跨物理机走每核独占QP的RDMA batch。
 
-跨机batch先把完整wire和原首flag块复制到注册GM，等暂存写完成后，把暂存wire首flag块清零，
-提交整个body。Flush先对每个不同peer执行quiet，随后发布每包保存的32B首flag块，再quiet后复用槽。
+跨机batch把完整wire复制到注册GM，等待MTE3_S后，一次Put发送整个packet。
+packet的最后32B已经是flag：利用用户给出的WQE尾片SO及片内保序保证，接收端原有完整flag检查
+包含该尾flag，因而不会在前面的payload未到达时就绪。内部flag位置和Compact/KeepFlags标记不变。
+不再保存额外首gate副本、清首gate或单独发送gate。容量为`min(8, floor(128KiB/tokenStride))`。
 
 ```python
 enqueue(packet):
-    stage_wire_and_original_first_flag()
+    stage_complete_wire_to_private_GM_slot()
     wait_MTE3_to_Scalar()
-    zero_staged_first_flag()
-    post_body()
+    put_whole_packet_in_one_WQE()        # 包含原有末尾32B flag
     if full:
         flush()
 
 flush():
-    quiet_distinct_peers()
-    post_saved_first_flag_for_each_packet()
-    quiet_distinct_peers()
+    quiet_distinct_peers_once()          # 完成后才可复用GM源槽
+    release_batch_slots()
 ```
 
-FIRST_HOP恢复的首flag仍包含marker=1.5；DIRECT恢复1.0。首flag为零时，body即使部分可见也不能被
-误认成就绪。两个quiet阶段分别保护body→gate以及GM源复用，不是消费ACK。
+FIRST_HOP的首flag仍为marker=1.5，DIRECT为1.0。接收端保留全部块的flag检查，不能改成只查首flag。
+尾片SO只用于同一WQE，不推导跨WQE、跨QP或跨peer的全局顺序。
+Quiet负责发送源GM和CQ退休；接收端数据就绪可能早于Quiet返回，也不代表接收者已经消费完毕。
 
-**优先提交FIRST_HOP不代表远端可以立即消费。** B8例子中，每sender只有一个跨机FH，batch未满8包。
-源码先提交FH body，再发本核的机内DIRECT，最后在已有PIPE_ALL保护后Flush尾批，才发布FH gate。
-这里可以重叠body进展与DIRECT工作，但relay要等gate和目标prefix均就绪。
+**优先提交FIRST_HOP不代表远端立即就绪，但不再等尾批Flush才发布gate。**
+B8例子中，每sender提交一个完整跨机FH后继续机内DIRECT；远端只要整个消息和目标prefix就绪即可消费。
+尾批仍在已有PIPE_ALL保护后Flush，确保网卡不再读取GM源槽。它不再承担额外flag发布。
 
-源码：[SendPacket](../../csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_send.h#L472)、
+正常dispatch跨机走`SendPacket → rdmaBatch_.Enqueue`，不走`Packet()`的同步RDMA分支；
+机内发送和同组relay调用`Packet()`的MTE分支。当前同步RDMA Packet主要用于跨机combine，
+也已改成整包一次Put＋一次Quiet。完整范围见[SO整包发布](ROCE_SO_PACKET.md)。
+
+源码：[SendPacket](../../csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_send.h)、
 [batch](../../csrc/kernels/dispatch/low_latency/device/ll_dispatch_rdma_batch.h)、
-[Sender尾批](../../csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_send.h#L163)。
+[Sender尾批](../../csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_send.h)。
 
 ## 10 Receiver如何消费并转发FIRST_HOP
 
@@ -443,8 +462,8 @@ pending清空后，处理各lane归还依赖，按稳定slot表发起本核packe
 输出、relay和清理完成。这里不新增Scalar完成屏障。payload保留，flags清零供后续bank复用。
 
 源码：[任务构造](../../csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_receive_tasks.h)、
-[role快照](../../csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_receive_packet.h#L85)、
-[FIRST_HOP消费和转发](../../csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_recv.h#L288)。
+[role快照](../../csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_receive_packet.h)、
+[FIRST_HOP消费和转发](../../csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_recv.h)。
 
 ## 11 例子A EP16内的G4去重
 
@@ -626,7 +645,8 @@ core0…7各负责一个token，均按本核次序执行：
 FH k2/e240 → DIRECT k0/e12 → DIRECT k5/e13 → DIRECT k7/e14 → 尾批Flush
 ```
 
-前面的FH首先提交RDMA body；尾批Flush才发布gate。三个DIRECT都在本机rank1，走MTE。
+前面的FH一次提交完整RDMA消息，尾flag随同一WQE到达；尾批Flush只等待源槽/CQ完成。
+三个DIRECT都在本机rank1，走MTE。
 远端owner收到ready FH后按tail顺序转发到rank16、21、22、20，最后一次是self MTE。
 
 对source0的8个token：
@@ -636,9 +656,9 @@ FH k2/e240 → DIRECT k0/e12 → DIRECT k5/e13 → DIRECT k7/e14 → 尾批Flush
 relay    = 8 * 4                = 32
 expert交付 = 64                 = B*K
 
-跨机payload：8个FH，每包2 Put、2 Quiet
-source0 payload RDMA = 16 Put、16 Quiet
-加配对路由控制       = 18 Put、18 Quiet
+跨机payload：8个FH，每个发送核1次Put＋尾批1次Quiet
+source0 payload RDMA = 8 Put、8 Quiet
+加配对路由控制       = 10 Put、10 Quiet
 ```
 
 payload首跳peer为20，配对控制peer为16。payload使用core0…7对应的peer20 QP0…7；
@@ -646,7 +666,7 @@ payload首跳peer为20，配对控制peer为16。payload使用core0…7对应的
 
 每个FP8 wire为4096B（8个512B块），逻辑payloadBytes=3808B、packedPayloadBytes=3840B，
 其中hidden3584B、scales112B、header逻辑offset3712、tail逻辑offset3744。
-RDMA还单独提交32B gate，因此8个FH实际提交`8*4128=33024B`，另有路由表256B和commit4B。
+不再单独提交32B gate，8个FH实际提交`8*4096=32768B`，另有路由表256B和commit4B，合计33028B。
 这些是LL调用字节和次数，不是NIC含头线速字节或以太网包数。
 
 全作业2016个源packet加32个relay，完成2048条原始路由。其中payload有8个跨机packet、
@@ -680,9 +700,9 @@ owner原权重`.15`已经放在tail block0，所以sourceWeights的k2写1，不�
 源端再按mask选中的k0、k2、k5、k7累计并最终取整。因此这里是代数等价，不能声称与平铺8项求和
 逐位相同。当前优化保持原有这条数值路径。
 
-源码：[TERMINAL暂存](../../csrc/kernels/combine/low_latency/combine_server_dedup_kernel.h#L223)、
-[member读取与归约](../../csrc/kernels/combine/low_latency/combine_server_dedup_partial.h#L192)、
-[源端加权](../../csrc/kernels/combine/low_latency/combine_server_dedup_source_aggregate.h#L211)。
+源码：[TERMINAL暂存](../../csrc/kernels/combine/low_latency/combine_server_dedup_kernel.h)、
+[member读取与归约](../../csrc/kernels/combine/low_latency/combine_server_dedup_partial.h)、
+[源端加权](../../csrc/kernels/combine/low_latency/combine_server_dedup_source_aggregate.h)。
 
 ## 14 输出和容量的有效范围
 
@@ -710,8 +730,8 @@ NDR RDMA会话要求已有HCCL ProcessGroup。
 count tensor属性保持None；实际T以send_counts末值为准。
 当前FP8测试的后半段是BF16专家输出/combine，不能称为原生FP8 combine。
 
-源码：[Host分配与handle](../../deep_ep/buffers/elastic.py#L471)、
-[布局容量](../../csrc/kernels/dispatch/low_latency/common/ep_memory_server_dedup_layout.h#L103)。
+源码：[Host分配与handle](../../deep_ep/buffers/elastic.py)、
+[布局容量](../../csrc/kernels/dispatch/low_latency/common/ep_memory_server_dedup_layout.h)。
 
 ## 15 必须保持的顺序和阅读要点
 
@@ -721,11 +741,26 @@ count tensor属性保持None；实际T以send_counts末值为准。
 4. owner先保存type2和源坐标，再把待转发UB改为TERMINAL；本地输出角色不变。
 5. 修改marker后仍按原keepFlags解释owner当前UB布局。
 6. 转发和combine member寻址都用原source，不用中转rank；self member仍占独立槽。
-7. FIRST_HOP优先是每核提交顺序，远端消费还要等gate和prefix；小batch的gate可能到尾批才发布。
-8. MTE、RDMA body/gate、lane和暂存生命周期依赖保留；没有路由消费ACK。
+7. FIRST_HOP优先是每核提交顺序，远端消费需整个packet尾flag和prefix就绪，不再等待独立gate发布。
+8. 保留MTE、lane、源GM暂存和窗口复用依赖；SO不替代源完成quiet，也没有新增路由消费ACK。
 9. 正式LL不读取GetSystemCycle，诊断timer和用户保留的SDK内部机制有各自范围。
 10. 不把sourceMask之外的权重、非FH的relayReadIndex或容量尾部当作有效结果。
 
 源码入口索引见[KERNEL_MAP](../ll_probe/KERNEL_MAP.md)，共同计数和Receiver底层流程的更长展开见
 [非去重dispatch文档](NON_DEDUP_DISPATCH_FLOW.md)，本轮优化与生命周期约束见
 [OVERHEAD_OPTIMIZATION](OVERHEAD_OPTIMIZATION.md)。
+
+## 16 当前采样与打点入口
+
+当前ST采样协议为`initial-reduce-exp100-batch-v3`：每个操作的采样批次只在开始做一次all_reduce；
+预热并同步后，在进入active的profiler.step之前固定100次Exp，然后连续调用算子，循环内无采样
+Exp/all_reduce。默认10预热、100采集、每rank尾50；算子内部必要复用协调保持。
+
+独立timer/reference同样为初始all_reduce、预热、100次Exp、连续稳定调用和capture。
+若perf后追加打点，则另排一次100次Exp前缀，共用perf初始all_reduce；不混入正式perf统计。
+`--mode reference`只测LL dispatch、默认1轮capture，并导出29阶段逐核表；该表是核内cycle，
+不能替代完整OFF profiler task时间。旧timer/reference与新采样协议的结果不可直接同条件A/B。
+
+目前reference会在正确性多轮检查后恢复声明seed并记录实际路由指纹；perf/旧timer仍沿用最后一轮
+正确性检查的路由，默认3轮时实际为声明seed+2。比较路由负载时应区分，本文构造例子不依赖随机seed。
+详见[采样协议](../ll_probe/PROFILING.md)和[参考逐核表](../ll_reference_profile/README.md)。
