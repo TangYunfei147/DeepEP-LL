@@ -23,8 +23,8 @@ def parse_args(argv=None):
         epilog='Offline export: bash tests/ll_rdma/one_click.sh --analyze-only RUN_DIR [--output-dir NEW_DIR] [--iteration last|N]. No CANN required.')
     p.add_argument("node_rank", type=int, choices=(0, 1))
     p.add_argument("master_addr", help="Reachable numeric IPv4 address of node 0; identical on both hosts")
-    p.add_argument("run_name", help="New shared name; the script appends -timer or -perf")
-    p.add_argument("--mode", choices=("timer", "perf", "reference"), default="timer")
+    p.add_argument("run_name", help="New shared name; the script appends -reference or -perf")
+    p.add_argument("--mode", choices=("perf", "reference"), default="reference")
     p.add_argument("--devices", default=",".join(map(str, range(16))))
     p.add_argument("--tokens", nargs="+", type=int, default=[8])
     p.add_argument("--dtype", nargs="+", choices=("bf16", "fp8"), default=["bf16", "fp8"])
@@ -33,7 +33,6 @@ def parse_args(argv=None):
     p.add_argument("--topk", type=int, default=8)
     p.add_argument("--experts", type=int, default=384)
     p.add_argument("--route", choices=("normal", "hotspot"), default="normal")
-    p.add_argument("--timer-iters", type=int, default=5)
     p.add_argument("--reference-iters", type=int, default=1)
     p.add_argument("--master-port", type=int, default=29500)
     p.add_argument("--shmem-port", type=int, default=29501)
@@ -91,10 +90,7 @@ def test_arguments(a):
               "--warmup", "10", "--num-iters", "100", "--perf-tail", "50",
               "--correctness-repeats", "3", "--repeat-combine", "3", "--num-cpu-timeout-secs", "300",
               "--output-dir", "results/ll-ndr", "--run-name", run_id(a)]
-    if a.mode == "timer":
-        result += ["--ll-stage-timer", "--ll-timer-iters", str(a.timer_iters),
-                   "--ll-timer-mode", "observe", "--ll-timer-frequency-hz", "1000000000", "--skip-perf-test"]
-    elif a.mode == "reference":
+    if a.mode == "reference":
         result += ["--dispatch-only", "--ll-reference-profile", "--ll-timer-iters", str(a.reference_iters),
                    "--ll-timer-frequency-hz", "1000000000", "--skip-perf-test"]
     return result
@@ -126,7 +122,7 @@ def child_environment(a):
         env.pop(key, None)
     env.update({key: a.devices for key in VISIBILITY})
     env.update(DEEPEP_NPU_ARCH="Ascend950", DEEPEP_LL_BACKEND="rdma",
-               DEEPEP_LL_STAGE_TIMER="ON" if a.mode == "timer" else "OFF",
+               DEEPEP_LL_STAGE_TIMER="OFF",
                DEEPEP_LL_REFERENCE_PROFILE="ON" if a.mode == "reference" else "OFF",
                PYTHONDONTWRITEBYTECODE="1", PYTHONUNBUFFERED="1", GIT_TERMINAL_PROMPT="0")
     return env
@@ -177,7 +173,7 @@ def installed_identity(a):
         raise RuntimeError("Installed wheel and current SHMEM SDK identity differ; rebuild the wheel")
     if getattr(native, "low_latency_implementation", None) != "ndr-hns1825" or native.low_latency_core_protocol != 10:
         raise RuntimeError("Installed wheel is not the current NDR protocol-10 SO implementation")
-    if not native.low_latency_rdma_enabled or bool(native.low_latency_stage_timer_enabled) != (a.mode == "timer"):
+    if not native.low_latency_rdma_enabled or bool(native.low_latency_stage_timer_enabled):
         raise RuntimeError("Installed RDMA/timer capability does not match the requested mode")
     reference = getattr(native, 'low_latency_reference_profile_enabled', None)
     if type(reference) is not bool or reference != (a.mode == 'reference'):
@@ -279,7 +275,7 @@ def main(argv=None):
                          peer_identity(json.loads(identity_path.read_text())), a.ready_timeout)
     (logs / "agreement.json").write_text(json.dumps(agreed, indent=2) + "\n", encoding="utf-8")
     run_logged([python, *test_command], env, logs / "30-test.log")
-    if a.mode in ("timer", "reference"):
+    if a.mode == "reference":
         run_logged([python, "tests/ll_rdma/analyze.py", result, "--iteration", "last"],
                    env, logs / "40-analysis.log")
     print(f"PASS node {a.node_rank}: {result}\nLogs: {logs}", flush=True)

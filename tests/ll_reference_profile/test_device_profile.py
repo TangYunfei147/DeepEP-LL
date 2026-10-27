@@ -150,7 +150,7 @@ def test_legacy_and_reference_cannot_compile_together(tmp_path):
         '-I' + str(tmp_path), '-I' + str(COMMON), str(source)],
         capture_output=True, text=True, timeout=180)
     assert result.returncode != 0
-    assert 'mutually exclusive' in result.stderr
+    assert 'has been removed' in result.stderr
 
 
 def read(relative):

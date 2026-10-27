@@ -1,5 +1,7 @@
 # LL dispatch 参考式逐核打点与 Excel
 
+> 当前仅保留 reference dispatch 设备打点，one_click 默认 reference；旧 stage/expert 插桩已删除，旧结果仍可离线解析。详见 [阶段与源码对照](../ll_rdma/STAGE_TIMELINE.md)。
+
 主阶段与子阶段的先后、w0..w57对账公式、阶段和超过核总耗时的原因见
 [阶段顺序与核总耗时对账](../ll_rdma/STAGE_TIMELINE.md)。
 
@@ -12,7 +14,7 @@
 
 使用独立构建 `DEEPEP_LL_REFERENCE_PROFILE=ON`，同时固定
 `DEEPEP_LL_STAGE_TIMER=OFF`。两个开关不能同时开启；旧阶段和专家计时在本构建中
-完全关闭。普通 OFF 和原有 timer 入口继续可用，新记录有独立格式、schema 和能力检查。
+完全关闭。普通 OFF 继续可用；旧 timer 仅保留历史结果离线解析，当前记录有独立格式、schema 和能力检查。
 SDK、公开 dispatch 输入输出以及原有流水依赖保持；当前通信协议10采用SO整包发布。
 
 - 每个固定边界只记录一次时间戳，不做旧计时器的 first/start/sum/count GM 读改写。

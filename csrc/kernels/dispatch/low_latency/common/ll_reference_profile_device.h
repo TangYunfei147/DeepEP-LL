@@ -4,8 +4,8 @@
 #ifdef DEEPEP_LL_REFERENCE_PROFILE
 #include "shmem.h"
 #endif
-#if defined(DEEPEP_LL_REFERENCE_PROFILE) && defined(DEEPEP_LL_STAGE_TIMER)
-#error LL reference profiling and the legacy stage timer are mutually exclusive
+#if defined(DEEPEP_LL_STAGE_TIMER)
+#error Legacy LL stage/expert instrumentation has been removed
 #endif
 
 namespace LlReferenceProfile {
@@ -66,18 +66,18 @@ public:
     {
 #ifdef DEEPEP_LL_REFERENCE_PROFILE
         if (!record_) return;
-        Mark<57>();
-        record_[50] = rank;
-        record_[51] = AscendC::GetBlockIdx();
-        record_[52] = world;
-        record_[53] = AscendC::GetBlockNum();
-        record_[54] = bs;
-        record_[55] = kSchema;
-        record_[56] = 1U;  // dispatch only
-        record_[58] = valid_;
-        record_[59] = kMagic;
-        record_[60] = 1U;  // observe; existing business dependencies only
-        record_[61] = 1U;
+        Mark<57>();  // w57: before_finalize
+        record_[50] = rank;                         // w50: rank (metadata, not a clock)
+        record_[51] = AscendC::GetBlockIdx();        // w51: AIV_core
+        record_[52] = world;                        // w52: EP
+        record_[53] = AscendC::GetBlockNum();        // w53: active_aiv
+        record_[54] = bs;                           // w54: BS
+        record_[55] = kSchema;                      // w55: schema
+        record_[56] = 1U;                           // w56: operation, dispatch only
+        record_[58] = valid_;                       // w58: valid_mask, absent != zero
+        record_[59] = kMagic;                       // w59: magic
+        record_[60] = 1U;                           // w60: boundary_mode, observe
+        record_[61] = 1U;                           // w61: complete
         // Python supplies a fresh zeroed tensor; reserved/absent words remain
         // zero. Publish only our 512B diagnostic record after business finish.
         // This matches the reference dispatch cache publication, not PIPE_ALL.

@@ -30,21 +30,12 @@ int main() {
     args.reservedAddresses[0]=local.data(); args.reservedAddresses[1]=stages.data();
     args.reservedConfig[0]=LlRdma::kBackend; args.reservedConfig[1]=16;
     cores=16; core=3;
-    std::vector<uint64_t> timerWords(16U*LlStageTimer::kWordsPerCore);
     unsigned cases=0;
     for (uint32_t bytes : {512U,4096U,15872U,65536U,131072U}) {
         for (uint32_t peerCount : {1U,2U,8U}) {
             for (uint32_t total : {0U,1U,3U,8U,19U}) {
                 LlTransport::DispatchRdmaBatch batch;
-                LlStageTimer::DeviceTimer timer;
-                LlStageTimer::DeviceTimer* timerPtr=nullptr;
-#ifdef DEEPEP_LL_STAGE_TIMER
-                std::fill(timerWords.begin(),timerWords.end(),0);
-                timer.Init(reinterpret_cast<GM_ADDR>(timerWords.data()),1U,1U);
-                timer.Start(LlStageTimer::Kernel);
-                timerPtr=&timer;
-#endif
-                batch.Init(&args,bytes,timerPtr);
+                batch.Init(&args,bytes);
                 std::fill(remote.begin(),remote.end(),0);
                 std::vector<std::vector<uint8_t>> saved;
                 uint32_t capacity=std::min(8U,LlRdma::kCoreBytes/bytes);
@@ -77,21 +68,12 @@ int main() {
                     expectedQuiets+=std::min(peerCount,std::min(capacity,total-i));
                 assert(Model::quiets-quiets==expectedQuiets);
                 assert(Model::puts-puts==total);
-#ifdef DEEPEP_LL_STAGE_TIMER
-                timer.End(LlStageTimer::Kernel);timer.Finish();
-                auto counters=timerWords.data()+core*LlStageTimer::kWordsPerCore;
-                assert(counters[LlStageTimer::StageOffset(LlStageTimer::SendRdmaStage)+3U]==total);
-                assert(counters[LlStageTimer::StageOffset(LlStageTimer::SendRdmaBodyWait)+3U]==(total+capacity-1)/capacity);
-                assert(counters[LlStageTimer::StageOffset(LlStageTimer::SendRdmaFlagPost)+3U]==0U);
-                assert(counters[LlStageTimer::StageOffset(LlStageTimer::SendRdmaFlagWait)+3U]==0U);
-                assert(counters[LlStageTimer::StageOffset(LlStageTimer::SendRdmaRestore)+3U]==0U);
-#endif
                 ++cases;
             }
         }
     }
     // CQ failure must not recycle sources. Readiness may already be visible.
-    LlTransport::DispatchRdmaBatch failed;failed.Init(&args,4096,nullptr);
+    LlTransport::DispatchRdmaBatch failed;failed.Init(&args,4096);
     Model::before={}; std::fill(ub.begin(),ub.end(),9);
     failed.Enqueue(16,0,{ub.data()});
     auto puts=Model::puts;
@@ -102,7 +84,7 @@ int main() {
     Model::pending.clear();Model::before={};
     // Receiver may observe a complete message before the sender's CQ retires.
     // Its staging is nevertheless retained until quiet, not reused on arrival.
-    LlTransport::DispatchRdmaBatch eager;eager.Init(&args,4096,nullptr);
+    LlTransport::DispatchRdmaBatch eager;eager.Init(&args,4096);
     std::fill(remote.begin(),remote.end(),0);
     flags(ub.data(),4096,true); const auto expected=ub;
     Model::onPost=[](Model::Request& r) { SoModel::Deliver(r); };
@@ -121,30 +103,30 @@ int main() {
     assert(std::memcmp(unsafe.data(),expected.data(),4096)!=0);
     // The sender chooses MTE versus RDMA once. The internal batch accepts only
     // that remote branch, retaining checks for route-dependent peer/range bounds.
-    LlTransport::DispatchRdmaBatch batch;batch.Init(&args,4096,nullptr);
+    LlTransport::DispatchRdmaBatch batch;batch.Init(&args,4096);
     assert(!LlTransport::RemoteWrite(&args,1) && LlTransport::RemoteWrite(&args,16));
     caught=false;
     try { batch.Enqueue(uint32_t(args.rankSize),0,{ub.data()}); } catch(const std::runtime_error&) { caught=true; }
     assert(caught);
     // Reconfiguration cannot silently forget pending data.
-    batch.Init(&args,4096,nullptr);
+    batch.Init(&args,4096);
     flags(ub.data(),4096,true);batch.Enqueue(16,0,{ub.data()});
     caught=false;
-    try { batch.Init(&args,LlRdma::kCoreBytes,nullptr); } catch(const std::runtime_error&) { caught=true; }
+    try { batch.Init(&args,LlRdma::kCoreBytes); } catch(const std::runtime_error&) { caught=true; }
     assert(caught && batch.Pending());
     batch.Flush({ub.data()});
     assert(Model::pending.empty());
     auto guard=stages.data()+uint64_t(core+1)*LlRdma::kCoreBytes;
     std::memset(guard,0xda,32);
-    batch.Init(&args,LlRdma::kCoreBytes,nullptr);
+    batch.Init(&args,LlRdma::kCoreBytes);
     flags(ub.data(),LlRdma::kCoreBytes,false);
     batch.Enqueue(16,0,{ub.data()});
     assert(!batch.Pending() && Model::pending.empty());
     for(unsigned i=0;i<32;++i) assert(guard[i]==0xda);
     caught=false;
-    try { batch.Init(&args,131584,nullptr); } catch(const std::runtime_error&) { caught=true; }
+    try { batch.Init(&args,131584); } catch(const std::runtime_error&) { caught=true; }
     assert(caught);
-    batch.Init(&args,4096,nullptr);
+    batch.Init(&args,4096);
     Model::pending.push_back({remote.data()+3500000,local.data()+3500000,1U,16U,core+1});
     batch.Enqueue(16,0,{ub.data()});batch.Flush({ub.data()});
     assert(Model::pending.size()==1 && Model::pending[0].qp==core+1);

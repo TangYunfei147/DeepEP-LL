@@ -6,7 +6,6 @@
 #include "roce_so_model.h"
 using namespace AscendC;
 int main() {
-    std::vector<uint64_t> timers(72U*LlStageTimer::kWordsPerCore);
     std::vector<uint8_t> local(256*1024),remote(local.size()),stages(72U*LlRdma::kCoreBytes),packet(128*1024);
     Model::local=local.data(); Model::remote=remote.data();
     DispatchDedup::CommArgs a; a.rank=0; a.rankSize=32; a.reserved0=16; a.peerMemBytes=128*1024;
@@ -31,23 +30,7 @@ int main() {
                         SoModel::Deliver(r);
                     };
                     unsigned q=Model::quiets;
-#ifdef DEEPEP_LL_STAGE_TIMER
-                    auto* counters=timers.data()+core*LlStageTimer::kWordsPerCore;
-                    std::fill(counters,counters+LlStageTimer::kWordsPerCore,0);
-                    LlStageTimer::DeviceTimer timer;
-                    timer.Init(reinterpret_cast<GM_ADDR>(timers.data()),1U,1U);
-                    timer.Start(LlStageTimer::Kernel);
-                    LlTransport::Packet(&a,16,0,{packet.data()},bytes,7U,&timer);
-                    timer.End(LlStageTimer::Kernel); timer.Finish();
-                    for(auto stage : {LlStageTimer::SendRdmaStage, LlStageTimer::SendRdmaBodyPost,
-                         LlStageTimer::SendRdmaBodyWait, LlStageTimer::SendRdmaRestore})
-                        assert(counters[LlStageTimer::StageOffset(stage)+3U]==1U);
-                    assert(counters[LlStageTimer::StageOffset(LlStageTimer::SendRdmaFlagPost)+3U]==0U);
-                    assert(counters[LlStageTimer::StageOffset(LlStageTimer::SendRdmaFlagWait)+3U]==0U);
-                    assert(counters[LlStageTimer::StageOffset(LlStageTimer::SendMteWrite)+3U]==0U);
-#else
                     LlTransport::Packet(&a,16,0,{packet.data()},bytes);
-#endif
                     assert(Model::quiets-q==1 && Model::pending.empty());
                     assert(std::memcmp(target,saved.data(),bytes)==0 && packet==saved);
                     ++cases;
@@ -62,7 +45,7 @@ int main() {
         for (uint32_t i=0;i<1536;++i) packet[i]=uint8_t(i+turn+1U);
         const auto expected=packet;
         const auto oldQuiets=Model::quiets;
-        LlTransport::Packet(&a,16,0,{packet.data()},1536,7U,nullptr,false);
+        LlTransport::Packet(&a,16,0,{packet.data()},1536,7U,false);
         assert(std::memcmp(remote.data()+16384,expected.data(),1536)==0);
         assert(std::memcmp(packet.data(),expected.data(),128)!=0);
         assert(Model::quiets-oldQuiets==1U && Model::pending.empty());

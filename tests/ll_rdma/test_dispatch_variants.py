@@ -96,8 +96,8 @@ def test_host_launch_uses_same_format_builder_as_tiling():
     assert "dispatch_server_dedup_kernel_do(" not in launch
 
 
-@pytest.mark.parametrize("timer_enabled", [False, True])
-def test_real_dispatch_launch_routes_exactly_one_specialization(tmp_path, timer_enabled):
+@pytest.mark.parametrize("reference_enabled", [False, True])
+def test_real_dispatch_launch_routes_exactly_one_specialization(tmp_path, reference_enabled):
     compiler = shutil.which("g++") or shutil.which("clang++")
     zig = os.environ.get("DEEPEP_TEST_ZIG")
     if compiler is None and not zig:
@@ -149,10 +149,11 @@ int main() {
     static_assert(sizeof(deepep::EpServerDedupKernelArgs) == 152);
     assert(deepep_ll_core_protocol_version() == 10);
     assert(deepep_ll_rdma_enabled() == 1);
-#ifdef DEEPEP_LL_STAGE_TIMER
-    assert(deepep_ll_stage_timer_enabled() == 1);
-#else
     assert(deepep_ll_stage_timer_enabled() == 0);
+#ifdef DEEPEP_LL_REFERENCE_PROFILE
+    assert(deepep_ll_reference_profile_enabled() == 1);
+#else
+    assert(deepep_ll_reference_profile_enabled() == 0);
 #endif
     for (uint32_t world : {16U, 32U, 64U, 128U})
         assert(deepep_ll_ranks_per_group(world) == (world <= 16U ? 4U : 16U));
@@ -176,8 +177,8 @@ int main() {
 ''', encoding="utf-8")
     executable = tmp_path / ("dispatch_launch.exe" if os.name == "nt" else "dispatch_launch")
     flags = ["-DCATLASS_ARCH=3510", "-DDEEPEP_LL_RDMA=1"]
-    if timer_enabled:
-        flags.append("-DDEEPEP_LL_STAGE_TIMER=1")
+    if reference_enabled:
+        flags.append("-DDEEPEP_LL_REFERENCE_PROFILE=1")
     subprocess.run([
         *command, "-std=c++17", "-UNDEBUG", *flags, "-iquote", str(ROOT), str(source),
         str(ROOT / "csrc/kernels/dispatch/low_latency.cpp"), "-o", str(executable),

@@ -5,7 +5,6 @@
 #define COMBINE_DEDUP_EP_COMBINE_MEMORY_SERVER_DEDUP_KERNEL_H
 
 #include "kernel_operator.h"
-#include "../../dispatch/low_latency/common/ll_stage_timer_device.h"
 #include "../../dispatch/low_latency/common/ep_memory_server_dedup_count_layout.h"
 #include "../../dispatch/low_latency/common/comm_args.h"
 #include "ep_memory_server_dedup_buffer_layout.h"
@@ -26,11 +25,10 @@ public:
     __aicore__ inline void Init(GM_ADDR commArgs, GM_ADDR expertOut, GM_ADDR assistInfoForCombine, GM_ADDR sendCounts,
                                 GM_ADDR expertScales, GM_ADDR tokenType, GM_ADDR relayReadIndex, GM_ADDR sourceMask,
                                 GM_ADDR yOut, uint32_t bs, uint32_t h, uint32_t topK, uint32_t experts, uint8_t dtype,
-                                uint8_t quantMode, int64_t magic, bool enableDedup = true,
-                                LlStageTimer::DeviceTimer* timer = nullptr)
+                                uint8_t quantMode, int64_t magic, bool enableDedup = true)
     {
         (void)quantMode;
-        timer_ = timer;
+
         core_ = GetBlockIdx();
         coreNum_ = GetBlockNum();
         sendCores_ = recvCores_ = coreNum_ / 2U;
@@ -113,45 +111,42 @@ public:
     __aicore__ inline void Process()
     {
         if (enableDedup_) {
-            if (timer_) timer_->Start(LlStageTimer::CombinePrepare);
+
             CopyLocalPendingTokens();
-            if (timer_) timer_->End(LlStageTimer::CombinePrepare);
+
         }
         if (core_ >= sendCores_) {
             if (enableDedup_) {
                 if (core_ >= notifyBegin_) {
-                    if (timer_) timer_->Start(LlStageTimer::CombineNotify);
+
                     NotifyServerCard();
-                    if (timer_) timer_->End(LlStageTimer::CombineNotify);
+
                     // Notification has been issued; do not add an MTE3 drain.
                 }
-                if (timer_) timer_->Start(LlStageTimer::CombineWaitReady);
+
                 WaitServerReady();
-                if (timer_) timer_->End(LlStageTimer::CombineWaitReady);
-                if (timer_) timer_->Start(LlStageTimer::CombinePartial);
+
                 ReturnPartialTokens();
-                if (timer_) timer_->End(LlStageTimer::CombinePartial);
-                if (timer_) timer_->Start(LlStageTimer::CombineAggregate);
+
                 const uint32_t retiredOutputs = AggregateSourceTokens();
-                if (timer_) timer_->End(LlStageTimer::CombineAggregate);
-                if (timer_) timer_->Start(LlStageTimer::CombineDrain);
+
                 DrainSharedOutputs(retiredOutputs);
-                if (timer_) timer_->End(LlStageTimer::CombineDrain);
+
             } else {
-                if (timer_) timer_->Start(LlStageTimer::CombineAggregate);
+
                 AggregateSourceTokensM6();
-                if (timer_) timer_->End(LlStageTimer::CombineAggregate);
+
             }
         } else {
-            if (timer_) timer_->Start(LlStageTimer::CombineDirect);
+
             ReturnDirectTokens();
-            if (timer_) timer_->End(LlStageTimer::CombineDirect);
+
         }
         // Retires prepare publication, both zero sources and server notification;
         // no arena/pipe reset or exit may precede completion of their DMA reads.
-        if (timer_) timer_->Start(LlStageTimer::CombineFinalDrain);
+
         PipeBarrier<PIPE_ALL>();
-        if (timer_) timer_->End(LlStageTimer::CombineFinalDrain);
+
     }
 
 private:
@@ -378,11 +373,11 @@ private:
                 SetFlag<HardEvent::V_MTE2>(lane);
                 SetFlag<HardEvent::V_MTE3>(lane);
                 WaitFlag<HardEvent::V_MTE3>(lane);
-                if (timer_) timer_->CountData(uint32_t(args_->rank), source, resultStride_, false);
+
                 // One destination owns this output. Its body is overwritten on
                 // the next lane use, so SDK scratch need not be restored.
                 LlTransport::Packet(args_, source, window_ + COMBINE_DEDUP_EP_SERVER_DEDUP_SHARED_DATA_OFFSET +
-                    (uint64_t(token) * topK_ + topk) * resultStride_, output, resultStride_, 7U, nullptr, false);
+                    (uint64_t(token) * topK_ + topk) * resultStride_, output, resultStride_, 7U, false);
                 SetFlag<HardEvent::MTE3_V>(lane);
             }
             // No server fence: the next scan can overlap pending output DMA.
@@ -405,7 +400,7 @@ private:
         ServerDedupPartial<Group> partial;
         partial.Init(args_, &pipe_, arena_.Get<uint8_t>()[kEpServerDedupCombineResidentUbBytes], expertAddr_,
                      tableAddr_, relayAddr_, typesAddr_, tokens_, bs_, h_, topK_, experts_, dtype_, window_,
-                     workspace_, timer_);
+                     workspace_);
         partialTasks_ = partial.Process();
         // Retire only input and Vector users before scalar metadata reuse.
         // M4 output slots and MTE3_V events stay live for M5's per-slot waits.
@@ -473,7 +468,6 @@ private:
     GM_ADDR masksAddr_ = nullptr;
     GM_ADDR outputAddr_ = nullptr;
     bool enableDedup_ = false;
-    LlStageTimer::DeviceTimer* timer_ = nullptr;
     uint32_t bs_ = 0, experts_ = 0;
     uint8_t dtype_ = 0;
     uint32_t core_ = 0, h_ = 0, topK_ = 0, blocks_ = 0, resultStride_ = 0, tokens_ = 0, lanes_ = 0, laneBytes_ = 0,

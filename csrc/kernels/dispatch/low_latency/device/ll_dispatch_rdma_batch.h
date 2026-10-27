@@ -11,11 +11,10 @@ class DispatchRdmaBatch {
     GM_ADDR stageBase_ = nullptr;
     uint32_t firstPeers_ = 0U;
     uint32_t peers_[kMaxPackets]{};
-    LlStageTimer::DeviceTimer* timer_ = nullptr;
 public:
-    __aicore__ inline void Init(const __gm__ Args* args, uint32_t bytes, LlStageTimer::DeviceTimer* timer) {
+    __aicore__ inline void Init(const __gm__ Args* args, uint32_t bytes) {
         if (count_) { Trap(); return; }
-        args_ = args; bytes_ = bytes; timer_ = timer; count_ = 0;
+        args_ = args; bytes_ = bytes; count_ = 0;
         if (!bytes || bytes % 512U || bytes > LlRdma::kCoreBytes) { Trap(); return; }
         const uint32_t slots = LlRdma::kCoreBytes / bytes_;
         capacity_ = slots < kMaxPackets ? slots : kMaxPackets;
@@ -30,19 +29,19 @@ public:
     __aicore__ inline void Enqueue(uint32_t peer, uint64_t offset, LocalTensor<uint8_t> packet) {
         Check(args_, peer, offset, bytes_);
         auto stage = stageBase_ + uint64_t(count_) * bytes_;
-        if (timer_) timer_->Start(LlStageTimer::SendRdmaStage);
+
         DataCopy(Tensor(stage, true), packet, bytes_);
         Sync<HardEvent::MTE3_S>(7U);
-        if (timer_) timer_->End(LlStageTimer::SendRdmaStage);
+
         peers_[count_] = peer;
         bool first = true;
         for (uint32_t i = 0; i < count_; ++i) if (peers_[i] == peer) { first = false; break; }
         if (first) firstPeers_ |= uint32_t(1) << count_;
-        if (timer_) timer_->Start(LlStageTimer::SendRdmaBodyPost);
+
         // All-flag receive checks include the last existing 32B SO tail.
         // Compact/KeepFlags markers and the shared MTE wire remain unchanged.
         Put(args_, peer, RemoteAddress(args_, peer, offset), stage, bytes_, packet);
-        if (timer_) timer_->End(LlStageTimer::SendRdmaBodyPost);
+
         ++count_;
         // Stage BEFORE Flush: its SDK scratch can destroy the current UB packet.
         if (count_ == capacity_) Flush(packet);
@@ -50,9 +49,9 @@ public:
 
     __aicore__ inline void Flush(LocalTensor<uint8_t> scratch) {
         if (!count_) return;
-        if (timer_) timer_->Start(LlStageTimer::SendRdmaBodyWait);
+
         for (uint32_t i = 0; i < count_; ++i) if (firstPeers_ & (uint32_t(1) << i)) Quiet(peers_[i], scratch);
-        if (timer_) timer_->End(LlStageTimer::SendRdmaBodyWait);
+
         // Arrival is not a source-reuse grant. All QPs must retire first.
         count_ = 0;
         firstPeers_ = 0U;

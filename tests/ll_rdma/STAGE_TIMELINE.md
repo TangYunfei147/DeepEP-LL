@@ -1,277 +1,174 @@
-# LL阶段先后关系与核总耗时对账
+# LL dispatch 打点顺序与 Excel 耗时对应
 
-适用本分支协议10，源码核对基点`b324fbe`。本页解释实际打点，不修改kernel或采样。
-先确认运行模式：`one_click.sh`默认`timer`；`--mode reference`是另一套仅dispatch的29阶段格式。
-两者边界不同，不能把同名列直接互换。CSV列名以下用代码形式表示。
+## 1. 当前唯一打点方式
 
-**所有耗时列不是一组互斥分段，不能整行SUM。** 核总耗时本身是一个外层区间；
-主阶段包含子阶段，子阶段还可能包含更细阶段。同一段时间因此会出现多次。
-发送核、接收核又是并行的，跨核相加得到的是累计工作量，不是一次kernel延迟。
-没有提供具体测量文件，本页给出结构性解释和逐行核验方法，不据此断定某份数据完全没有异常。
+当前 kernel 只保留 `DEEPEP_LL_REFERENCE_PROFILE`，只采集 LL dispatch；旧 stage/expert device 插桩已删除，combine 不再有设备打点。`one_click.sh` 默认 `reference`，`--mode perf` 为无插桩性能测试。旧 `--mode timer` 不再接受；历史结果仍可离线解析。
 
-## 1. 先统一计算口径
+`wN` 是本核 64 个 uint64 record word 中的索引，不是名为 W 的 C++ 变量。源码的 `Mark<N>()` 取一次 clock 并写 word N，`Value<N>(value)` 写指定值；现在每个调用旁都可搜索 `wN:`。w0 的取时在入口，稍后写入；w42 复用首批 pollEnd，不额外读 clock。每核 512B，实际 AIV 数动态查询，前半为 S，后半为 R。
 
-一次对账必须固定同一个run、case、算子、rank、core、capture轮次，使用`stages.csv`或“逐核耗时”页。
-`stages_mean.csv`是多轮有效记录均值；不同阶段可能有不同有效轮数，不能直接用它做严格总量对账。
-阶段的p90/p99/max也可能来自不同轮或不同核，不能把各列的这些统计值相加。
+同核原始整数先相减再换算。1GHz 时除以1000得到微秒。空白表示该点未执行/无效，0表示有效的零值。w33、w34为累计周期，w37、w41、w43为数量，不能拿它们作时间戳相减。
 
-| 量 | 计算与用途 |
-|---|---|
-| timer阶段累计值 | `sum_ticks = Σ(end_i-start_i)`；转微秒为`ticks × 1e6 / frequency_hz` |
-| timer重复阶段首尾跨度 | `last_end-first_start`包含各次执行之间的间隙，不等于累计值；不能代替CSV耗时 |
-| reference区间 | 同核两个word的整数差，再换算单位；w33/w34直接是累计ticks |
-| `kernel` | 此核被总计打点包住的时间；不是所有列的和 |
-| `before_finalize` | reference另一种总计口径，包含kernel结束至诊断Finish入口；不能加到kernel上 |
-| profiler task | 独立采样的设备task时间，不等于某个核打点总计，也不能与阶段值相加 |
+## 2. 当前 reference：dispatch 顺序与层级
 
-频率为1GHz时才可用`ticks/1000 = µs`。原始大整数须先整数相减，再换算；
-不要将文本uint64先转成Excel浮点数后相减，否则可能丢掉小差值。
-空白表示未记录/不适用；实际执行得到0与空白不同。只有根据对应执行路径确认未执行的可选阶段，
-才能在该路径的代数式中省略，不能把缺失的必需记录当作0。
+以下为每个核自己的程序顺序。S/R 并行工作，不能将两张图串行相加；数字是 word 索引，不代表执行先后。图中“提交”也不代表异步写已经完成。
 
-## 2. 默认timer：dispatch顺序与层级
-
-下图表示单核程序顺序。S/R两条分支由不同核并行执行，不是先发完所有payload再开始接收。
+### 2.1 S 核
 
 ```mermaid
 flowchart TD
-  K[核计时开始] --> I[worker_init：含magic、count_init、角色Init]
-  I --> C[count_send：所有核]
-  C --> S[sender：发送核]
-  C --> R1[count_receive：接收核]
-  R1 --> R2[count_prefix]
-  R2 --> R3[count_publish：含既有PIPE_ALL]
-  R3 --> R4[receiver]
-  S --> F[count_finish：各核各自执行]
-  R4 --> F
-  F --> E[核计时结束]
+  s0["w0 入口 → w1 配置完成 → w2 magic开始"] --> s1["w3 magic结束 → w4 counts.Init结束 → w5 sender.Init结束"]
+  s1 --> s2["w6 SendCnt开始 → w7 计数统计/发送提交结束"]
+  s2 --> s3["w8 Sender.Process开始；w43记录分配的route数量"]
+  s3 --> empty{"本核有发送任务？"}
+  empty -->|有| s4["缓冲与路由加载 → w38"]
+  s4 --> s5["SendWithDedup / SendWithoutDedup → w39"]
+  s5 --> s6["input释放、尾RDMA batch Flush、lane回收、source元数据写出、MTE3_S → w40"]
+  s6 --> s7["w9 Sender.Process返回"]
+  empty -->|无，w38/39/40缺失| s7
+  s7 --> s8["w20 Counts.Finish开始 → PIPE_ALL / CTRL恢复 → w21"]
+  s8 --> s9["退出kernel对象作用域 → w57 Finish开始 → 诊断记录发布"]
 ```
 
-图中汇合只是画法，**不是新增跨核同步点**。核的分工按实际AIV前半S/后半R；
-某核进入下一阶段不表示其他核也已到达该阶段。
+`sender = w9-w8` 包含三段 `w38-w8`、`w39-w38`、`w40-w39`，还包含 `w9-w40` 的返回间隙。w39之前的发送循环可能已经执行满批次 Flush；最后未满的 RDMA 批次在 w39→w40 中完成。w43为分配的逻辑路由数量，不能当作去重后实际网络包数。
 
-| 层级/范围 | 阶段 | 包含与先后 |
+### 2.2 R 核
+
+```mermaid
+flowchart TD
+  r0["w0 → w1 → w2 → w3 → w4 → w5：公共初始化，最后为receiver.Init"] --> r1["w6 SendCnt → w7"]
+  r1 --> r2["w10 RecvCnt开始：其中w24→w25为ready轮询；w11结束"]
+  r2 --> r3["w12 CalcCumsum开始：其中w26→w27为GetCumSum汇合；w13结束"]
+  r3 --> r4["w14 CompleteCumsum开始：其中w28→w29等待前缀ready；w15结束"]
+  r4 --> r5["w16 → 原有PIPE_ALL → w17"]
+  r5 --> r6["w18 Receiver.Process → reset / 前缀加载 / MTE2_S → w30"]
+  r6 --> r7["任务构建 → w31；w37记录task数量"]
+  r7 --> empty{"task数量非零？"}
+  empty -->|有| r8["探测/lane/标记缓冲和事件准备 → w32"]
+  r8 --> loop["每批：pollBegin → 就绪轮询 → pollEnd → 加载/消费提交 → consumeEnd"]
+  loop --> accum["w33累计pollEnd-pollBegin；w34累计consumeEnd-pollEnd；w41计批次；首批pollEnd写w42"]
+  accum -->|还有pending| loop
+  accum -->|全部完成| r9["lane等待、ClearFlags提交 → w35 → PIPE_ALL → w36"]
+  r9 --> r10["写累计值，Receiver返回 → w19"]
+  empty -->|无，w33/34/41为0，无w32/35/36/42| r10
+  r10 --> r11["w20 Counts.Finish → PIPE_ALL / CTRL恢复 → w21 → w57 → 诊断发布"]
+```
+
+计数任务分配与 payload 任务分配不同；w24/25、w26/27、w28/29是按实际执行路径出现的可选成对点，不能由 w37 推断其必然存在。每个 ready 批次只有三个 clock，空扫描和逐 packet 没有额外打点。w33/w34覆盖循环内的两个累计区间；`w35-w32`还包括循环管理、打点开销、lane回收和清标记提交。`w42-w32`是首批等待，已经包含在整个接收循环中，不能再加一次。
+
+### 2.3 各个 word 的定义与源码
+
+| Word | 内容 / 边界 | 类型 |
 |---|---|---|
-| 总计 | `kernel` | 包含下述主阶段及未单独命名的区间 |
-| 主阶段 | `worker_init` | 内部依次包含`magic`、`count_init`，以及sender/receiver Init等代码 |
-| 主阶段 | `count_send` | worker_init之后，全部核执行 |
-| S主阶段 | `sender` | 内部依次执行`send_prepare` → `send_payload` → `send_metadata`；空任务可提前返回 |
-| R主阶段 | `count_receive` → `count_prefix` → `count_publish` | 顺序执行；count_publish含CompleteCumsum及其后PIPE_ALL |
-| R主阶段 | `receiver` | 内部为准备 → 多批轮询/消费 → 清理 |
-| 主阶段 | `count_finish` | S/R本核分支结束后，包含最后PIPE_ALL和CTRL恢复 |
+| w0 | `kernel_entry` | 时间戳 |
+| w1 | `config_ready` | 时间戳 |
+| w2 | `magic_begin` | 时间戳 |
+| w3 | `magic_end` | 时间戳 |
+| w4 | `counts_init_end` | 时间戳 |
+| w5 | `role_init_end` | 时间戳 |
+| w6 | `send_count_begin` | 时间戳 |
+| w7 | `send_count_issue_end` | 时间戳 |
+| w8 | `sender_begin` | 时间戳 |
+| w9 | `sender_end_after_MTE3_S` | 时间戳 |
+| w10 | `recv_count_begin` | 时间戳 |
+| w11 | `recv_count_end` | 时间戳 |
+| w12 | `cumsum_begin` | 时间戳 |
+| w13 | `cumsum_issue_end` | 时间戳 |
+| w14 | `complete_cumsum_begin` | 时间戳 |
+| w15 | `complete_cumsum_issue_end` | 时间戳 |
+| w16 | `count_drain_begin` | 时间戳 |
+| w17 | `count_drain_end_PIPE_ALL` | 时间戳 |
+| w18 | `receiver_begin` | 时间戳 |
+| w19 | `receiver_end` | 时间戳 |
+| w20 | `final_drain_begin` | 时间戳 |
+| w21 | `final_drain_end_PIPE_ALL` | 时间戳 |
+| w24 | `count_ready_poll_begin` | 时间戳 |
+| w25 | `count_ready_poll_end_after_V_S` | 时间戳 |
+| w26 | `cumsum_peer_join_begin` | 时间戳 |
+| w27 | `cumsum_peer_join_clear_issue_end` | 时间戳 |
+| w28 | `prefix_ready_wait_begin` | 时间戳 |
+| w29 | `prefix_ready_wait_clear_issue_end` | 时间戳 |
+| w30 | `receive_prefix_loaded_after_MTE2_S` | 时间戳 |
+| w31 | `receive_tasks_built` | 时间戳 |
+| w32 | `receive_buffers_ready` | 时间戳 |
+| w33 | `receive_packet_poll_accum_cycles` | 累计周期 |
+| w34 | `receive_load_consume_submit_accum_cycles` | 累计周期 |
+| w35 | `receive_lane_wait_clear_issue_end` | 时间戳 |
+| w36 | `receive_final_PIPE_ALL_end` | 时间戳 |
+| w37 | `receive_task_count` | 计数 |
+| w38 | `send_buffers_routes_ready` | 时间戳 |
+| w39 | `send_packets_issue_end` | 时间戳 |
+| w40 | `send_metadata_end_after_MTE3_S` | 时间戳 |
+| w41 | `receive_probe_batch_count` | 计数 |
+| w42 | `first_packet_ready` | 时间戳 |
+| w43 | `send_route_count` | 计数 |
+| w50 | `rank` | 身份/有效性元数据 |
+| w51 | `AIV_core` | 身份/有效性元数据 |
+| w52 | `EP` | 身份/有效性元数据 |
+| w53 | `active_aiv` | 身份/有效性元数据 |
+| w54 | `BS` | 身份/有效性元数据 |
+| w55 | `schema` | 身份/有效性元数据 |
+| w56 | `operation` | 身份/有效性元数据 |
+| w57 | `before_finalize` | 时间戳 |
+| w58 | `valid_mask` | 身份/有效性元数据 |
+| w59 | `magic` | 身份/有效性元数据 |
+| w60 | `boundary_mode` | 身份/有效性元数据 |
+| w61 | `complete` | 身份/有效性元数据 |
 
-### 2.1 发送内部：哪些列重复
+源码位置（每个点均有同名注释）：
 
-| 父范围 | 细分列 | 解释 |
-|---|---|---|
-| `sender` | `send_prepare` | UB、lane、路由、初始flags等准备 |
-| `sender` | `send_payload` | packet调度，含输入复用收尾及最后一批RDMA Flush |
-| `sender` | `send_metadata` | lane归还、source mask/weights写回及MTE3_S |
-| `send_payload` | `send_classify` | 去重路由分类；按token重复，非去重路径可能没有 |
-| `send_payload` | `send_pack` | 每包构造；包含下方输入/尾部/lane子段及Vector拼包等未细分代码 |
-| `send_payload` | `send_issue` | 每包发送提交/入批，以及末尾Flush；按实际调用累计 |
-| 通常在`send_pack`内 | `send_input_gm_to_ub` | 输入DataCopy及入队等提交区间，不是纯DMA完成时间 |
-| 输入复用逻辑 | `send_input_wait` | DeQue、已有MTE2_S或输入复用等待；也可能出现在尾部Finish，不能把该列全部机械归入send_pack |
-| `send_pack` | `send_tail` | FillTail |
-| `send_pack` | `send_lane_wait` | lane复用等待指令区间 |
-| `send_issue` | `send_mte_write` | 本机路径DataCopy提交 |
-| `send_issue` | `send_rdma_stage` | 跨机packet复制到注册GM并等待该源就绪 |
-| `send_issue` | `send_rdma_body_post` | 协议10中为**整包单WQE put**，旧列名保留，不再是只发body |
-| `send_issue` | `send_rdma_body_wait` | quiet/CQ源完成等待；dispatch按批每peer，不是每包独立计时 |
-| Packet保留源分支 | `send_rdma_restore` | SDK scratch覆盖后恢复需要保留的packet；批量dispatch通常不走此分支 |
-| 历史槽位 | `send_rdma_flag_post`、`send_rdma_flag_wait` | 协议10整包SO路径不再独立发flag，这两列无记录是预期情况 |
+- [dispatch_variant_kernel.h](../../csrc/kernels/dispatch/low_latency/dispatch_variant_kernel.h)：入口 w0/w1。
+- [dispatch_server_dedup_kernel.h](../../csrc/kernels/dispatch/low_latency/dispatch_server_dedup_kernel.h)：主流程 w2..w21。
+- [dispatch_server_dedup_counts.h](../../csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_counts.h)：w24..w29。
+- [dispatch_server_dedup_send.h](../../csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_send.h)：w38..w40、w43。
+- [dispatch_server_dedup_recv.h](../../csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_recv.h)：w30..w37、w41/w42。
+- [ll_reference_profile_device.h](../../csrc/kernels/dispatch/low_latency/common/ll_reference_profile_device.h)：w57与元数据发布。
 
-因此不能计算`sender + send_payload + send_issue + send_rdma_body_wait`作为发送耗时；
-它们是同一段调用栈上逐层包含的观测。低层transport列只在调用者传入timer时记录，
-不要将未传timer的relay/combine传输误认为没有通信。
+## 3. core_stage_timings.xlsx 每列对应哪一段
 
-### 2.2 接收内部：多批累计
+每个case的 `core_stage_timings.xlsx` 保留，run级 `stage-times.xlsx` 将各case合为多sheet。逐核耗时默认选择末次capture，每个rank/core一行；多轮均值独立列在均值页/CSV。以下与解析器 `STAGE_INFO` 的29列一一对应；公式以1GHz为例。任务数列S取w43，R取w37。
 
-```text
-receiver
-  recv_prepare（前缀加载、任务构建；非空任务还有第二段缓冲准备）
-  repeat until pending empty:
-    recv_wait（连续空扫描直到本批有ready包）
-    recv_consume（本批预取、消费、输出、可能转发、移除pending）
-  recv_cleanup（lane收尾、清flags、最终PIPE_ALL）
-```
+| CSV阶段 / Excel列名 | 微秒公式 | 覆盖内容 | 层级 |
+|---|---|---|---|
+| `kernel` / 核总耗时 | `(w21-w0)/1000` | 核入口至最终 PIPE_ALL/CTRL 恢复完成；包含区间内打点开销，不含末尾诊断身份/有效位发布及 cache 写回 | 主阶段 |
+| `before_finalize` / 写出前总耗时 | `(w57-w0)/1000` | 核入口至诊断 Finish 开始；包含此前主点 scalar GM 写入，不含随后身份/有效位发布及 cache 写回 | 总计 |
+| `entry_config` / 入口配置 | `(w1-w0)/1000` | 入口配置和 tracer 初始化 | 主阶段 |
+| `init_prepare` / Init 准备 | `(w2-w1)/1000` | kernel Init 绑定至 magic 开始 | 主阶段 |
+| `magic` / magic | `(w3-w2)/1000` | 窗口 magic 轮转，沿用原 DMA/事件/TPipe Reset | 主阶段 |
+| `count_init` / 计数 Init | `(w4-w3)/1000` | 计数参数、控制区、CTRL 配置 | 主阶段 |
+| `role_init` / 收发 Init | `(w5-w4)/1000` | sender/receiver Init 和布局计算 | 主阶段 |
+| `count_send` / 计数统计/发送提交 | `(w7-w6)/1000` | SendCnt，包含已有同步，远端写可异步继续 | 主阶段 |
+| `sender` / 发送 payload/元数据完成 | `(w9-w8)/1000` | Sender.Process，结束已有 MTE3_S 等待 | 发送主阶段 |
+| `count_receive` / 计数接收/归约 | `(w11-w10)/1000` | RecvCnt，包含 ready 轮询及归约；普通路径在此清计数标记，NDR packed-count 路径随后在 CalcCumsum 中清理 | 接收主阶段 |
+| `count_prefix` / cumsum 汇合/发布提交 | `(w13-w12)/1000` | CalcCumsum，包含 GetCumSum 和前缀发布；NDR packed-count 清计数标记位于 GetCumSum 返回后，不计入其子段 | 接收主阶段 |
+| `count_complete` / 前缀就绪/加载/输出提交 | `(w15-w14)/1000` | CompleteCumsum，输出计数仍可异步继续 | 接收主阶段 |
+| `count_drain` / 计数阶段 drain | `(w17-w16)/1000` | 现有 PIPE_ALL，回收计数 UB 前完成写入 | 接收主阶段 |
+| `receiver` / 接收 payload 完成 | `(w19-w18)/1000` | Receiver.Process，含构建任务、轮询、接收及收尾 | 接收主阶段 |
+| `final_drain` / 最终 drain/恢复 CTRL | `(w21-w20)/1000` | Counts.Finish，包含现有 PIPE_ALL | 主阶段 |
+| `count_ready_poll` / 计数 ready 轮询 | `(w25-w24)/1000` | WaitDispatch 轮询至最后一次 V_S 完成 | 计数接收/归约的细分 |
+| `cumsum_join` / cumsum 跨核等待/清理提交 | `(w27-w26)/1000` | GetCumSum，包含等待片段总数和清标记提交 | cumsum 汇合/发布提交的细分 |
+| `prefix_ready` / 前缀 ready 等待/清理提交 | `(w29-w28)/1000` | WaitCumSumFlag 等待及清理提交 | 前缀就绪/加载/输出提交的细分 |
+| `recv_prefix_load` / 接收前缀加载 | `(w30-w18)/1000` | Receiver reset / 前缀 DMA，结束 MTE2_S | 接收 payload 完成的细分 |
+| `recv_tasks` / 接收任务构建 | `(w31-w30)/1000` | ReceiveTasks.Build | 接收 payload 完成的细分 |
+| `recv_buffers` / 接收缓冲准备 | `(w32-w31)/1000` | 探测、lane、标记缓冲和事件准备 | 接收 payload 完成的细分 |
+| `recv_packet_poll` / packet 就绪轮询累计 | `w33/1000` | 每批完整轮询区间累积，未对每次空扫描插点 | 接收 payload 完成的细分 |
+| `recv_load_consume` / 加载/消费提交累计 | `w34/1000` | IssueLoad / ConsumeLoaded / RemovePending 区间累积 | 接收 payload 完成的细分 |
+| `recv_loop_clear` / 接收循环/清标记提交 | `(w35-w32)/1000` | 包含 packet 循环、lane 等待指令和 ClearFlags 提交 | 接收 payload 完成的细分 |
+| `recv_final_drain` / 接收最终 PIPE_ALL | `(w36-w35)/1000` | 接收输出、转发及标记清理的现有完成屏障 | 接收 payload 完成的细分 |
+| `send_buffers_routes` / 发送缓冲/路由加载 | `(w38-w8)/1000` | Sender UB/lane 分配及路由加载，含已有同步 | 发送 payload/元数据完成的细分 |
+| `send_packets` / 路由/packet 发送提交 | `(w39-w38)/1000` | SendWithDedup / SendWithoutDedup，包含已有 lane 依赖 | 发送 payload/元数据完成的细分 |
+| `send_drain_metadata` / 发送 drain/元数据完成 | `(w40-w39)/1000` | 尾 RDMA batch Flush（消息完成quiet）、lane 回收、source metadata 写回及已有 MTE3_S；无尾批次时不执行 Flush | 发送 payload/元数据完成的细分 |
+| `recv_first_packet` / 首次 packet 就绪等待 | `(w42-w32)/1000` | 接收缓冲准备完至首个 packet batch ready | 接收 payload 完成的细分 |
 
-`recv_prepare`可能调用两次，CSV已累计；不要再乘calls。
-`recv_wait`、`recv_consume`按ready批累计，不是每个packet各一段。
-空任务核完成第一段prepare后返回，不进入循环和cleanup。
+## 4. 为什么阶段相加不等于核总耗时
 
-| `recv_consume`中的子段 | 含义/顺序 |
-|---|---|
-| `recv_lane_wait` → `recv_gm_to_ub` | IssueLoad中复用lane并提交packet预取 |
-| `recv_load_wait` | ConsumeLoaded等待本包MTE2_S |
-| `recv_metadata` | 解码/构造输出路由信息，FIRST_HOP还含共享转发准备 |
-| `recv_output_wait` | 输出使用的Scalar/MTE依赖等待 |
-| `recv_output_write` | token/scale/路由信息写出，可能分多段累计 |
-| `recv_forward` | FIRST_HOP转发循环；其他包不执行 |
+`kernel=(w21-w0)` 是总区间，`before_finalize=(w57-w0)` 是另一总区间，二者不能相加；父阶段与细分阶段重复覆盖。公共主阶段之间仍有 w5→w6、w7→角色入口以及各函数返回/下个调用之间的间隙。对同一capture、同一核，可以按图中真实顺序插入这些间隙，使所有相邻时间差望远镜求和得到 w21-w0；不能把29列直接SUM。
 
-通常消费顺序是load_wait → metadata → output_wait → output_write → 可选forward；
-非去重compact路径先写payload，再处理/写出路由信息，不能强套同一条细分顺序。
-预取多个包与消费交错，硬件流水可重叠；上表是程序计时范围，不是互斥硬件占用时间。
+R核的 `receiver` 包含前缀加载、任务构建、缓冲准备、循环清理、最终drain及函数返回间隙；w33/w34、首次就绪等待都是其中子区间。S核的 sender 三段边界已在2.1说明。未执行的点不能补造时间，必要点缺失由解析器报错。
 
-### 2.3 timer dispatch如何对账
+只在同核做差，不作跨rank/core时钟差。多轮均值、跨核最大值、p99可能各自来自不同样本，也不能用于严格逐段对账。kernel不包含w21之后的全部诊断写出；before_finalize也不包含w57之后的身份/有效位/cache发布。因此这些值都不能替代完整OFF profiler task时间。
 
-定义`R = kernel - 主阶段之和`，在**同一单轮同一核**计算：
+## 5. 构建与历史数据
 
-```text
-S核主阶段和 = worker_init + count_send + sender + count_finish
-R核主阶段和 = worker_init + count_send + count_receive
-              + count_prefix + count_publish + receiver + count_finish
-kernel = 主阶段和 + R
-```
+两台目标机拉取同一提交后正常运行 `one_click.sh`，默认重编reference完整wheel；不要对旧wheel使用 `--skip-build`。`--reference-iters N` 控制capture轮数；`--mode perf` 仍测试完整dispatch+BF16 combine。SDK、协议10、launch结构大小、采样协议initial-reduce-exp100-batch-v3保持不变。
 
-这里**不再加magic、count_init或sender/receiver子段**。
-R覆盖kernel起点到worker_init前的配置读取、阶段之间的分支/打点写入、对象退出等未单独划段区间。
-它不是自动可解释为“纯计算”“通信开销”或“调度空洞”的新指标。
-按当前同核顺序区间，未舍入的合法记录应有非负R；微小负数先查显示舍入，明显负数查混轮、混核、
-重复父子阶段、错误列或不匹配源码。不能把负值强制截成0掩盖问题。
-
-同理，可计算`sender - (send_prepare + send_payload + send_metadata)`，
-以及`receiver - (recv_prepare + recv_wait + recv_consume + recv_cleanup)`，
-但须根据空任务路径省略未执行段。子段与父段不共享同一次clock边界，仍存在记录和控制间隙。
-
-## 3. 默认timer：combine
-
-combine的`magic`与`worker_init`是**顺序同级**，这点和dispatch不同：
-
-```text
-kernel
-  magic → worker_init
-  [去重时] combine_prepare
-  S核: combine_direct
-  R核去重: [部分核] combine_notify → combine_wait_ready
-           → combine_partial → combine_aggregate → combine_drain
-  R核非去重: combine_aggregate
-  combine_final_drain
-```
-
-| 阶段 | 意义 |
-|---|---|
-| `combine_prepare` | 去重路径准备/发布本地待归约行；S/R核均进入对应函数 |
-| `combine_notify` | 只有通知核执行ready通知提交 |
-| `combine_wait_ready` | 接收/归约核等待组内ready |
-| `combine_direct` | S核DIRECT结果回传 |
-| `combine_partial` | R核读取成员结果、局部归约和partial回传 |
-| `combine_aggregate` | 源token最终加权聚合；非去重是M6路径 |
-| `combine_drain` | 去重聚合后DrainSharedOutputs |
-| `combine_final_drain` | 本核末尾PIPE_ALL，退休在途操作 |
-
-对账从`magic + worker_init`开始，只加本核实际分支的上述同级combine阶段，最后加`combine_final_drain`；
-与kernel之差仍为未覆盖区间。不能把其他核的DIRECT、partial、aggregate全部加在本核上。
-旧stage格式同时包含dispatch和combine的所有标签，空白列不意味着此核漏做了必需工作。
-
-## 4. reference：29阶段的先后与精确区间
-
-这里只包含dispatch。记`wN`为同核“原始Cycle”的word N，所有式子先按整数ticks算，再统一换算。
-本节主阶段边界比timer细，不能把timer的`count_publish`直接当成reference的`count_complete`。
-
-| 顺序 | 阶段 | 原始区间 |
-|---|---|---|
-| 公共1 | `entry_config` | w1−w0 |
-| 公共2 | `init_prepare` | w2−w1 |
-| 公共3 | `magic` | w3−w2 |
-| 公共4 | `count_init` | w4−w3 |
-| 公共5 | `role_init` | w5−w4 |
-| 公共6 | `count_send` | w7−w6 |
-| S分支 | `sender` | w9−w8 |
-| R分支1 | `count_receive` | w11−w10 |
-| R分支2 | `count_prefix` | w13−w12 |
-| R分支3 | `count_complete` | w15−w14 |
-| R分支4 | `count_drain` | w17−w16 |
-| R分支5 | `receiver` | w19−w18 |
-| 公共末尾 | `final_drain` | w21−w20 |
-| 总计 | `kernel` | w21−w0 |
-| 另一总计 | `before_finalize` | w57−w0 |
-
-前五段连续衔接，后续阶段起止点之间有小间隙。因此精确对账为：
-
-```text
-I = entry_config + init_prepare + magic + count_init + role_init
-
-S核: kernel = I + count_send + sender + final_drain + Gs
-Gs(ticks) = (w6-w5) + (w8-w7) + (w20-w9)
-
-R核: kernel = I + count_send + count_receive + count_prefix
-             + count_complete + count_drain + receiver + final_drain + Gr
-Gr(ticks) = (w6-w5) + (w10-w7) + (w12-w11) + (w14-w13)
-            + (w16-w15) + (w18-w17) + (w20-w19)
-
-before_finalize = kernel + (w57-w21) / 每微秒ticks数
-```
-
-最后一式以µs表示；其余若使用CSV值则G也要换算到相同单位。
-Gs/Gr是实际边界间隙之和，包含标记写入和边界代码，不是新增加的网络等待。
-kernel不含最终诊断身份/有效位发布及cache写回，before_finalize也没有覆盖整个诊断导出。
-两者都不是OFF profiler task。
-
-### 4.1 reference细分表：只展开父段，不重复加入主阶段和
-
-| 父段 | 细分 | 区间/关系 |
-|---|---|---|
-| `count_receive` | `count_ready_poll` | w25−w24；ready轮询，不含全部归约工作 |
-| `count_prefix` | `cumsum_join` | w27−w26；跨核汇合/清理提交，不含全部前缀发布 |
-| `count_complete` | `prefix_ready` | w29−w28；等待前缀，不含全部加载/输出 |
-| `sender` | `send_buffers_routes` | w38−w8 |
-| `sender` | `send_packets` | w39−w38 |
-| `sender` | `send_drain_metadata` | w40−w39；含尾批Flush，和timer的send_payload边界不同 |
-| `receiver` | `recv_prefix_load` | w30−w18 |
-| `receiver` | `recv_tasks` | w31−w30 |
-| `receiver` | `recv_buffers` | w32−w31，非空任务核 |
-| `receiver` | `recv_loop_clear` | w35−w32；整个循环及lane等待/清flags提交 |
-| `receiver` | `recv_final_drain` | w36−w35 |
-| `recv_loop_clear`内部 | `recv_packet_poll` | w33，按ready批累计轮询 |
-| `recv_loop_clear`内部 | `recv_load_consume` | w34，按ready批累计加载/消费提交 |
-| 与首次轮询重叠 | `recv_first_packet` | w42−w32；从缓冲准备完至第一批ready，不是额外独立阶段 |
-
-对有任务且上述点有效的核：
-
-```text
-sender = send_buffers_routes + send_packets + send_drain_metadata
-         + (w9-w40)/每微秒ticks数
-
-receiver = recv_prefix_load + recv_tasks + recv_buffers
-           + recv_loop_clear + recv_final_drain
-           + (w19-w36)/每微秒ticks数
-```
-
-`recv_packet_poll + recv_load_consume`是loop_clear内部分累计，不能再和loop_clear相加。
-两项之和不必等于loop_clear：还留有循环边界、初始准备后的间隙、lane收尾和清flags等代码。
-`recv_first_packet`与首次poll大幅重叠，但起点不同，不应当作poll累计之外的新等待，
-也不应武断断言它精确等于第一次poll。
-空任务核缺少w32/w35/w36等点时，不能使用非空公式；接收可按
-`recv_prefix_load + recv_tasks + (w19-w31)/每微秒ticks数`对账。
-空发送核同理，缺少w38..w40时保留sender父段，不补造子段。
-
-## 5. 如何判断“阶段总和大于核总耗时”
-
-1. 固定单轮同核，先从求和范围中移除`kernel`、`before_finalize`这类总计列。
-2. 按上述主阶段清单计算，父段存在时不再加它的子段。dispatch的worker_init/magic尤其容易重复。
-3. 计算核总耗时减主阶段和，保留正负原值；reference还可用word间隙公式直接核对。
-4. 针对占比最大的父段，只在该父段内部展开一次子段；循环累计值使用total，不使用first到last跨度，不再乘calls。
-5. 若同级单轮总和仍明显超过kernel，核对实际源码、模式、schema、单位和原始记录，不先归因计时器错误或性能退化。
-
-例如（仅演示算术，非测量结果）：kernel=100µs，互斥主阶段和=95µs，未覆盖区间=5µs。
-其中sender=60µs，子段prepare/payload/metadata=5/50/4µs，sender内部余量=1µs。
-若把这三个子段又加入主阶段和，得到154µs，大于100µs；这正是重复计入59µs，而非kernel实际用了154µs。
-
-同rank所有核完成才结束整个kernel，但`max(各核跨度)`只是最长单核诊断指标：
-核启动时差、外层task边界和诊断导出均可能使其与profiler task不同。
-不要跨核或跨rank相减未对齐时间戳，也不要用“每阶段取最慢核，再相加”拼一个不存在的核。
-
-## 6. 源码对应位置
-
-- [dispatch入口与worker_init范围](../../csrc/kernels/dispatch/low_latency/dispatch_variant_kernel.h)
-- [dispatch主阶段顺序](../../csrc/kernels/dispatch/low_latency/dispatch_server_dedup_kernel.h)
-- [sender细分与尾Flush](../../csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_send.h)
-- [receiver循环与子段](../../csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_recv.h)
-- [combine入口](../../csrc/kernels/combine/low_latency.cpp)、[combine阶段分支](../../csrc/kernels/combine/low_latency/combine_server_dedup_kernel.h)
-- [timer累计实现](../../csrc/kernels/dispatch/low_latency/common/ll_stage_timer_device.h)
-- [reference 29阶段定义、有效位与解析](../../deep_ep/utils/ll_reference_profile_parse.py)
-- [整包SO批处理](../../csrc/kernels/dispatch/low_latency/device/ll_dispatch_rdma_batch.h)
-
-observe不添加阶段边界屏障；drain会在Start/End处额外PIPE_ALL，改变原本的流水重叠。
-以上代数关系解释同次诊断记录，不能把ON或drain耗时当作未插桩OFF开销。
+旧timer结果仅保留离线解码支持，可用 `one_click.sh --analyze-only RUN_DIR --output-dir NEW_DIR`。历史47阶段不是当前29阶段，不能跨格式直接A/B。

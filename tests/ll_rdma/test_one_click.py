@@ -17,7 +17,7 @@ launch = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(launch)
 
 
-@pytest.mark.parametrize("mode", ["timer", "perf", "reference"])
+@pytest.mark.parametrize("mode", ["perf", "reference"])
 def test_defaults_use_real_st_parser_and_keep_modes_separate(mode):
     a = launch.parse_args(["1", "192.0.2.1", "run-001", "--mode", mode])
     arguments = launch.test_arguments(a)
@@ -47,7 +47,8 @@ def test_plan_clears_stale_rank_and_sdk_environment(monkeypatch):
     assert not set(launch.RANK_ENV).intersection(env)
     assert "SHMEM_ROOT" not in env and "DEEPEP_LL_SEND_CORES" not in env
     assert all(env[key] == a.devices for key in launch.VISIBILITY)
-    assert env["DEEPEP_LL_STAGE_TIMER"] == "ON"
+    assert env["DEEPEP_LL_STAGE_TIMER"] == "OFF"
+    assert env["DEEPEP_LL_REFERENCE_PROFILE"] == "ON"
 
 
 @pytest.mark.parametrize("extra", [["--devices", "0,1"], ["--devices", ",".join(["0"] * 16)],
@@ -97,7 +98,7 @@ def test_plan_does_not_prepare_or_create_run(tmp_path, monkeypatch, capsys):
     assert launch.main(["0", "192.0.2.1", "dry", "--plan"]) == 0
     assert len(called) == 1 and called[0][0][-1] == "--plan"
     assert not list(tmp_path.iterdir())
-    assert json.loads(capsys.readouterr().out)["mode"] == "timer"
+    assert json.loads(capsys.readouterr().out)["mode"] == "reference"
 
 
 def test_git_commands_do_not_inherit_vendor_loader_paths():
@@ -156,7 +157,7 @@ def test_bad_shape_rejected_before_any_preparation(tokens, monkeypatch):
         launch.main(["0", "192.0.2.1", "bad-shape", "--tokens", tokens])
 
 
-@pytest.mark.parametrize("mode", ["timer", "perf", "reference"])
+@pytest.mark.parametrize("mode", ["perf", "reference"])
 @pytest.mark.parametrize("fault", [None, "timer", "source", "sdk", "firmware", "library", "branch", "protocol", "reference", "reference_metadata"])
 def test_installed_check_rejects_stale_or_mixed_builds(tmp_path, monkeypatch, mode, fault):
     root = tmp_path / "project"

@@ -387,9 +387,9 @@ __aicore__ inline void ServerDedupCounts::CompleteCumsum()
     statusFp32Tensor_ = readyBuf_.Get<float>();
     statusCleanFp32Tensor_ = cleanBuf_.Get<float>();
     // 各核先写前缀再发完成标记；全部标记到齐后，读取才不会混入未更新片段。
-    if (profile_) profile_->Mark<28>();
+    if (profile_) profile_->Mark<28>();  // w28: prefix_ready_wait_begin
     WaitCumSumFlag();
-    if (profile_) profile_->Mark<29>();
+    if (profile_) profile_->Mark<29>();  // w29: prefix_ready_wait_clear_issue_end
     // 仅接收组的第 0 核写公开专家计数，避免多核重复写同一输出。
     // 每个专家最后一个来源 rank 的前缀即该专家结束位置；type=0 输出累计数，
     // 其他已验证类型输出与上一专家累计数之差，即该专家自己的接收条数。
@@ -612,7 +612,7 @@ __aicore__ inline void ServerDedupCounts::WaitDispatch()
     DataCopyParams intriParams{static_cast<uint16_t>(recStatusNumPerCore_), 1,
                                static_cast<uint16_t>(CNT_GM_STRIDE_BLOCKS - 1U), 0};
     SyncFunc<AscendC::HardEvent::S_V>();
-    if (profile_) profile_->Mark<24>();
+    if (profile_) profile_->Mark<24>();  // w24: count_ready_poll_begin
     while (sumOfFlag != compareTarget) {
         if (packedFrames_) {
             ReadCountFrames(statusFp32Tensor_, windowInstatusFp32Tensor_, readPlan, false);
@@ -624,7 +624,7 @@ __aicore__ inline void ServerDedupCounts::WaitDispatch()
         SyncFunc<AscendC::HardEvent::V_S>();
         sumOfFlag = statusSumOutTensor.GetValue(0);
     }
-    if (profile_) profile_->Mark<25>();
+    if (profile_) profile_->Mark<25>();  // w25: count_ready_poll_end_after_V_S
 
     if (packedFrames_) {
         // Commit acquired: load the actual dense records, preserving the old
@@ -644,9 +644,9 @@ __aicore__ inline void ServerDedupCounts::CalRecvAndSetFlag()
     uint32_t newAivId = aivId_ - aivUsedAllToAll_;
     // 当前 UB 中是片段内前缀；先等待所有片段总数，再累加编号更小接收核的总数。
     // 这样得到全 rank 接收表中的基址，各核可独立修正自己负责的片段。
-    if (profile_) profile_->Mark<26>();
+    if (profile_) profile_->Mark<26>();  // w26: cumsum_peer_join_begin
     const uint32_t offset = GetCumSum(newAivId);
-    if (profile_) profile_->Mark<27>();
+    if (profile_) profile_->Mark<27>();  // w27: cumsum_peer_join_clear_issue_end
     if (packedFrames_) WaitDispatchClearStatus();
 
     if (recStatusNumPerCore_ != 0U) {

@@ -25,11 +25,7 @@ extern "C" void dispatch_server_dedup_launch_bf16_e5m2_g16(void*, const deepep::
 
 extern "C" DEEPEP_EXPORT uint32_t deepep_ll_stage_timer_enabled()
 {
-#ifdef DEEPEP_LL_STAGE_TIMER
-    return 1U;
-#else
-    return 0U;
-#endif
+    return 0U;  // Legacy stage/expert device instrumentation has been removed.
 }
 extern "C" DEEPEP_EXPORT uint32_t deepep_ll_reference_profile_enabled()
 {

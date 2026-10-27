@@ -5,8 +5,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def test_cycle_clock_is_confined_to_explicit_timer_headers():
-    diagnostic = {"ll_stage_timer_device.h", "ll_expert_timer_device.h",
-                  "ll_reference_profile_device.h"}
+    diagnostic = {"ll_reference_profile_device.h"}
     for directory in (ROOT / "csrc/kernels/dispatch/low_latency",
                       ROOT / "csrc/kernels/combine/low_latency"):
         for source in directory.rglob("*"):

@@ -6,7 +6,6 @@
 // prepare_snapshot.py仅在实验副本中截断SendPacket并加入观测输出，生产路径不受该提取影响。
 #ifndef DISPATCH_SERVER_DEDUP_SEND_H
 #define DISPATCH_SERVER_DEDUP_SEND_H
-#include "../common/ll_stage_timer_device.h"
 #include "../common/ll_reference_profile_device.h"
 
 #include "kernel_operator.h"
@@ -67,7 +66,6 @@ public:
 
     // 摘要：执行本核发送主流程：准备 UB、优先发送去重首跳、再发送 DIRECT，最后写回源端元数据。
     __aicore__ inline void Process(TBufPool<TPosition::VECCALC, 16>& scratch, uint32_t reservedBytes,
-                                   LlStageTimer::DeviceTimer* timer = nullptr,
                                    LlReferenceProfile::DeviceProfile* profile = nullptr)
     {
         // Count assigned original routes, not deduplicated packets. Auto splits
@@ -76,14 +74,14 @@ public:
             const uint32_t routes = bs_ * k_;
             const uint32_t assigned = enableDedup_ ? count_ * k_ :
                 routes / sendCores_ + (GetBlockIdx() < routes % sendCores_ ? 1U : 0U);
-            profile->Value<43>(assigned);
+            profile->Value<43>(assigned);  // w43: send_route_count
         }
         // 1. 无 token 分片的发送核直接返回；有任务的核复用 SendCnt 释放出的 scratch。
         // reservedBytes 对应仍可能被计数发送读取的 UB，不能当作可用空间覆盖。
         if (!LlSenderHasWork(enableDedup_, count_, bs_ * k_, GetBlockIdx())) return;
-        timer_ = timer;
-        if (LlTransport::Rdma(args_)) rdmaBatch_.Init(args_, uint32_t(data_.tokenStride), timer_);
-        if (timer_) timer_->Start(LlStageTimer::SendPrepare);
+
+        if (LlTransport::Rdma(args_)) rdmaBatch_.Init(args_, uint32_t(data_.tokenStride));
+
         scratch_ = &scratch;
         TQue<QuePosition::VECIN, 1> input;
         TBufPool<TPosition::VECIN, 1> cleanPool;
@@ -168,27 +166,24 @@ public:
         }
         PipeBarrier<PIPE_V>();
 
-        if (timer_) timer_->End(LlStageTimer::SendPrepare);
-        if (profile) profile->Mark<38>();
-        if (timer_) timer_->Start(LlStageTimer::SendPayload);
+        if (profile) profile->Mark<38>();  // w38: send_buffers_routes_ready
+
         if (enableDedup_)
             SendWithDedup(input);
         else
             SendWithoutDedup(input);
         // Reference boundary: packet scheduling has returned. The existing
         // trailing RDMA batch Flush remains in the drain/metadata interval.
-        if (profile) profile->Mark<39>();
+        if (profile) profile->Mark<39>();  // w39: send_packets_issue_end
         SenderInputOperations inputOperations{*this, input};
         inputReuse_.Finish(inputOperations);
         if (rdmaBatch_.Pending()) {
             // End-of-stream may borrow any lane only after local MTE reads retire.
             PipeBarrier<PIPE_ALL>();
-            if (timer_) timer_->Start(LlStageTimer::SendIssue);
+
             rdmaBatch_.Flush(outBuf_.Get<uint8_t>());
-            if (timer_) timer_->End(LlStageTimer::SendIssue);
+
         }
-        if (timer_) timer_->End(LlStageTimer::SendPayload);
-        if (timer_) timer_->Start(LlStageTimer::SendMetadata);
 
         // 6. 等待所有发送 lane 归还后，把本核 sourceMask 和 sourceWeights 写回 GM。
         // 只有 sourceMask 标记的权重位置才有效，未选中位置不应被下游消费。
@@ -200,8 +195,8 @@ public:
             DataCopyPad(weightOut_[uint64_t(start_) * k_], enableDedup_ ? sourceWeights_ : routeWeights_,
                         {1U, count_ * k_ * 4U, 0U, 0U, 0U});
         Sync<HardEvent::MTE3_S>();
-        if (profile) profile->Mark<40>();
-        if (timer_) timer_->End(LlStageTimer::SendMetadata);
+        if (profile) profile->Mark<40>();  // w40: send_metadata_end_after_MTE3_S
+
     }
 
     // 摘要：去重发送主流程：先发同 server 合并的 FIRST_HOP，再按 server 顺序发缓存的 DIRECT。
@@ -216,9 +211,9 @@ public:
         const uint32_t sendCore = GetBlockIdx();
         for (uint32_t token = 0; token < count_; ++token) {
             uint32_t directMask = 0, firstHopCount = 0, meshFirstK = 0;
-            if (timer_) timer_->Start(LlStageTimer::SendClassify);
+
             Classify(token, directMask, firstHopCount, meshFirstK);
-            if (timer_) timer_->End(LlStageTimer::SendClassify);
+
             uint32_t sourceMask = directMask;
             for (uint32_t group = 0; group < firstHopCount; ++group) {
                 const uint32_t scheduled = LlFirstHopOrder(firstHopCount, rankInGroup, sendCore,
@@ -420,12 +415,12 @@ private:
             if constexpr (!NeedQuantize) input.template FreeTensor<XType>(sender.cachedInput_);
         }
         __aicore__ inline void WaitPackedRead() {
-            if (sender.timer_) sender.timer_->Start(LlStageTimer::SendInputWait);
+
             // This replaces the per-packet input wait on a cache hit. TQue is
             // deliberately still holding this buffer, so it cannot provide a
             // new MTE2 dependency for Scalar tail writes. Wait for V directly.
             sender.template Sync<HardEvent::V_S>();
-            if (sender.timer_) sender.timer_->End(LlStageTimer::SendInputWait);
+
         }
     };
 
@@ -433,7 +428,7 @@ private:
     // never aliases outBuf_, which the SDK may borrow as submission scratch.
     __aicore__ inline void LoadTokenInput(TQue<QuePosition::VECIN, 1>& input, uint32_t token)
     {
-        if (timer_) timer_->Start(LlStageTimer::SendInputGmToUb);
+
         auto x = input.template AllocTensor<XType>();
         if constexpr (Prequantized) {
             // The full payload queue slot stages H bytes and 4P scale bytes.
@@ -461,10 +456,9 @@ private:
                         {1U, uint32_t(data_.scaleBytes), 0U, 0U, 0U}, {false, 0U, 0U, uint8_t(0)});
         }
         input.EnQue(x);
-        if (timer_) timer_->End(LlStageTimer::SendInputGmToUb);
-        if (timer_) timer_->Start(LlStageTimer::SendInputWait);
+
         x = input.template DeQue<XType>();
-        if (timer_) timer_->End(LlStageTimer::SendInputWait);
+
         if constexpr (NeedQuantize) {
             cachedPayload_ = quantBuf_.Get<uint8_t>();
             if constexpr (E4M3)
@@ -474,9 +468,9 @@ private:
             input.template FreeTensor<XType>(x);
             Sync<HardEvent::V_S>();
         } else {
-            if (timer_) timer_->Start(LlStageTimer::SendInputWait);
+
             Sync<HardEvent::MTE2_S>();
-            if (timer_) timer_->End(LlStageTimer::SendInputWait);
+
             cachedInput_ = x;
             cachedPayload_ = x.template ReinterpretCast<uint8_t>();
         }
@@ -487,19 +481,19 @@ private:
     __aicore__ inline void SendPacket(TQue<QuePosition::VECIN, 1>& input, uint32_t token, uint32_t firstK,
                                       uint32_t expert, uint32_t q, uint32_t mask)
     {
-        if (timer_) timer_->Start(LlStageTimer::SendPack);
+
         const uint32_t destination = expert / localExperts_;
         SenderInputOperations inputOperations{*this, input};
         inputReuse_.Prepare(token, inputOperations);
         auto payload = cachedPayload_;
-        if (timer_) timer_->Start(LlStageTimer::SendTail);
+
         FillTail(payload, token, firstK, mask);
-        if (timer_) timer_->End(LlStageTimer::SendTail);
+
         Sync<HardEvent::S_V>();
         const uint32_t lane = packets_ % lanes_;
-        if (timer_) timer_->Start(LlStageTimer::SendLaneWait);
+
         WaitFlag<HardEvent::MTE3_V>(lane);
-        if (timer_) timer_->End(LlStageTimer::SendLaneWait);
+
         auto out = outBuf_.Get<uint8_t>()[lane * data_.tokenStride];
         auto outWords = out.template ReinterpretCast<int32_t>();
         auto inWords = payload.template ReinterpretCast<int32_t>();
@@ -513,16 +507,7 @@ private:
                          1U, 8U);
         SetFlag<HardEvent::V_MTE3>(lane);
         WaitFlag<HardEvent::V_MTE3>(lane);
-        if (timer_) timer_->End(LlStageTimer::SendPack);
-        if (timer_) timer_->Start(LlStageTimer::SendIssue);
-        // Count each protocol handoff once at its initiating core, not at receive.
-        if (timer_) timer_->CountData(uint32_t(args_->rank), destination,
-#ifdef DEEPEP_LL_NO_COMM
-            uint64_t(data_.blockCount) * 32U,
-#else
-            uint64_t(data_.tokenStride),
-#endif
-            false);
+
 #ifndef DEEPEP_LL_NO_COMM
         if (LlTransport::RemoteWrite(args_, destination)) {
             rdmaBatch_.Enqueue(destination,
@@ -533,16 +518,15 @@ private:
         {
         LlTransport::Packet(args_, destination,
             DispatchServerDedupDispatchOffset(data_, args_->rank, destination,
-                expert % localExperts_, q, args_->rankSize, localExperts_, bs_), out, uint32_t(data_.tokenStride), 7U, timer_);
+                expert % localExperts_, q, args_->rankSize, localExperts_, bs_), out, uint32_t(data_.tokenStride), 7U);
         }
         SetFlag<HardEvent::MTE3_V>(lane);
         ++packets_;
-        if (timer_) timer_->End(LlStageTimer::SendIssue);
+
     }
 
     const __gm__ DispatchDedup::CommArgs* args_ = nullptr;
     TPipe* pipe_ = nullptr;
-    LlStageTimer::DeviceTimer* timer_ = nullptr;
     LlTransport::DispatchRdmaBatch rdmaBatch_;
     LlSenderInputReuse inputReuse_;
     LocalTensor<XType> cachedInput_;

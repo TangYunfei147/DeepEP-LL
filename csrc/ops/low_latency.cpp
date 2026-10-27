@@ -82,7 +82,7 @@ uint8_t* stage_timer(py::dict tensors, uint32_t cores, uint32_t& mode, bool allo
         return pointer;
     }
     if (!tensors.contains("ll_stage_timer") || tensors["ll_stage_timer"].is_none()) return nullptr;
-    if (!deepep_ll_stage_timer_enabled()) throw std::invalid_argument("Rebuild with DEEPEP_LL_STAGE_TIMER=ON");
+    if (!deepep_ll_stage_timer_enabled()) throw std::invalid_argument("Legacy LL stage tracing was removed; use LL reference profiling");
     if (tensors.contains("ll_stage_timer_mode")) mode = tensors["ll_stage_timer_mode"].cast<uint32_t>();
     if (mode != 1U && mode != 2U) throw std::invalid_argument("Invalid LL timer mode");
     auto timer = py::reinterpret_borrow<py::object>(tensors["ll_stage_timer"]);

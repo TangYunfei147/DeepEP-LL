@@ -27,8 +27,8 @@ find_path(DEVICE_RT_INCLUDE rt.h HINTS
     "${ASCEND_HOME_PATH}/${CMAKE_SYSTEM_PROCESSOR}-linux/pkg_inc/runtime"
     "${ASCEND_HOME_PATH}/${CMAKE_SYSTEM_PROCESSOR}-linux/runtime/include"
     NO_DEFAULT_PATH)
-# This NDR performance branch builds LL only. Retain both LL diagnostic
-# variants so timer switches reuse dependency-tracked objects.
+# This NDR performance branch builds LL only. Keep plain and reference objects
+# separate so profiling switches reuse dependency-tracked objects.
 set(_ll_sources
     "${DEEPEP_SOURCE_DIR}/csrc/kernels/dispatch/low_latency.cpp"
     "${DEEPEP_SOURCE_DIR}/csrc/kernels/combine/low_latency.cpp")
@@ -41,18 +41,14 @@ foreach(_mode prequant_e4m3 fp16 fp16_e4m3 fp16_e5m2 bf16 bf16_e4m3 bf16_e5m2)
     endforeach()
 endforeach()
 add_library(deepep_kernel_ll_plain OBJECT ${_ll_sources})
-add_library(deepep_kernel_ll_timer OBJECT ${_ll_sources})
 add_library(deepep_kernel_ll_reference OBJECT ${_ll_sources})
-set_target_properties(deepep_kernel_ll_plain deepep_kernel_ll_timer deepep_kernel_ll_reference PROPERTIES EXCLUDE_FROM_ALL TRUE)
-target_compile_definitions(deepep_kernel_ll_timer PRIVATE DEEPEP_LL_STAGE_TIMER=1)
+set_target_properties(deepep_kernel_ll_plain deepep_kernel_ll_reference PROPERTIES EXCLUDE_FROM_ALL TRUE)
 target_compile_definitions(deepep_kernel_ll_reference PRIVATE DEEPEP_LL_REFERENCE_PROFILE=1)
-if(DEEPEP_LL_STAGE_TIMER AND DEEPEP_LL_REFERENCE_PROFILE)
-    message(FATAL_ERROR "LL reference profiling and legacy stage tracing are mutually exclusive")
+if(DEEPEP_LL_STAGE_TIMER)
+    message(FATAL_ERROR "Legacy LL tracing was removed; use DEEPEP_LL_REFERENCE_PROFILE=ON")
 endif()
 if(DEEPEP_LL_REFERENCE_PROFILE)
     set(_ll_variant deepep_kernel_ll_reference)
-elseif(DEEPEP_LL_STAGE_TIMER)
-    set(_ll_variant deepep_kernel_ll_timer)
 else()
     set(_ll_variant deepep_kernel_ll_plain)
 endif()
@@ -80,7 +76,7 @@ if(DEVICE_RT_INCLUDE)
 else()
     message(STATUS "No standalone rt.h found; using the selected CANN -xasc toolchain headers")
 endif()
-foreach(_objects deepep_kernel_ll_plain deepep_kernel_ll_timer deepep_kernel_ll_reference)
+foreach(_objects deepep_kernel_ll_plain deepep_kernel_ll_reference)
     target_link_libraries(${_objects} PRIVATE deepep_kernel_options)
 endforeach()
 

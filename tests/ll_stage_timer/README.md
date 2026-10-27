@@ -1,5 +1,7 @@
 # LL dispatch/combine阶段打点
 
+> 当前仅保留 reference dispatch 设备打点，one_click 默认 reference；旧 stage/expert 插桩已删除，旧结果仍可离线解析。详见 [阶段与源码对照](../ll_rdma/STAGE_TIMELINE.md)。
+
 逐阶段顺序、嵌套关系、同核可加总清单及核总耗时对账见
 [阶段顺序与核总耗时对账](../ll_rdma/STAGE_TIMELINE.md)。父子阶段重复计时，不能整行求和。
 

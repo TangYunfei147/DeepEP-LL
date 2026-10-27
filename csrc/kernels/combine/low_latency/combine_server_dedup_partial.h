@@ -25,10 +25,10 @@ public:
     __aicore__ inline void Init(const __gm__ DispatchDedup::CommArgs* args, TPipe* pipe, LocalTensor<uint8_t> scratch,
                                 GM_ADDR expert, GM_ADDR table2, GM_ADDR table3, GM_ADDR types, uint32_t tokens,
                                 uint32_t bs, uint32_t h, uint32_t k, uint32_t experts, uint8_t dtype, uint64_t window,
-                                const EpCombineM45WorkspaceLayout& layout, LlStageTimer::DeviceTimer* timer = nullptr)
+                                const EpCombineM45WorkspaceLayout& layout)
     {
         args_ = args;
-        timer_ = timer;
+
         recvCores_ = GetBlockNum() / 2U;
         pipe_ = pipe;
         scratch_ = scratch[layout.phaseOffset];
@@ -197,7 +197,7 @@ private:
         GlobalTensor<uint16_t> data;
         if (member == 0U) {
             data = expert_[uint64_t(row) * h_];
-            if (timer_) timer_->CountData(uint32_t(args_->rank), uint32_t(args_->rank), h_ * 2U, false, true);
+
             DataCopyPad(inputs_[lane * inputBytes_ / 2U], data, {1U, h_ * 2U, 0U, 0U, 0U},
                         {false, 0U, 0U, uint16_t(0)});
         } else {
@@ -207,7 +207,7 @@ private:
             const uint64_t slot =
                 (((uint64_t(source) + memberRank) % uint32_t(args_->rankSize)) * localExperts_ + localExpert) * bs_ + q;
             if (memberRank / Group != uint32_t(args_->rank) / Group) { Trap(); return; }
-            if (timer_) timer_->CountData(uint32_t(args_->rank), memberRank, h_ * 2U, false, true);
+
             LlTransport::LoadLocalPeer(args_, memberRank, stageBase_ + slot * stageStride_,
                 inputs_[lane * inputBytes_ / 2U], h_ * 2U);
         }
@@ -253,16 +253,14 @@ private:
         Copy(dst[64U], src[64U], uint64_t(56U), uint8_t(blocks_), {1U, 1U, 16U, 15U});
         SetFlag<HardEvent::V_MTE3>(lane);
         WaitFlag<HardEvent::V_MTE3>(lane);
-        // A reduced result is a forwarding hop, not a byte-for-byte relay.
-        if (timer_) timer_->CountData(uint32_t(args_->rank), source, packetBytes_, true);
+
         // This reduced output has one destination; the next use rewrites its
         // body and never reads the SDK's borrowed first 128 bytes.
         LlTransport::Packet(args_, source, window_ + COMBINE_DEDUP_EP_SERVER_DEDUP_SHARED_DATA_OFFSET +
-            (uint64_t(token) * k_ + topk) * packetBytes_, output, packetBytes_, 7U, nullptr, false);
+            (uint64_t(token) * k_ + topk) * packetBytes_, output, packetBytes_, 7U, false);
         SetFlag<HardEvent::MTE3_V>(lane);
     }
 
-    LlStageTimer::DeviceTimer* timer_ = nullptr;
     uint32_t recvCores_ = 0;
     const __gm__ DispatchDedup::CommArgs* args_ = nullptr;
     TPipe* pipe_ = nullptr;

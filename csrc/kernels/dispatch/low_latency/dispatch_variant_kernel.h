@@ -52,15 +52,14 @@ extern "C" [[bisheng::core_ratio(0, 1)]] __global__ __aicore__ void DEEPEP_LL_VA
     GM_ADDR relayReadIndexOut, GM_ADDR sourceMaskOut, GM_ADDR expertScalesOut, GM_ADDR tilingData,
     int64_t reservedMagic, GM_ADDR inputScales, GM_ADDR stageTimer, uint32_t timerMode, GM_ADDR expertTimer)
 {
+    (void)timerMode; (void)expertTimer;  // Reserved launch ABI slots; legacy tracing removed.
     const uint64_t referenceEntry = LlReferenceProfile::DeviceProfile::EntryClock(stageTimer);
     util_set_ffts_config(reinterpret_cast<const __gm__ DispatchDedup::CommArgs*>(commArgs)->fftsVal);
     LlReferenceProfile::DeviceProfile profile;
     profile.Init(stageTimer);
-    profile.Value<0>(referenceEntry);
-    profile.Mark<1>();
-    LlStageTimer::DeviceTimer timer;
-    timer.Init(stageTimer, 1U, timerMode);
-    timer.Start(LlStageTimer::Kernel);
+    profile.Value<0>(referenceEntry);  // w0: kernel_entry
+    profile.Mark<1>();  // w1: config_ready
+
     // Host owns validation; each core reads its configuration once before work.
     const auto* tiling = reinterpret_cast<const __gm__ DispatchDedup::EpServerDedupTilingData*>(tilingData);
     if (!DispatchDedup::LlTilingKeyValid(reinterpret_cast<const __gm__ DispatchDedup::CommArgs*>(commArgs)->rankSize, tiling->tilingKey)) { AscendC::Trap(); return; }
@@ -70,16 +69,14 @@ extern "C" [[bisheng::core_ratio(0, 1)]] __global__ __aicore__ void DEEPEP_LL_VA
         uint32_t(reinterpret_cast<const __gm__ DispatchDedup::CommArgs*>(commArgs)->rankSize));
     const uint32_t topK = tiling->topK;
     const uint32_t moeExpertNum = tiling->moeExpertNum;
-    LlExpertTimer::DeviceTimer expert;
-    expert.Init(expertTimer, moeExpertNum,
-                uint32_t(reinterpret_cast<const __gm__ DispatchDedup::CommArgs*>(commArgs)->rank), timerMode);
+
     const uint32_t expertTokenNumsType = tiling->expertTokenNumsType;
     const uint8_t quantMode = tiling->quantMode;
     const uint8_t dtype = tiling->dtype;
     const uint8_t expandXOutDtype = tiling->expandXOutDtype;
     const auto inputMode = static_cast<DispatchDedup::EpServerDedupInputMode>(tiling->inputMode);
     AscendC::TPipe pipe;
-    timer.Start(LlStageTimer::WorkerInit);
+
     // Host chooses the specialization without reading device memory. Verify the
     // uploaded tiling still agrees before executing the unchanged algorithm.
     if (DispatchDedup::LlDispatchVariantForTiling(dtype, quantMode, expandXOutDtype,
@@ -92,13 +89,11 @@ extern "C" [[bisheng::core_ratio(0, 1)]] __global__ __aicore__ void DEEPEP_LL_VA
             kPrequantized, DEEPEP_LL_VARIANT_GROUP> kernel;
         kernel.Init(commArgs, x, expertIds, expertScales, expandXOut, dynamicScalesOut, expertTokenNumsOut, sendCountsOut,
                     tokenTypeOut, destinationIndexOut, relayReadIndexOut, sourceMaskOut, expertScalesOut, bs, h, topK,
-                    moeExpertNum, expertTokenNumsType, &pipe, inputScales, enableDedup, &timer, &expert, &profile);
-        timer.End(LlStageTimer::WorkerInit);
+                    moeExpertNum, expertTokenNumsType, &pipe, inputScales, enableDedup, &profile);
+
         kernel.Process();
     }
-    timer.End(LlStageTimer::Kernel);
-    expert.Finish();
-    timer.Finish();
+
     profile.Finish(uint32_t(reinterpret_cast<const __gm__ DispatchDedup::CommArgs*>(commArgs)->rank),
                    uint32_t(reinterpret_cast<const __gm__ DispatchDedup::CommArgs*>(commArgs)->rankSize), bs);
 }

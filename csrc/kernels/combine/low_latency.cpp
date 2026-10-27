@@ -23,34 +23,29 @@ extern "C" [[bisheng::core_ratio(0, 1)]] __global__ __aicore__ void combine_serv
     GM_ADDR tokenType, GM_ADDR relayReadIndex, GM_ADDR sourceMask, GM_ADDR yOut, GM_ADDR tilingData, GM_ADDR stageTimer,
     uint32_t timerMode)
 {
+    (void)stageTimer; (void)timerMode;  // Reserved launch ABI slots; combine has no device tracing.
     const auto* args = reinterpret_cast<const __gm__ DispatchDedup::CommArgs*>(commArgs);
     util_set_ffts_config(args->fftsVal);
-    LlStageTimer::DeviceTimer timer;
-    timer.Init(stageTimer, 2U, timerMode);
-    timer.Start(LlStageTimer::Kernel);
-    timer.Start(LlStageTimer::Magic);
+
     uint32_t magic;
     {
         AscendC::TPipe pipe;
         // 与dispatch共用每核窗口轮转规则；即使本核没有有效token也必须参加本次轮转。
         magic = DispatchDedup::RotateDispatchServerDedupMagic(args, AscendC::GetBlockIdx(), &pipe);
     }
-    timer.End(LlStageTimer::Magic);
-    timer.Start(LlStageTimer::WorkerInit);
+
     const auto* td = reinterpret_cast<const volatile __gm__ CombineDedup::EpServerDedupCombineTilingData*>(tilingData);
     const bool enableDedup = DispatchDedup::EpServerDedupEnabled(td->numMaxTokensPerRank, td->bs, uint32_t(args->rankSize));
     if (!DispatchDedup::LlTilingKeyValid(args->rankSize, td->tilingKey)) { AscendC::Trap(); return; }
 #define COMBINE_RUN(Group) \
     CombineDedup::CombineMemoryServerDedupKernel<Group> kernel; \
     kernel.Init(commArgs, expertOut, destinationIndex, sendCounts, expertScales, tokenType, relayReadIndex, sourceMask, \
-                yOut, td->bs, td->h, td->topK, td->moeExpertNum, td->dtype, 0, magic, enableDedup, &timer); \
-    timer.End(LlStageTimer::WorkerInit); \
+                yOut, td->bs, td->h, td->topK, td->moeExpertNum, td->dtype, 0, magic, enableDedup); \
     kernel.Process()
     if (td->tilingKey == uint8_t(DispatchDedup::LlTilingKey::Group4)) { COMBINE_RUN(4U); }
     else { COMBINE_RUN(16U); }
 #undef COMBINE_RUN
-    timer.End(LlStageTimer::Kernel);
-    timer.Finish();
+
 }
 extern "C" DEEPEP_EXPORT void combine_server_dedup_kernel_do(void* stream,
                                                              const deepep::EpServerDedupCombineKernelArgs* args)

@@ -14,7 +14,7 @@
 | MTE/RDMA 收口和对称暂存契约 | `csrc/kernels/dispatch/low_latency/device/ll_transport.h`、`common/ll_rdma_layout.h` |
 | 完整路径审计、风险与复现 | [RDMA AUDIT](../ll_rdma/AUDIT.md)、[RDMA README](../ll_rdma/README.md) |
 | 完整 LL 数值与性能入口 | `tests/elastic/test_ep_low_latency.py`；[统计协议](PROFILING.md) |
-| 可选设备打点 | `tests/ll_stage_timer/README.md`，默认 OFF、诊断单独采集 |
+| 可选设备打点 | `tests/ll_reference_profile/README.md`，仅 reference dispatch，默认编译 OFF、诊断单独采集 |
 
 UB payload 打包不能直接交给 RDMA；只修改 payload 不足以完成协议。计数、ready、partial 远端读取、flag 发布、缓存可见性及复用必须一起检查。
 

@@ -139,7 +139,7 @@ class LauncherTests(unittest.TestCase):
 
     def test_modes_clear_stale_build_flags_and_reference_is_dispatch_only(self):
         with patch.dict('os.environ', {'DEEPEP_LL_STAGE_TIMER': 'ON', 'DEEPEP_LL_REFERENCE_PROFILE': 'ON'}):
-            for mode in ('reference', 'timer', 'perf'):
+            for mode in ('reference', 'perf'):
                 args = launch.parse_args(['1', '192.0.2.1', 'cpu', '--mode', mode])
                 env = launch.child_environment(args)
                 self.assertEqual(env['DEEPEP_LL_STAGE_TIMER'], 'ON' if mode == 'timer' else 'OFF')
