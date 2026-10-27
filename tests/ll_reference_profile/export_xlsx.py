@@ -13,7 +13,7 @@ from zipfile import ZipFile, ZIP_DEFLATED
 NS = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'
 REL = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
 SHEET_NAMES = ('采样汇总', '逐核耗时', '阶段说明', '原始Cycle')
-IDENTITY_HEADERS = ('实验组', 'Rank', '服务器', '本地卡', '核号', '收发角色', '采集轮次', '任务数')
+IDENTITY_HEADERS = ('Rank', '核号', '收发角色', '任务数')
 EXACT_LIMIT = 999_999_999_999_999
 
 
@@ -176,20 +176,17 @@ def export_workbook(output_path, report, selected_saved, timer):
         summary.append([key, json.dumps(value, ensure_ascii=False)])
     summary += [['采样', json.dumps(report['sampling'], ensure_ascii=False)],
                 ['实际核数 / EP', report['active_aiv'], report['world_size']],
-                ['拓扑字段', '无原始hostname时显示连续16rank物理组；本地rank按rank%16推导，不编造IP。'],
+                ['身份字段', '逐核页保留global Rank和核号；省略实验组、服务器、本地卡及轮次列，run/case和选轮见本页。'],
                 ['阶段语义', '主阶段包含细分，不能相加；空白=未执行或无点，0=确有记录且耗时为0。']]
 
     def per_core():
         for saved, parsed in selected:
-            meta = saved['metadata']
             by_core = {c['core']: {} for c in parsed['cores']}
             for record in parsed['records']:
                 by_core[record['core']][record['stage']] = record
             for core in parsed['cores']:
                 index = core['core']; rank = parsed['rank']
-                identity = [group, rank, meta.get('hostname', f'物理组 {rank//16}'),
-                            meta.get('local_rank', rank % 16), index,
-                            '发送' if core['role'] == 'send' else '接收', iteration, core['task_count']]
+                identity = [rank, index, '发送' if core['role'] == 'send' else '接收', core['task_count']]
                 words = [v for row in saved['raw'][index] for v in row]
                 yield identity, words, by_core[index], core
 
@@ -204,11 +201,11 @@ def export_workbook(output_path, report, selected_saved, timer):
                 info = timer.STAGE_INFO[name]
                 start, end = info['start'], info['end']
                 if start is None:
-                    formula = f"'原始Cycle'!{column(end+4)}{row}"
+                    formula = f"'原始Cycle'!{column(end+3)}{row}"
                 elif max(words[start], words[end]) <= EXACT_LIMIT:
-                    formula = f"('原始Cycle'!{column(end+4)}{row}-'原始Cycle'!{column(start+4)}{row})"
+                    formula = f"('原始Cycle'!{column(end+3)}{row}-'原始Cycle'!{column(start+3)}{row})"
                 else:
-                    formula = f"'原始Cycle'!{column(68+index)}{row}"
+                    formula = f"'原始Cycle'!{column(67+index)}{row}"
                 value = rec['total_ticks'] / divisor if frequency is not None else rec['total_ticks']
                 if frequency is not None:
                     formula += "/'阶段说明'!$B$2"
@@ -231,17 +228,17 @@ def export_workbook(output_path, report, selected_saved, timer):
     definitions += [
         ['有效性', 'w58 valid_mask', '未执行点mask未置位且word为0；执行时刻或累计为0仍保留有效位。'],
         ['任务 / 次数', '发送任务w43；接收任务w37；packet batch w41', 'w33/w34的calls对应w41批次数，不是packet总数。'],
-        ['原始精度', '超过15位整数保存为文本', 'BP列起保留Python整数域作差得到的29项ticks；大时钟公式引用这些差值，避免Excel大数消减。'],
+        ['原始精度', '超过15位整数保存为文本', 'BO列起保留Python整数域作差得到的29项ticks；大时钟公式引用这些差值，避免Excel大数消减。'],
         ['核时钟', '仅同核相减', '不做跨rank绝对时钟对齐；不从嵌套阶段之和推算总时长。'],
         ['NDR边界', '参考阶段命名保留', '同名SendCnt包含当前NDR已有路由交换；payload提交可能包含RDMA post/quiet；不移植参考业务逻辑。'],
         ['接收批次', '标量累计两段', '只对完整ready批次和加载消费区间累计，不对每次空扫描插点。'],
     ]
 
     def raw_rows():
-        yield ['实验组', 'Rank', '核号', *[f'w{i} {name}' for i, name in enumerate(timer.WORDS)],
+        yield ['Rank', '核号', *[f'w{i} {name}' for i, name in enumerate(timer.WORDS)],
                *[f"{timer.STAGE_INFO[name]['label']} 精确ticks（整数作差）" for name in stages]]
         for identity, words, records, _ in per_core():
-            yield [identity[0], identity[1], identity[4], *words,
+            yield [identity[0], identity[1], *words,
                    *[records[name]['total_ticks'] if name in records else None for name in stages]]
 
     path = Path(output_path)
@@ -250,7 +247,7 @@ def export_workbook(output_path, report, selected_saved, timer):
     with ZipFile(path, 'x', compression=ZIP_DEFLATED, compresslevel=6) as archive:
         _package(archive)
         _sheet(archive, 1, summary, len(summary), 6, [35, 68, 24, 48, 24, 24], header=8)
-        _sheet(archive, 2, detail_rows(), row_count, 38, [28, 10, 22, 10, 10, 12, 12, 12, 22], freeze=6, numeric_from=9)
+        _sheet(archive, 2, detail_rows(), row_count, 34, [10, 10, 12, 12, 22], freeze=5, numeric_from=5)
         _sheet(archive, 3, definitions, len(definitions), 4, [36, 48, 95, 38], header=5)
-        _sheet(archive, 4, raw_rows(), row_count, 67+len(stages), [28, 10, 10, 27], freeze=3)
+        _sheet(archive, 4, raw_rows(), row_count, 66+len(stages), [10, 10, 27], freeze=2)
     return path

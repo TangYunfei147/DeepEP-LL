@@ -73,6 +73,12 @@ def test_native_last_mean_operations_and_raw_words(tmp_path, frequency):
     with ZipFile(out/'stage-times.xlsx') as z:
         names = [s.attrib['name'] for s in ET.fromstring(z.read('xl/workbook.xml')).findall('m:sheets/m:sheet', NS)]
         assert {'逐核耗时_dispatch', '逐核耗时_combine', '通信计数', '接收明细', '原始Cycle'} <= set(names)
+        sheet = ET.fromstring(z.read(f'xl/worksheets/sheet{names.index("逐核耗时_dispatch")+1}.xml'))
+        assert sheet.find('m:sheetViews/m:sheetView/m:pane', NS).attrib['xSplit'] == '5'
+        headers = [''.join(c.itertext()) for c in sheet.findall('m:sheetData/m:row', NS)[0]]
+        assert headers[:4] == ['算子', 'Rank', '核号', '收发分工']
+        assert headers[4].startswith('kernel (')
+        assert not {'服务器组', '本地卡', '采集轮次'} & set(headers)
 
 
 def test_no_capture_has_no_fake_stage_table(tmp_path):

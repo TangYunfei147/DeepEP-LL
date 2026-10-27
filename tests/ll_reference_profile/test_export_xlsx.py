@@ -35,19 +35,21 @@ def export(tmp_path, **kwargs):
 def test_export_preserves_raw_precision_formulas_missing_zero_and_layout(tmp_path):
     path, report, selected = export(tmp_path, cores=56)
     detail, tree = cells(path,2)
-    assert tree.find('m:dimension',NS).attrib['ref'] == 'A1:AL897'
-    assert tree.find('m:sheetViews/m:sheetView/m:pane',NS).attrib['topLeftCell'] == 'G2'
-    assert tree.find('m:autoFilter',NS).attrib['ref'] == 'A1:AL897'
-    assert detail['I2'].find('m:f',NS).text == "'原始Cycle'!BP2/'阶段说明'!$B$2"
-    assert float(detail['I2'].find('m:v',NS).text) == .36
-    assert detail['AI3'].find('m:f',NS) is None  # empty sender has no packet-submit segment
+    assert tree.find('m:dimension',NS).attrib['ref'] == 'A1:AH897'
+    assert tree.find('m:sheetViews/m:sheetView/m:pane',NS).attrib['topLeftCell'] == 'F2'
+    assert [text(detail[f'{c}1']) for c in 'ABCDE'] == ['Rank', '核号', '收发角色', '任务数', '核总耗时 (µs)']
+    assert not {'实验组', '服务器', '本地卡', '采集轮次'} & {text(c) for key,c in detail.items() if key.rstrip('0123456789')+'1' == key}
+    assert tree.find('m:autoFilter',NS).attrib['ref'] == 'A1:AH897'
+    assert detail['E2'].find('m:f',NS).text == "'原始Cycle'!BO2/'阶段说明'!$B$2"
+    assert float(detail['E2'].find('m:v',NS).text) == .36
+    assert detail['AE3'].find('m:f',NS) is None  # empty sender has no packet-submit segment
     receiver_row = 30
-    assert float(detail[f'AD{receiver_row}'].find('m:v',NS).text) == 0
-    assert detail['G2'].find('m:v',NS).text == '1'
+    assert float(detail[f'Z{receiver_row}'].find('m:v',NS).text) == 0
+    assert detail['D2'].find('m:v',NS).text == '1'
     raw, _ = cells(path,4)
-    assert raw['D2'].attrib['t'] == 'inlineStr'
-    assert text(raw['D2']) == str(10**17)
-    assert raw['BP2'].find('m:v',NS).text == '360'
+    assert raw['C2'].attrib['t'] == 'inlineStr'
+    assert text(raw['C2']) == str(10**17)
+    assert raw['BO2'].find('m:v',NS).text == '360'
     assert raw['B2'].find('m:v',NS).text == '0'
     definitions, _ = cells(path,3)
     assert float(definitions['B2'].find('m:v',NS).text) == 1000
@@ -62,9 +64,9 @@ def test_export_preserves_raw_precision_formulas_missing_zero_and_layout(tmp_pat
 def test_small_raw_uses_reference_differences_and_no_frequency_keeps_ticks(tmp_path):
     path, _, _ = export(tmp_path, frequency=None, offset=0)
     detail, _ = cells(path,2)
-    assert text(detail['I1']) == '核总耗时 (ticks)'
-    assert detail['I2'].find('m:f',NS).text == "('原始Cycle'!Y2-'原始Cycle'!D2)"
-    assert detail['I2'].find('m:v',NS).text == '360'
+    assert text(detail['E1']) == '核总耗时 (ticks)'
+    assert detail['E2'].find('m:f',NS).text == "('原始Cycle'!X2-'原始Cycle'!C2)"
+    assert detail['E2'].find('m:v',NS).text == '360'
     definition, _ = cells(path,3)
     assert definition['B2'].find('m:v',NS) is None
 
@@ -106,9 +108,9 @@ def test_text_escaping_and_formula_like_strings_stay_text(tmp_path):
     report = analyzer.analyze(paths)
     selected = [json.loads(path.read_text()) for path in paths if path.name == 'sample_0001.json']
     path = tmp_path/'escaped.xlsx'; analyzer.exporter.export_workbook(path,report,selected,timer)
-    detail,_ = cells(path,2)
-    assert detail['A2'].attrib['t'] == 'inlineStr' and detail['A2'].find('m:f',NS) is None
-    assert '=SUM(A1)&<tag>"' in text(detail['A2'])
+    detail,_ = cells(path,1)
+    assert detail['B2'].attrib['t'] == 'inlineStr' and detail['B2'].find('m:f',NS) is None
+    assert '=SUM(A1)&<tag>"' in text(detail['B2'])
 
 
 def test_multi_case_cli_single_bounded_return_and_actual_route_identity(tmp_path):

@@ -122,12 +122,33 @@ def number(value):
             return value
 
 
+def display_table(rows, widths):
+    """Compact Excel view; CSV keeps full identity for offline joins and audit."""
+    drop = {'实验组', '服务器', '服务器组', '本地卡', '采集轮次',
+            'host_group', 'local_rank', 'iteration'}
+    pinned = {'算子', 'operation', 'Rank', 'rank', '核号', 'core',
+              '收发分工', '收发角色', 'role', '任务数', 'task_count',
+              'executing_rank', 'expert_rank', 'expert_id'}
+    head = rows[0]
+    keep = [i for i, h in enumerate(head) if h not in drop]
+    frozen = [i for i in keep if head[i] in pinned or head[i] == 'kernel' or head[i].startswith('kernel (')]
+    order = frozen + [i for i in keep if i not in frozen]
+    return ([[r[i] if i < len(r) else None for i in order] for r in rows],
+            [widths[min(i, len(widths)-1)] for i in order], len(frozen))
+
+
 def workbook(path, specs):
     with ZipFile(path, 'x', compression=ZIP_DEFLATED, compresslevel=6) as archive:
         writer._package(archive, [s[0] for s in specs])
         for i, (_, rows, widths, explanatory, numeric_from) in enumerate(specs, 1):
+            freeze = 0
+            if not explanatory:
+                old_headers = rows[0]
+                numeric_headers = set(old_headers[numeric_from-1:]) if numeric_from else set()
+                rows, widths, freeze = display_table(rows, widths)
+                numeric_from = next((j+1 for j, h in enumerate(rows[0]) if h in numeric_headers), None)
             writer._sheet(archive, i, rows, len(rows), max(map(len, rows)), widths,
-                          freeze=0 if explanatory else min(6, len(rows[0])-1), numeric_from=numeric_from,
+                          freeze=freeze, numeric_from=numeric_from,
                           explanatory=explanatory)
 
 
@@ -178,5 +199,6 @@ def merge_workbooks(output, entries):
         for i, data in enumerate(parts, first):
             target.writestr(f'xl/worksheets/sheet{i}.xml', data)
         for i, (_, rows) in enumerate(extra, first+len(parts)):
-            writer._sheet(target, i, rows, len(rows), len(rows[0]), [18, 12, 12, 12, 12, 12, 14, 12, 24],
-                          freeze=6, explanatory=False)
+            rows, widths, freeze = display_table(rows, [18, 12, 12, 12, 12, 12, 14, 12, 24])
+            writer._sheet(target, i, rows, len(rows), len(rows[0]), widths,
+                          freeze=freeze, explanatory=False)
