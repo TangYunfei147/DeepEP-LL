@@ -29,13 +29,13 @@ route body/epoch采用独立控制区，覆盖下文旧跨机计数描述。
 | 路径 | 机内 | 跨机 |
 |---|---|---|
 | dispatch 专家计数与 ready | MTE 32B 记录写 | 对称 GM 暂存；put 28B count/body → quiet → put 4B ready → quiet |
-| dispatch DIRECT / FIRST_HOP payload | 原 MTE 包写 | 每包 480B body 块批量 put → quiet → 32B flag 块批量 put → quiet |
+| dispatch DIRECT / FIRST_HOP payload | 原 MTE 包写 | 每包一次SO整包put；每批每peer一次quiet保护暂存复用 |
 | dispatch relay | 同逻辑组内 MTE | 按 G/机界约束不会产生跨机 relay |
 | dispatch 接收、轮询、清理、magic、prefix | 本地 MTE | 没有远端读取 |
 | combine stage 准备 | 本地输入 → UB → 本地对称 GM | 没有跨机 stage 准备 |
 | combine ready | 同逻辑组内 MTE；保留所有实际核 prepare-done 依赖 | 不跨机 |
 | combine partial 成员读取 | `LoadLocalPeer` 使用机内 MTE | 显式 trap；不调用 RDMA get |
-| combine DIRECT / partial 结果返回 | MTE 包写 | 对称暂存、body/flag 两阶段 RDMA put |
+| combine DIRECT / partial 结果返回 | MTE 包写 | 对称暂存、一次SO整包put＋一次quiet保护源复用 |
 | combine 最终聚合与 flag 清理 | 本地 MTE | 没有远端读取 |
 
 生产传输收口位于 `csrc/kernels/dispatch/low_latency/device/ll_transport.h`。`RemoteWrite` 只在显式 RDMA 模式且 peer 不同物理机时为真。`LoadLocalPeer` 同时检查机界、范围和本地 MTE 映射；partial 路径额外检查成员属于当前 G 组。生产代码不再调用 `aclshmemx_roce_qp_get_nbi`。

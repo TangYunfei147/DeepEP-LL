@@ -20,6 +20,18 @@ inline void Flags(uint8_t* p,uint32_t bytes,bool keep) {
             std::memcpy(p+b+480U+w*4U,&value,4U);
         }
 }
+// Combine probes one value from every 32B flag block. It may become ready at
+// the FIRST word of the final flag, before its other seven words are written.
+inline void CheckCombineReady(const Model::Request& r) {
+    float marker; std::memcpy(&marker,r.src+480U,4U);
+    if (marker!=1.0f) return; // KeepFlags is dispatch's separate marker contract.
+    float sum=0;
+    for(uint32_t b=0;b<r.bytes;b+=512U) {
+        float value; std::memcpy(&value,r.dst+b+480U,4U); sum+=value;
+    }
+    if(sum==float(r.bytes/512U))
+        for(uint32_t b=0;b<r.bytes;b+=512U) assert(std::memcmp(r.dst+b,r.src+b,480U)==0);
+}
 // Default 2KiB fragments. Reorder ALL non-final fragments adversarially;
 // the SO final fragment cannot arrive until those predecessors retire.
 // Within a fragment expose one word at a time, including a partial tail flag.
@@ -29,7 +41,10 @@ inline void Deliver(const Model::Request& r) {
     auto fragment=[&](uint32_t begin,uint32_t end) {
         for (uint32_t b=begin;b<end;b+=4U) {
             std::memcpy(r.dst+b,r.src+b,4U);
-            if (b%512U>=480U && b+4U<r.bytes) assert(Probe(r.dst,r.bytes)==Receive::State::Pending);
+            if (b%512U>=480U) {
+                if (b+4U<r.bytes) assert(Probe(r.dst,r.bytes)==Receive::State::Pending);
+                CheckCombineReady(r);
+            }
         }
     };
     for (uint32_t end=last;end;end-=2048U) fragment(end-2048U,end);

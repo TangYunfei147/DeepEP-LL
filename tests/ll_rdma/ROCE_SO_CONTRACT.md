@@ -10,7 +10,7 @@
 
 > 跨机走ROCE的时候，每个WQE的尾片中存在so特性，so能保证该so前面的数据先到达，且片内保序，单片默认2KB。
 
-本项目后续设计采用这一目标RoCE契约。本次没有执行硬件验证，也没有修改SDK、kernel、
+本项目后续设计采用这一目标RoCE契约。最初持久化时没有执行硬件验证，也没有修改SDK、kernel、
 wire布局或通信协议；该记录不能作为新方案已经实现或性能改善的证据。
 2KB描述网络分片，完整WQE消息可以跨多个分片。它与当前每512B wire块中的480B body
 和32B flag是不同层次的概念。
@@ -41,7 +41,7 @@ wire布局或通信协议；该记录不能作为新方案已经实现或性能�
 5. 旧FLAG清理或epoch识别、零消息、同stream顺序及窗口复用分别证明。变更布局时
    同步Host容量、sender/receiver和协议版本，全部rank使用匹配wheel。
 
-## 当前代码仍是什么
+## 持久化时的实现（协议9，历史）
 
 - dispatch主跨机路径：`DispatchRdmaBatch::Enqueue/Flush`，完整packet首FLAG置0后put；
   body quiet后另put首32B FLAG，再quiet保护源暂存复用。
