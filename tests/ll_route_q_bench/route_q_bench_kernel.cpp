@@ -50,9 +50,8 @@ extern "C" [[bisheng::core_ratio(0, 1)]] __global__ __aicore__ void ll_route_q_b
     idsGm.SetGlobalBuffer(reinterpret_cast<__gm__ int32_t*>(idsAddress));
     // 禁用 L2 命中：每一轮都按 HBM 时延重新取 8KB 路由表。
     idsGm.SetL2CacheHint(CacheMode::CACHE_MODE_DISABLE);
-    GlobalTensor<uint64_t> cycleGm;
-    cycleGm.SetGlobalBuffer(reinterpret_cast<__gm__ uint64_t*>(cycleAddress));
-
+    // 计时结果按标量直写 GM（与 device profile 的做法一致，避免 64 位 GlobalTensor 下标写入）。
+    __gm__ uint64_t* cycleOut = reinterpret_cast<__gm__ uint64_t*>(cycleAddress);
     for (uint32_t rep = 0; rep < reps; ++rep) {
         // 上一轮的 UB 读者必须先退出，才允许 MTE2 覆盖同一块 ids。
         if (rep != 0U) {
@@ -83,7 +82,7 @@ extern "C" [[bisheng::core_ratio(0, 1)]] __global__ __aicore__ void ll_route_q_b
                 reinterpret_cast<__ubuf__ int32_t*>(table.GetPhyAddr()),
                 reinterpret_cast<__ubuf__ int32_t*>(counts.GetPhyAddr()), routes, 8U, int32_t(begin), owned, stride);
         }
-        cycleGm[uint64_t(core) * reps + rep] = GetSystemCycle() - repStart;
+        cycleOut[uint64_t(core) * reps + rep] = GetSystemCycle() - repStart;
     }
 
     if (mode == 0U)
