@@ -21,7 +21,8 @@ __aicore__ inline void SyncEvent(uint32_t id)
 
 // routeAddress：experts * stride 个 int32，每专家一段升序路由下标。
 // countAddress：experts 个 int32，每专家实际条数。
-// cycleAddress：每核 4 个 uint64，word0 为本次计算的周期数。
+// cycleAddress：reps 个 uint64 / 核，记录每一轮的周期数（core*reps + rep）。
+// 每一轮都把路由表从 GM 重新读入（L2 提示关闭），因此单轮时间包含真实取数。
 extern "C" [[bisheng::core_ratio(0, 1)]] __global__ __aicore__ void ll_route_q_bench_kernel(
     GM_ADDR idsAddress, GM_ADDR routeAddress, GM_ADDR countAddress, GM_ADDR cycleAddress, uint32_t routes,
     uint32_t experts, uint32_t stride, uint32_t mode, uint32_t reps)
@@ -33,7 +34,7 @@ extern "C" [[bisheng::core_ratio(0, 1)]] __global__ __aicore__ void ll_route_q_b
     const uint32_t begin = core * base + (core < remainder ? core : remainder);
 
     const uint32_t vec = uint32_t(GetVecLen() / sizeof(int32_t));
-    // VF 的 LoadAlign 每次读满一个向量，尾部必须补齐，-1 不会命中任何专家。
+    // VF 的 LoadAlign 每次读满一个向量；尾部 padding 由 Host 用 -1 填好，不会命中任何专家。
     const uint32_t idsItems = (routes + vec - 1U) / vec * vec + vec;
 
     TPipe pipe;
@@ -45,19 +46,28 @@ extern "C" [[bisheng::core_ratio(0, 1)]] __global__ __aicore__ void ll_route_q_b
     auto table = tableBuf.Get<int32_t>();
     auto counts = countBuf.Get<int32_t>();
 
-    Duplicate<int32_t>(ids, -1, idsItems);
-    SyncEvent<HardEvent::V_MTE2>(0U);
     GlobalTensor<int32_t> idsGm;
     idsGm.SetGlobalBuffer(reinterpret_cast<__gm__ int32_t*>(idsAddress));
-    DataCopyPad(ids, idsGm, {1U, routes * uint32_t(sizeof(int32_t)), 0U, 0U, 0U}, {false, 0U, 0U, 0});
-    // scalar 分支由 Scalar 读 UB，VF 分支由向量读 UB，两者等待的事件不同。
-    if (mode == 0U)
-        SyncEvent<HardEvent::MTE2_S>(0U);
-    else
-        SyncEvent<HardEvent::MTE2_V>(0U);
+    // 禁用 L2 命中：每一轮都按 HBM 时延重新取 8KB 路由表。
+    idsGm.SetL2CacheHint(CacheMode::CACHE_MODE_DISABLE);
+    GlobalTensor<uint64_t> cycleGm;
+    cycleGm.SetGlobalBuffer(reinterpret_cast<__gm__ uint64_t*>(cycleAddress));
 
-    const uint64_t start = GetSystemCycle();
     for (uint32_t rep = 0; rep < reps; ++rep) {
+        // 上一轮的 UB 读者必须先退出，才允许 MTE2 覆盖同一块 ids。
+        if (rep != 0U) {
+            if (mode == 0U)
+                SyncEvent<HardEvent::S_MTE2>(0U);
+            else
+                SyncEvent<HardEvent::V_MTE2>(0U);
+        }
+        const uint64_t repStart = GetSystemCycle();
+        DataCopyPad(ids, idsGm, {1U, idsItems * uint32_t(sizeof(int32_t)), 0U, 0U, 0U}, {false, 0U, 0U, 0});
+        // scalar 分支由 Scalar 读 UB，VF 分支由向量读 UB，两者等待的事件不同。
+        if (mode == 0U)
+            SyncEvent<HardEvent::MTE2_S>(0U);
+        else
+            SyncEvent<HardEvent::MTE2_V>(0U);
         if (mode == 0U) {
             for (uint32_t expert = 0; expert < owned; ++expert) {
                 const int32_t target = int32_t(begin + expert);
@@ -73,8 +83,8 @@ extern "C" [[bisheng::core_ratio(0, 1)]] __global__ __aicore__ void ll_route_q_b
                 reinterpret_cast<__ubuf__ int32_t*>(table.GetPhyAddr()),
                 reinterpret_cast<__ubuf__ int32_t*>(counts.GetPhyAddr()), routes, 8U, int32_t(begin), owned, stride);
         }
+        cycleGm[uint64_t(core) * reps + rep] = GetSystemCycle() - repStart;
     }
-    const uint64_t end = GetSystemCycle();
 
     if (mode == 0U)
         SyncEvent<HardEvent::S_MTE3>(1U);
@@ -88,9 +98,6 @@ extern "C" [[bisheng::core_ratio(0, 1)]] __global__ __aicore__ void ll_route_q_b
                     {1U, owned * stride * uint32_t(sizeof(int32_t)), 0U, 0U, 0U});
         DataCopyPad(countGm[begin], counts, {1U, owned * uint32_t(sizeof(int32_t)), 0U, 0U, 0U});
     }
-    SyncEvent<HardEvent::MTE3_S>(2U);
-    // 计时结果用标量直写，避免再走一次 MTE3。
-    reinterpret_cast<__gm__ uint64_t*>(cycleAddress)[uint64_t(core) * 4U] = end - start;
     PipeBarrier<PIPE_ALL>();
 }
 

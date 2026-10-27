@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # 一键：编译（仅依赖 CANN/bisheng，不需要 shmem、catlass）→ 单卡跑 → 出图。
 #   bash tests/ll_route_q_bench/run.sh
+# 计时口径：每核每轮用 GetSystemCycle 采样，路由表每轮以 CACHE_MODE_DISABLE 从 HBM 重读；
+# 默认 100 轮，丢弃前 50 轮，后 50 轮按“最慢核”给出 avg / p50 / p99。
 # 可透传参数，例如：
 #   bash tests/ll_route_q_bench/run.sh --tokens 256 --topk 8 --experts 384 --reps 200 --cores 1,2,4,8,16,32,64
 # 环境变量：DEVICE_ID（默认 0）、CANN_ENV（未设置 ASCEND_HOME_PATH 时指向 set_env.sh）。

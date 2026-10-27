@@ -3,6 +3,7 @@
 #include <acl/acl.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <fstream>
@@ -28,7 +29,7 @@ struct Options {
     uint32_t topK = 8;       // --num-topk
     uint32_t experts = 384;  // --num-experts
     uint32_t stride = 32;    // 每专家表容量（个 int32）
-    uint32_t reps = 100;
+    uint32_t reps = 100;     // 采样轮数；统计只用后一半，前一半当热身
     std::string cores;       // 逗号分隔；空表示默认扫描
     std::string out = "route_q_bench.csv";
 };
@@ -126,8 +127,12 @@ int main(int argc, char** argv)
 {
     try {
         const Options opt = Parse(argc, argv);
+        if (opt.reps < 2U) throw std::invalid_argument("--reps must be at least 2");
         const uint32_t tokens = opt.tokens, topK = opt.topK, experts = opt.experts, stride = opt.stride;
         const uint32_t routeItems = tokens * topK;
+        // kernel 的向量读取会越过 routes 尾部，Host 侧预留并填 -1，避免命中任何专家。
+        const uint32_t idsItems = routeItems + 4096U;
+        const uint32_t usedReps = opt.reps - opt.reps / 2U;
 
         auto ids = BuildRoutes(tokens, topK, experts);
         const Reference ref = BuildReference(ids, experts);
@@ -156,25 +161,27 @@ int main(int argc, char** argv)
         void* routeDev = nullptr;
         void* countDev = nullptr;
         void* cycleDev = nullptr;
-        Check(aclrtMalloc(&idsDev, uint64_t(routeItems) * sizeof(int32_t), ACL_MEM_MALLOC_HUGE_FIRST), "ids alloc");
+        Check(aclrtMalloc(&idsDev, uint64_t(idsItems) * sizeof(int32_t), ACL_MEM_MALLOC_HUGE_FIRST), "ids alloc");
         Check(aclrtMalloc(&routeDev, uint64_t(experts) * stride * sizeof(int32_t), ACL_MEM_MALLOC_HUGE_FIRST),
               "route alloc");
         Check(aclrtMalloc(&countDev, uint64_t(experts) * sizeof(int32_t), ACL_MEM_MALLOC_HUGE_FIRST), "count alloc");
-        Check(aclrtMalloc(&cycleDev, uint64_t(maxCores) * 4U * sizeof(uint64_t), ACL_MEM_MALLOC_HUGE_FIRST),
+        Check(aclrtMalloc(&cycleDev, uint64_t(maxCores) * opt.reps * sizeof(uint64_t), ACL_MEM_MALLOC_HUGE_FIRST),
               "cycle alloc");
-        Check(aclrtMemcpy(idsDev, uint64_t(routeItems) * sizeof(int32_t), ids.data(),
-                          uint64_t(routeItems) * sizeof(int32_t), ACL_MEMCPY_HOST_TO_DEVICE),
+        std::vector<int32_t> idsHost(idsItems, -1);
+        std::copy(ids.begin(), ids.end(), idsHost.begin());
+        Check(aclrtMemcpy(idsDev, uint64_t(idsItems) * sizeof(int32_t), idsHost.data(),
+                          uint64_t(idsItems) * sizeof(int32_t), ACL_MEMCPY_HOST_TO_DEVICE),
               "ids upload");
         aclrtStream stream = nullptr;
         Check(aclrtCreateStream(&stream), "stream");
 
         std::vector<int32_t> routeHost(uint64_t(experts) * stride);
         std::vector<int32_t> countHost(experts);
-        std::vector<uint64_t> cycleHost(uint64_t(maxCores) * 4U);
+        std::vector<uint64_t> cycleHost(uint64_t(maxCores) * opt.reps);
 
         std::ofstream csv(opt.out);
         if (!csv) throw std::runtime_error("cannot write " + opt.out);
-        csv << "mode,cores,reps,routes,experts,us_per_rep,us_total\n";
+        csv << "mode,cores,reps,used_reps,routes,experts,us_avg,us_p50,us_p99\n";
 
         std::cout << "shape: routes=" << routeItems << " experts=" << experts << " stride=" << stride
                   << " reps=" << opt.reps << " available_aiv=" << available << "\n";
@@ -197,8 +204,8 @@ int main(int argc, char** argv)
                 Check(aclrtMemcpy(countHost.data(), countHost.size() * sizeof(int32_t), countDev,
                                   countHost.size() * sizeof(int32_t), ACL_MEMCPY_DEVICE_TO_HOST),
                       "count download");
-                Check(aclrtMemcpy(cycleHost.data(), uint64_t(useCores) * 4U * sizeof(uint64_t), cycleDev,
-                                  uint64_t(useCores) * 4U * sizeof(uint64_t), ACL_MEMCPY_DEVICE_TO_HOST),
+                Check(aclrtMemcpy(cycleHost.data(), uint64_t(useCores) * opt.reps * sizeof(uint64_t), cycleDev,
+                                  uint64_t(useCores) * opt.reps * sizeof(uint64_t), ACL_MEMCPY_DEVICE_TO_HOST),
                       "cycle download");
 
                 for (uint32_t expert = 0; expert < experts; ++expert) {
@@ -211,17 +218,28 @@ int main(int argc, char** argv)
                                                      std::to_string(useCores) + " expert=" + std::to_string(expert));
                 }
 
-                // 每核只写 word0，因此按 4 个 uint64 的步长取本核周期数再取最大。
-                uint64_t slowest = 0U;
-                for (uint32_t core = 0U; core < useCores; ++core)
-                    slowest = std::max(slowest, cycleHost[uint64_t(core) * 4U]);
-                const double totalUs = double(slowest) / 1000.0;  // 系统计数器：1000 ticks/us
-                const double perRepUs = totalUs / double(opt.reps);
-                csv << mode << ',' << useCores << ',' << opt.reps << ',' << routeItems << ',' << experts << ','
-                    << perRepUs << ',' << totalUs << '\n';
+                // 每一轮取“最慢核”的周期数作为该轮的 kernel 时延；只用后一半采样做统计。
+                std::vector<uint64_t> samples;
+                samples.reserve(usedReps);
+                for (uint32_t rep = opt.reps - usedReps; rep < opt.reps; ++rep) {
+                    uint64_t slowest = 0U;
+                    for (uint32_t core = 0U; core < useCores; ++core)
+                        slowest = std::max(slowest, cycleHost[uint64_t(core) * opt.reps + rep]);
+                    samples.push_back(slowest);
+                }
+                std::vector<uint64_t> sorted = samples;
+                std::sort(sorted.begin(), sorted.end());
+                double sumTicks = 0.0;
+                for (uint64_t value : samples) sumTicks += double(value);
+                // 系统计数器：1000 ticks/us。
+                const double avgUs = sumTicks / double(samples.size()) / 1000.0;
+                const double p50Us = double(sorted[(sorted.size() - 1U) / 2U]) / 1000.0;
+                const double p99Us = double(sorted[size_t(std::ceil(0.99 * double(sorted.size()))) - 1U]) / 1000.0;
+                csv << mode << ',' << useCores << ',' << opt.reps << ',' << usedReps << ',' << routeItems << ','
+                    << experts << ',' << avgUs << ',' << p50Us << ',' << p99Us << '\n';
                 csv.flush();
-                std::cout << (mode == 0U ? "scalar" : "vf    ") << " cores=" << useCores
-                          << " us/rep=" << perRepUs << "\n";
+                std::cout << (mode == 0U ? "scalar" : "vf    ") << " cores=" << useCores << " avg=" << avgUs
+                          << "us p50=" << p50Us << "us p99=" << p99Us << "us\n";
             }
         }
 
