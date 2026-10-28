@@ -2,7 +2,7 @@
 #define DEEPEP_LL_CORE_CONFIG_H
 #include <cstdint>
 namespace DispatchDedup {
-constexpr uint32_t kLlCoreProtocolVersion = 12U; // eight QP owners per peer, distributed across all sender cores
+constexpr uint32_t kLlCoreProtocolVersion = 13U; // eight QP owners per peer, distributed across all sender cores
 // Capacity is not participation. Pure AIV launches use the queried even count.
 constexpr uint32_t kLlMaxCoreNum = 72U;
 constexpr uint32_t kLlMaxRecvCoreNum = kLlMaxCoreNum / 2U;

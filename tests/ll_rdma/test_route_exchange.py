@@ -11,9 +11,9 @@ def test_count_wiring_skips_empty_cores_and_retains_source_identity():
     assert send.index('start=start<hostFirst?hostFirst:start') < send.index('statusCntAlign_ =')
     empty=send.split('if (count == 0U && pairedRoutes_ && aivId_ != 0U)',1)[1].split('// 3.',1)[0]
     assert 'return;' in empty and 'routeExchange_.' not in empty
-    assert (send.index('routeExchange_.PostFrame') < send.index('CountByVectorRange(start, end, maskBytes)')
+    assert (send.index('routeExchange_.PostBody') < send.index('CountByVectorRange(start, end, maskBytes)')
             < send.index('if (count) SendExpertCntRange(start, end)')
-            < send.index('routeExchange_.ReadPeer'))
+            < send.index('routeExchange_.PublishCommit') < send.index('routeExchange_.ReadPeer'))
     assert 'publishingSource_=routeExchange_.Peer()' in send
     assert send.index('routeExchange_.ReadPeer') < send.index('routeExchange_.FinishSend')
     # Paired SendCnt clipped the whole expert range once, before both sources.
@@ -30,11 +30,11 @@ def test_production_exchange_with_autonomous_network_and_delays(tmp_path):
         str(Path(__file__).with_name('route_exchange_test.cpp')),'-o',str(exe)],check=True,timeout=180)
     result=subprocess.run([str(exe)],check=True,capture_output=True,text=True,timeout=60)
     assert 'PASS paired route exchange' in result.stdout
-    assert '1 put / 1 quiet' in result.stdout
+    assert '2 puts / 2 quiets' in result.stdout
     assert 'alternating dispatch banks without rank barrier' in result.stdout
     assert 'existing combine completion boundary' in result.stdout
-    assert 'PASS FinishSend retires outbound SO frame without peer or local-reader join' in result.stdout
-    assert 'PASS CQ failure retains source even after SO readiness' in result.stdout
+    assert 'PASS FinishSend retires outbound commit without peer or local-reader join' in result.stdout
+    assert 'PASS body CQ failure prevents commit' in result.stdout
     print(result.stdout)
 
 @pytest.mark.parametrize('b,k,e,cores',[(1,8,384,56),(2,8,384,56),(32,8,384,56),

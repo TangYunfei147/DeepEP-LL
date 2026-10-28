@@ -1,3 +1,5 @@
+> 当前为协议13对照版：保留每peer 8QP、完整S核池归属、packet SO及combine；仅配对路由恢复body put → quiet → commit put → quiet。下面路由SO章节记录待单独重新应用的优化，不是本提交行为。所有rank须重编完整wheel。
+
 # 协议12：每个peer的8核集合覆盖完整S核池
 
 2026-10-28。协议11误将所有peer固定到S0～S7；协议12按用户纠正，改为每个peer独立的8核集合，跨peer覆盖完整S核池（56 AIV时为28个S核）。路由SO保持协议11实现。SDK保持原实现，所有rank必须更新完整wheel，旧协议不能混装。本文覆盖旧指南中“每AIV一个QP”和“路由表body/commit两次put”的当前行为描述。
