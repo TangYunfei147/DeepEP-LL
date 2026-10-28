@@ -42,7 +42,7 @@ LL_PACKET_PLAN_INLINE bool LlOwnsRemotePacket(uint32_t taggedQ, uint32_t core) {
     return (taggedQ & kLlRemotePacket) && ((taggedQ >> 16U) & 63U) == core;
 }
 LL_PACKET_PLAN_INLINE uint32_t LlRemotePacketQp(uint32_t taggedQ) {
-    return (taggedQ >> 22U) & 7U;
+    return (taggedQ >> 22U) & 63U;
 }
 
 // Reuse the retired qSub scratch as a peer/count hash table. At most routes
@@ -68,7 +68,7 @@ LL_PACKET_PLAN_INLINE uint32_t LlBuildRemotePacketOwners(Ids ids, Words q, Words
             entry = scratch.GetValue(slot);
         }
         const uint32_t ordinal = entry >> 16U;
-        const uint32_t qp = ordinal % LlRdma::kQpCount;
+        const uint32_t qp = ordinal % sendCores;
         const uint32_t owner = LlDispatchQpOwner(rank, world, sendCores, peer, qp, routes);
         scratch.SetValue(slot, key | ((ordinal + 1U) << 16U));
         q.SetValue(index, (q.GetValue(index) & kLlRouteQMask) | kLlRemotePacket | (owner << 16U) | (qp << 22U));

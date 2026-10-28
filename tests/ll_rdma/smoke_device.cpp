@@ -21,7 +21,7 @@ extern "C" [[bisheng::core_ratio(0,1)]] __global__ __aicore__ void ll_rdma_smoke
     auto packet=packetBuf.Get<uint8_t>(), received=readBuf.Get<uint8_t>();
     auto record=controlBuf.Get<uint32_t>(); auto scratch=scratchBuf.Get<uint8_t>();
     const uint32_t rank=uint32_t(a->rank), peer=1U-rank;
-    const uint32_t workers=LlTransport::RemoteWrite(a,peer)?LlRdma::kQpCount:GetBlockNum();
+    const uint32_t workers=LlTransport::RemoteWrite(a,peer)?GetBlockNum():GetBlockNum();
     if(GetBlockIdx()>=workers) return;
     for(uint32_t core=GetBlockIdx();core<GetBlockNum();core+=workers) {
     const uint32_t writer=epoch%2U;

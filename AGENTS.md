@@ -1,3 +1,5 @@
+> 当前分支为新增每物理核QP基线，协议22，覆盖下方历史8QP说明。见 [PER_CORE_QP_AB.md](tests/ll_rdma/PER_CORE_QP_AB.md)。原四个A/B分支不改。
+
 > 本分支属于四版独立性能A/B：当前 kernel/ll-ndr-ab-base。当前版本与对照关系以 [tests/ll_rdma/FOUR_WAY_AB.md](tests/ll_rdma/FOUR_WAY_AB.md) 为准，下方历史协议描述不作为当前安装身份。
 
 # 目标RoCE通信契约

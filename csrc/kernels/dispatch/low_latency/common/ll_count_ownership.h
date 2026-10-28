@@ -9,8 +9,7 @@ __aicore__ inline
 inline
 #endif
 uint32_t LlCountProducerCores(uint32_t cores, uint32_t bs, uint32_t world, uint64_t routes, bool rdma) {
-    const bool paired = rdma && world == 32U && routes <= kRouteExchangeMaxBytes / sizeof(int32_t);
-    if (rdma && world > kLlPhysicalRanksPerHost && !paired) return LlRdma::kQpCount;
+    (void)world; (void)routes; (void)rdma;
     return bs < kEpServerDedupAllCoreCountBsThreshold ? cores : cores / 2U;
 }
 }

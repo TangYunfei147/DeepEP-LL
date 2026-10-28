@@ -29,7 +29,7 @@ int main() {
     DispatchDedup::CommArgs args;
     args.rank=0; args.rankSize=32; args.reserved0=16; args.peerMemBytes=3U<<20;
     args.reservedAddresses[0]=local.data(); args.reservedAddresses[1]=stages.data();
-    args.reservedConfig[0]=LlRdma::kBackend; args.reservedConfig[1]=8;
+    args.reservedConfig[0]=LlRdma::kBackend; args.reservedConfig[1]=cores;
     args.reservedAddresses[2]=stages.data()+16U*LlRdma::kCoreBytes;
     cores=16; core=3;
     unsigned cases=0;
@@ -135,13 +135,13 @@ int main() {
     Model::pending.clear();
     // One physical S24 owns different QP indices for different peers. Flush
     // must retire the exact peer/QP pair, not the hardware core number.
-    cores=56;core=24;
+    cores=56;core=24;args.reservedConfig[1]=cores;
     stages.resize(uint64_t(cores)*LlRdma::kCoreBytes);
     args.reservedAddresses[1]=stages.data();args.reservedAddresses[2]=stages.data()+stages.size();
-    assert(DispatchDedup::LlDispatchQpOwner(0,32,28,17,0,8)==core);
-    assert(DispatchDedup::LlDispatchQpOwner(0,32,28,20,4,8)==core);
+    assert(DispatchDedup::LlDispatchQpOwner(0,32,28,17,24,8)==core);
+    assert(DispatchDedup::LlDispatchQpOwner(0,32,28,20,24,8)==core);
     Model::onPost=[&](Model::Request& req){
-        assert(req.qp==(req.peer==17?0U:4U));
+        assert(req.qp==core);
         assert(req.src>=stages.data()+uint64_t(core)*LlRdma::kCoreBytes);
         assert(req.src<stages.data()+uint64_t(core+1)*LlRdma::kCoreBytes);
     };
@@ -149,7 +149,7 @@ int main() {
     batch.Init(&args,4096);
     for(uint32_t i=0;i<3;++i){
         std::fill(ub.begin(),ub.end(),uint8_t(i+9));flags(ub.data(),4096,true);
-        batch.Enqueue(i==1?20:17,1000000U+i*16384U,{ub.data()},i==1?4:0);
+        batch.Enqueue(i==1?20:17,1000000U+i*16384U,{ub.data()},core);
     }
     Model::pending.push_back({remote.data()+3500000,local.data()+3500000,1U,17U,4U});
     batch.Flush({ub.data()});

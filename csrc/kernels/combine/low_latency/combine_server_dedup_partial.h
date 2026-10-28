@@ -136,9 +136,8 @@ private:
         uint32_t count = 0U, owned = 0U;
         more = false;
         const uint32_t localCore = GetBlockIdx() - recvCores_;
-        const uint32_t workers = LlTransport::RemoteWrite(args_, server * Group) ?
-                                 LlRdma::kCombinePartialQps : recvCores_;
-        // Four remote workers can own more rows than the old R-core split.
+        const uint32_t workers = recvCores_;
+        // All R cores own their physical QPs. Keep the existing bounded paging.
         // Page within the existing row buffer instead of enlarging live UB.
         const uint32_t capacity = EpCombineM4TaskBytes(tokens_, recvCores_) / sizeof(int32_t);
         const uint32_t vectorBytes = EpCombineAlign(scanRows_ * 4U, 256U);
@@ -277,7 +276,7 @@ private:
         // body and never reads the SDK's borrowed first 128 bytes.
         LlTransport::Packet(args_, source, window_ + COMBINE_DEDUP_EP_SERVER_DEDUP_SHARED_DATA_OFFSET +
             (uint64_t(token) * k_ + topk) * packetBytes_, output, packetBytes_, 7U, false,
-            LlRdma::kCombineDirectQps + GetBlockIdx() - recvCores_);
+            GetBlockIdx());
         SetFlag<HardEvent::MTE3_V>(lane);
     }
 

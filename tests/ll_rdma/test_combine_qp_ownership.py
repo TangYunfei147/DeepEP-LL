@@ -98,7 +98,7 @@ struct Fixture {
  void LoadTask(uint32_t row){row_=row;for(unsigned j=0;j<3;++j)t2[j]=triples[row*3+j];t3[0]=1;}
  template<class T> void Aggregate(uint32_t,uint32_t,uint32_t){}
  void Send(uint32_t,uint32_t source,uint32_t,uint32_t){
- if(LlTransport::RemoteWrite(args_,source))assert(hardwareCore-recvCores_<4);
+ if(LlTransport::RemoteWrite(args_,source))assert(hardwareCore-recvCores_<recvCores_);
  visits.push_back(row_);
  }
 ''' + process + '\n' + select + r'''
@@ -123,11 +123,11 @@ int main(){
   std::vector<unsigned> partialSeen(n),directSeen(n);
   for(unsigned c=0;c<cores/2;++c){
    hardwareCore=cores/2+c;Fixture f(0,world,cores,types,triples);assert(f.Process()==f.visits.size());
-   for(auto row:f.visits){assert(types[row]==2);++partialSeen[row];if(ranks[row]>=16)assert(c<4);}
-   Direct d(0,world,c,cores,ranks);d.Process();for(auto row:d.visits){++directSeen[row];if(ranks[row]>=16)assert(c<4);}
+   for(auto row:f.visits){assert(types[row]==2);++partialSeen[row];if(ranks[row]>=16)assert(c<cores/2);}
+   Direct d(0,world,c,cores,ranks);d.Process();for(auto row:d.visits){++directSeen[row];if(ranks[row]>=16)assert(c<cores/2);}
    for(auto& eventsForType:events)for(bool live:eventsForType)assert(!live);
   }
   for(unsigned i=0;i<n;++i){assert(partialSeen[i]==unsigned(types[i]==2));assert(directSeen[i]==1);}
  }
 }
-''', 'combine-eight-qp')
+''', 'combine-per-core-qp')

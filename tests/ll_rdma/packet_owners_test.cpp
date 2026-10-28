@@ -23,21 +23,15 @@ int main() {
         std::set<unsigned> all;
         for(unsigned peer=0;peer<world;++peer)if(!LlSameHost(rank,peer)) {
             std::set<unsigned> owners;
-            for(unsigned qp=0;qp<8;++qp) {
+            for(unsigned qp=0;qp<sendCores;++qp) {
                 auto core=LlDispatchQpOwner(rank,world,sendCores,peer,qp,routes);
-                assert(core<sendCores);owners.insert(core);all.insert(core);
+                assert(core==qp);owners.insert(core);all.insert(core);
             }
-            assert(owners.size()==8);
-            if(world==32 && routes<=8192) {
-                if(peer==(rank^16U))assert(LlDispatchQpOwner(rank,world,sendCores,peer,0,routes)==0);
-            } else {
-                const auto countCore=peer/(world/8);
-                assert(LlDispatchQpOwner(rank,world,sendCores,peer,countCore,routes)==countCore);
-            }
+            assert(owners.size()==sendCores);
         }
         assert(all.size()==sendCores);
     }
-    for(unsigned qp=0;qp<8;++qp)assert(LlDispatchQpOwner(0,32,28,17,qp,8)==(24+qp)%28);
+    for(unsigned qp=0;qp<28;++qp)assert(LlDispatchQpOwner(0,32,28,17,qp,8)==qp);
     for(unsigned world:{16U,32U,64U,128U,256U}) for(unsigned b:{1U,2U,17U,256U})
     for(unsigned k:{1U,8U,16U,32U}) for(unsigned hot:{0U,1U}) {
         const unsigned e=world*2U,group=LlGroupForWorld(world),local=2U,rank=world/2U;
@@ -98,14 +92,14 @@ int main() {
             for(const auto& [peer,packets]:remote) {
                 for(unsigned ordinal=0;ordinal<packets.size();++ordinal) {
                     const auto i=packets[ordinal];
-                    assert(LlRemotePacketQp(q[i])==ordinal%8);
-                    const auto owner=LlDispatchQpOwner(rank,world,sendCores,peer,ordinal%8,b*k);
+                    assert(LlRemotePacketQp(q[i])==ordinal%sendCores);
+                    const auto owner=LlDispatchQpOwner(rank,world,sendCores,peer,ordinal%sendCores,b*k);
                     assert(LlOwnsRemotePacket(q[i],core)==(owner==core));
                     if(LlOwnsRemotePacket(q[i],core)){++seen[i];++checked;}
                 }
             }
             assert(checked==owned);
-            if(owned && b==1 && core>=8)noninitialCoreAtB1=true;
+            if(owned && core>=8)noninitialCoreAtB1=true;
             for(unsigned i=0;i<b*k;++i) {
                 assert((q[i]&kLlRouteQMask)==baseQ[i]);
                 if(expectedMask[i]==UINT64_MAX || LlSameHost(rank,ids[i]/local))assert(!(q[i]&kLlRemotePacket));
@@ -116,5 +110,5 @@ int main() {
         ++cases;
     }
     assert(noninitialCoreAtB1);
-    std::cout<<"PASS "<<cases<<" packet plans: unchanged dedup/first-hop/q, per-peer round robin, unique eight QP owners across the full S-core pool\n";
+    std::cout<<"PASS "<<cases<<" packet plans: unchanged dedup/first-hop/q, per-peer round robin, unique physical-core QP owners across the full S-core pool\n";
 }

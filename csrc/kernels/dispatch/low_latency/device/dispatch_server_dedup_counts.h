@@ -190,12 +190,7 @@ __aicore__ inline void ServerDedupCounts::SendCnt()
     // 否则只由接收核统计；每个参与核读取完整路由，但只负责自己的专家区间。
     const uint32_t cores = countCores_;
     uint32_t start = 0, end = 0, count = 0;
-    if (packedFrames_ && !pairedRoutes_) {
-        // Fallback remote count frames use the same eight sole QP owners as
-        // payload. Each owner finishes its count puts/quiets before payload.
-        if (aivId_ < LlRdma::kQpCount)
-            SplitToCore(rscvStatusNum_, cores, aivId_, start, end, count);
-    } else if (useAllCoreCount_ || aivId_ >= aivUsedAllToAll_) {
+    if (useAllCoreCount_ || aivId_ >= aivUsedAllToAll_) {
         const uint32_t core = useAllCoreCount_ ? aivId_ : aivId_ - aivUsedAllToAll_;
         SplitToCore(rscvStatusNum_, cores, core, start, end, count);
     }

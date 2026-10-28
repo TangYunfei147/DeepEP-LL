@@ -16,7 +16,7 @@ def test_post_dedup_packets_rotate_by_actual_peer(tmp_path):
     subprocess.run([zig, 'c++', '-std=c++17', '-O2', '-UNDEBUG', '-I'+str(ROOT/'csrc'),
         str(Path(__file__).with_name('packet_owners_test.cpp')), '-o', str(exe)], check=True, timeout=180)
     result = subprocess.run([str(exe)], check=True, capture_output=True, text=True, timeout=60)
-    assert 'unique eight QP owners' in result.stdout
+    assert 'unique physical-core QP owners' in result.stdout
 
 
 def test_remote_owner_preserves_original_q_and_weight_tail(tmp_path):
@@ -85,11 +85,11 @@ def test_count_ownership_and_host_ub_admission_match(tmp_path):
 #include "kernels/dispatch/low_latency/common/ep_memory_server_dedup_layout.h"
 using namespace DispatchDedup;
 int main(){
- static_assert(LlRdma::kQpCount==8 && LlRdma::kCombineDirectQps+LlRdma::kCombinePartialQps==8);
+
  for(unsigned cores=16;cores<=72;cores+=2)for(unsigned world:{16U,32U,64U,128U,256U})
  for(unsigned b:{1U,8U,256U})for(bool rdma:{false,true}){
   const auto workers=LlCountProducerCores(cores,b,world,b*8U,rdma);
-  assert(workers==(rdma && world>32?8U:cores));
+  assert(workers==cores);
   for(auto mode:{EpServerDedupInputMode::Plain16,EpServerDedupInputMode::PrequantizedFp8Packs}){
    EpMemoryServerDedupLayout layout;
    assert(BuildDispatchServerDedupLayout(world,b,3584,8,512,&layout,mode,cores,rdma)==DISPATCH_DEDUP_SUCCESS);
@@ -97,7 +97,7 @@ int main(){
    assert(DispatchServerDedupCountSendUbBytes(b*8U,512,workers)<=kEpServerDedupCountUbBytes);
   }
  }
- assert(LlCountProducerCores(56,512,32,16384,true)==8);
+ assert(LlCountProducerCores(56,512,32,16384,true)==28);
  assert(LlCountProducerCores(56,512,32,16384,false)==28);
 }
 ''', 'count-owners-ub')

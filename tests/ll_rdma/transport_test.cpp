@@ -13,7 +13,7 @@ int main() {
     a.peerMems[0]=local.data(); a.peerMems[1]=remote.data()+1024; // All remote MTE mappings deliberately absent.
     unsigned cases=0;
     for (cores=16;cores<=72;cores+=2) {
-        a.reservedConfig[1]=8; a.reservedAddresses[2]=stages.data()+uint64_t(cores)*LlRdma::kCoreBytes;
+        a.reservedConfig[1]=cores; a.reservedAddresses[2]=stages.data()+uint64_t(cores)*LlRdma::kCoreBytes;
         for (core=0;core<cores;++core) {
             for (uint32_t bytes : {512U,1536U,2048U,2560U,4096U,7680U,15872U}) {
                 for (unsigned epoch=1;epoch<=3;++epoch) {
@@ -38,7 +38,7 @@ int main() {
             }
         }
     }
-    Model::before={}; core=0; cores=72; a.reservedConfig[1]=8; a.reservedAddresses[2]=stages.data()+72U*LlRdma::kCoreBytes;
+    Model::before={}; core=0; cores=72; a.reservedConfig[1]=cores; a.reservedAddresses[2]=stages.data()+72U*LlRdma::kCoreBytes;
     // Single-use combine packets retain wire contents and completion while
     // allowing the SDK to consume their UB prefix. Each new call repacks it.
     for (uint32_t turn=0;turn<3;++turn) {

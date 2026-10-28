@@ -33,7 +33,7 @@ __aicore__ inline GlobalTensor<uint8_t> Tensor(GM_ADDR p, bool uncached=false) {
     return t;
 }
 __aicore__ inline GM_ADDR Stage(const __gm__ Args* a, uint32_t bytes) {
-    if (a->reservedConfig[1] != LlRdma::kQpCount || GetBlockIdx() >= GetBlockNum() || bytes > LlRdma::kCoreBytes ||
+    if (a->reservedConfig[1] != GetBlockNum() || GetBlockIdx() >= GetBlockNum() || bytes > LlRdma::kCoreBytes ||
         a->reservedAddresses[1] + uint64_t(GetBlockNum()) * LlRdma::kCoreBytes != a->reservedAddresses[2]) Trap();
     return a->reservedAddresses[1] + uint64_t(GetBlockIdx()) * LlRdma::kCoreBytes;
 }

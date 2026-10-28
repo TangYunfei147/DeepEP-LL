@@ -343,8 +343,7 @@ private:
         for (uint32_t step = 1U; step <= servers; ++step) {
             const uint32_t server = ServerDedupHalfOrder(servers, ownServer, step - 1U);
             const uint32_t count = SelectDirectServer(server);
-            const uint32_t workers = LlTransport::RemoteWrite(args_, server * Group) ?
-                                     LlRdma::kCombineDirectQps : sendCores_;
+            const uint32_t workers = sendCores_;
             const uint32_t first = core_ < workers ? ServerDedupFirstOwned(core_, owner % workers, workers) : count;
             owner = (owner + count) % workers;
             for (uint32_t task = first; task < count; task += workers) {
