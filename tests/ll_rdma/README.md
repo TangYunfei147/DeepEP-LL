@@ -1,3 +1,5 @@
+> 本分支属于四版独立性能A/B：当前 kernel/ll-ndr-ab-no-q-cache。当前版本与对照关系以 [FOUR_WAY_AB.md](FOUR_WAY_AB.md) 为准，下方历史协议描述不作为当前安装身份。
+
 # HNS_1825 混合 MTE / NDR LL（核心协议10）
 
 > 当前协议14：路由SO整帧、每对卡8QP、按实际目标rank选择各自8核并覆盖全部S核。部署与所有权说明见 [ROCE_SO_ROUTE_8QP.md](ROCE_SO_ROUTE_8QP.md)。
