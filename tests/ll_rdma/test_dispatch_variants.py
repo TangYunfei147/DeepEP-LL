@@ -147,7 +147,7 @@ void rejects(const deepep::EpServerDedupKernelArgs* args, uint32_t variant) {
 }
 int main() {
     static_assert(sizeof(deepep::EpServerDedupKernelArgs) == 152);
-    assert(deepep_ll_core_protocol_version() == 22);
+    assert(deepep_ll_core_protocol_version() == 23);
     assert(deepep_ll_rdma_enabled() == 1);
     assert(deepep_ll_stage_timer_enabled() == 0);
 #ifdef DEEPEP_LL_REFERENCE_PROFILE

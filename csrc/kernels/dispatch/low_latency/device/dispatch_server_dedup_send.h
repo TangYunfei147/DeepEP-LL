@@ -149,10 +149,10 @@ public:
             DataCopyPad(routeWeights_, weights_[uint64_t(start_) * k_], {1U, count_ * k_ * 4U, 0U, 0U, 0U},
                         {false, 0U, 0U, 0.0f});
         Sync<HardEvent::MTE2_S>();
-        // Build q once in original flat-route order. The old reduction scratch
-        // is reused as a bounded key/count table; qWork stays read-only below.
-        LlBuildRouteQ(routeIds_, bs_ * k_, k_, experts_, qDstBuf_.Get<uint32_t>(), qSubBuf_.Get<uint32_t>(),
-                      qPlanBuf_.Get<uint32_t>(), qBytes / sizeof(uint32_t));
+        // Protocol17 rollback: q is reduced on demand in original route order.
+        // Keep only the independent owner/QP plan; no q histogram/hash build.
+        for (uint32_t index = 0; index < bs_ * k_; ++index)
+            qPlanBuf_.Get<uint32_t>().SetValue(index, 0U);
         if (planRemote) {
             remoteTasks = LlBuildRemotePacketOwners(routeIds_, qPlanBuf_.Get<uint32_t>(),
                 qSubBuf_.Get<uint32_t>(), routes, k_, localExperts_, uint32_t(args_->rank), Group,
@@ -160,8 +160,7 @@ public:
             if (profile) profile->Value<43>(assigned + remoteTasks);  // w43: send_route_count
             if (assigned == 0U && remoteTasks == 0U) return;
         }
-        // Quantization reuses the first hash array on V. Retire its Scalar
-        // stores once here, replacing repeated vector-prefix reductions.
+        // Retire Scalar owner-planning scratch before Vector q/quantization reuse.
         if (bs_ > 1U) Sync<HardEvent::S_V>();
         // 每个 512B 块尾部的 32B 标记预置为 1；发送时 payload 和标记一起搬运。
         // 初始 MTE3_V 事件让 lane 首次可写，后续复用由上一包的发送完成事件控制。
@@ -381,11 +380,26 @@ private:
         }
         meshFirstK = fullMeshFirstHop_ && groups != 0U ? mesh.FirstK() : 0U;
     }
-    // q was computed from original flat-route order, before packet reordering.
+    // Original Vector prefix reduction, independent of packet issue order.
     __aicore__ inline uint32_t CalTokenSendExpertCnt(uint32_t expert, uint32_t index)
     {
-        (void)expert;
-        return qPlanBuf_.Get<uint32_t>().GetValue(index) & kLlRouteQMask;
+        if (index < k_) return 0U;
+        // Memory's prefix reduction over the complete original route sequence.
+        auto dst = qDstBuf_.Get<int32_t>();
+        auto sub = qSubBuf_.Get<int32_t>();
+        Duplicate<int32_t>(dst, int32_t(expert), index);
+        PipeBarrier<PIPE_V>();
+        Sub(sub, routeIds_, dst, index);
+        PipeBarrier<PIPE_V>();
+        auto input = sub.template ReinterpretCast<float>();
+        auto output = dst.template ReinterpretCast<float>();
+        Abs(output, input, index);
+        PipeBarrier<PIPE_V>();
+        Mins(sub, dst, 1, index);
+        PipeBarrier<PIPE_V>();
+        ReduceSum<float>(output, input, qWorkBuf_.Get<float>(), index);
+        Sync<HardEvent::V_S>();
+        return index - uint32_t(dst.GetValue(0));
     }
     template <class Fp8Type>
     // 摘要：以每 32 元素为一组生成 MXFP8 scale 和量化数据，复用 q 计算的临时 UB。

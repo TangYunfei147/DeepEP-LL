@@ -1,3 +1,5 @@
+> 2026-10-28更新：本分支当前协议23，每物理核QP，已恢复逐次Vector求q；不启用q预计算。测试脚本normal路由直接调用按用户tmp.py移植的make_random_expert_indices，默认倍率2、seed偏移0的输出与原脚本一致；hotspot保持原方式。下方协议22/保留q预计算描述属于历史对照7fbc309。
+
 # 不限定8QP的独立基线
 
 分支kernel/ll-ndr-ab-per-core-qp，协议22，直接基于kernel/ll-ndr-ab-base的f52ab46；不累加其他消融。保留路由SO、payload SO、q预计算、共同qPlan缓冲布局和原首跳专家选择，没有固定rank^16中转。

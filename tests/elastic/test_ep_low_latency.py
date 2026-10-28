@@ -542,6 +542,66 @@ def validate_args(args, world):
     return m
 
 
+def make_random_expert_indices(  # 造数入口：返回 shape=[ep*tokens_per_rank, topk] 的全局专家号
+    tokens_per_rank: int,  # 每个 rank 的 token 数（即 bs）
+    ep: int = 64,  # 目标 rank 数；本函数按"目标 rank"来分配路由份额
+    experts: int = 384,  # 全局专家总数；必须满足 experts == ep * physical_stride
+    physical_stride: int = 6,  # 每个 rank 拥有的连续专家数（= experts // ep），用于拼全局专家号
+    topk: int = 8,  # 每个 token 选几个不同的专家
+    hot_multiplier_x2: int = 2,  # 热点倍率的 2 倍表示；2 表示最高 rank 恰为均值（即无热点）
+    seed_offset: int = 0,
+):
+    seed = BALANCED_ROUTE_SEED + seed_offset  # 固定基种子，A/B 两次跑必须喂同一份输入
+    total = ep * tokens_per_rank * topk  # 全局路由条数 = rank 数 × 每 rank token × topk
+    mean = total // ep  # 每个目标 rank 的平均份额（整除）
+    hot_count = mean * hot_multiplier_x2 // 2  # 热点 rank 的份额 = 均值 × (倍率/2)，倍率 2 时正好等于均值
+
+    if hot_count == mean:  # 无热点（或倍率折算后等于均值）时走完全均匀分支
+        counts = [mean] * ep  # 每个目标 rank 都拿 mean 条，总和精确等于 total
+    else:  # 有热点：hot rank 先拿走 hot_count，其余按随机权重分摊
+        rng = random.Random(seed + tokens_per_rank)  # 独立随机流；把 bs 混进种子，不同规模用不同数据但各自可复现
+        weights = [rng.uniform(0.7, 1.3) for _ in range(ep - 1)]  # 除 hot rank 外每个 rank 的权重，0.7~1.3 倍
+        raw = [(total - hot_count) * w / sum(weights) for w in weights]  # 剩余额度按权重归一化摊成浮点条数
+        others = [math.floor(x) for x in raw]  # 先全部向下取整，保证不会超额
+        order = sorted(  # 按"被截掉的小数部分"降序，决定谁先补 1 条
+            range(ep - 1),  # 只对非 hot 的 rank 排序
+            key=lambda i: (raw[i] - others[i], rng.random()),  # 主键是小数余数，同余数时用随机数打破平局
+            reverse=True,  # 降序：余数大的排前面
+        )
+        for i in order[:total - hot_count - sum(others)]:  # 取整丢掉的条数（≥0，为 0 时切片为空）补给余数最大的若干个
+            others[i] += 1  # 每条只补 1，保证 total 精确守恒
+        counts = [hot_count] + others  # 第 0 个 rank 是热点，其余是摊分结果；sum(counts) == total
+
+    remaining = counts.copy()  # 每个目标 rank 还剩多少条没分配，用来约束抽样
+    occurrences = [0] * ep  # 每个目标 rank 已被选中次数，用于轮转其名下的局部专家号
+    rng = random.Random(seed + tokens_per_rank * 1000 + hot_multiplier_x2)  # 第二阶段独立随机流；与上面的流刻意错开
+    routes = []  # 输出：每个 token 一行，行内是 topk 个全局专家号
+
+    for global_token in range(ep * tokens_per_rank):  # 逐个 token 生成路由（token 数 = ep × 每 rank token）
+        tokens_left = ep * tokens_per_rank - global_token  # 含当前 token 在内还剩多少个 token 待生成
+        chosen = [r for r, n in enumerate(remaining) if n == tokens_left]  # 剩余额度恰等于剩余 token 数的 rank 必须被选，否则永远填不满
+        while len(chosen) < topk:  # 补足到 topk 个互不相同的目标 rank
+            candidates = [  # 候选：还有额度、且本次 token 未选过的 rank
+                r for r, n in enumerate(remaining)
+                if n > 0 and r not in chosen  # 额度 >0 保证可分配，排除重复保证同 token 内专家不重复
+            ]
+            chosen.append(rng.choices(  # 按剩余额度加权抽一个，额度大的更容易被选（天然均衡收尾）
+                candidates, weights=[remaining[r] for r in candidates]
+            )[0])
+        rng.shuffle(chosen)  # 打乱 topk 内顺序，避免每行都是"大额度 rank 在前"的固定排列
+
+        routes.append([  # 生成本 token 的 topk 个全局专家号
+            r * physical_stride + occurrences[r] % (experts // ep)  # 全局号 = rank 块基址 + 该 rank 名下轮转的局部专家号
+            for r in chosen  # 对选中的每个目标 rank 逐个算号
+        ])
+        for r in chosen:  # 更新本 token 用掉的状态
+            remaining[r] -= 1  # 扣掉一个额度
+            occurrences[r] += 1  # 轮转计数 +1，使同一 rank 的局部专家号依次循环
+
+    assert not any(remaining)  # 自检：所有额度用尽，说明每 rank 实际分配条数精确等于 counts
+    return routes  # 返回 shape=[ep*tokens_per_rank, topk] 的嵌套列表
+
+
 def make_routes(world, b, k, e, seed, route="normal"):
     """Default: user's exact rank quotas, distinct ranks, round-robin experts.
 
@@ -553,26 +613,9 @@ def make_routes(world, b, k, e, seed, route="normal"):
     if route not in ('normal', 'hotspot'):
         raise ValueError('Unknown routing mode')
     if route == 'normal':
-        local_experts = e // world
-        remaining = [b * k] * world
-        occurrences = [0] * world
-        rng = random.Random(BALANCED_ROUTE_SEED + seed + b * 1000 + 2)
-        result = [[] for _ in range(world)]
-        for global_token in range(world * b):
-            tokens_left = world * b - global_token
-            chosen = [rank for rank, count in enumerate(remaining) if count == tokens_left]
-            while len(chosen) < k:
-                candidates = [rank for rank, count in enumerate(remaining)
-                              if count > 0 and rank not in chosen]
-                chosen.append(rng.choices(candidates, weights=[remaining[rank] for rank in candidates])[0])
-            rng.shuffle(chosen)
-            result[global_token // b].append([
-                rank * local_experts + occurrences[rank] % local_experts for rank in chosen])
-            for rank in chosen:
-                remaining[rank] -= 1
-                occurrences[rank] += 1
-        assert not any(remaining)
-        return result
+        flat = make_random_expert_indices(b, ep=world, experts=e, physical_stride=e // world,
+                                         topk=k, seed_offset=seed, hot_multiplier_x2=2)
+        return [flat[source * b:(source + 1) * b] for source in range(world)]
     rng = random.Random(seed)
     result = []
     for _ in range(world):
