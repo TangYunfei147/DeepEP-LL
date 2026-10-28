@@ -341,12 +341,10 @@ private:
         }
         PipeBarrier<PIPE_V>();
         for (uint32_t step = 1U; step <= servers; ++step) {
-            const uint32_t server = ServerDedupHalfOrder(servers, ownServer, step - 1U);
-            const uint32_t count = SelectDirectServer(server);
-            const uint32_t workers = sendCores_;
-            const uint32_t first = core_ < workers ? ServerDedupFirstOwned(core_, owner % workers, workers) : count;
-            owner = (owner + count) % workers;
-            for (uint32_t task = first; task < count; task += workers) {
+            const uint32_t count = SelectDirectServer(ServerDedupHalfOrder(servers, ownServer, step - 1U));
+            const uint32_t first = ServerDedupFirstOwned(core_, owner, sendCores_);
+            owner = (owner + count) % sendCores_;
+            for (uint32_t task = first; task < count; task += sendCores_) {
                 const uint32_t row = uint32_t(indexUb_.GetValue(task));
                 // Only owned rows reload a routing triple. The persistent rank
                 // and original-row arrays are untouched between server rounds.
@@ -379,7 +377,7 @@ private:
                 // One destination owns this output. Its body is overwritten on
                 // the next lane use, so SDK scratch need not be restored.
                 LlTransport::Packet(args_, source, window_ + COMBINE_DEDUP_EP_SERVER_DEDUP_SHARED_DATA_OFFSET +
-                    (uint64_t(token) * topK_ + topk) * resultStride_, output, resultStride_, 7U, false, core_);
+                    (uint64_t(token) * topK_ + topk) * resultStride_, output, resultStride_, 7U, false);
                 SetFlag<HardEvent::MTE3_V>(lane);
             }
             // No server fence: the next scan can overlap pending output DMA.

@@ -128,7 +128,7 @@ Session::Session(int rank, int size, uint64_t bytes, const std::string& endpoint
         ll_rdma_qps_ = query_ll_core_config().active;
         validate_ll_rdma_qps(ll_rdma_qps_, size > int(DispatchDedup::kLlPhysicalRanksPerHost));
         low_latency_cores_ = ll_rdma_qps_;
-        const uint64_t used_staging = uint64_t(low_latency_cores_) * LlRdma::kCoreBytes;
+        const uint64_t used_staging = uint64_t(ll_rdma_qps_) * LlRdma::kCoreBytes;
         if (size > int(DispatchDedup::kLlPhysicalRanksPerHost))
             staging_bytes = (used_staging + alignment - 1U) / alignment * alignment;
     }

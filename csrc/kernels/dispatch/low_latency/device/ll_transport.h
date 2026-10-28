@@ -33,25 +33,20 @@ __aicore__ inline GlobalTensor<uint8_t> Tensor(GM_ADDR p, bool uncached=false) {
     return t;
 }
 __aicore__ inline GM_ADDR Stage(const __gm__ Args* a, uint32_t bytes) {
-    if (a->reservedConfig[1] != GetBlockNum() || GetBlockIdx() >= GetBlockNum() || bytes > LlRdma::kCoreBytes ||
-        a->reservedAddresses[1] + uint64_t(GetBlockNum()) * LlRdma::kCoreBytes != a->reservedAddresses[2]) Trap();
+    if (GetBlockNum() != a->reservedConfig[1] || GetBlockIdx() >= a->reservedConfig[1] || bytes > LlRdma::kCoreBytes) Trap();
     return a->reservedAddresses[1] + uint64_t(GetBlockIdx()) * LlRdma::kCoreBytes;
 }
 __aicore__ inline void Put(const __gm__ Args* a, uint32_t peer, GM_ADDR dst, GM_ADDR src,
-                           uint32_t bytes, LocalTensor<uint8_t> scratch, uint32_t syncId=7U,
-                           uint32_t qp=UINT32_MAX) {
+                           uint32_t bytes, LocalTensor<uint8_t> scratch, uint32_t syncId=7U) {
 #ifdef DEEPEP_LL_RDMA
-    aclshmemx_roce_qp_put_nbi(dst, src, (__ubuf__ uint8_t*)scratch.GetPhyAddr(), bytes, peer,
-                             qp == UINT32_MAX ? GetBlockIdx() : qp, syncId);
+    aclshmemx_roce_qp_put_nbi(dst, src, (__ubuf__ uint8_t*)scratch.GetPhyAddr(), bytes, peer, GetBlockIdx(), syncId);
 #else
     Trap();
 #endif
 }
-__aicore__ inline void Quiet(uint32_t peer, LocalTensor<uint8_t> scratch, uint32_t syncId=7U,
-                             uint32_t qp=UINT32_MAX) {
+__aicore__ inline void Quiet(uint32_t peer, LocalTensor<uint8_t> scratch, uint32_t syncId=7U) {
 #ifdef DEEPEP_LL_RDMA
-    aclshmemx_roce_qp_quiet(peer, qp == UINT32_MAX ? GetBlockIdx() : qp,
-                           (__ubuf__ uint8_t*)scratch.GetPhyAddr(), syncId);
+    aclshmemx_roce_qp_quiet(peer, GetBlockIdx(), (__ubuf__ uint8_t*)scratch.GetPhyAddr(), syncId);
 #else
     Trap();
 #endif
@@ -63,7 +58,7 @@ __aicore__ inline void Quiet(uint32_t peer, LocalTensor<uint8_t> scratch, uint32
 // See ROCE_SO_CONTRACT.md. No cross-WQE/QP ordering is assumed.
 __aicore__ inline void Packet(const __gm__ Args* a, uint32_t peer, uint64_t offset,
                               LocalTensor<uint8_t> packet, uint32_t bytes, uint32_t syncId=7U,
-                              bool preservePacket=true, uint32_t qp=UINT32_MAX) {
+                              bool preservePacket=true) {
     Check(a, peer, offset, bytes);
     auto dst = Address(a, peer, offset);
     if (!RemoteWrite(a, peer)) {
@@ -79,9 +74,9 @@ __aicore__ inline void Packet(const __gm__ Args* a, uint32_t peer, uint64_t offs
     DataCopy(Tensor(stage,true), packet, bytes);
     Sync<HardEvent::MTE3_S>(syncId); // registered GM complete before Scalar posts NIC WQEs
 
-    Put(a, peer, dst, stage, bytes, packet, syncId, qp);
+    Put(a, peer, dst, stage, bytes, packet, syncId);
 
-    Quiet(peer, packet, syncId, qp);
+    Quiet(peer, packet, syncId);
 
     if (preservePacket) {
 

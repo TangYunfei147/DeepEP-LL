@@ -1,24 +1,21 @@
-> 2026-10-28更新：本分支当前协议23，每物理核QP，已恢复逐次Vector求q；不启用q预计算。测试脚本normal路由直接调用按用户tmp.py移植的make_random_expert_indices，默认倍率2、seed偏移0的输出与原脚本一致；hotspot保持原方式。下方协议22/保留q预计算描述属于历史对照7fbc309。
+# 原始分片与每核QP基线（协议24）
 
-# 不限定8QP的独立基线
+当前分支kernel/ll-ndr-ab-per-core-qp已按用户要求撤销所有8QP派生实现。原四条独立实验分支不改。
 
-分支kernel/ll-ndr-ab-per-core-qp，协议22，直接基于kernel/ll-ndr-ab-base的f52ab46；不累加其他消融。保留路由SO、payload SO、q预计算、共同qPlan缓冲布局和原首跳专家选择，没有固定rank^16中转。
+- 恢复按原token/路由分片分配S核；每核按原FIRST_HOP、DIRECT顺序执行。没有按peer的packet轮转，也没有独立“先跨机、后机内”阶段。
+- 删除packet owner/QP规划、跨分片GM权重读取、qPlanBuf及其Host预算；恢复原UB布局。q使用逐次Vector前缀归约，不启用预计算。
+- combine恢复8QP改动前的选择/分工，删除为4+4发送者引入的分页与显式QP映射。计数恢复原核分片；Host预算恢复原公式。
+- QP按实际AIV数配置，每核默认使用自身QP；SDK原生56QP上限保护不变。原8包批次是源暂存批次大小，保留，不是8QP限制。
+- 路由SO整帧1put+1quiet及payload SO保留；源生命周期、原UB/lane/event与双bank复用保持。SDK未改。
+- 保留reference-only打点及用户tmp.py式normal路由，hotspot原方式不变。reference w43恢复原本核路由任务数，不能与此前“源任务+remote任务”口径混用。
 
-Session按实际active AIV数量设置每peer RoCE QP，物理核c只用QPc。以56 AIV为例：配置56QP；dispatch跨机包按每个实际目标peer在全部28个S核/QP0..27轮转；combine DIRECT由全部28个S核发送，partial由全部28个R核/QP28..55发送。计数恢复原实际核分片，每核提交和退休自己的QP。没有并发共享QP，也没有QP锁。
+比较旧提交b50d599时，仍有路由SO、q回退、旧打点源码删除及测试负载差异；不能当作单变量性能比较。
 
-当前SDK原生上限56QP仍由初始化前检查保护；不改SDK、不扩大SDK上限。超过56 active AIV的跨机启动会被拒绝，不能称为无限QP。72仍只是LL控制容量。
-
-每核128KiB源暂存、现有8包批次和每peer/QP quiet保留；8包批次不等于8QP限制。source生命周期、UB/lane/event、旧FLAG与双bank依赖保留。q中的QP字段扩为6bit，覆盖高编号发送核。对照两版的SDK、核数、shape和采样必须相同。
-
-对比：f52ab46（8QP）与本分支（每物理核QP）。这项同时解除dispatch及combine的8QP分工限制，分别比较完整dispatch和combine task，不将两者变化混成单一发送收益。逐次Vector q回退、固定配对卡中转均不启用。
-
-两机所有rank完整重编同分支wheel，不加--skip-build；使用新的run名，保留原始结果。NODE为0/1，MASTER为节点0真实IP：
+两机相同最新提交，全rank重编完整wheel，不加--skip-build。使用新的run名：
 
 ```bash
-git fetch origin
-git switch kernel/ll-ndr-ab-per-core-qp && git pull --ff-only
-bash tests/ll_rdma/one_click.sh "$NODE" "$MASTER" per-core-qp-001 --mode perf \
+bash tests/ll_rdma/one_click.sh "$NODE" "$MASTER" original-partition-001 --mode perf \
   --tokens 1 2 4 8 16 32 64 128 256 --dtype bf16 fp8
 ```
 
-FP8配置的combine仍为BF16。推荐与base交替ABBA，不能复用旧run名覆盖结果。CPU模型不代表CANN/NPU正确性或性能通过。
+NODE=0/1，MASTER为节点0真实IP。原始结果保留，只回传入口生成的紧凑报告。CPU检查不代表CANN/NPU验证。

@@ -80,34 +80,26 @@ public:
         const uint32_t ownServer = uint32_t(args_->rank) / Group;
         uint32_t owner = 0U, completed = 0U;
         for (uint32_t step = 1U; step <= servers; ++step) {
-            const uint32_t ownerBefore = owner;
-            uint32_t beginOwned = 0U;
-            bool more = false;
-            do {
-                owner = ownerBefore;
-                const uint32_t count = SelectServer(ServerDedupHalfOrder(servers, ownServer, step - 1U),
-                                                    owner, step == 1U, beginOwned, more);
-                for (uint32_t task = 0; task < count; ++task) {
-                    const uint32_t row = uint32_t(rows_.GetValue(task));
-                    LoadTask(row);
-                    const uint32_t source = uint32_t(table2Ub_.GetValue(0U));
-                    const uint32_t token = uint32_t(table2Ub_.GetValue(1U));
-                    const uint32_t topk = uint32_t(table2Ub_.GetValue(2U));
-                    const uint32_t members = table3Ub_.GetValue(0U);  // full uint32 N, not uint16
-                    if (members == 0U || members >= k_) {
-                        Trap();
-                        return completed;
-                    }
-                    if (dtype_ == DispatchDedup::DISPATCH_DEDUP_DATA_TYPE_FP16)
-                        Aggregate<half>(row, source, members + 1U);
-                    else
-                        Aggregate<bfloat16_t>(row, source, members + 1U);
-                    Send(completed % outputLanes_, source, token, topk);
-                    ++completed;
+            const uint32_t count = SelectServer(ServerDedupHalfOrder(servers, ownServer, step - 1U), owner, step == 1U);
+            for (uint32_t task = 0; task < count; ++task) {
+                const uint32_t row = uint32_t(rows_.GetValue(task));
+                LoadTask(row);
+                const uint32_t source = uint32_t(table2Ub_.GetValue(0U));
+                const uint32_t token = uint32_t(table2Ub_.GetValue(1U));
+                const uint32_t topk = uint32_t(table2Ub_.GetValue(2U));
+                const uint32_t members = table3Ub_.GetValue(0U);  // full uint32 N, not uint16
+                if (members == 0U || members >= k_) {
+                    Trap();
+                    return completed;
                 }
-                beginOwned += count;
-                // Reuse phase scratch with its Vector dependency, not an MTE3 drain.
-            } while (more);
+                if (dtype_ == DispatchDedup::DISPATCH_DEDUP_DATA_TYPE_FP16)
+                    Aggregate<half>(row, source, members + 1U);
+                else
+                    Aggregate<bfloat16_t>(row, source, members + 1U);
+                Send(completed % outputLanes_, source, token, topk);
+                ++completed;
+            }
+            // Reuse phase scratch with its Vector dependency, not an MTE3 drain.
         }
         for (uint32_t lane = 0; lane < inputLanes_; ++lane) WaitFlag<HardEvent::V_MTE2>(lane);
         // Output events and their UB sources remain owned by the shared ring.
@@ -130,16 +122,10 @@ private:
         SetFlag<E>(id);
         WaitFlag<E>(id);
     }
-    __aicore__ inline uint32_t SelectServer(uint32_t server, uint32_t& owner, bool validateRanks,
-                                           uint32_t beginOwned, bool& more)
+    __aicore__ inline uint32_t SelectServer(uint32_t server, uint32_t& owner, bool validateRanks)
     {
-        uint32_t count = 0U, owned = 0U;
-        more = false;
+        uint32_t count = 0U;
         const uint32_t localCore = GetBlockIdx() - recvCores_;
-        const uint32_t workers = recvCores_;
-        // All R cores own their physical QPs. Keep the existing bounded paging.
-        // Page within the existing row buffer instead of enlarging live UB.
-        const uint32_t capacity = EpCombineM4TaskBytes(tokens_, recvCores_) / sizeof(int32_t);
         const uint32_t vectorBytes = EpCombineAlign(scanRows_ * 4U, 256U);
         const uint32_t maskBytes = EpCombineAlign((scanRows_ + 7U) / 8U, 32U);
         auto table = scan_.ReinterpretCast<int32_t>();
@@ -189,14 +175,10 @@ private:
             uint64_t selected = 0U;
             GatherMask(table, indices, mask.ReinterpretCast<uint32_t>(), true, span, {1U, 1U, 0U, 0U}, selected);
             Sync<HardEvent::V_S>();
-            const uint32_t first = localCore < workers ?
-                ServerDedupFirstOwned(localCore, owner % workers, workers) : uint32_t(selected);
-            owner = (owner + uint32_t(selected)) % workers;
-            for (uint32_t task = first; task < uint32_t(selected); task += workers) {
-                if (owned++ < beginOwned) continue;
-                if (count < capacity) rows_.SetValue(count++, table.GetValue(task));
-                else more = true;
-            }
+            const uint32_t first = ServerDedupFirstOwned(localCore, owner, recvCores_);
+            owner = (owner + uint32_t(selected)) % recvCores_;
+            for (uint32_t task = first; task < uint32_t(selected); task += recvCores_)
+                rows_.SetValue(count++, table.GetValue(task));
         }
         return count;
     }
@@ -275,8 +257,7 @@ private:
         // This reduced output has one destination; the next use rewrites its
         // body and never reads the SDK's borrowed first 128 bytes.
         LlTransport::Packet(args_, source, window_ + COMBINE_DEDUP_EP_SERVER_DEDUP_SHARED_DATA_OFFSET +
-            (uint64_t(token) * k_ + topk) * packetBytes_, output, packetBytes_, 7U, false,
-            GetBlockIdx());
+            (uint64_t(token) * k_ + topk) * packetBytes_, output, packetBytes_, 7U, false);
         SetFlag<HardEvent::MTE3_V>(lane);
     }
 

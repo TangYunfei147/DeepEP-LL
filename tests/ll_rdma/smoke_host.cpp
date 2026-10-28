@@ -55,8 +55,7 @@ int main(int argc,char** argv) {
             args.peerMems[peer]+=peer*1024U;
         } args.reservedAddresses[0]=memory;
         args.reservedAddresses[1]=memory+logical+guard; args.reservedConfig[0]=LlRdma::kBackend;
-        args.reservedConfig[1]=cores;
-        args.reservedAddresses[2]=args.reservedAddresses[1]+uint64_t(cores)*LlRdma::kCoreBytes; args.fftsVal=shmemx_get_ffts_config();
+        args.reservedConfig[1]=cores; args.fftsVal=shmemx_get_ffts_config();
         void *deviceArgs=nullptr,*result=nullptr; aclrtStream stream=nullptr;
         Check(aclrtMalloc(&deviceArgs,sizeof(args),ACL_MEM_MALLOC_HUGE_FIRST),"args allocation");
         Check(aclrtMalloc(&result,cores*32U,ACL_MEM_MALLOC_HUGE_FIRST),"result allocation");

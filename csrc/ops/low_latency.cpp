@@ -111,16 +111,16 @@ uint8_t* expert_timer(py::dict tensors, uint32_t cores, uint32_t experts, uint8_
         throw std::invalid_argument("Expert timer requires 512-byte alignment");
     return pointer;
 }
-DispatchDedup::EpMemoryServerDedupLayout layout(int p, int b, int h, int k, int e, bool fp8, bool rdma = true)
+DispatchDedup::EpMemoryServerDedupLayout layout(int p, int b, int h, int k, int e, bool fp8)
 {
     const uint32_t coreNum = query_ll_core_config().active;
     DispatchDedup::EpMemoryServerDedupLayout result{};
     auto mode = fp8 ? DispatchDedup::EpServerDedupInputMode::PrequantizedFp8Packs
                     : DispatchDedup::EpServerDedupInputMode::Plain16;
     if (b <= 0 || b > 65536 ||
-        DispatchDedup::BuildDispatchServerDedupLayout(p, b, h, k, e, &result, mode, coreNum, rdma) !=
+        DispatchDedup::BuildDispatchServerDedupLayout(p, b, h, k, e, &result, mode, coreNum) !=
             DispatchDedup::DISPATCH_DEDUP_SUCCESS ||
-        !DispatchDedup::DispatchDedupPacketUbFits(result, b, k, e, p, coreNum, rdma) || result.capacityRows > INT32_MAX) {
+        !DispatchDedup::DispatchDedupPacketUbFits(result, b, k, e, p, coreNum) || result.capacityRows > INT32_MAX) {
         throw std::invalid_argument("LL dispatch exceeds topology, shape, UB or workspace limits");
     }
     return result;
@@ -168,7 +168,7 @@ void bind_low_latency(py::module_& module)
     if (deepep_ll_core_protocol_version() != DispatchDedup::kLlCoreProtocolVersion)
         throw std::runtime_error("LL Host/device core protocol mismatch; rebuild and reinstall the complete wheel");
     module.attr("low_latency_core_protocol") = DispatchDedup::kLlCoreProtocolVersion;
-    module.attr("low_latency_roce_qps_per_peer") = 0; // dynamic: low_latency_core_config().active_aiv
+    module.attr("low_latency_roce_qps_per_peer") = 0; // actual active physical cores
     module.attr("low_latency_implementation") = "ndr-hns1825";
 #ifdef DEEPEP_LL_RDMA
     if (!deepep_ll_rdma_enabled()) throw std::runtime_error("LL Host/device RDMA build mismatch; rebuild complete wheel");
@@ -252,7 +252,7 @@ void bind_low_latency(py::module_& module)
             session.world() < 16 || session.world() % DispatchDedup::LlGroupForWorld(session.world()) != 0) {
             throw std::invalid_argument("LL requires exactly 8 GiB of symmetric workspace");
         }
-        const uint32_t cores = pin_session_cores(session);
+        pin_session_cores(session);
         DispatchDedup::CommArgs args{};
         args.rank = session.rank();
         args.rankSize = session.world();
@@ -264,8 +264,6 @@ void bind_low_latency(py::module_& module)
         if (session.ll_rdma()) {
             args.reservedAddresses[0] = static_cast<uint8_t*>(session.workspace());
             args.reservedAddresses[1] = static_cast<uint8_t*>(session.ll_rdma_stage());
-            if (args.reservedAddresses[1])
-                args.reservedAddresses[2] = args.reservedAddresses[1] + uint64_t(cores) * LlRdma::kCoreBytes;
             args.reservedConfig[0] = LlRdma::kBackend;
             args.reservedConfig[1] = session.ll_rdma_qps();
         }
@@ -312,7 +310,7 @@ void bind_low_latency(py::module_& module)
         if (session.combine_only()) throw std::invalid_argument("LL requires a dense-channel Session");
         dtype_code(dtype);
         const bool fp8 = dtype == "float8_e4m3fn";
-        const auto plan = layout(session.world(), b, h, k, e, fp8, session.ll_rdma());
+        const auto plan = layout(session.world(), b, h, k, e, fp8);
         const auto format = dispatch_format_tiling(session.world(), dtype);
         const uint32_t variant = DispatchDedup::LlDispatchVariantForTiling(
             format.dtype, format.quantMode, format.expandXOutDtype, format.inputMode, format.tilingKey);

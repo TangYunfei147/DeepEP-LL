@@ -16,7 +16,7 @@ def test_limit_precedes_initialization():
     assert guard < session.index("aclshmemx_init_attr(")
     assert "ll_rdma_qps_ = query_ll_core_config().active;" in session
     assert "low_latency_cores_ = ll_rdma_qps_;" in session
-    assert "uint64_t(low_latency_cores_) * LlRdma::kCoreBytes" in session
+    assert "uint64_t(ll_rdma_qps_) * LlRdma::kCoreBytes" in session
     smoke = (ROOT / "tests/ll_rdma/smoke_host.cpp").read_text()
     assert smoke.index("validate_ll_rdma_qps(cores, ranksPerHost==1)") < smoke.index("aclshmemx_set_qp_num(")
 

@@ -10,7 +10,6 @@
 #include "ll_count_frame_receive.h"
 #include "ll_route_exchange.h"
 #include "../common/ll_count_frame_layout.h"
-#include "../common/ll_count_ownership.h"
 #include "../common/ll_reference_profile_device.h"
 #include "adv_api/reduce/sum.h"
 #include "../common/ep_memory_server_dedup_count_layout.h"
@@ -50,7 +49,6 @@ public:
         packedFrames_ = LlTransport::Rdma(args_) && epWorldSize_ > 16U;
         pairedRoutes_ = LlTransport::Rdma(args_) && epWorldSize_ == 32U &&
                         expertIdsCnt_ <= kRouteExchangeMaxBytes / sizeof(int32_t);
-        countCores_ = LlCountProducerCores(coreNum_, bs, epWorldSize_, expertIdsCnt_, LlTransport::Rdma(args_));
         publishingSource_ = epRankId_;
         if (pairedRoutes_) routeExchange_.Init(args_, expertIdsCnt_, DispatchServerDedupWindowOffset(magic));
         layout_ = DispatchServerDedupCountLayout(experts, coreNum_);
@@ -164,7 +162,6 @@ private:
     bool useAllCoreCount_ = false;
     bool packedFrames_ = false;
     bool pairedRoutes_ = false;
-    uint32_t countCores_ = 0;
     uint32_t publishingSource_ = 0;
     PairedRouteExchange routeExchange_;
     GM_ADDR recvCntWorkspaceGM_ = nullptr;
@@ -188,7 +185,7 @@ __aicore__ inline void ServerDedupCounts::SendCnt()
 {
     // 1. 按专家编号而非 token 分片分工：小 BS 由本次启动的全部核参与，
     // 否则只由接收核统计；每个参与核读取完整路由，但只负责自己的专家区间。
-    const uint32_t cores = countCores_;
+    const uint32_t cores = useAllCoreCount_ ? coreNum_ : aivUsedCumSum_;
     uint32_t start = 0, end = 0, count = 0;
     if (useAllCoreCount_ || aivId_ >= aivUsedAllToAll_) {
         const uint32_t core = useAllCoreCount_ ? aivId_ : aivId_ - aivUsedAllToAll_;
@@ -253,8 +250,7 @@ __aicore__ inline void ServerDedupCounts::SendCnt()
     SyncFunc<HardEvent::S_MTE3>();
     if (count) SendExpertCntRange(start, end);
     if (pairedRoutes_) {
-        // The complete outbound frame (including its SO tail) was already
-        // posted. FinishSend retires its source and QP0 before payload reuse.
+        // SO tail publishes routes; FinishSend retains source/CQ retirement.
         // Status records are reused for the paired source. Retire the local
         // source's MTE body/commit reads before overwriting their UB.
         SyncFunc<HardEvent::MTE3_S>();
@@ -337,7 +333,7 @@ __aicore__ inline void ServerDedupCounts::SendExpertCntRange(uint32_t start, uin
         const uint64_t offset = (uint64_t(localExpert) * epWorldSize_ + publishingSource_) * kEpServerDedupCountGmStride;
         if (packedFrames_) {
             const auto frame = CountFrame(rscvStatusNum_, epWorldSize_,
-                countCores_, dst, publishingSource_, localExpert);
+                useAllCoreCount_ ? coreNum_ : aivUsedCumSum_, dst, publishingSource_, localExpert);
             if (frame.firstExpert != localExpert || frame.records != count) { Trap(); return; }
             LlTransport::CountFrame(args_, dst, stateOffset_ + frame.frameOffset, stateOffset_ + frame.commitOffset,
                 statusTensor_[(expert - start) * UB_ALIGN_DATA_COUNT].ReinterpretCast<uint8_t>(), count, workBuf_.Get<uint8_t>());
@@ -462,7 +458,7 @@ __aicore__ inline void ServerDedupCounts::WaitDispatchClearStatus()
         for (uint32_t logical = startStatusIndex_; logical < endStatusIndex_; ++logical) {
             const uint32_t expert = logical / epWorldSize_, source = logical % epWorldSize_;
             const auto frame = CountFrame(rscvStatusNum_, epWorldSize_,
-                countCores_, epRankId_, source, expert);
+                useAllCoreCount_ ? coreNum_ : aivUsedCumSum_, epRankId_, source, expert);
             // Retire body ready words too: a later shape/partition may place a
             // commit at a former dense-record boundary. Counts are snapshotted.
             DataCopy(selfRankWinInGMTensor_[frame.recordOffset / sizeof(float)], zero, 8U);
@@ -607,7 +603,7 @@ __aicore__ inline void ServerDedupCounts::WaitDispatch()
     float sumOfFlag = static_cast<float>(-1.0);
     LlCountReadPlan readPlan;
     if (packedFrames_ && !BuildCountReadPlan(rscvStatusNum_, epWorldSize_,
-            countCores_, epRankId_,
+            useAllCoreCount_ ? coreNum_ : aivUsedCumSum_, epRankId_,
             startStatusIndex_, recStatusNumPerCore_, readPlan)) { Trap(); return; }
 
     DataCopyParams intriParams{static_cast<uint16_t>(recStatusNumPerCore_), 1,
