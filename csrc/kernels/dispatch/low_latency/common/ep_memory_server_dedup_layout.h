@@ -190,7 +190,7 @@ inline bool DispatchDedupPacketUbFits(const EpMemoryServerDedupLayout& layout, i
     const uint64_t quantWork = align(align(scaleCount, 32) * 4U + scaleCount * 2U, 32);
     const uint64_t scratchBytes = needQuantize ? std::max(qBytes, quantWork) : qBytes;
     const uint64_t sender = reserved + 2 * inputBytes + (needQuantize ? layout.data.packedPayloadBytes : 0U) +
-                            align(b * k * 4, 256) + 2 * scratchBytes + qBytes + 2 * align(tokens * k * 4, 32) +
+                            align(b * k * 4, 256) + 2 * scratchBytes + 2 * qBytes + 2 * align(tokens * k * 4, 32) +
                             align(tokens * 4, 32) + align(tokens * k * 16, 32) + 64 + align(groups * 4, 32) +
                             layout.data.tokenStride;
     const uint64_t serverStateExtra = std::max<uint64_t>(64U, align(world_size / LlGroupForWorld(uint32_t(world_size)) * 4U, 32U)) - 64U;
