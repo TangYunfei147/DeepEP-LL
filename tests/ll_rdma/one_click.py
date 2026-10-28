@@ -12,7 +12,7 @@ import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parents[2]
-BRANCH = "kernel/ll-ndr-hns1825"
+BRANCH = "kernel/ll-ndr-ab-no-q-cache"
 VISIBILITY = ("CUDA_VISIBLE_DEVICES", "ASCEND_RT_VISIBLE_DEVICES", "ASCEND_VISIBLE_DEVICES", "PROBE_VISIBLE_DEVICES")
 RANK_ENV = ("RANK", "WORLD_SIZE", "LOCAL_RANK", "LOCAL_WORLD_SIZE", "GROUP_RANK", "ROLE_RANK",
             "MASTER_ADDR", "MASTER_PORT", "DEEPEP_SHMEM_ENDPOINT")
