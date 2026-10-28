@@ -60,6 +60,7 @@ template<bool P> void Check(){
  for(bool remote:{true,false})for(unsigned token:{0U,3U,19U})for(uint32_t mask:{255U,60U,0U,8U}){
   if(!remote && token!=3)continue;
   t.remoteIssue_=remote;unsigned first=mask?0:3;while(mask && !(mask&(1U<<first)))++first;
+  t.routeWeights_=remote?LocalTensor<float>{nullptr,0}:LocalTensor<float>{weights.data()+24,8};
   t.FillTail(payload,token,first,mask);
   assert(raw[16]==7 && raw[17]==token && raw[18]==first && raw[19]==(mask?2U:1U));
   auto* index=raw.data()+24;float weight;std::memcpy(&weight,index+1,4);

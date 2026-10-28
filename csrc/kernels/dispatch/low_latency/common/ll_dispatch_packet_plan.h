@@ -3,6 +3,7 @@
 #include "ll_fullmesh_first_hop.h"
 #include "ll_group_policy.h"
 #include "ll_rdma_layout.h"
+#include "ll_dispatch_peer_owners.h"
 
 namespace DispatchDedup {
 #if defined(__CCE__) && defined(__CCE_IS_AICORE__)
@@ -38,7 +39,10 @@ LL_PACKET_PLAN_INLINE LlDispatchPacket LlPacketForRoute(Ids ids, uint32_t index,
 constexpr uint32_t kLlRemotePacket = 0x80000000U;
 constexpr uint32_t kLlRouteQMask = 0xffffU;
 LL_PACKET_PLAN_INLINE bool LlOwnsRemotePacket(uint32_t taggedQ, uint32_t core) {
-    return (taggedQ & kLlRemotePacket) && ((taggedQ >> 16U) & 7U) == core;
+    return (taggedQ & kLlRemotePacket) && ((taggedQ >> 16U) & 63U) == core;
+}
+LL_PACKET_PLAN_INLINE uint32_t LlRemotePacketQp(uint32_t taggedQ) {
+    return (taggedQ >> 22U) & 7U;
 }
 
 // Reuse the retired qSub scratch as a peer/count hash table. At most routes
@@ -47,7 +51,7 @@ LL_PACKET_PLAN_INLINE bool LlOwnsRemotePacket(uint32_t taggedQ, uint32_t core) {
 template<class Ids, class Words>
 LL_PACKET_PLAN_INLINE uint32_t LlBuildRemotePacketOwners(Ids ids, Words q, Words scratch,
     uint32_t routes, uint32_t topK, uint32_t localExperts, uint32_t rank, uint32_t group,
-    bool dedup, bool fullMesh, uint32_t core)
+    bool dedup, bool fullMesh, uint32_t core, uint32_t sendCores, uint32_t world)
 {
     for (uint32_t slot = 0; slot < routes; ++slot) scratch.SetValue(slot, 0U);
     uint32_t owned = 0U;
@@ -64,9 +68,10 @@ LL_PACKET_PLAN_INLINE uint32_t LlBuildRemotePacketOwners(Ids ids, Words q, Words
             entry = scratch.GetValue(slot);
         }
         const uint32_t ordinal = entry >> 16U;
-        const uint32_t owner = ordinal % LlRdma::kQpCount;
+        const uint32_t qp = ordinal % LlRdma::kQpCount;
+        const uint32_t owner = LlDispatchQpOwner(rank, world, sendCores, peer, qp, routes);
         scratch.SetValue(slot, key | ((ordinal + 1U) << 16U));
-        q.SetValue(index, (q.GetValue(index) & kLlRouteQMask) | kLlRemotePacket | (owner << 16U));
+        q.SetValue(index, (q.GetValue(index) & kLlRouteQMask) | kLlRemotePacket | (owner << 16U) | (qp << 22U));
         if (owner == core) ++owned;
     }
     return owned;

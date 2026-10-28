@@ -73,15 +73,14 @@ public:
         const uint32_t routes = bs_ * k_;
         const uint32_t assigned = enableDedup_ ? count_ * k_ :
             routes / sendCores_ + (GetBlockIdx() < routes % sendCores_ ? 1U : 0U);
-        const bool networkOwner = networkRoundRobin_ && GetBlockIdx() < LlRdma::kQpCount;
-        if (profile) profile->Value<43>(assigned);  // w43: send_route_count
+        const bool planRemote = networkRoundRobin_;
+        uint32_t remoteTasks = 0U;
+        if (!planRemote && profile) profile->Value<43>(assigned);  // w43: send_route_count
         // 1. 无 token 分片的发送核直接返回；有任务的核复用 SendCnt 释放出的 scratch。
         // reservedBytes 对应仍可能被计数发送读取的 UB，不能当作可用空间覆盖。
-        // Cross-host dedup emits at most one packet/token to a given peer.
-        // Thus peer ordinal i requires B>i; an empty original token owner
-        // among S0..S7 cannot own a remote packet either. Keep w43's original
-        // source-route/metadata meaning and avoid waking empty B1 cores.
-        if (!LlSenderHasWork(enableDedup_, count_, routes, GetBlockIdx())) return;
+        // A peer's eight owners may include a core outside the original token
+        // slice even for B1. Plan its remote work before declaring it empty.
+        if (!planRemote && !LlSenderHasWork(enableDedup_, count_, routes, GetBlockIdx())) return;
 
         if (LlTransport::Rdma(args_)) rdmaBatch_.Init(args_, uint32_t(data_.tokenStride));
 
@@ -153,10 +152,12 @@ public:
         // is reused as a bounded key/count table; qWork stays read-only below.
         LlBuildRouteQ(routeIds_, bs_ * k_, k_, experts_, qDstBuf_.Get<uint32_t>(), qSubBuf_.Get<uint32_t>(),
                       qWorkBuf_.Get<uint32_t>(), qBytes / sizeof(uint32_t));
-        if (networkOwner) {
-            LlBuildRemotePacketOwners(routeIds_, qWorkBuf_.Get<uint32_t>(),
+        if (planRemote) {
+            remoteTasks = LlBuildRemotePacketOwners(routeIds_, qWorkBuf_.Get<uint32_t>(),
                 qSubBuf_.Get<uint32_t>(), routes, k_, localExperts_, uint32_t(args_->rank), Group,
-                enableDedup_, fullMeshFirstHop_, GetBlockIdx());
+                enableDedup_, fullMeshFirstHop_, GetBlockIdx(), sendCores_, uint32_t(args_->rankSize));
+            if (profile) profile->Value<43>(assigned + remoteTasks);  // w43: send_route_count
+            if (assigned == 0U && remoteTasks == 0U) return;
         }
         // Quantization reuses the first hash array on V. Retire its Scalar
         // stores once here, replacing repeated vector-prefix reductions.
@@ -176,10 +177,10 @@ public:
 
         if (profile) profile->Mark<38>();  // w38: send_buffers_routes_ready
 
-        if (networkOwner) SendRemotePackets(input);
-        if (enableDedup_)
-            SendWithDedup(input);
-        else
+        if (remoteTasks != 0U) SendRemotePackets(input);
+        if (enableDedup_) {
+            if (count_ != 0U) SendWithDedup(input);
+        } else
             SendWithoutDedup(input);
         // Reference boundary: packet scheduling has returned. The existing
         // trailing RDMA batch Flush remains in the drain/metadata interval.
@@ -325,7 +326,8 @@ private:
             const uint32_t expert = uint32_t(routeIds_.GetValue(index));
             const auto packet = LlPacketForRoute(routeIds_, index, k_, localExperts_,
                 uint32_t(args_->rank), Group, enableDedup_, fullMeshFirstHop_);
-            SendPacket(input, index / k_, index % k_, expert, CalTokenSendExpertCnt(expert, index), packet.mask);
+            SendPacket(input, index / k_, index % k_, expert, CalTokenSendExpertCnt(expert, index),
+                       packet.mask, LlRemotePacketQp(q.GetValue(index)));
         }
         remoteIssue_ = false;
     }
@@ -509,7 +511,7 @@ private:
     // Every packet still builds its own header/tail and lane, while consecutive
     // emissions of one token share input/quantized bytes. Group/order is unchanged.
     __aicore__ inline void SendPacket(TQue<QuePosition::VECIN, 1>& input, uint32_t token, uint32_t firstK,
-                                      uint32_t expert, uint32_t q, uint32_t mask)
+                                      uint32_t expert, uint32_t q, uint32_t mask, uint32_t qp = UINT32_MAX)
     {
 
         const uint32_t destination = expert / localExperts_;
@@ -542,13 +544,13 @@ private:
         if (LlTransport::RemoteWrite(args_, destination)) {
             rdmaBatch_.Enqueue(destination,
                 DispatchServerDedupDispatchOffset(data_, args_->rank, destination,
-                    expert % localExperts_, q, args_->rankSize, localExperts_, bs_), out);
+                    expert % localExperts_, q, args_->rankSize, localExperts_, bs_), out, qp);
         } else
 #endif
         {
         LlTransport::Packet(args_, destination,
             DispatchServerDedupDispatchOffset(data_, args_->rank, destination,
-                expert % localExperts_, q, args_->rankSize, localExperts_, bs_), out, uint32_t(data_.tokenStride), 7U);
+                expert % localExperts_, q, args_->rankSize, localExperts_, bs_), out, uint32_t(data_.tokenStride), 7U, true, qp);
         }
         SetFlag<HardEvent::MTE3_V>(lane);
         ++packets_;
