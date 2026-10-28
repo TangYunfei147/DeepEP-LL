@@ -1,3 +1,5 @@
+> 当前协议15为新增固定配对卡中转穿刺，详见 [PAIRED_GATEWAY_PROBE.md](PAIRED_GATEWAY_PROBE.md)。以下协议14内容保留为父提交对照说明。
+
 # 两机 NDR 一键构建、测试和本机解析
 
 入口：`tests/ll_rdma/one_click.sh`。参考 `kernel/ll-g4-local-q-table@af094ce` 的

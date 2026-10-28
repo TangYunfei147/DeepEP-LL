@@ -58,6 +58,7 @@ public:
         if (previous==UINT32_MAX) { AscendC::Trap(); return; }
         epoch_=previous+1U;Write(counter,epoch_);
     }
+    __aicore__ inline void WaitReady() const { WaitFrame(); }
     __aicore__ inline uint32_t Peer() const { return uint32_t(args_->rank)^16U; }
     __aicore__ inline void PostFrame(AscendC::LocalTensor<int32_t> routes, AscendC::LocalTensor<uint8_t> scratch) {
         if (AscendC::GetBlockIdx()!=0U) return;

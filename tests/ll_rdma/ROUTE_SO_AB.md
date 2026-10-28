@@ -1,7 +1,7 @@
 # 路由SO独立回退与A/B
 
 协议13为对照：8QP与全部S核池分布保持，配对路由2 put + 2 quiet。
-协议14末提交独立应用路由SO：1 put + 1 quiet，保留源GM退休、完整尾FLAG检查、epoch、双bank、combine_reuse。
+协议14独立提交应用路由SO：1 put + 1 quiet，保留源GM退休、完整尾FLAG检查、epoch、双bank、combine_reuse。
 已推送历史不重写；先恢复对照，再以末提交单独应用优化。
 
 仅EP32配对路由命中此差异。每个版本所有rank更新同一源码并完整重编wheel，不用--skip-build；SDK、shape、route、seed、OFF采样参数保持一致。独立结果目录保留原始数据。完整dispatch+BF16 combine的OFF task用于收益结论。
@@ -9,13 +9,13 @@
 
 ## 目标机操作
 
-A固定提交 `1343b3d`，B为本指南所在的协议14提交。A/B的差异仅为配对路由SO及必要layout、协议身份、测试和说明；8QP、packet归属、combine与SDK不变。
+A固定提交 `1343b3d`，B固定为 `24e90d6`（协议14），新增协议15穿刺不属于此A/B。A/B的差异仅为配对路由SO及必要layout、协议身份、测试和说明；8QP、packet归属、combine与SDK不变。
 
-先在干净checkout拉取并记录B，两台机器使用相同完整SHA：
+先在干净checkout拉取并使用固定B，两台机器使用相同完整SHA：
 
 ```bash
 git pull --ff-only
-ROUTE_SO_B=$(git rev-parse HEAD)
+ROUTE_SO_B=24e90d6bc62fdb7258dfdf5e6f6dd9816e751e0d
 printf "%s\n" "$ROUTE_SO_B"
 # 对照A：两台都切换到此提交并重编
 # 节点0/1分别将NODE设为0/1，MASTER为节点0真实IP

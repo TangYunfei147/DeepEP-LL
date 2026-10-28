@@ -28,7 +28,7 @@ int main() {
                 assert(core<sendCores);owners.insert(core);all.insert(core);
             }
             assert(owners.size()==8);
-            if(world==32 && routes<=8192) {
+            if(world==32 && routes<=kRouteExchangeMaxBytes/4U) {
                 if(peer==(rank^16U))assert(LlDispatchQpOwner(rank,world,sendCores,peer,0,routes)==0);
             } else {
                 const auto countCore=peer/(world/8);
@@ -79,7 +79,8 @@ int main() {
             assert(packet.present==(expectedMask[i]!=UINT64_MAX));
             if(packet.present) {
                 assert(packet.mask==expectedMask[i]);
-                const unsigned peer=ids[i]/local;
+                const unsigned destination=ids[i]/local;
+                const unsigned peer=world==32 && !LlSameHost(rank,destination)?(rank^16U):destination;
                 if(!LlSameHost(rank,peer))remote[peer].push_back(i);
             }
         }

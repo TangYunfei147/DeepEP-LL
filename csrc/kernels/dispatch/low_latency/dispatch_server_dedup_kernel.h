@@ -35,6 +35,13 @@ public:
 
         counts_.Init(commArgs, expertIds, expertTokenNumsOut, sendCountsOut, bs, topK, experts, expertTokenNumsType,
                      magic, pipe, profile_);
+        if (counts_.PairedRoutes()) {
+            constexpr EpServerDedupInputMode mode = Prequantized ? EpServerDedupInputMode::PrequantizedFp8Packs
+                : (WireFp8 ? EpServerDedupInputMode::Quantize16 : EpServerDedupInputMode::Plain16);
+            const auto gateway = DispatchServerDedupDataLayout(bs, h, topK, experts, mode);
+            counts_.GatewayLayout(DispatchServerDedupWindowOffset(magic) + gateway.gatewayOffset,
+                                  gateway.gatewayBytes / 512U);
+        }
         if (profile_) profile_->Mark<4>();  // w4: counts_init_end
 
         if (core_ < sendCores_)
@@ -58,6 +65,7 @@ public:
         if (core_ < sendCores_) {
 
             if (profile_) profile_->Mark<8>();  // w8: sender_begin
+            counts_.WaitPeerGateway();
             sender_.Process(counts_.ScratchPool(), counts_.ReservedBytes(), profile_);
             if (profile_) profile_->Mark<9>();  // w9: sender_end_after_MTE3_S
 
@@ -83,7 +91,7 @@ public:
             if (profile_) profile_->Mark<17>();  // w17: count_drain_end_PIPE_ALL
 
             if (profile_) profile_->Mark<18>();  // w18: receiver_begin
-            receiver_.Process(profile_);
+            receiver_.Process(profile_, counts_.PairedRoutes());
             if (profile_) profile_->Mark<19>();  // w19: receiver_end
 
         }

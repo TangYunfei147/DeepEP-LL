@@ -1,3 +1,5 @@
+> 当前协议15为新增固定配对卡中转穿刺，详见 [PAIRED_GATEWAY_PROBE.md](PAIRED_GATEWAY_PROBE.md)。以下协议14内容保留为父提交对照说明。
+
 > 当前协议14：在协议13对照上独立恢复路由SO。独立回退与A/B见 [ROUTE_SO_AB.md](ROUTE_SO_AB.md)。以下协议12表示8QP分布方案的历史来源，当前运行身份为14。
 
 # 协议14：独立路由SO与每peer的8核集合

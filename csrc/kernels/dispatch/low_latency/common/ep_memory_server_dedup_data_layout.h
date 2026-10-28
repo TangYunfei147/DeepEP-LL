@@ -27,6 +27,7 @@ struct EpServerDedupDataLayout {
     uint64_t sourceOffset = 0, sourceBytes = 0;
     uint64_t dispatchOffset = 0, dispatchBytes = 0;
     uint64_t relayOffset = 0, relayBytes = 0, requiredBytes = 0;
+    uint64_t gatewayOffset = 0, gatewayBytes = 0;
 };
 
 DISPATCH_DEDUP_EP_DATA_INLINE uint64_t DispatchDedupAlign(uint64_t value, uint64_t alignment)
@@ -66,10 +67,14 @@ DISPATCH_DEDUP_EP_DATA_INLINE EpServerDedupDataLayout DispatchServerDedupDataLay
     layout.dispatchOffset = DispatchDedupAlign(layout.sourceOffset + layout.sourceBytes, 512U);
     layout.dispatchBytes = uint64_t(experts) * bs * layout.tokenStride;
     layout.relayOffset = DispatchDedupAlign(layout.dispatchOffset + layout.dispatchBytes, 512U);
-    // Historical Combine reservation, unused by Dispatch. The new pull Combine
-    // must define its stage/result allocation before consuming the five tables.
+    // Historical reservation. Gateway slots must also exclude the BF16 Combine
+    // stage, which can be larger than FP8 dispatch storage.
     layout.relayBytes = uint64_t(8U) * bs * topK * layout.returnStride;
     layout.requiredBytes = layout.relayOffset + layout.relayBytes;
+    const uint64_t combineEnd = layout.dispatchOffset + uint64_t(experts) * bs *
+        DispatchDedupAlign(uint64_t(h) * 2U, 512U);
+    layout.gatewayOffset = layout.relayOffset > combineEnd ? layout.relayOffset : combineEnd;
+    layout.gatewayBytes = uint64_t(bs) * topK * layout.tokenStride;
     return layout;
 }
 

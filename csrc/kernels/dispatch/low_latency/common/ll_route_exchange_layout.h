@@ -6,7 +6,7 @@ namespace DispatchDedup {
 // Fixed, private reservation in each bank, above combine's control region and
 // below the common 2MiB payload boundary. Epoch counters use bank0 only.
 constexpr uint64_t kRouteExchangeBase = 1280ULL * 1024U;
-constexpr uint32_t kRouteExchangeMaxBytes = 256U * 32U * sizeof(int32_t);
+constexpr uint32_t kRouteExchangeMaxBytes = 16384U * sizeof(int32_t);
 constexpr uint32_t kRouteFlagBytes = 32U;
 // A marker outside the valid expert-ID domain distinguishes a tail from an
 // old, longer route body's IDs when B/K changes between uses of the bank.

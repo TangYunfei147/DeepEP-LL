@@ -1,3 +1,9 @@
+## 固定配对卡中转穿刺（2026-10-28）
+
+用户要求新增独立穿刺commit，确认对端卡为EP32的`rank ^ 16`。协议15对所有合法BS的跨机payload使用固定配对卡的8个独占QP核；配对卡执行组内首路由和成员分发。原q、输出槽、权重、combine角色/归约、SDK保持。其他EP域保持原发送路径。
+中转区避开dispatch及BF16 combine stage；core0先清全部本轮中转FLAG再发布路由SO帧，所有S核取得peer帧后发payload。中转保持完整flag检查、源quiet、UB依赖、epoch/双bank/combine_reuse。此为保守穿刺，清理/等待/中转开销计入完整OFF，不宣称正收益。指南tests/ll_rdma/PAIRED_GATEWAY_PROBE.md，父提交24e90d6。
+路由SO独立A/B固定1343b3d（协议13）对24e90d6（协议14）；不得用新增穿刺HEAD冒充纯路由SO版本。助手本地CPU检查后提交推送，CANN/NPU由用户目标机执行。
+
 # 目标RoCE通信契约
 
 ## NDR采样方式（2026-10-27最新用户要求）

@@ -45,6 +45,8 @@ LL_PACKET_PLAN_INLINE uint32_t LlRemotePacketQp(uint32_t taggedQ) {
     return (taggedQ >> 22U) & 7U;
 }
 
+// Protocol15 EP32 uses the paired gateway as the actual NIC peer, independent
+// of the eventual expert rank. Other worlds retain their original NIC targets.
 // Reuse the retired qSub scratch as a peer/count hash table. At most routes
 // distinct peers occur, so routes slots suffice even for B1/EP256. q's high
 // bits store ownership; its original low 16 bits remain the wire slot index.
@@ -56,7 +58,8 @@ LL_PACKET_PLAN_INLINE uint32_t LlBuildRemotePacketOwners(Ids ids, Words q, Words
     for (uint32_t slot = 0; slot < routes; ++slot) scratch.SetValue(slot, 0U);
     uint32_t owned = 0U;
     for (uint32_t index = 0; index < routes; ++index) {
-        const uint32_t peer = uint32_t(ids.GetValue(index)) / localExperts;
+        const uint32_t destination = uint32_t(ids.GetValue(index)) / localExperts;
+        const uint32_t peer = world == 32U && !LlSameHost(rank, destination) ? (rank ^ 16U) : destination;
         if (LlSameHost(rank, peer)) continue;
         const auto packet = LlPacketForRoute(ids, index, topK, localExperts, rank, group, dedup, fullMesh);
         if (!packet.present) continue;

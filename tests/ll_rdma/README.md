@@ -1,3 +1,5 @@
+> 当前协议15为新增固定配对卡中转穿刺，详见 [PAIRED_GATEWAY_PROBE.md](PAIRED_GATEWAY_PROBE.md)。以下协议14内容保留为父提交对照说明。
+
 # HNS_1825 混合 MTE / NDR LL（核心协议10）
 
 > 当前协议14：路由SO整帧、每对卡8QP、按实际目标rank选择各自8核并覆盖全部S核。部署与所有权说明见 [ROCE_SO_ROUTE_8QP.md](ROCE_SO_ROUTE_8QP.md)。
