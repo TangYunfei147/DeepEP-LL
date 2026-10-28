@@ -174,7 +174,7 @@ def test_installed_check_rejects_stale_or_mixed_builds(tmp_path, monkeypatch, mo
     (package / "_build_info.json").write_text(json.dumps(info))
     native = SimpleNamespace(
         low_latency_implementation="wrong" if fault == "branch" else "ndr-hns1825",
-        low_latency_core_protocol=12 if fault == "protocol" else 13, low_latency_rdma_enabled=True,
+        low_latency_core_protocol=11 if fault == "protocol" else 14, low_latency_rdma_enabled=True,
         low_latency_roce_qps_per_peer=4 if fault == "qps" else 8,
         low_latency_stage_timer_enabled=(mode == "timer") != (fault == "timer"),
         low_latency_reference_profile_enabled=(mode == "reference") != (fault == "reference"),

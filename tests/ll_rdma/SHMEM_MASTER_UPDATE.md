@@ -1,6 +1,6 @@
 # SHMEM 官方 master 更新（2026-10-25）
 
-> 2026-10-28更新：当前协议12，路由表同WQE尾FLAG发布，每对跨机卡共8个QP；本文旧QP/独立commit描述作为历史记录。当前实现见 [ROCE_SO_ROUTE_8QP.md](ROCE_SO_ROUTE_8QP.md)。
+> 2026-10-28更新：当前协议14，路由表同WQE尾FLAG发布，每对跨机卡共8个QP；本文旧QP/独立commit描述作为历史记录。当前实现见 [ROCE_SO_ROUTE_8QP.md](ROCE_SO_ROUTE_8QP.md)。
 
 本次按用户要求，将 `third-party/shmem` 从 dev 的
 `4dd80e2129da42bd773982c2bb3758af1ed0bba8` 更新到官方

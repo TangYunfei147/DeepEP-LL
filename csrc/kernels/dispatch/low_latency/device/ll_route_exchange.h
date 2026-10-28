@@ -12,7 +12,7 @@ namespace DispatchDedup {
 class PairedRouteExchange {
     const __gm__ CommArgs* args_ = nullptr;
     uint64_t bank_ = 0;
-    uint32_t bytes_ = 0, epoch_ = 0;
+    uint32_t bytes_ = 0, bodyBytes_ = 0, epoch_ = 0;
     __aicore__ inline GM_ADDR Local(uint64_t offset) const {
         return args_->peerMems[args_->rank] + offset;
     }
@@ -33,12 +33,23 @@ class PairedRouteExchange {
                                         AscendC::DcciDst::CACHELINE_OUT>(value);
         AscendC::DataSyncBarrier<AscendC::MemDsbT::DDR>();
     }
-    __aicore__ inline void Wait(uint64_t offset, uint32_t sequence) const {
-        while (Read(offset) != sequence) {}
+    __aicore__ inline void WaitFrame() const {
+        const uint64_t tail = bank_ + kRouteRx + bodyBytes_;
+        for (;;) {
+            bool ready = true;
+            for (uint32_t word = 0; word < kRouteFlagBytes / sizeof(uint32_t); ++word) {
+                if (Read(tail + word * sizeof(uint32_t)) != (word % 2U ? epoch_ : kRouteFlagMagic)) {
+                    ready = false;
+                    break;
+                }
+            }
+            if (ready) return;
+        }
     }
 public:
     __aicore__ inline void Init(const __gm__ CommArgs* args, uint32_t routes, uint64_t bank) {
         args_=args;bank_=bank;bytes_=routes*sizeof(int32_t);
+        bodyBytes_=(bytes_+31U)/32U*32U;
         if (args->rankSize!=32 || !routes || bytes_>kRouteExchangeMaxBytes || !LlTransport::Rdma(args)) {
             AscendC::Trap(); return;
         }
@@ -48,39 +59,36 @@ public:
         epoch_=previous+1U;Write(counter,epoch_);
     }
     __aicore__ inline uint32_t Peer() const { return uint32_t(args_->rank)^16U; }
-    __aicore__ inline void PostBody(AscendC::LocalTensor<int32_t> routes, AscendC::LocalTensor<uint8_t> scratch) {
+    __aicore__ inline void PostFrame(AscendC::LocalTensor<int32_t> routes, AscendC::LocalTensor<uint8_t> scratch) {
         if (AscendC::GetBlockIdx()!=0U) return;
         // Routes reside in registered symmetric GM; no source points to UB.
         AscendC::DataCopy(LlTransport::Tensor(Local(bank_+kRouteTx),true), routes.ReinterpretCast<uint8_t>(),
-                         (bytes_+31U)/32U*32U);
+                         bodyBytes_);
+        // Existing count-work scratch supplies the 32B tail; no extra UB.
+        auto flag = scratch.ReinterpretCast<uint32_t>();
+        for (uint32_t word = 0; word < kRouteFlagBytes / sizeof(uint32_t); ++word)
+            flag.SetValue(word, word % 2U ? epoch_ : kRouteFlagMagic);
+        LlTransport::Sync<AscendC::HardEvent::S_MTE3>(7U);
+        AscendC::DataCopy(LlTransport::Tensor(Local(bank_+kRouteTx+bodyBytes_),true), scratch, kRouteFlagBytes);
         LlTransport::Sync<AscendC::HardEvent::MTE3_S>(7U);
-        Write(bank_+kRouteSequence,epoch_);
         LlTransport::Put(args_,Peer(),LlTransport::Address(args_,Peer(),bank_+kRouteRx),
-                         Local(bank_+kRouteTx),bytes_,scratch);
+                         Local(bank_+kRouteTx),bodyBytes_+kRouteFlagBytes,scratch);
         // Ordinary HNS Put submits immediately and retires its UB workspace
         // before returning. Only the registered GM source remains live: count
-        // computation may reuse scratch while the body progresses on the NIC.
+        // computation may reuse scratch while the SO frame progresses on NIC.
     }
-    __aicore__ inline void PublishCommit(AscendC::LocalTensor<uint8_t> scratch) {
-        if (AscendC::GetBlockIdx()!=0U) return;
-        // Never expose a route commit before successful body completion.
-        LlTransport::Quiet(Peer(),scratch);
-        LlTransport::Put(args_,Peer(),LlTransport::Address(args_,Peer(),bank_+kRouteCommit),
-                         Local(bank_+kRouteSequence),sizeof(uint32_t),scratch);
-        // Commit progresses without quiet. FinishSend retires its GM sequence
-        // source and CQ before this core leaves the count phase.
-    }
-    // Acquire the remote commit and issue the body load. The caller owns the
+    // Acquire the complete SO tail and issue the body load. The caller owns the
     // MTE2_V (or MTE2_S) dependency before consuming/reusing this UB view.
     __aicore__ inline void ReadPeerAsync(AscendC::LocalTensor<int32_t> routes) {
-        Wait(bank_+kRouteCommit,epoch_);
+        WaitFrame();
         LlTransport::Sync<AscendC::HardEvent::S_MTE2>(7U);
         AscendC::DataCopy(routes.ReinterpretCast<uint8_t>(), LlTransport::Tensor(Local(bank_+kRouteRx),true),
-                         (bytes_+31U)/32U*32U);
+                         bodyBytes_);
     }
     __aicore__ inline void FinishSend(AscendC::LocalTensor<uint8_t> scratch) {
         if (AscendC::GetBlockIdx()!=0U) return;
-        // This waits only for our outbound commit, never for peer/local readers.
+        // SO publishes readiness, not source reuse: retire the whole frame and
+        // QP0 before core0 can send payload. Never join peer/local readers.
         LlTransport::Quiet(Peer(),scratch);
     }
 };

@@ -240,7 +240,7 @@ __aicore__ inline void ServerDedupCounts::SendCnt()
         // counts. HNS retires Put's UB scratch on return; body transfer from
         // registered GM overlaps the following count work and MTE publication.
         SyncFunc<HardEvent::MTE2_S>();
-        routeExchange_.PostBody(validExpertIdsTensor_, workBuf_.Get<uint8_t>());
+        routeExchange_.PostFrame(validExpertIdsTensor_, workBuf_.Get<uint8_t>());
     }
 
     // 4. 规模足够时先向量筛选本核专家区间再做直方图；小输入逐专家统计。
@@ -258,9 +258,8 @@ __aicore__ inline void ServerDedupCounts::SendCnt()
     SyncFunc<HardEvent::S_MTE3>();
     if (count) SendExpertCntRange(start, end);
     if (pairedRoutes_) {
-        // Baseline: body completion precedes the independent commit put.
-        // QP0 remains core0-owned; FinishSend retires its commit source.
-        routeExchange_.PublishCommit(workBuf_.Get<uint8_t>());
+        // The complete outbound frame (including its SO tail) was already
+        // posted. FinishSend retires its source and QP0 before payload reuse.
         // Status records are reused for the paired source. Retire the local
         // source's MTE body/commit reads before overwriting their UB.
         SyncFunc<HardEvent::MTE3_S>();

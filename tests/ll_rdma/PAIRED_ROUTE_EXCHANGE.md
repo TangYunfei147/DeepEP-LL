@@ -1,6 +1,6 @@
 # 每卡独立网口的 EP32 配对路由交换（协议9）
 
-> 2026-10-28更新：当前协议12，路由表同WQE尾FLAG发布，每对跨机卡共8个QP；本文旧QP/独立commit描述作为历史记录。当前实现见 [ROCE_SO_ROUTE_8QP.md](ROCE_SO_ROUTE_8QP.md)。
+> 2026-10-28更新：当前协议14，路由表同WQE尾FLAG发布，每对跨机卡共8个QP；本文旧QP/独立commit描述作为历史记录。当前实现见 [ROCE_SO_ROUTE_8QP.md](ROCE_SO_ROUTE_8QP.md)。
 
 初始配对路由的基线为67b1b72；本次删除ACK的直接对照基线为1a1b6fc。
 目标两台机器、每台16卡，每卡独立跨机网口。
