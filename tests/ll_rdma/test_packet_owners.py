@@ -48,14 +48,14 @@ template<bool Prequantized> struct Test {
  struct Layout {uint32_t headerPayloadOffset=64,readIndexPayloadOffset=96;} data_;
  LocalTensor<float> weights_,routeWeights_;
  LocalTensor<int32_t> routeIds_;
- Buffer qWorkBuf_;
+ Buffer qPlanBuf_;
 ''' + methods + r'''
 };
 template<bool P> void Check(){
  std::vector<float> weights(160);std::vector<int32_t> ids(160);std::vector<uint32_t> q(160),raw(128);
  for(unsigned i=0;i<160;++i){weights[i]=float(i+1)/8;ids[i]=i*17%384;q[i]=0x80070000U|(i/8+7);}
  Test<P> t;t.weights_={weights.data(),160};t.routeWeights_={weights.data()+24,8};
- t.routeIds_={ids.data(),160};t.qWorkBuf_={q.data()};
+ t.routeIds_={ids.data(),160};t.qPlanBuf_={q.data()};
  LocalTensor<uint8_t> payload{reinterpret_cast<uint8_t*>(raw.data()),raw.size()*4};
  for(bool remote:{true,false})for(unsigned token:{0U,3U,19U})for(uint32_t mask:{255U,60U,0U,8U}){
   if(!remote && token!=3)continue;

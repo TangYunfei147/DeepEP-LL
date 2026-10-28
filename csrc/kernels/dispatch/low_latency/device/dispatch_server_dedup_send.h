@@ -116,6 +116,7 @@ public:
         Allocate(qDstBuf_, scratchBytes);
         Allocate(qSubBuf_, scratchBytes);
         Allocate(qWorkBuf_, qBytes);
+        Allocate(qPlanBuf_, qBytes); // independent immutable q/QP plan in both A/B builds
         if constexpr (NeedQuantize) Allocate(quantBuf_, uint32_t(data_.packedPayloadBytes));
         Allocate(weightInBuf_, uint32_t(DispatchDedupAlign(uint64_t(count_) * k_ * 4U, 32U)));
         Allocate(weightOutBuf_, uint32_t(DispatchDedupAlign(uint64_t(count_) * k_ * 4U, 32U)));
@@ -151,9 +152,9 @@ public:
         // Build q once in original flat-route order. The old reduction scratch
         // is reused as a bounded key/count table; qWork stays read-only below.
         LlBuildRouteQ(routeIds_, bs_ * k_, k_, experts_, qDstBuf_.Get<uint32_t>(), qSubBuf_.Get<uint32_t>(),
-                      qWorkBuf_.Get<uint32_t>(), qBytes / sizeof(uint32_t));
+                      qPlanBuf_.Get<uint32_t>(), qBytes / sizeof(uint32_t));
         if (planRemote) {
-            remoteTasks = LlBuildRemotePacketOwners(routeIds_, qWorkBuf_.Get<uint32_t>(),
+            remoteTasks = LlBuildRemotePacketOwners(routeIds_, qPlanBuf_.Get<uint32_t>(),
                 qSubBuf_.Get<uint32_t>(), routes, k_, localExperts_, uint32_t(args_->rank), Group,
                 enableDedup_, fullMeshFirstHop_, GetBlockIdx(), sendCores_, uint32_t(args_->rankSize));
             if (profile) profile->Value<43>(assigned + remoteTasks);  // w43: send_route_count
@@ -161,9 +162,7 @@ public:
         }
         // Quantization reuses the first hash array on V. Retire its Scalar
         // stores once here, replacing repeated vector-prefix reductions.
-        if constexpr (NeedQuantize) {
-            if (bs_ > 1U) Sync<HardEvent::S_V>();
-        }
+        if (bs_ > 1U) Sync<HardEvent::S_V>();
         // 每个 512B 块尾部的 32B 标记预置为 1；发送时 payload 和标记一起搬运。
         // 初始 MTE3_V 事件让 lane 首次可写，后续复用由上一包的发送完成事件控制。
         uint64_t flagMask[2] = {0xffU, 0U};
@@ -303,13 +302,12 @@ public:
         // core's sends by the same 256P+ server order used by dedup DIRECT.
         const uint32_t expertsPerServer = localExperts_ * Group;
         const uint32_t ownServer = args_->rank / Group;
-        auto nextRoute = qSubBuf_.Get<uint32_t>();
-        LlBuildStableRouteGroups(routeIds_, begin, count, expertsPerServer, serverNum, serverState_, nextRoute);
         for (uint32_t step = 0; step < serverNum; ++step) {
             const uint32_t server = EpServerOrder::ServerDedupDispatchDirectOrder(serverNum, ownServer, step);
-            for (uint32_t i = serverState_.GetValue(server); i != UINT32_MAX; i = nextRoute.GetValue(i)) {
+            for (uint32_t i = begin; i < begin + count; ++i) {
                 const uint32_t expert = uint32_t(routeIds_.GetValue(i));
-                if (OwnsLocalPacket(expert)) SendPacket(input, i / k_, i % k_, expert, CalTokenSendExpertCnt(expert, i), 0U);
+                if (expert / expertsPerServer == server && OwnsLocalPacket(expert))
+                    SendPacket(input, i / k_, i % k_, expert, CalTokenSendExpertCnt(expert, i), 0U);
             }
         }
     }
@@ -320,7 +318,7 @@ private:
     }
     __aicore__ inline void SendRemotePackets(TQue<QuePosition::VECIN, 1>& input) {
         remoteIssue_ = true;
-        auto q = qWorkBuf_.Get<uint32_t>();
+        auto q = qPlanBuf_.Get<uint32_t>();
         for (uint32_t index = 0; index < bs_ * k_; ++index) {
             if (!LlOwnsRemotePacket(q.GetValue(index), GetBlockIdx())) continue;
             const uint32_t expert = uint32_t(routeIds_.GetValue(index));
@@ -387,7 +385,7 @@ private:
     __aicore__ inline uint32_t CalTokenSendExpertCnt(uint32_t expert, uint32_t index)
     {
         (void)expert;
-        return qWorkBuf_.Get<uint32_t>().GetValue(index) & kLlRouteQMask;
+        return qPlanBuf_.Get<uint32_t>().GetValue(index) & kLlRouteQMask;
     }
     template <class Fp8Type>
     // 摘要：以每 32 元素为一组生成 MXFP8 scale 和量化数据，复用 q 计算的临时 UB。
@@ -576,7 +574,7 @@ private:
     GlobalTensor<int32_t> ids_;
     GlobalTensor<float> weights_, weightOut_;
     GlobalTensor<uint32_t> maskOut_;
-    TBuf<> idsBuf_, qDstBuf_, qSubBuf_, qWorkBuf_, quantBuf_;
+    TBuf<> idsBuf_, qDstBuf_, qSubBuf_, qWorkBuf_, qPlanBuf_, quantBuf_;
     TBuf<> weightInBuf_, weightOutBuf_, maskBuf_, directBuf_, serverBuf_, firstHopBuf_, outBuf_;
     LocalTensor<int32_t> routeIds_;
     LocalTensor<float> routeWeights_, sourceWeights_;
