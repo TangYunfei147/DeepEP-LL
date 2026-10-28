@@ -19,3 +19,5 @@ bash tests/ll_rdma/one_click.sh "$NODE" "$MASTER" original-partition-001 --mode 
 ```
 
 NODE=0/1，MASTER为节点0真实IP。原始结果保留，只回传入口生成的紧凑报告。CPU检查不代表CANN/NPU验证。
+
+发送调度复盘、示例图与重新设计议题见 [EIGHT_QP_SCHEDULING_REVIEW.md](EIGHT_QP_SCHEDULING_REVIEW.md)。

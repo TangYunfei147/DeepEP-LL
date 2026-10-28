@@ -156,3 +156,5 @@ normal 全 rank 通过后，将 `--route normal` 改为 `--route hotspot` 再执
 公共Runtime/Session保留MTE默认；由已确认LL用途的测试入口选择混合后端，不按缓冲容量猜用途。维护原则见[配置注意事项](../ll_stage_timer/CONFIGURATION_NOTES.md)。
 
 NDR wheel/kernel增量构建、timer对象复用与目标机计时步骤见[增量构建说明](../../docs/BUILD_INCREMENTAL.md)。
+
+发送调度复盘、示例图与重新设计议题见 [EIGHT_QP_SCHEDULING_REVIEW.md](EIGHT_QP_SCHEDULING_REVIEW.md)。
