@@ -1,3 +1,5 @@
+> 当前协议17为q逐次Vector归约回退实验；匹配对照3f80050（协议16）。见 [Q_ROLLBACK_AB.md](Q_ROLLBACK_AB.md)。
+
 > 当前协议15为新增固定配对卡中转穿刺，详见 [PAIRED_GATEWAY_PROBE.md](PAIRED_GATEWAY_PROBE.md)。以下协议14内容保留为父提交对照说明。
 
 # HNS_1825 混合 MTE / NDR LL（核心协议10）

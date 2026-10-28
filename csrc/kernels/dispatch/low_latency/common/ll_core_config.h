@@ -2,7 +2,7 @@
 #define DEEPEP_LL_CORE_CONFIG_H
 #include <cstdint>
 namespace DispatchDedup {
-constexpr uint32_t kLlCoreProtocolVersion = 16U; // EP32 fixed paired gateway probe; eight exclusive QP owners
+constexpr uint32_t kLlCoreProtocolVersion = 17U; // EP32 fixed paired gateway probe; eight exclusive QP owners
 // Capacity is not participation. Pure AIV launches use the queried even count.
 constexpr uint32_t kLlMaxCoreNum = 72U;
 constexpr uint32_t kLlMaxRecvCoreNum = kLlMaxCoreNum / 2U;

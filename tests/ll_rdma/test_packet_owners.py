@@ -41,6 +41,19 @@ template<class T> struct LocalTensor {
  template<class U> LocalTensor<U> ReinterpretCast(){return {reinterpret_cast<U*>(p),n*sizeof(T)/sizeof(U)};}
 };
 struct Buffer {uint32_t* p;template<class T> LocalTensor<T> Get(){return {reinterpret_cast<T*>(p),160};}};
+constexpr int PIPE_V=1;
+enum class HardEvent{V_S};
+template<int>void PipeBarrier(){}
+template<class T>void Duplicate(LocalTensor<T> t,T x,uint32_t n){for(unsigned i=0;i<n;++i)t.SetValue(i,x);}
+void Sub(LocalTensor<int32_t> d,LocalTensor<int32_t> a,LocalTensor<int32_t> b,uint32_t n){for(unsigned i=0;i<n;++i)d.SetValue(i,a.GetValue(i)-b.GetValue(i));}
+void Abs(LocalTensor<float> d,LocalTensor<float> a,uint32_t n){for(unsigned i=0;i<n;++i)d.ReinterpretCast<uint32_t>().SetValue(i,a.ReinterpretCast<uint32_t>().GetValue(i)&0x7fffffffU);}
+void Mins(LocalTensor<int32_t> d,LocalTensor<int32_t> a,int x,uint32_t n){for(unsigned i=0;i<n;++i)d.SetValue(i,a.GetValue(i)<x?a.GetValue(i):x);}
+template<class T>void ReduceSum(LocalTensor<T> d,LocalTensor<T> a,LocalTensor<T> work,uint32_t n){
+ unsigned sum=0;for(unsigned i=0;i<n;++i)sum+=a.template ReinterpretCast<uint32_t>().GetValue(i);
+ // Model bit-pattern FP32 reduction under the kernel's preserved CTRL mode.
+ work.template ReinterpretCast<uint32_t>().SetValue(0,0xdeadbeef);
+ d.template ReinterpretCast<uint32_t>().SetValue(0,sum);
+}
 struct Args {uint32_t rank=7;};
 template<bool Prequantized> struct Test {
  Args a;Args* args_=&a;uint32_t start_=3,k_=8,cachedTailEntries_=0;
@@ -48,14 +61,15 @@ template<bool Prequantized> struct Test {
  struct Layout {uint32_t headerPayloadOffset=64,readIndexPayloadOffset=96;} data_;
  LocalTensor<float> weights_,routeWeights_;
  LocalTensor<int32_t> routeIds_;
- Buffer qPlanBuf_;
+ Buffer qPlanBuf_,qDstBuf_,qSubBuf_,qWorkBuf_;
+ template<HardEvent> void Sync(){}
 ''' + methods + r'''
 };
 template<bool P> void Check(){
- std::vector<float> weights(160);std::vector<int32_t> ids(160);std::vector<uint32_t> q(160),raw(128);
- for(unsigned i=0;i<160;++i){weights[i]=float(i+1)/8;ids[i]=i*17%384;q[i]=0x80070000U|(i/8+7);}
+ std::vector<float> weights(160);std::vector<int32_t> ids(160);std::vector<uint32_t> q(160),raw(128),dst(160),sub(160),work(160),hist(384);
+ for(unsigned i=0;i<160;++i){weights[i]=float(i+1)/8;ids[i]=i*17%37;q[i]=0x80070000U|(i<8?0U:hist[ids[i]]);++hist[ids[i]];}
  Test<P> t;t.weights_={weights.data(),160};t.routeWeights_={weights.data()+24,8};
- t.routeIds_={ids.data(),160};t.qPlanBuf_={q.data()};
+ t.routeIds_={ids.data(),160};t.qPlanBuf_={q.data()};t.qDstBuf_={dst.data()};t.qSubBuf_={sub.data()};t.qWorkBuf_={work.data()};
  LocalTensor<uint8_t> payload{reinterpret_cast<uint8_t*>(raw.data()),raw.size()*4};
  for(bool remote:{true,false})for(unsigned token:{0U,3U,19U})for(uint32_t mask:{255U,60U,0U,8U}){
   if(!remote && token!=3)continue;

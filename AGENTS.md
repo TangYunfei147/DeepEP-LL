@@ -1,3 +1,7 @@
+## q优化回退A/B（2026-10-28）
+
+用户要求验证q缓存收益。协议16对照3f80050与协议17回退使用同样的独立qPlanBuf、原q归约scratch及Host预算，避免Vector求q破坏8QP归属；不能直接拿60f8bec与协议17视为纯q A/B。协议17恢复原CalTokenSendExpertCnt逐次Vector前缀归约，生产sender不调用LlBuildRouteQ；8QP的peer计数表仍保留。固定配对卡中转、SDK、采样和combine不变。指南tests/ll_rdma/Q_ROLLBACK_AB.md。
+
 ## 固定配对卡中转穿刺（2026-10-28）
 
 用户要求新增独立穿刺commit，确认对端卡为EP32的`rank ^ 16`。协议15对所有合法BS的跨机payload使用固定配对卡的8个独占QP核；配对卡执行组内首路由和成员分发。原q、输出槽、权重、combine角色/归约、SDK保持。其他EP域保持原发送路径。
