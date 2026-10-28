@@ -1,42 +1,56 @@
 #!/usr/bin/env python3
-"""把 route_q_bench.csv 画成单条折线：横轴核数，纵轴单轮 q 构建耗时。
+"""把 route_q_bench.csv 画成折线：横轴核数，纵轴单轮 q 构建耗时。
 
-实线 = 后一半采样的平均，虚线 = p99；p50 与原始采样留在 CSV 里。
+split = 按专家区间分核的 q 构建（实线 avg，虚线 p99）；
+prod  = 1 核生产参考（每核全表 LlBuildRouteQ，水平虚线）。
 """
 
 import csv
 import sys
 
-COLOR = "#1f6feb"
+SPLIT_COLOR = "#1f6feb"
+PROD_COLOR = "#2e7d32"
 
 
 def load(path):
-    points = []
+    data = {"split": [], "prod": []}
     shape = ""
     with open(path, newline="") as handle:
         for row in csv.DictReader(handle):
-            points.append((float(row["cores"]), float(row["us_avg"]), float(row["us_p99"])))
+            impl = row["impl"]
+            data.setdefault(impl, []).append(
+                (float(row["cores"]), float(row["us_avg"]), float(row["us_p99"])))
             shape = "routes=%s experts=%s" % (row["routes"], row["experts"])
-    points.sort()
-    return points, shape
+    for values in data.values():
+        values.sort()
+    return data, shape
 
 
-def plot_matplotlib(points, shape, out_png, out_svg):
+def plot_matplotlib(data, shape, out_png, out_svg):
     import matplotlib
 
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
     fig, axis = plt.subplots(figsize=(7.2, 4.4), dpi=160)
-    xs = [p[0] for p in points]
-    axis.plot(xs, [p[1] for p in points], color=COLOR, marker="o", linewidth=1.8, markersize=4, label="avg")
-    axis.plot(xs, [p[2] for p in points], color=COLOR, linestyle="--", linewidth=1.1, alpha=0.85, label="p99")
-    for x, avg, _ in points:
-        axis.annotate("%.2f" % avg, (x, avg), textcoords="offset points", xytext=(0, 7), ha="center", fontsize=7,
-                      color=COLOR)
-    values = [v for _, avg, p99 in points for v in (avg, p99) if v > 0]
+    split = data.get("split", [])
+    if split:
+        xs = [p[0] for p in split]
+        axis.plot(xs, [p[1] for p in split], color=SPLIT_COLOR, marker="o", linewidth=1.8, markersize=4,
+                  label="expert-split avg")
+        axis.plot(xs, [p[2] for p in split], color=SPLIT_COLOR, linestyle="--", linewidth=1.1, alpha=0.85,
+                  label="expert-split p99")
+        for x, avg, _ in split:
+            axis.annotate("%.2f" % avg, (x, avg), textcoords="offset points", xytext=(0, 7), ha="center",
+                          fontsize=7, color=SPLIT_COLOR)
+    prod = data.get("prod", [])
+    if prod:
+        value = prod[0][1]
+        axis.axhline(value, color=PROD_COLOR, linestyle=":", linewidth=1.4,
+                     label="production full-table (%.2f us)" % value)
+    values = [v for name in data for _, avg, p99 in data[name] for v in (avg, p99) if v > 0]
     if values:
-        axis.set_ylim(min(values) * 0.7, max(values) * 1.5)
+        axis.set_ylim(min(values) * 0.6, max(values) * 1.6)
     axis.set_xscale("log", base=2)
     axis.set_xlabel("AIV cores used")
     axis.set_ylabel("q build time (us), last-half average / p99")
@@ -48,14 +62,15 @@ def plot_matplotlib(points, shape, out_png, out_svg):
     fig.savefig(out_svg)
 
 
-def plot_svg(points, shape, out_svg):
+def plot_svg(data, shape, out_svg):
     """matplotlib 缺失时的最小折线图，保证一键流程仍产出图片。"""
     width, height, pad = 720, 440, 60
-    values = [v for _, avg, p99 in points for v in (avg, p99)]
-    xs = [p[0] for p in points]
+    split = data.get("split", [])
+    values = [v for name in data for _, avg, p99 in data[name] for v in (avg, p99)]
+    xs = [p[0] for p in split]
     if not values or not xs:
         raise SystemExit("empty CSV")
-    x_min, x_max, y_max = min(xs), max(xs), max(values) * 1.15 or 1.0
+    x_min, x_max, y_max = min(xs), max(xs), max(values) * 1.2
 
     def px(x):
         return pad + (width - 2 * pad) / 2.0 if x_max == x_min else pad + (x - x_min) / (x_max - x_min) * (width - 2 * pad)
@@ -71,13 +86,21 @@ def plot_svg(points, shape, out_svg):
         '<text x="%d" y="20" font-size="14" font-family="sans-serif">q build (%s), us: solid=avg dash=p99</text>'
         % (pad, shape),
         '<polyline fill="none" stroke="%s" stroke-width="2" points="%s"/>'
-        % (COLOR, " ".join("%.1f,%.1f" % (px(x), py(y)) for x, y, _ in points)),
+        % (SPLIT_COLOR, " ".join("%.1f,%.1f" % (px(x), py(y)) for x, y, _ in split)),
         '<polyline fill="none" stroke="%s" stroke-width="1" stroke-dasharray="4 3" points="%s"/>'
-        % (COLOR, " ".join("%.1f,%.1f" % (px(x), py(y)) for x, _, y in points)),
+        % (SPLIT_COLOR, " ".join("%.1f,%.1f" % (px(x), py(y)) for x, _, y in split)),
     ]
-    for x, y, _ in points:
-        parts.append('<circle cx="%.1f" cy="%.1f" r="3" fill="%s"/>' % (px(x), py(y), COLOR))
-        parts.append('<text x="%.1f" y="%.1f" font-size="9" fill="%s">%.2f</text>' % (px(x) + 4, py(y) - 4, COLOR, y))
+    prod = data.get("prod", [])
+    if prod:
+        value = prod[0][1]
+        parts.append('<line x1="%d" y1="%.1f" x2="%d" y2="%.1f" stroke="%s" stroke-dasharray="1 4"/>'
+                     % (pad, py(value), width - pad, py(value), PROD_COLOR))
+        parts.append('<text x="%d" y="%.1f" font-size="10" fill="%s">prod %.2f</text>'
+                     % (width - pad - 80, py(value) - 4, PROD_COLOR, value))
+    for x, y, _ in split:
+        parts.append('<circle cx="%.1f" cy="%.1f" r="3" fill="%s"/>' % (px(x), py(y), SPLIT_COLOR))
+        parts.append('<text x="%.1f" y="%.1f" font-size="9" fill="%s">%.2f</text>'
+                     % (px(x) + 4, py(y) - 4, SPLIT_COLOR, y))
     for x in xs:
         parts.append('<text x="%.1f" y="%d" font-size="10" text-anchor="middle">%d</text>'
                      % (px(x), height - pad + 16, int(x)))
@@ -95,13 +118,13 @@ def main():
     out = "route_q_bench.png"
     if "--out" in sys.argv:
         out = sys.argv[sys.argv.index("--out") + 1]
-    points, shape = load(csv_path)
+    data, shape = load(csv_path)
     svg = out.rsplit(".", 1)[0] + ".svg"
     try:
-        plot_matplotlib(points, shape, out, svg)
+        plot_matplotlib(data, shape, out, svg)
         print("figure: %s" % out)
     except ImportError:
-        plot_svg(points, shape, svg)
+        plot_svg(data, shape, svg)
         print("matplotlib 不可用，已写 SVG: %s" % svg)
 
 

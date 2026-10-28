@@ -15,6 +15,8 @@
 
 extern "C" void ll_route_q_bench_launch(uint32_t cores, void* stream, void* ids, void* q, void* cycles,
                                         uint32_t routes, uint32_t experts, uint32_t topK, uint32_t reps);
+extern "C" void ll_route_q_prod_launch(uint32_t cores, void* stream, void* ids, void* q, void* cycles,
+                                       uint32_t routes, uint32_t experts, uint32_t topK, uint32_t reps);
 
 namespace {
 void Check(aclError status, const char* what)
@@ -150,7 +152,7 @@ int main(int argc, char** argv)
         void* qDev = nullptr;
         void* cycleDev = nullptr;
         Check(aclrtMalloc(&idsDev, uint64_t(idsItems) * sizeof(int32_t), ACL_MEM_MALLOC_HUGE_FIRST), "ids alloc");
-        Check(aclrtMalloc(&qDev, uint64_t(routeItems) * sizeof(int32_t), ACL_MEM_MALLOC_HUGE_FIRST), "q alloc");
+        Check(aclrtMalloc(&qDev, uint64_t(maxCores) * routeItems * sizeof(int32_t), ACL_MEM_MALLOC_HUGE_FIRST), "q alloc");
         Check(aclrtMalloc(&cycleDev, uint64_t(maxCores) * (opt.reps + 1U) * sizeof(uint64_t),
                           ACL_MEM_MALLOC_HUGE_FIRST),
               "cycle alloc");
@@ -162,37 +164,47 @@ int main(int argc, char** argv)
         aclrtStream stream = nullptr;
         Check(aclrtCreateStream(&stream), "stream");
 
-        std::vector<int32_t> qHost(routeItems);
+        std::vector<int32_t> qHost(uint64_t(maxCores) * routeItems);
         std::vector<uint64_t> cycleHost(uint64_t(maxCores) * (opt.reps + 1U));
 
         std::ofstream csv(opt.out);
         if (!csv) throw std::runtime_error("cannot write " + opt.out);
-        csv << "cores,reps,used_reps,routes,experts,us_avg,us_p50,us_p99\n";
+        csv << "impl,cores,reps,used_reps,routes,experts,us_avg,us_p50,us_p99\n";
 
-        std::cout << "shape: routes=" << routeItems << " experts=" << experts << " topk=" << topK
-                  << " reps=" << opt.reps << " available_aiv=" << available << "\n";
-        // 预热一次，避免首启开销落进任一配置。
-        ll_route_q_bench_launch(1U, stream, idsDev, qDev, cycleDev, routeItems, experts, topK, 1U);
-        Check(aclrtSynchronizeStream(stream), "warmup");
-
-        for (uint32_t useCores : cores) {
-            Check(aclrtMemset(qDev, uint64_t(routeItems) * sizeof(int32_t), 0xff,
-                              uint64_t(routeItems) * sizeof(int32_t)), "clear q");
-            ll_route_q_bench_launch(useCores, stream, idsDev, qDev, cycleDev, routeItems, experts, topK, opt.reps);
+        // 跑一次配置：launch → 校验 q → 取后一半采样的 avg/p50/p99 → 写 CSV。
+        const uint32_t cycleStride = opt.reps + 1U;
+        auto runOnce = [&](const char* impl, uint32_t useCores, bool production) {
+            const uint64_t qBytes = uint64_t(maxCores) * routeItems * sizeof(int32_t);
+            Check(aclrtMemset(qDev, qBytes, 0xff, qBytes), "clear q");
+            if (production)
+                ll_route_q_prod_launch(useCores, stream, idsDev, qDev, cycleDev, routeItems, experts, topK, opt.reps);
+            else
+                ll_route_q_bench_launch(useCores, stream, idsDev, qDev, cycleDev, routeItems, experts, topK, opt.reps);
             Check(aclrtSynchronizeStream(stream), "bench kernel");
             const uint64_t cycleBytes = uint64_t(useCores) * (opt.reps + 1U) * sizeof(uint64_t);
             Check(aclrtMemcpy(cycleHost.data(), cycleBytes, cycleDev, cycleBytes, ACL_MEMCPY_DEVICE_TO_HOST),
                   "cycle download");
-            Check(aclrtMemcpy(qHost.data(), qHost.size() * sizeof(int32_t), qDev, qHost.size() * sizeof(int32_t),
-                              ACL_MEMCPY_DEVICE_TO_HOST),
-                  "q download");
-            for (uint32_t i = 0; i < routeItems; ++i)
-                if (qHost[i] != qRef[i])
-                    throw std::runtime_error("q mismatch: cores=" + std::to_string(useCores) + " index=" +
-                                             std::to_string(i));
+            const uint64_t copyBytes = uint64_t(useCores) * routeItems * sizeof(int32_t);
+            Check(aclrtMemcpy(qHost.data(), copyBytes, qDev, copyBytes, ACL_MEMCPY_DEVICE_TO_HOST), "q download");
+            // 每核只写自己私有区的一部分下标，其余保持 -1；要求每个下标恰好被一个核写过。
+            for (uint32_t i = 0; i < routeItems; ++i) {
+                int32_t value = -1;
+                uint32_t writers = 0U;
+                for (uint32_t core = 0U; core < useCores; ++core) {
+                    const int32_t candidate = qHost[uint64_t(core) * routeItems + i];
+                    if (candidate == -1) continue;
+                    value = candidate;
+                    ++writers;
+                }
+                if (writers != 1U)
+                    throw std::runtime_error(std::string("q coverage: impl=") + impl +
+                                             " cores=" + std::to_string(useCores) + " index=" + std::to_string(i) +
+                                             " writers=" + std::to_string(writers));
+                if (value != qRef[i])
+                    throw std::runtime_error(std::string("q mismatch: impl=") + impl +
+                                             " cores=" + std::to_string(useCores) + " index=" + std::to_string(i));
+            }
 
-            // 每轮取“最慢核”的周期数作为该轮时延；只用后一半采样做统计。
-            const uint32_t cycleStride = opt.reps + 1U;
             std::vector<uint64_t> samples;
             samples.reserve(usedReps);
             for (uint32_t rep = opt.reps - usedReps; rep < opt.reps; ++rep) {
@@ -209,12 +221,22 @@ int main(int argc, char** argv)
             const double avgUs = sumTicks / double(samples.size()) / 1000.0;
             const double p50Us = double(sorted[(sorted.size() - 1U) / 2U]) / 1000.0;
             const double p99Us = double(sorted[size_t(std::ceil(0.99 * double(sorted.size()))) - 1U]) / 1000.0;
-            csv << useCores << ',' << opt.reps << ',' << usedReps << ',' << routeItems << ',' << experts << ','
-                << avgUs << ',' << p50Us << ',' << p99Us << '\n';
+            csv << impl << ',' << useCores << ',' << opt.reps << ',' << usedReps << ',' << routeItems << ','
+                << experts << ',' << avgUs << ',' << p50Us << ',' << p99Us << '\n';
             csv.flush();
-            std::cout << "q-build cores=" << useCores << " avg=" << avgUs << "us p50=" << p50Us
+            std::cout << impl << " cores=" << useCores << " avg=" << avgUs << "us p50=" << p50Us
                       << "us p99=" << p99Us << "us\n";
-        }
+        };
+
+        std::cout << "shape: routes=" << routeItems << " experts=" << experts << " topk=" << topK
+                  << " reps=" << opt.reps << " available_aiv=" << available << "\n";
+        // 预热一次，避免首启开销落进任一配置。
+        ll_route_q_bench_launch(1U, stream, idsDev, qDev, cycleDev, routeItems, experts, topK, 1U);
+        Check(aclrtSynchronizeStream(stream), "warmup");
+
+        // 1 核生产参考：每核全表跑 LlBuildRouteQ，对齐算子内打点。
+        runOnce("prod", 1U, true);
+        for (uint32_t useCores : cores) runOnce("split", useCores, false);
 
         Check(aclrtDestroyStream(stream), "destroy stream");
         Check(aclrtFree(cycleDev), "free cycles");

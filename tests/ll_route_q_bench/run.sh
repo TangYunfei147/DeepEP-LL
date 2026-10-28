@@ -3,8 +3,9 @@
 #   bash tests/ll_route_q_bench/run.sh
 # 计时口径：每核每轮用 GetSystemCycle 采样，路由表每轮以 CACHE_MODE_DISABLE 从 HBM 重读；
 # 默认 100 轮，丢弃前 50 轮，后 50 轮按“最慢核”给出 avg / p50 / p99。
-# 被测内容只有一项：生产同款 q 构建（LlBuildRouteQ 语义），按专家区间分核；
-# 1 核即等价于 dispatch 里每核全表那一趟，多核则均分专家区间。
+# 被测内容分两部分：
+#   split = 生产同款 q 构建按专家区间分核（1 核即全表，多核均分专家区间）；
+#   prod  = 1 核生产参考，直接调用 LlBuildRouteQ（每核全表），用来对齐算子内打点。
 # 可透传参数，例如：
 #   bash tests/ll_route_q_bench/run.sh --tokens 256 --topk 8 --experts 384 --reps 200 --cores 1,2,4,8,16,32,64
 # 环境变量：DEVICE_ID（默认 0）、CANN_ENV（未设置 ASCEND_HOME_PATH 时指向 set_env.sh）。
