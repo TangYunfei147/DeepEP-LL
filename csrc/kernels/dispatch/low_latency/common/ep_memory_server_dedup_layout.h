@@ -104,6 +104,8 @@ inline int BuildDispatchServerDedupLayout(int64_t rankSize, int64_t bs, int64_t 
     next.localExpertNum = static_cast<uint64_t>(moeExpertNum / rankSize);
     next.countStateBytes = DispatchServerDedupCountLayout(uint32_t(moeExpertNum), coreNum).stateBytes;
     next.data = DispatchServerDedupDataLayout(uint32_t(bs), uint32_t(h), uint32_t(topK), uint32_t(moeExpertNum), mode);
+    if (rdma && rankSize == 32)
+        next.data.requiredBytes = std::max(next.data.requiredBytes, next.data.gatewayOffset + next.data.gatewayBytes);
     if (next.countStateBytes > kEpServerDedupControlBytes ||
         next.data.requiredBytes > kEpServerDedupWindowUsableBytes) {
         return DispatchDedup::DISPATCH_DEDUP_ERROR_PARA_CHECK_FAIL;
@@ -198,7 +200,11 @@ inline bool DispatchDedupPacketUbFits(const EpMemoryServerDedupLayout& layout, i
                               16 * layout.data.blockCount * 32 + 256 +
                               16 * align((layout.data.blockCount + 7) / 8, 32) * 4 + 256 + 16 * 36 +
                               layout.data.tokenStride + 64;
-    return layout.data.blockCount > 0 && layout.data.blockCount <= UINT8_MAX &&
+    const bool pairedGateway = rdma && world_size == 32;
+    const uint64_t gateway = qBytes + layout.data.tokenStride + layout.data.blockCount * 32U;
+    return (!pairedGateway || (uint64_t(b) * k <= kRouteExchangeMaxBytes / sizeof(int32_t) &&
+            gateway <= kEpServerDedupCountUbBytes && layout.data.gatewayOffset + layout.data.gatewayBytes <= kEpServerDedupWindowUsableBytes)) &&
+           layout.data.blockCount > 0 && layout.data.blockCount <= UINT8_MAX &&
            sender + serverStateExtra <= kEpServerDedupCountUbBytes && receiver <= kEpServerDedupCountUbBytes;
 }
 }  // namespace DispatchDedup

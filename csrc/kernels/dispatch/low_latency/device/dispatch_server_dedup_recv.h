@@ -12,6 +12,7 @@
 #include "../../../common/ep_packet_receive_layout.h"
 #include "dispatch_server_dedup_receive_tasks.h"
 #include "dispatch_server_dedup_receive_packet.h"
+#include "ll_paired_gateway.h"
 
 namespace DispatchDedup {
 using namespace AscendC;
@@ -55,7 +56,7 @@ public:
     }
 
     // 摘要：执行接收主流程：加载前缀、构建任务、批量探测、预取并消费就绪包，最后清理本核槽位标记。
-    __aicore__ inline void Process(LlReferenceProfile::DeviceProfile* profile = nullptr)
+    __aicore__ inline void Process(LlReferenceProfile::DeviceProfile* profile = nullptr, PairedRouteExchange* pairedRoutes = nullptr)
     {
 
         // 1. 调用方已完成计数阶段的写入，才能 Reset TPipe 回收旧计数 UB。
@@ -63,6 +64,10 @@ public:
 
         // Caller has completed count-stage writes before this Reset. The GM
         // prefix is shared and read-only; old count UB is no longer used.
+        if (pairedRoutes) {
+            ForwardPairedGateway(args_, data_, windowOffset_, bs_, k_, localExperts_,
+                                 receiver_, recvCoreNum_, enableDedup_, pairedRoutes, pipe_);
+        }
         pipe_->Reset();
         const uint32_t prefixBytes = uint32_t(DispatchDedupAlign(uint64_t(experts_) * 4U, 32U));
         pipe_->InitBuffer(prefixBuf_, prefixBytes);
@@ -311,7 +316,8 @@ private:
         else
             for (uint32_t i = 0U; i < 3U; ++i) destination.SetValue(i, tail.Header().GetValue(i));
 
-        if (firstHop) {
+        const bool gatewayForwarded = tail.Header().GetValue(6U) == 1U;
+        if (firstHop && !gatewayForwarded) {
             PrepareServerDedupForward(tail);
             // Forwarded packets only need compact payload. The hint remains
             // independent of the application-level token type in the header.
@@ -343,7 +349,7 @@ private:
             const uint32_t sourceRank = tail.Header().GetValue(0U);
             const uint32_t ranks = uint32_t(args_->rankSize);
             const uint32_t members = tail.ReadIndex().GetValue(0U);
-            for (uint32_t i = 0U; i < members; ++i) {
+            for (uint32_t i = 0U; !gatewayForwarded && i < members; ++i) {
                 const uint32_t index = tail.Entry(i).GetValue(0U);
                 const uint32_t expertId = index & 0xffffU;
                 const uint32_t q = index >> 16U;

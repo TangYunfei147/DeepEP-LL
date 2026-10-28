@@ -58,6 +58,7 @@ public:
         start_ = core * base + (core < remainder ? core : remainder);
         data_ = DispatchServerDedupDataLayout(bs, h, k, experts, InputMode);
         data_.dispatchOffset += DispatchServerDedupWindowOffset(magic);
+        data_.gatewayOffset += DispatchServerDedupWindowOffset(magic);
         inputScales_.SetGlobalBuffer(inputScales);
         x_.SetGlobalBuffer(reinterpret_cast<__gm__ XType*>(x));
         ids_.SetGlobalBuffer(reinterpret_cast<__gm__ int32_t*>(ids));
@@ -518,6 +519,12 @@ private:
         auto payload = cachedPayload_;
 
         FillTail(payload, token, firstK, mask);
+        // Probe-only fixed paired gateway. Reserved header words retain the
+        // original destination/slot and distinguish gateway fanout from legacy relay.
+        auto gatewayHeader = payload[data_.headerPayloadOffset].template ReinterpretCast<uint32_t>();
+        gatewayHeader.SetValue(4U, expert);
+        gatewayHeader.SetValue(5U, q);
+        gatewayHeader.SetValue(6U, 0U);
 
         Sync<HardEvent::S_V>();
         const uint32_t lane = packets_ % lanes_;
@@ -540,9 +547,13 @@ private:
 
 #ifndef DEEPEP_LL_NO_COMM
         if (LlTransport::RemoteWrite(args_, destination)) {
-            rdmaBatch_.Enqueue(destination,
-                DispatchServerDedupDispatchOffset(data_, args_->rank, destination,
-                    expert % localExperts_, q, args_->rankSize, localExperts_, bs_), out, qp);
+            const bool pairedGateway = args_->rankSize == 32;
+            const uint32_t peer = pairedGateway ? (uint32_t(args_->rank) ^ 16U) : destination;
+            const uint64_t offset = pairedGateway
+                ? data_.gatewayOffset + uint64_t(token * k_ + firstK) * data_.tokenStride
+                : DispatchServerDedupDispatchOffset(data_, args_->rank, destination,
+                    expert % localExperts_, q, args_->rankSize, localExperts_, bs_);
+            rdmaBatch_.Enqueue(peer, offset, out, qp);
         } else
 #endif
         {

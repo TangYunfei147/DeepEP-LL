@@ -73,6 +73,11 @@ public:
 
     // 摘要：统计完整原始路由的专家计数并异步发往专家所属 rank，同时保留仍被 MTE3 使用的记录 UB。
     __aicore__ inline void SendCnt();
+    __aicore__ inline void GatewayLayout(uint64_t offset, uint64_t blocks) {
+        gatewayOffset_ = offset; gatewayBlocks_ = blocks;
+    }
+    __aicore__ inline void WaitPeerGateway() { if (pairedRoutes_) routeExchange_.WaitReady(); }
+    __aicore__ inline PairedRouteExchange* PairedRoutes() { return pairedRoutes_ ? &routeExchange_ : nullptr; }
     // 摘要：将本 rank 的计数记录分给接收核，等待本片计数到齐并计算局部前缀与总数。
     __aicore__ inline void RecvCnt();
     // 摘要：汇合接收核片段总数，补齐跨核前缀偏移并发布完整前缀表的就绪标记。
@@ -167,6 +172,7 @@ private:
     uint32_t countCores_ = 0;
     uint32_t publishingSource_ = 0;
     PairedRouteExchange routeExchange_;
+    uint64_t gatewayOffset_ = 0, gatewayBlocks_ = 0;
     GM_ADDR recvCntWorkspaceGM_ = nullptr;
     GM_ADDR sendCountsOutGM_ = nullptr;
     GlobalTensor<int32_t> expertIdsGMTensor_;
@@ -240,6 +246,19 @@ __aicore__ inline void ServerDedupCounts::SendCnt()
         // counts. HNS retires Put's UB scratch on return; body transfer from
         // registered GM overlaps the following count work and MTE publication.
         SyncFunc<HardEvent::MTE2_S>();
+        // Publish this route epoch only after the incoming gateway flags are
+        // clean. Every peer sender acquires it before posting payload. Reuse
+        // the existing work buffer and route WQE, including shape transitions.
+        auto zeros = workBuf_.Get<uint32_t>();
+        Duplicate<uint32_t>(zeros, 0U, routeBytes / 4U);
+        SyncFunc<HardEvent::V_MTE3>();
+        const uint32_t chunk = routeBytes / 32U;
+        for (uint64_t block = 0; block < gatewayBlocks_; block += chunk) {
+            const uint32_t n = uint32_t(gatewayBlocks_ - block < chunk ? gatewayBlocks_ - block : chunk);
+            DataCopyPad(LlTransport::Tensor(args_->peerMems[epRankId_] + gatewayOffset_ + block * 512U + 480U, true),
+                        workBuf_.Get<uint8_t>(), {uint16_t(n), 32U, 0U, 480U, 0U});
+        }
+        SyncFunc<HardEvent::MTE3_S>();
         routeExchange_.PostFrame(validExpertIdsTensor_, workBuf_.Get<uint8_t>());
     }
 

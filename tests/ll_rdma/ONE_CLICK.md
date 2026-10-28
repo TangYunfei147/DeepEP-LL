@@ -1,3 +1,5 @@
+> 本分支属于四版独立性能A/B：当前 kernel/ll-ndr-ab-paired-gateway。当前版本与对照关系以 [FOUR_WAY_AB.md](FOUR_WAY_AB.md) 为准，下方历史协议描述不作为当前安装身份。
+
 # 两机 NDR 一键构建、测试和本机解析
 
 入口：`tests/ll_rdma/one_click.sh`。参考 `kernel/ll-g4-local-q-table@af094ce` 的

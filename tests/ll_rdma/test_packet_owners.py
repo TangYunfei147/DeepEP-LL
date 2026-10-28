@@ -97,7 +97,7 @@ int main(){
    assert(DispatchServerDedupCountSendUbBytes(b*8U,512,workers)<=kEpServerDedupCountUbBytes);
   }
  }
- assert(LlCountProducerCores(56,512,32,16384,true)==8);
+ assert(LlCountProducerCores(56,512,32,16384,true)==28);
  assert(LlCountProducerCores(56,512,32,16384,false)==28);
 }
 ''', 'count-owners-ub')

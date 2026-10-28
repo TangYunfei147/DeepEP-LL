@@ -1,3 +1,5 @@
+> 本分支属于四版独立性能A/B：当前 kernel/ll-ndr-ab-paired-gateway。当前版本与对照关系以 [tests/ll_rdma/FOUR_WAY_AB.md](tests/ll_rdma/FOUR_WAY_AB.md) 为准，下方历史协议描述不作为当前安装身份。
+
 # 目标RoCE通信契约
 
 ## NDR采样方式（2026-10-27最新用户要求）
