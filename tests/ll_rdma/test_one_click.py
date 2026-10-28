@@ -217,3 +217,10 @@ def test_peer_comparison_allows_different_pi_modes_but_keeps_other_checks():
 def test_peer_comparison_requires_a_validated_local_doorbell_mode(mode):
     with pytest.raises(RuntimeError):
         launch.peer_identity({"sdk_build": {"hns_1825_pi_on_chip": mode}})
+
+
+def test_launcher_branch_matches_checked_out_experiment():
+    actual = subprocess.check_output(["git", "branch", "--show-current"], cwd=ROOT, text=True).strip()
+    if not actual:
+        pytest.skip("Detached source snapshot has no branch name")
+    assert launch.BRANCH == actual, "Launcher must not retain the original branch after an experiment fork"
