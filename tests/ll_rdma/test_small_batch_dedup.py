@@ -23,5 +23,6 @@ int main() {
 }
 '''.replace('#include <cassert>', '#include <cassert>\n#include <initializer_list>'))
     exe=tmp_path/'policy.exe'
-    subprocess.run([zig,'c++','-std=c++17','-UNDEBUG','-iquote',str(ROOT),str(source),'-o',str(exe)],check=True)
+    subprocess.run([zig,'c++','-std=c++17','-UNDEBUG','-Wall','-Wextra','-Werror',
+                    '-iquote',str(ROOT),str(source),'-o',str(exe)],check=True)
     subprocess.run([str(exe)],check=True)

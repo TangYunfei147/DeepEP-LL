@@ -17,6 +17,7 @@ __aicore__ inline
     constexpr bool
     EpServerDedupEnabled(uint32_t numMaxTokensPerRank, uint32_t actualBs = 32U, uint32_t world = 16U)
 {
+    (void)actualBs;  // Preserve callers; cross-host dedup no longer depends on actual B.
     return (world > 16U) || (numMaxTokensPerRank > kEpServerDedupDedupThreshold);
 }
 }  // namespace DispatchDedup
