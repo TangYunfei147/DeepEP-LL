@@ -1,3 +1,10 @@
+## 满stage与combine回传（2026-10-29，默认34/直方图35）
+
+- 用户第一项已实施：dispatch GM批容量floor(128KiB/packetBytes)，删除固定8包上限；按peer位图去重避免包序号超过32位，UB lane与GM分配量不改。独立提交4c12865（身份32/33）。
+- 第二项仅审计，未修改其他dispatch依赖：数学依赖/方案依赖/编码时序分类见tests/ll_rdma/DISPATCH_DEPENDENCY_AUDIT.md。
+- 第三项combine DIRECT/M4 partial改为满stage回传批次，包准备好立即put，每批每peer quiet；M4尾批CQ越过M5在kernel末尾退休。归约/Cast/权重/所有权/wire/SDK不改，不新增UB或全rank屏障。
+- 仅减少quiet与串行等待，put次数及字节不变，不宣称已跨token合包。指南tests/ll_rdma/COMBINE_BATCH_RETURN.md；尚无CANN/NPU性能验证。
+
 ## Count源隔离（当前默认30/直方图31）
 
 - 用户明确要求按算子数学逻辑判断；共享暂存区造成的实现依赖不能作为count必须等待payload前完成的理由。

@@ -146,7 +146,9 @@ public:
         // no arena/pipe reset or exit may precede completion of their DMA reads.
 
         PipeBarrier<PIPE_ALL>();
-
+        // All resident control sources and output lanes have retired. Pending
+        // return GM slots are independent of M5 UB and are reclaimed only here.
+        returnBatch_.Flush(arena_.Get<uint8_t>());
     }
 
 private:
@@ -328,6 +330,7 @@ private:
     {
         PrepareDirectRows();
         if (selected_ == 0U) return;
+        if (LlTransport::Rdma(args_)) returnBatch_.Init(args_, resultStride_);
         const uint32_t servers = uint32_t(args_->rankSize) / Group;
         const uint32_t ownServer = uint32_t(args_->rank) / Group;
         uint32_t owner = 0U, sendSequence = 0U;
@@ -376,12 +379,14 @@ private:
 
                 // One destination owns this output. Its body is overwritten on
                 // the next lane use, so SDK scratch need not be restored.
-                LlTransport::Packet(args_, source, window_ + COMBINE_DEDUP_EP_SERVER_DEDUP_SHARED_DATA_OFFSET +
-                    (uint64_t(token) * topK_ + topk) * resultStride_, output, resultStride_, 7U, false);
+                const uint64_t offset = window_ + COMBINE_DEDUP_EP_SERVER_DEDUP_SHARED_DATA_OFFSET +
+                    (uint64_t(token) * topK_ + topk) * resultStride_;
+                SendReturnPacket(returnBatch_, args_, source, offset, output, resultStride_, false);
                 SetFlag<HardEvent::MTE3_V>(lane);
             }
             // No server fence: the next scan can overlap pending output DMA.
         }
+        returnBatch_.SubmitPending();
         // Final retirement includes unused seeded lanes, never a per-token drain.
         for (uint32_t lane = 0; lane < lanes_; ++lane) {
             WaitFlag<HardEvent::V_MTE2>(lane);
@@ -400,7 +405,7 @@ private:
         ServerDedupPartial<Group> partial;
         partial.Init(args_, &pipe_, arena_.Get<uint8_t>()[kEpServerDedupCombineResidentUbBytes], expertAddr_,
                      tableAddr_, relayAddr_, typesAddr_, tokens_, bs_, h_, topK_, experts_, dtype_, window_,
-                     workspace_);
+                     workspace_, &returnBatch_);
         partialTasks_ = partial.Process();
         // Retire only input and Vector users before scalar metadata reuse.
         // M4 output slots and MTE3_V events stay live for M5's per-slot waits.
@@ -455,6 +460,7 @@ private:
     }
 
     EpCombineM45WorkspaceLayout workspace_{};
+    LlTransport::DispatchRdmaBatch returnBatch_;
     uint32_t partialTasks_ = 0U;
     uint32_t coreNum_ = 0, sendCores_ = 0, recvCores_ = 0, notifyBegin_ = 0;
     TPipe pipe_;

@@ -1,3 +1,5 @@
+> 当前默认身份34、直方图身份35：dispatch按GM stage容量批处理，combine回传批处理并将尾批CQ移至M5之后。见[COMBINE_BATCH_RETURN.md](COMBINE_BATCH_RETURN.md)。下方旧身份为历史。
+
 # Count源隔离与quiet审计（默认30，直方图31）
 
 对照ec15f2e（默认28/直方图29）。用户明确要求按算子数学依赖分析，不能把共用暂存区造成的

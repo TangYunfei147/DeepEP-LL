@@ -6,6 +6,7 @@
 
 #include "kernel_operator.h"
 #include "../../dispatch/low_latency/device/ll_transport.h"
+#include "combine_rdma_return.h"
 #include "../../dispatch/low_latency/common/comm_args.h"
 #include "../../dispatch/low_latency/common/dispatch_dedup_types.h"
 #include "ep_memory_server_dedup_buffer_layout.h"
@@ -25,9 +26,10 @@ public:
     __aicore__ inline void Init(const __gm__ DispatchDedup::CommArgs* args, TPipe* pipe, LocalTensor<uint8_t> scratch,
                                 GM_ADDR expert, GM_ADDR table2, GM_ADDR table3, GM_ADDR types, uint32_t tokens,
                                 uint32_t bs, uint32_t h, uint32_t k, uint32_t experts, uint8_t dtype, uint64_t window,
-                                const EpCombineM45WorkspaceLayout& layout)
+                                const EpCombineM45WorkspaceLayout& layout, LlTransport::DispatchRdmaBatch* batch)
     {
         args_ = args;
+        rdmaBatch_ = batch;
 
         recvCores_ = GetBlockNum() / 2U;
         pipe_ = pipe;
@@ -69,6 +71,7 @@ public:
 
     __aicore__ inline uint32_t Process()
     {
+        if (LlTransport::Rdma(args_)) rdmaBatch_->Init(args_, packetBytes_);
         for (uint32_t lane = 0; lane < inputLanes_; ++lane) SetFlag<HardEvent::V_MTE2>(lane);
         uint64_t flagMask[2] = {0xffU, 0U};
         for (uint32_t lane = 0; lane < outputLanes_; ++lane) {
@@ -102,6 +105,10 @@ public:
             // Reuse phase scratch with its Vector dependency, not an MTE3 drain.
         }
         for (uint32_t lane = 0; lane < inputLanes_; ++lane) WaitFlag<HardEvent::V_MTE2>(lane);
+        // Post the final staged packet before M5 can wait on peer returns.
+        // Isolated GM slots survive M5's UB reuse; tail CQ retirement is owned
+        // by the enclosing kernel, after M5, not by this temporary object.
+        rdmaBatch_->SubmitPending();
         // Output events and their UB sources remain owned by the shared ring.
         // The caller hands off only MTE2/Vector before M5 reuses phase metadata.
         return completed;
@@ -256,12 +263,14 @@ private:
 
         // This reduced output has one destination; the next use rewrites its
         // body and never reads the SDK's borrowed first 128 bytes.
-        LlTransport::Packet(args_, source, window_ + COMBINE_DEDUP_EP_SERVER_DEDUP_SHARED_DATA_OFFSET +
-            (uint64_t(token) * k_ + topk) * packetBytes_, output, packetBytes_, 7U, false);
+        const uint64_t offset = window_ + COMBINE_DEDUP_EP_SERVER_DEDUP_SHARED_DATA_OFFSET +
+            (uint64_t(token) * k_ + topk) * packetBytes_;
+        SendReturnPacket(*rdmaBatch_, args_, source, offset, output, packetBytes_, false);
         SetFlag<HardEvent::MTE3_V>(lane);
     }
 
     uint32_t recvCores_ = 0;
+    LlTransport::DispatchRdmaBatch* rdmaBatch_ = nullptr;
     const __gm__ DispatchDedup::CommArgs* args_ = nullptr;
     TPipe* pipe_ = nullptr;
     LocalTensor<uint8_t> scratch_, outputs_, scan_;
