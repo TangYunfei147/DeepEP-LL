@@ -44,7 +44,7 @@ public:
         sendCores_ = (coreNum == 0U ? GetBlockNum() : coreNum) / 2U;
         pipe_ = pipe;
         enableDedup_ = enableDedup;
-        fullMeshFirstHop_ = Group == 16U && args->rankSize == 32 && LlTransport::Rdma(args);
+        fullMeshFirstHop_ = Group == kLlPhysicalRanksPerHost && LlTransport::Rdma(args);
         bs_ = bs;
         h_ = h;
         k_ = k;
@@ -203,27 +203,24 @@ public:
     __aicore__ inline void SendWithDedup(TQue<QuePosition::VECIN, 1>& input)
     {
         // 4. 第一遍处理本核 token：同一远端 server 的多条路由合并为一份 FIRST_HOP。
-        // EP32 RDMA优先从目标最多的4-rank fullmesh小组选真实专家；其他路径仍取最小k。
+        // RDMA逐目标主机从目标最多的4-rank fullmesh小组选真实专家；其他路径仍取最小k。
         // 其他成员的路由信息放入包尾，
         // 由目标接收端继续转发。所有首跳优先发出，尽早启动远端 relay。
 
         const uint32_t rankInGroup = uint32_t(args_->rank) % Group;
         const uint32_t sendCore = GetBlockIdx();
         for (uint32_t token = 0; token < count_; ++token) {
-            uint32_t directMask = 0, firstHopCount = 0, meshFirstK = 0;
+            uint32_t directMask = 0, firstHopCount = 0;
 
-            Classify(token, directMask, firstHopCount, meshFirstK);
+            Classify(token, directMask, firstHopCount);
 
             uint32_t sourceMask = directMask;
             for (uint32_t group = 0; group < firstHopCount; ++group) {
                 const uint32_t scheduled = LlFirstHopOrder(firstHopCount, rankInGroup, sendCore,
                                                           start_ + token, group);
                 const uint32_t mask = firstHopMasks_.GetValue(scheduled);
-                uint32_t firstK = meshFirstK;
-                if (!fullMeshFirstHop_) {
-                    firstK = 0U;
-                    while ((mask & (uint32_t(1) << firstK)) == 0U) ++firstK;
-                }
+                const uint32_t firstK = LlFirstHopForMask(routeIds_, (start_ + token) * k_,
+                                                         k_, localExperts_, mask, fullMeshFirstHop_);
                 const uint32_t index = (start_ + token) * k_ + firstK;
                 const uint32_t expert = uint32_t(routeIds_.GetValue(index));
                 SendPacket(input, start_ + token, firstK, expert, CalTokenSendExpertCnt(expert, index), mask);
@@ -321,15 +318,13 @@ private:
         usedBytes_ += bytes;
     }
     // 摘要：按目标 server 对当前 token 的路由分类：同 server 多条远端路由合并为 FIRST_HOP，其余为 DIRECT。
-    __aicore__ inline void Classify(uint32_t token, uint32_t& directMask, uint32_t& groups, uint32_t& meshFirstK)
+    __aicore__ inline void Classify(uint32_t token, uint32_t& directMask, uint32_t& groups)
     {
         uint32_t seen = 0, grouped = 0;
-        LlFullMeshFirstHop mesh;
         for (uint32_t k = 0; k < k_; ++k) {
             const uint32_t expert = uint32_t(routeIds_.GetValue((start_ + token) * k_ + k));
             const uint32_t destination = expert / localExperts_;
             const uint32_t server = destination / Group;
-            if (fullMeshFirstHop_ && server != uint32_t(args_->rank) / Group) mesh.Add(destination, k);
             const uint32_t bit = uint32_t(1) << k, serverBit = uint32_t(1) << server;
             if (server == uint32_t(args_->rank) / Group) {
                 directMask |= bit;
@@ -348,7 +343,6 @@ private:
                 firstHopMasks_.SetValue(index, firstHopMasks_.GetValue(index) | bit);
             }
         }
-        meshFirstK = fullMeshFirstHop_ && groups != 0U ? mesh.FirstK() : 0U;
     }
     // Compute q by the original Vector prefix reduction on demand.
     __aicore__ inline uint32_t CalTokenSendExpertCnt(uint32_t expert, uint32_t index)

@@ -1,3 +1,6 @@
+> 当前协议28已移除未确认的EP32/两机特例；旧配对源码已删除，历史可从7293457读取。
+> 当前行为、逐项清单及剩余风险见 [MULTI_HOST_LIMIT_AUDIT.md](MULTI_HOST_LIMIT_AUDIT.md)。
+
 > 2026-10-29当前协议27：源端按跨机目标rank分核计数并直接发布，详见 [DIRECT_RANK_COUNTS.md](DIRECT_RANK_COUNTS.md)。本文原QP实验与版本号作为历史对照；每物理核QP仍保留。
 
 # 原始分片与每核QP基线（协议24）

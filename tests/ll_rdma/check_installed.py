@@ -15,13 +15,12 @@ helpers = runpy.run_path(str(ROOT / "tests/elastic/test_dispatch.py"))
 package = helpers["_import_installed_deep_ep"]()
 from deep_ep._native import require_native
 native = require_native("RDMA build capability check")
-assert native.low_latency_core_protocol == 27
+assert native.low_latency_core_protocol == 28
 assert native.low_latency_roce_qps_per_peer == 0
-assert native.low_latency_ranks_per_group(16) == 4
-assert native.low_latency_ranks_per_group(32) == 16
-for p in (16, 32):
-    d = native.low_latency_dispatch_tiling(p, 4, 256, 4, 128, "bfloat16", 64)
-    c = native.low_latency_combine_tiling(p, 4, 256, 4, 128, "bfloat16", 64)
+for p in (16, 32, 64, 128, 256):
+    assert native.low_latency_ranks_per_group(p) == (4 if p <= 16 else 16)
+    d = native.low_latency_dispatch_tiling(p, 4, 256, 4, 256, "bfloat16", 64)
+    c = native.low_latency_combine_tiling(p, 4, 256, 4, 256, "bfloat16", 64)
     assert d[21] == (4 if p <= 16 else 16) and c[15] == d[21]
 assert bool(native.low_latency_rdma_enabled) == bool(args.rdma)
 assert bool(native.low_latency_stage_timer_enabled) == bool(args.timer)

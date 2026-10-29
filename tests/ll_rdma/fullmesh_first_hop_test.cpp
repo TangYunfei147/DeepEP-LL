@@ -64,7 +64,7 @@ int main() {
     Check(boundary,0U);
     std::mt19937 rng(251025);
     unsigned checked=0;
-    for(unsigned host=0;host<2;++host)
+    for(unsigned host=0;host<16;++host)
         for(unsigned k=1;k<=32;++k)
             for(unsigned sample=0;sample<300;++sample) {
                 std::vector<uint32_t> ranks(k);

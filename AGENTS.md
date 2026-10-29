@@ -1,4 +1,13 @@
-## EP32源端直发count（2026-10-29，当前）
+## 多机32P特例清理（2026-10-29，当前协议28）
+
+- 用户要求删除未确认的32P多机限制并审计风险。当前工作区/分支保持DeepEP-LL-ndr-overhead/kernel/ll-ndr-ab-per-core-qp；对照7293457/协议27。
+- count对所有跨物理机RDMA启用，跳过本机16rank，task=core、core+C分轮；每帧quiet保护同核GM/UB复用。Host容量核算同步；本机count与原payload lane保留区不变。
+- 删除EP32首跳门槛及token级单一meshFirstK，每个目标主机mask独立选首跳，防止跨主机误选。q/原权重保持；新域lead选择可能改变浮点累加顺序，不宣称旧路径逐bit一致，必须目标机数值验证。
+- 删除已停用的配对route helper/layout及其旧专属模型。one_click增加num_nodes并按实际EP校验；target_ready v2等待全部不同节点同身份后放行。
+- 每机16rank、32B wire/top-k32、公开EP16/32/64/128/256、ABI最大256、锁定SDK每peer56QP限制有依据，保持。CPU72核布局测试不等于SDK允许72核跨机。
+- 详细删除清单、正确性证明、性能/数值与设备验证边界见tests/ll_rdma/MULTI_HOST_LIMIT_AUDIT.md。SDK及其他独立实验不改；不执行远端或NPU，本地检查后提交推送。
+
+## EP32源端直发count（2026-10-29，协议27历史）
 
 - 用户要求参照main源端计数直达最终卡，跨机按一核一目标卡分工、减少Scalar。当前协议27，分支kernel/ll-ndr-ab-per-core-qp；对照d251739/协议26。
 - NDR EP32物理核0..15各统计一个跨机目标rank的全部专家，Vector EQ+GatherMask取数量，每专家只写最终count；同一WQE发送body+32B尾FLAG，每帧put+quiet。删除活跃配对路由交换/代算/远端源count机内分发。本机源count仍按原专家分片直接MTE发布；部分remote owner兼有本机任务。

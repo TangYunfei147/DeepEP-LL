@@ -1,10 +1,11 @@
 #pragma once
 #include <cstdint>
+#include "ll_group_policy.h"
 
 namespace DispatchDedup {
 // Same E*512B reservation, physical source-major frames; logical prefixes stay
 // expert-major. Legacy/local frames intersect a count-core and target rank;
-// EP32 direct remote frames cover all experts of that destination rank.
+// Direct remote frames cover all experts of that destination rank.
 struct LlCountFrame {
     uint64_t recordOffset, commitOffset, frameOffset;
     uint32_t firstExpert, records;
@@ -19,7 +20,7 @@ LlCountFrame CountFrame(uint32_t experts, uint32_t world, uint32_t countCores,
                         bool directRanks = false)
 {
     const uint32_t local = experts / world, expert = destination * local + localExpert;
-    if (directRanks && destination / 16U != source / 16U) {
+    if (directRanks && !LlSameHost(destination, source)) {
         // One source/core owns all experts of this remote rank. The compact
         // body and its trailing 32B commit travel in the same SO WQE.
         const uint64_t frame = uint64_t(source) * local * 512U;

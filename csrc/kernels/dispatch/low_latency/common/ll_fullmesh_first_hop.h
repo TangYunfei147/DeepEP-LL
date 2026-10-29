@@ -8,7 +8,7 @@ namespace DispatchDedup {
 #define LL_MESH_INLINE inline
 #endif
 
-// Confirmed EP32 deployment: each physical host contains four consecutive
+// Each target physical host contains four consecutive
 // full-mesh groups of four ranks. Count actual expert deliveries, not distinct
 // cards: each relay carries one equal-sized token for its target expert.
 // Two scalar words suffice for K<=32; no UB array, route rescan or cross-core work.
@@ -36,6 +36,22 @@ public:
         return bestCount ? bestK : 0U;
     }
 };
+
+// Classify supplies a mask for exactly one target host. Select independently
+// for each mask; a single token-wide firstK is invalid with multiple hosts.
+// Masks are disjoint, so each grouped route is loaded at most once here.
+template <class Ids>
+LL_MESH_INLINE uint32_t LlFirstHopForMask(Ids ids, uint32_t base, uint32_t topK,
+                                         uint32_t localExperts, uint32_t mask, bool fullMesh)
+{
+    LlFullMeshFirstHop mesh;
+    for (uint32_t k = 0U; k < topK; ++k) {
+        if (!(mask & (1U << k))) continue;
+        if (!fullMesh) return k;
+        mesh.Add(uint32_t(ids.GetValue(base + k)) / localExperts, k);
+    }
+    return mesh.FirstK();
+}
 
 LL_MESH_INLINE uint32_t LlRelayMemberMask(uint32_t mask, uint32_t firstK) {
     return mask & ~(1U << firstK);

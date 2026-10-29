@@ -9,6 +9,7 @@
 #include "kernels/dispatch/low_latency/common/ll_count_assignment.h"
 #include "kernels/dispatch/low_latency/common/ep_memory_server_dedup_count_layout.h"
 #include "kernels/dispatch/low_latency/common/ep_memory_server_dedup_layout.h"
+#include "kernels/combine/low_latency/combine_layout.h"
 #include "kernels/dispatch/low_latency/device/ll_count_frame_receive.h"
 #include "kernels/dispatch/low_latency/device/ll_count_frame_transport.h"
 using namespace DispatchDedup;
@@ -22,29 +23,31 @@ static uint32_t Value(uint32_t source,uint32_t expert,uint32_t iteration) {
 
 int main() {
     unsigned assignments=0, snapshots=0, exchanges=0;
-    for(unsigned experts=32;experts<=1024;experts+=32)
+    for(unsigned world: {32U,64U,128U,256U}) for(unsigned experts=world;experts<=1024;experts+=world)
       for(unsigned cores=16;cores<=72;cores+=2) for(bool all: {false,true})
-        for(unsigned rank=0;rank<32;++rank) {
-          std::vector<unsigned> owners(experts),remoteOwners(32);
+        for(unsigned rank=0;rank<world;++rank) {
+          std::vector<unsigned> owners(experts),remoteOwners(world);
           const unsigned countCores=all?cores:cores/2;
           for(unsigned core=0;core<cores;++core) {
-            auto a=CountAssignment(rank,32,experts,cores,core,all,true);
+            auto a=CountAssignment(rank,world,experts,cores,core,all,true);
             assert(a.first<=a.end && a.end<=experts);
             assert(a.alignedRecords%8==0 && a.alignedRecords>=a.end-a.first);
             for(unsigned e=a.first;e<a.end;++e) {
-              assert(e/(experts/2)==rank/16); ++owners[e];
-              auto f=CountFrame(experts,32,countCores,e/(experts/32),rank,e%(experts/32),true);
-              assert(f.firstExpert==std::max(a.first,e/(experts/32)*(experts/32))%(experts/32));
+              assert(e/(16*(experts/world))==rank/16); ++owners[e];
+              auto f=CountFrame(experts,world,countCores,e/(experts/world),rank,e%(experts/world),true);
+              assert(f.firstExpert==std::max(a.first,e/(experts/world)*(experts/world))%(experts/world));
             }
-            if(a.remoteRank<32) {
-              assert(core<16 && a.remoteRank/16!=rank/16 && a.remoteRank%16==core);
-              assert(a.remoteRecords>=experts/32+1); ++remoteOwners[a.remoteRank];
-              for(unsigned e=a.remoteRank*(experts/32);e<(a.remoteRank+1)*(experts/32);++e) ++owners[e];
+            assert(a.remoteRank==CountRemotePeer(rank,world,core));
+            for(unsigned task=core;task<world-16;task+=cores) {
+              const auto peer=CountRemotePeer(rank,world,task);
+              assert(peer<world && peer/16!=rank/16 && task%cores==core);
+              assert(a.remoteRecords>=experts/world+1); ++remoteOwners[peer];
+              for(unsigned e=peer*(experts/world);e<(peer+1)*(experts/world);++e) ++owners[e];
             }
             for(unsigned routes: {1U,8U,256U,8192U,12000U}) {
               const uint64_t routeBytes=(routes*4+255U)/256U*256U;
               const uint64_t actual=3*routeBytes+std::max(routeBytes,uint64_t(a.remoteRecords)*32U)+uint64_t(a.alignedRecords)*36U;
-              assert(actual<=DispatchServerDedupCountSendUbBytes(routes,experts,countCores,experts/32+1));
+              assert(actual<=DispatchServerDedupCountSendUbBytes(routes,experts,countCores,experts/world+1));
             }
             const unsigned base=experts/countCores,extra=experts%countCores;
             const unsigned localWorker=all?core:core-cores/2;
@@ -52,18 +55,18 @@ int main() {
             if(all || core>=cores/2) {
               const unsigned begin=localWorker*base+std::min(localWorker,extra);
               const unsigned finish=begin+base+(localWorker<extra);
-              const unsigned low=std::max(begin,rank/16*(experts/2));
-              const unsigned high=std::min(finish,(rank/16+1)*(experts/2));
+              const unsigned low=std::max(begin,rank/16*(16*(experts/world)));
+              const unsigned high=std::min(finish,(rank/16+1)*(16*(experts/world)));
               oldLocalCount=high>low?high-low:0;
             }
             const unsigned oldReserved=oldLocalCount?((experts+countCores-1)/countCores+7)/8*8:0;
             assert(a.alignedRecords==oldReserved); // payload lanes cannot shrink
           }
           for(auto n:owners) assert(n==1); // every source/expert, including zero
-          for(unsigned dst=0;dst<32;++dst) assert(remoteOwners[dst]==unsigned(dst/16!=rank/16));
+          for(unsigned dst=0;dst<world;++dst) assert(remoteOwners[dst]==unsigned(dst/16!=rank/16));
           ++assignments;
         }
-    // Non-EP32/MTE fallback retains the original expert split exactly.
+    // MTE fallback retains the original expert split exactly.
     for(unsigned world: {16U,32U,64U,128U}) for(unsigned cores: {16U,56U,72U})
       for(bool all: {false,true}) {
         std::vector<unsigned> seen(384);
@@ -82,6 +85,15 @@ int main() {
     assert(DispatchServerDedupCountSendUbBytes(12033,1024,72,33)==
            DispatchServerDedupCountSendUbBytes(12033,1024,72));
     assert(BuildDispatchServerDedupLayout(32,415,256,29,1024,&layout,false,72)==0);
+    // Check the guide's concrete E1024/H3584/K8/capacity256 FP8+BF16 case
+    // against real Host allocation/UB rules at the target 56-core setting.
+    for(unsigned world: {16U,32U,64U,128U,256U}) {
+        assert(BuildDispatchServerDedupLayout(world,256,3584,8,1024,&layout,
+                    EpServerDedupInputMode::PrequantizedFp8Packs,56)==0);
+        assert(DispatchDedupPacketUbFits(layout,256,8,1024,world,56));
+        CombineDedup::Layout combine;
+        assert(CombineDedup::BuildLayout(world,256,3584,8,1024,combine,56));
+    }
     unsigned defaultLanes=0;
     const auto align=[](uint64_t n,uint64_t a){return (n+a-1)/a*a;};
     for(unsigned coreCount: {16U,28U,56U,72U})
@@ -106,30 +118,33 @@ int main() {
     CommArgs args{}; args.rankSize=32; args.reserved0=16; args.peerMemBytes=512*1024;
     args.reservedAddresses[0]=local.data(); args.reservedAddresses[1]=stage.data();
     args.reservedConfig[0]=LlRdma::kBackend;
-    for(unsigned experts: {32U,64U,384U,1024U}) for(unsigned coreCount: {16U,28U,56U,72U})
-      for(bool all: {false,true}) for(unsigned dst: {0U,15U,16U,31U}) {
-        const unsigned localExperts=experts/32, countCores=all?coreCount:coreCount/2, receivers=coreCount/2;
-        cores=coreCount; args.reservedConfig[1]=coreCount;
+    for(unsigned world: {32U,64U,128U,256U}) for(unsigned experts: {32U,64U,384U,1024U})
+      if(experts>=world && experts%world==0) for(unsigned coreCount: {16U,28U,56U,72U})
+      for(bool all: {false,true}) for(unsigned dst: {0U,world/2-1,world/2,world-1}) {
+        const unsigned localExperts=experts/world, countCores=all?coreCount:coreCount/2, receivers=coreCount/2;
+        cores=coreCount; args.rankSize=world; args.reservedConfig[1]=coreCount;
         auto target=remote.data()+dst*1024;
         std::fill(remote.begin(),remote.end(),0);
         for(unsigned iteration=0;iteration<3;++iteration) {
           // Reverse source/core completion; a whole zero-count round is valid.
-          for(unsigned source=32;source-->0;) {
+          for(unsigned source=world;source-->0;) {
             args.rank=source; args.peerMems[dst]=target;
             for(unsigned worker=coreCount;worker-->0;) {
               core=worker;
-              const auto a=CountAssignment(source,32,experts,coreCount,worker,all,true);
+              const auto a=CountAssignment(source,world,experts,coreCount,worker,all,true);
               unsigned first,end;
               const bool cross=source/16!=dst/16;
               if(cross) {
-                if(a.remoteRank!=dst) continue;
+                const unsigned task=dst<source/16*16?dst:dst-16;
+                if(task%coreCount!=worker) continue;
+                assert(CountRemotePeer(source,world,task)==dst);
                 first=0; end=localExperts;
               } else {
                 unsigned begin=std::max(a.first,dst*localExperts),finish=std::min(a.end,(dst+1)*localExperts);
                 if(finish<=begin) continue;
                 first=begin-dst*localExperts; end=finish-dst*localExperts;
               }
-              auto f=CountFrame(experts,32,countCores,dst,source,first,true);
+              auto f=CountFrame(experts,world,countCores,dst,source,first,true);
               assert(f.firstExpert==first && f.records==end-first);
               assert(f.frameOffset+f.records*32<=f.commitOffset);
               assert(f.commitOffset+32<=(uint64_t(source)+1)*localExperts*512);
@@ -175,15 +190,15 @@ int main() {
           for(unsigned receiver=0;receiver<receivers;++receiver) {
             const unsigned count=experts/receivers+(receiver<experts%receivers);
             LlCountReadPlan plan;
-            assert(BuildCountReadPlan(experts,32,countCores,dst,at,count,plan,true));
+            assert(BuildCountReadPlan(experts,world,countCores,dst,at,count,plan,true));
             assert(plan.size<=9);
             std::vector<uint32_t> snapshot(count*8+8,0xdeadbeef);
             ReadCountFrames({reinterpret_cast<float*>(snapshot.data())},{reinterpret_cast<float*>(target)},plan,false);
             for(unsigned i=0;i<count;++i) assert(snapshot[i*8]==Ready);
             ReadCountFrames({reinterpret_cast<float*>(snapshot.data())},{reinterpret_cast<float*>(target)},plan,true);
             for(unsigned i=0;i<count;++i) {
-              const unsigned logical=at+i,source=logical%32,expert=logical/32;
-              const auto f=CountFrame(experts,32,countCores,dst,source,expert,true);
+              const unsigned logical=at+i,source=logical%world,expert=logical/world;
+              const auto f=CountFrame(experts,world,countCores,dst,source,expert,true);
               assert(snapshot[i*8]==Ready);
               const auto expected=Value(source,dst*localExperts+expert,iteration);
               assert(snapshot[i*8+1]==expected);

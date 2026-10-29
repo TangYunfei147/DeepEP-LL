@@ -147,7 +147,7 @@ void rejects(const deepep::EpServerDedupKernelArgs* args, uint32_t variant) {
 }
 int main() {
     static_assert(sizeof(deepep::EpServerDedupKernelArgs) == 152);
-    assert(deepep_ll_core_protocol_version() == 27);
+    assert(deepep_ll_core_protocol_version() == 28);
     assert(deepep_ll_rdma_enabled() == 1);
     assert(deepep_ll_stage_timer_enabled() == 0);
 #ifdef DEEPEP_LL_REFERENCE_PROFILE
@@ -155,7 +155,7 @@ int main() {
 #else
     assert(deepep_ll_reference_profile_enabled() == 0);
 #endif
-    for (uint32_t world : {16U, 32U, 64U, 128U})
+    for (uint32_t world : {16U, 32U, 64U, 128U, 256U})
         assert(deepep_ll_ranks_per_group(world) == (world <= 16U ? 4U : 16U));
     deepep::EpServerDedupKernelArgs args{};
     int streamHandle = 1;

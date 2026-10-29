@@ -1,4 +1,6 @@
-> 当前协议27：EP32源卡按物理核0..15分别计算一张跨机目标卡的count，一帧SO直发；删除配对路由交换及远端源count的机内转发。仍保留原payload一包流水、每核QP和reference schema4。详见 [DIRECT_RANK_COUNTS.md](DIRECT_RANK_COUNTS.md)。下方协议26及更早描述仅作历史说明。
+> 当前协议28：已移除两机/EP32专限，支持现有EP16/32/64/128/256入口，新增`--num-nodes`。
+> 多机count按远端rank分核/分轮直发；首跳按目标主机mask独立选择。变更清单及风险见
+> [MULTI_HOST_LIMIT_AUDIT.md](MULTI_HOST_LIMIT_AUDIT.md)。下方协议27及更早说明仅作历史对照。
 
 > 当前为一包深度暂存/put流水，实现身份26、reference schema4；复用原lane，单lane立即提交。S表区分暂存经过、延后间隔、剩余等待及前包提交，不改packet所属核/顺序。详见 [ONE_PACKET_PIPELINE.md](ONE_PACKET_PIPELINE.md)；覆盖下方旧立即提交及schema2说明。
 
@@ -12,11 +14,11 @@
 
 > 本分支属于四版独立性能A/B：当前 kernel/ll-ndr-ab-base。当前版本与对照关系以 [FOUR_WAY_AB.md](FOUR_WAY_AB.md) 为准，下方历史协议描述不作为当前安装身份。
 
-# 两机 NDR 一键构建、测试和本机解析
+# 多机 NDR 一键构建、测试和本机解析
 
 入口：`tests/ll_rdma/one_click.sh`。参考 `kernel/ll-g4-local-q-table@af094ce` 的
 环境、完整ON wheel、稳定尾段采样与分析流程，使用本分支的NDR/SDK/计时schema。
-两台目标机各执行一条命令；不通过SSH连接其他机器、不终止其他作业。
+每台目标机各执行一条命令；不通过SSH连接其他机器、不终止其他作业。
 
 默认 `--mode reference` 是仅LL dispatch的参考式打点，使用独立reference wheel并关闭旧stage/expert计时；
 默认1轮capture，自动生成逐核Excel。阶段定义、BS1命令和回传报告见
@@ -24,22 +26,26 @@
 
 默认 EP32，每机设备0..15，B8/M256/H3584/K8/E384，BF16和预量化FP8两组，
 默认仅dispatch，正确性检查保留；`--mode perf`执行dispatch+combine，FP8配置的combine仍是BF16。
+`--num-nodes`默认2，可指定现有域对应的1/2/4/8/16；节点编号必须在0..N-1。
+以下0/1示例使用默认两机，多机时每个节点添加相同`--num-nodes "$NODES"`，并使用各自NODE。
+实际EP由16×节点数计算；E384可用于EP32/64/128，EP256须显式使用可整除的E，如1024。
+
 默认 `--route normal` 已改为用户指定的严格均衡构造：每rank接收 `B*K` 条路由，每token选K个不同rank，rank内专家轮转；固定 `hot_multiplier_x2=2`。步长自动取 `E/EP`（默认EP32为12，EP64/E384为6）。基础seed为20261014，`--seed`默认0、作为偏移，抽样seed为 `20261014 + seed + B*1000 + 2`。旧 `hotspot` 的专家随机采样保持不变。
 
 结果的 `routing.generator=balanced-rank-distinct-roundrobin-v1` 标识新normal；comparison及reference样本保留seed/步长和实际路由SHA256。多轮正确性后恢复声明seed及匹配handle再测量。旧normal是独立专家随机采样，不能与新normal当作同负载A/B；历史结果不改写。路由在CPU准备阶段构造，不计入kernel采样。
 此NDR性能分支仅编译LL，跳过与当前SHMEM内部UDMA接口不匹配的HT路径；
 不会初始化CATLASS子模块。HT调用明确拒绝。
 
-当前通信实现为[协议27：源端直发count](DIRECT_RANK_COUNTS.md)，全rank更新完整wheel，不能混装旧协议。
+当前通信实现为[协议28：源端直发count](DIRECT_RANK_COUNTS.md)，全rank更新完整wheel，不能混装旧协议。
 
 ## 使用
 
-两机的工程绝对路径必须相同，使用相同分支/提交、run名及参数。
+所有节点的工程绝对路径必须相同，使用相同分支/提交、run名及参数。
 先在各自工程根执行 `git pull --ff-only`，并加载现有CANN环境；
 也可设置 `CANN_ENV` 指向实际 `set_env.sh`，脚本会加载它。
 本脚本不自动切分支、合并或覆盖用户源码。
 
-首次升级到当前SHMEM主线版本，先停止使用该工程SDK的作业，然后两机分别执行：
+首次升级到当前SHMEM主线版本，先停止使用该工程SDK的作业，然后各机分别执行：
 
 ```bash
 # 节点0：把 192.0.2.10 替换为节点0的真实可达IPv4地址
@@ -53,11 +59,11 @@ bash tests/ll_rdma/one_click.sh 1 192.0.2.10 ndr-b8-001 --rebuild-shmem
 已安装与当前源码、SDK、reference模式完全匹配的wheel时，可加 `--skip-build`。
 不要同时使用这两个选项。
 
-默认使用三个不同端口：29500（HCCL启动）、29501（SHMEM）、29502（两机准备确认）。
-可用 `--master-port`、`--shmem-port`、`--ready-port` 修改，两机配置必须一致。
+默认使用三个不同端口：29500（HCCL启动）、29501（SHMEM）、29502（全节点准备确认）。
+可用 `--master-port`、`--shmem-port`、`--ready-port` 修改，所有节点配置必须一致。
 准备确认只交换版本和参数JSON；不使用Gloo/TCPStore，不参与算子计数、数据通信或采样。
-各机完成构建/检查后最多等待另一机1800秒，可用 `--ready-timeout` 调整。
-如果一机准备失败，另一机的等待有超时；测试失败不自动重试。
+各机完成构建/检查后最多等待其余所有节点1800秒，可用 `--ready-timeout` 调整。
+如果一机准备失败，其他节点的等待有超时；测试失败不自动重试。
 
 ## 流程与结果
 
@@ -67,14 +73,14 @@ bash tests/ll_rdma/one_click.sh 1 192.0.2.10 ndr-b8-001 --rebuild-shmem
 2. 获取锁定子模块、校验/显式重建SDK、安装构建依赖和完整wheel。
 3. 检查当前源码fingerprint、SDK版本/实际PI模式、安装包NDR协议14、每peer 8个RoCE QP、G16及reference模式。
 4. 用既有ST生成CPU计划，执行RDMA环境前检。
-5. 两机核对工程路径、Git版本、源码、SDK与完整测试参数，一致后进入原HCCL入口。
-6. 运行测试；reference模式成功后自动分析各自本机16rank，不要求复制另一机样本。
+5. 所有节点核对工程路径、Git版本、源码、SDK与完整测试参数，一致后进入原HCCL入口。
+6. 运行测试；reference模式成功后自动分析各自本机16rank，不要求复制其他节点样本。
 
-2026-10-26：允许两机 `hns_1825_pi_on_chip` 不同，只从跨机比较副本中移除该字段。
+2026-10-26：允许各机 `hns_1825_pi_on_chip` 不同，只从跨机比较副本中移除该字段。
 各机identity.json仍保留实际PI值，且每台机器的SDK与wheel必须匹配同一个有效0/1值。
 不用为了跨机同值重建SDK，也不能手改manifest；实际模式仍须匹配本机固件，
 SDK探测fallback不能当作硬件验收。
-其他源码/协议/参数差异仍拒绝，错误会列出具体字段及两机值。
+其他源码/协议/参数差异仍拒绝，错误会列出具体字段及节点0与不匹配节点的值。
 `source_sha256`涵盖构建脚本、测试与源码；相同Git提交但已跟踪文件有本地修改仍会不一致。
 Git checkout中只纳入已跟踪测试文件，其他分支遗留的未跟踪实验目录保留但不进入指纹；
 实际构建目录中的源码/头文件仍完整计入。根目录的 `core` 文件从未参与该指纹。
@@ -93,7 +99,7 @@ Git checkout中只纳入已跟踪测试文件，其他分支遗留的未跟踪�
 
 ## OFF性能与参数调整
 
-两机同样增加 `--mode perf`，脚本安装OFF wheel，执行10预热/100采集/尾50统计。
+所有节点同样增加 `--mode perf`，脚本安装OFF wheel，执行10预热/100采集/尾50统计。
 rank0输出原有完整性能汇总；各节点保存本地profiler原始数据。
 OFF模式不调用阶段解析器，也不接受误装的ON wheel。
 
@@ -102,7 +108,7 @@ bash tests/ll_rdma/one_click.sh 0 192.0.2.10 ndr-perf-001 --mode perf
 bash tests/ll_rdma/one_click.sh 1 192.0.2.10 ndr-perf-001 --mode perf
 ```
 
-常用覆盖，两机必须相同：
+常用覆盖，所有节点必须相同：
 
 ```bash
 # 多B、只测FP8；其余保持默认

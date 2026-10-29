@@ -228,7 +228,7 @@ void bind_low_latency(py::module_& module)
         result["control_capacity_aiv"] = DispatchDedup::kLlMaxCoreNum;
         return result;
     });
-    for (uint32_t world : {16U, 32U})
+    for (uint32_t world : {16U, 32U, 64U, 128U, 256U})
         if (deepep_ll_ranks_per_group(world) != DispatchDedup::LlGroupForWorld(world))
             throw std::runtime_error("LL Host/device tiling-key policy mismatch; rebuild the complete wheel");
     module.def("low_latency_ranks_per_group", [](uint32_t world) { return DispatchDedup::LlGroupForWorld(world); });

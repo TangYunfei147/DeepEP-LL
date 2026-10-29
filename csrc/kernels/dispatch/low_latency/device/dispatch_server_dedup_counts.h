@@ -47,7 +47,7 @@ public:
         expertTokenNumsType_ = expertTokenNumsType;
         useAllCoreCount_ = bs < kEpServerDedupAllCoreCountBsThreshold;
         packedFrames_ = LlTransport::Rdma(args_) && epWorldSize_ > 16U;
-        directRanks_ = LlTransport::Rdma(args_) && epWorldSize_ == 32U;
+        directRanks_ = LlTransport::Rdma(args_) && epWorldSize_ > kLlPhysicalRanksPerHost;
         layout_ = DispatchServerDedupCountLayout(experts, coreNum_);
         stateOffset_ = DispatchServerDedupWindowOffset(magic) + layout_.cntOffset;
         GM_ADDR localState = args_->peerMems[epRankId_] + stateOffset_;
@@ -180,8 +180,8 @@ private:
 // 摘要：统计完整原始路由的专家计数并异步发往专家所属 rank，同时保留仍被 MTE3 使用的记录 UB。
 __aicore__ inline void ServerDedupCounts::SendCnt()
 {
-    // Same-host work keeps the original expert split. In EP32, cores 0..15
-    // additionally own one remote rank each, independent of the BS threshold.
+    // Same-host work keeps the original expert split. Each physical core owns
+    // remote rank tasks core, core+coreNum, ... independent of the BS threshold.
     const uint32_t cores = useAllCoreCount_ ? coreNum_ : aivUsedCumSum_;
     const auto assignment = CountAssignment(epRankId_, epWorldSize_, rscvStatusNum_,
                                             coreNum_, aivId_, useAllCoreCount_, directRanks_);
@@ -212,18 +212,20 @@ __aicore__ inline void ServerDedupCounts::SendCnt()
     DataCopyPad(validExpertIdsTensor_, expertIdsGMTensor_, idsCopy, pad);
     SyncFunc<HardEvent::MTE2_V>();
     if (remoteOwner) {
-        const uint32_t destination = assignment.remoteRank;
-        const uint32_t first = destination * moeExpertNumPerRank_;
         auto remoteFrame = workBuf_.Get<int32_t>();
-        CountRemoteRank(first, remoteFrame, assignment.remoteRecords);
-        SyncFunc<HardEvent::S_MTE3>();
-        const auto frame = CountFrame(rscvStatusNum_, epWorldSize_, cores,
-                                      destination, epRankId_, 0U, true);
-        LlTransport::DirectCountFrame(args_, destination, stateOffset_ + frame.frameOffset,
-            remoteFrame.ReinterpretCast<uint8_t>(), moeExpertNumPerRank_, dstExpBuf_.Get<uint8_t>());
-        // Vector has retired the selected-ID output; SDK reuses it as scratch.
-        // Quiet retires source/CQ, then S_V acquires SDK writes for local counts.
-        SyncFunc<HardEvent::S_V>();
+        for (uint32_t task = aivId_; task < epWorldSize_ - kLlPhysicalRanksPerHost; task += coreNum_) {
+            const uint32_t destination = CountRemotePeer(epRankId_, epWorldSize_, task);
+            const uint32_t first = destination * moeExpertNumPerRank_;
+            CountRemoteRank(first, remoteFrame, assignment.remoteRecords);
+            SyncFunc<HardEvent::S_MTE3>();
+            const auto frame = CountFrame(rscvStatusNum_, epWorldSize_, cores,
+                                          destination, epRankId_, 0U, true);
+            LlTransport::DirectCountFrame(args_, destination, stateOffset_ + frame.frameOffset,
+                remoteFrame.ReinterpretCast<uint8_t>(), moeExpertNumPerRank_, dstExpBuf_.Get<uint8_t>());
+            // Each frame's quiet retires GM/CQ before another peer reuses this
+            // core's stage. Acquire SDK scratch before the next Vector pass.
+            SyncFunc<HardEvent::S_V>();
+        }
     }
 
     // 4. 规模足够时先向量筛选本核专家区间再做直方图；小输入逐专家统计。

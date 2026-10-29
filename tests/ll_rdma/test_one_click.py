@@ -158,8 +158,9 @@ def test_bad_shape_rejected_before_any_preparation(tokens, monkeypatch):
 
 
 @pytest.mark.parametrize("mode", ["perf", "reference"])
-@pytest.mark.parametrize("fault", [None, "timer", "source", "sdk", "firmware", "library", "branch", "protocol", "qps", "reference", "reference_metadata"])
-def test_installed_check_rejects_stale_or_mixed_builds(tmp_path, monkeypatch, mode, fault):
+@pytest.mark.parametrize("nodes", [1, 2, 4, 8, 16])
+@pytest.mark.parametrize("fault", [None, "timer", "source", "sdk", "firmware", "library", "branch", "protocol", "qps", "reference", "reference_metadata", "group"])
+def test_installed_check_rejects_stale_or_mixed_builds(tmp_path, monkeypatch, mode, nodes, fault):
     root = tmp_path / "project"
     root.mkdir()
     (root / "dependencies.lock.json").write_text('{"shmem":{"revision":"sdk"}}')
@@ -174,14 +175,14 @@ def test_installed_check_rejects_stale_or_mixed_builds(tmp_path, monkeypatch, mo
     (package / "_build_info.json").write_text(json.dumps(info))
     native = SimpleNamespace(
         low_latency_implementation="wrong" if fault == "branch" else "ndr-hns1825",
-        low_latency_core_protocol=11 if fault == "protocol" else 27, low_latency_rdma_enabled=True,
+        low_latency_core_protocol=11 if fault == "protocol" else 28, low_latency_rdma_enabled=True,
         low_latency_core_config=lambda: {"active_aiv": 56},
         low_latency_roce_qps_per_peer=4 if fault == "qps" else 0,
         low_latency_stage_timer_enabled=(mode == "timer") != (fault == "timer"),
         low_latency_reference_profile_enabled=(mode == "reference") != (fault == "reference"),
         low_latency_reference_profile_layout=lambda: dict(schema=4, slots=80, fields=8,
                 words=list(WORDS)),
-        low_latency_ranks_per_group=lambda world: 16,
+        low_latency_ranks_per_group=lambda world: (99 if fault == "group" else (4 if world <= 16 else 16)),
         low_latency_stage_timer_layout=lambda: {"schema": 3},
         shmem_library_path=lambda: str(root / ("wrong.so" if fault == "library" else "third-party/shmem/install/shmem/lib/libshmem.so")))
     monkeypatch.setattr(launch, "ROOT", root)
@@ -191,7 +192,7 @@ def test_installed_check_rejects_stale_or_mixed_builds(tmp_path, monkeypatch, mo
     monkeypatch.setattr(launch.runpy, "run_path", lambda _: {"_import_installed_deep_ep":
         lambda: SimpleNamespace(__file__=str(package / "__init__.py"))})
     monkeypatch.setattr(launch.subprocess, "check_output", lambda *a, **kw: "revision\n")
-    a = launch.parse_args(["1", "192.0.2.1", "check", "--mode", mode])
+    a = launch.parse_args([str(nodes - 1), "192.0.2.1", "check", "--mode", mode, "--num-nodes", str(nodes)])
     if fault:
         with pytest.raises(RuntimeError): launch.installed_identity(a)
     else:

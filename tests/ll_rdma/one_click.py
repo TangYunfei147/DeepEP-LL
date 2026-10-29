@@ -1,4 +1,4 @@
-"""Prepare and run the existing EP32 NDR test on one of two target hosts."""
+"""Prepare and run NDR on the requested number of 16-rank target hosts."""
 
 import argparse
 import ipaddress
@@ -21,8 +21,9 @@ RANK_ENV = ("RANK", "WORLD_SIZE", "LOCAL_RANK", "LOCAL_WORLD_SIZE", "GROUP_RANK"
 def parse_args(argv=None):
     p = argparse.ArgumentParser(description=__doc__, allow_abbrev=False,
         epilog='Offline export: bash tests/ll_rdma/one_click.sh --analyze-only RUN_DIR [--output-dir NEW_DIR] [--iteration last|N]. No CANN required.')
-    p.add_argument("node_rank", type=int, choices=(0, 1))
-    p.add_argument("master_addr", help="Reachable numeric IPv4 address of node 0; identical on both hosts")
+    p.add_argument("node_rank", type=int)
+    p.add_argument("--num-nodes", type=int, default=2, help="Host count; existing LL EP domains are 16/32/64/128/256")
+    p.add_argument("master_addr", help="Reachable numeric IPv4 address of node 0; identical on all hosts")
     p.add_argument("run_name", help="New shared name; the script appends -reference or -perf")
     p.add_argument("--mode", choices=("perf", "reference"), default="reference")
     p.add_argument("--devices", default=",".join(map(str, range(16))))
@@ -38,13 +39,15 @@ def parse_args(argv=None):
     p.add_argument("--master-port", type=int, default=29500)
     p.add_argument("--shmem-port", type=int, default=29501)
     p.add_argument("--ready-port", type=int, default=29502)
-    p.add_argument("--ready-timeout", type=int, default=1800, help="Seconds to wait for the other prepared host")
+    p.add_argument("--ready-timeout", type=int, default=1800, help="Seconds to wait for all other prepared hosts")
     p.add_argument("--rebuild-shmem", action="store_true", help="Explicitly rebuild an old SDK after stopping its users")
     p.add_argument("--skip-build", action="store_true", help="Use the existing project venv/wheel after strict checks")
     p.add_argument("--prepare-only", action="store_true", help="Build and check without joining or launching")
     p.add_argument("--plan", action="store_true", help="CPU plan only; no download/build/venv/device launch")
     p.add_argument("--identity-output", type=Path, help=argparse.SUPPRESS)
     a = p.parse_args(argv)
+    if a.num_nodes < 1 or not 0 <= a.node_rank < a.num_nodes:
+        p.error("node_rank must be in [0, num_nodes), with positive num_nodes")
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,79}", a.run_name):
         p.error("run_name must be 1..80 letters/digits/underscore/dot/hyphen and start with a letter or digit")
     try:
@@ -81,7 +84,7 @@ def run_id(a):
 
 def test_arguments(a):
     result = ["--backend", "rdma", "--devices", a.devices,
-              "--num-processes", "16", "--num-nodes", "2", "--node-rank", str(a.node_rank),
+              "--num-processes", "16", "--num-nodes", str(a.num_nodes), "--node-rank", str(a.node_rank),
               "--master-addr", a.master_addr, "--master-port", str(a.master_port),
               "--shmem-port", str(a.shmem_port), "--num-tokens", *map(str, a.tokens),
               "--num-max-tokens-per-rank", str(a.capacity), "--hidden", str(a.hidden),
@@ -113,7 +116,7 @@ def validate_test_arguments(a):
     st = runpy.run_path(str(ROOT / "tests/elastic/test_ep_low_latency.py"))
     arguments = test_arguments(a)
     # --devices belongs to the shared wrapper, not the ST parser.
-    st["validate_args"](st["parse_args"](arguments[:2] + arguments[4:]), 32)
+    st["validate_args"](st["parse_args"](arguments[:2] + arguments[4:]), 16 * a.num_nodes)
 
 
 def child_environment(a):
@@ -172,8 +175,8 @@ def installed_identity(a):
     if (info.get("shmem", {}).get("revision") != lock["revision"] or
             info.get("shmem", {}).get("build") != sdk["build"]):
         raise RuntimeError("Installed wheel and current SHMEM SDK identity differ; rebuild the wheel")
-    if getattr(native, "low_latency_implementation", None) != "ndr-hns1825" or native.low_latency_core_protocol != 27:
-        raise RuntimeError("Installed wheel is not the current NDR protocol-27 direct-count/SO/per-physical-core-QP implementation")
+    if getattr(native, "low_latency_implementation", None) != "ndr-hns1825" or native.low_latency_core_protocol != 28:
+        raise RuntimeError("Installed wheel is not the current NDR protocol-28 multi-host-direct-count/SO/per-physical-core-QP implementation")
     if not native.low_latency_rdma_enabled or bool(native.low_latency_stage_timer_enabled):
         raise RuntimeError("Installed RDMA/timer capability does not match the requested mode")
     if getattr(native, 'low_latency_roce_qps_per_peer', None) != 0:
@@ -191,7 +194,9 @@ def installed_identity(a):
             raise RuntimeError('Installed reference-profile schema differs from this NDR branch')
         if info.get('ll_stage_timer') is not False:
             raise RuntimeError('Reference-profile wheel must compile legacy stage tracing OFF')
-    if native.low_latency_ranks_per_group(32) != 16 or native.low_latency_stage_timer_layout()["schema"] != 3:
+    world = 16 * a.num_nodes
+    if (native.low_latency_ranks_per_group(world) != (4 if world <= 16 else 16)
+            or native.low_latency_stage_timer_layout()["schema"] != 3):
         raise RuntimeError("Installed group/timer schema differs from this NDR branch")
     if Path(native.shmem_library_path()).resolve() != (sdk_root / "lib/libshmem.so").resolve():
         raise RuntimeError("Loaded SHMEM library is outside the selected SDK")
@@ -203,7 +208,7 @@ def installed_identity(a):
     shared_args[shared_args.index("--node-rank") + 1] = "<node>"
     return {"schema": 1, "project_root": str(ROOT.resolve()), "git_revision": revision,
             "source_sha256": fingerprint, "sdk_revision": lock["revision"], "sdk_build": sdk["build"],
-            "core_protocol": 27, "roce_qps_per_peer": native.low_latency_core_config()["active_aiv"], "timer_schema": 3, "reference_profile": reference,
+            "core_protocol": 28, "roce_qps_per_peer": native.low_latency_core_config()["active_aiv"], "timer_schema": 3, "reference_profile": reference,
             "reference_profile_schema": 4 if reference else None, "mode": a.mode, "arguments": shared_args}
 
 
@@ -270,12 +275,12 @@ def main(argv=None):
     run_logged([python, "tests/ll_rdma/preflight.py", "--output", logs / "preflight.json"], env, logs / "21-preflight.log")
     print(f"Preparation passed: node={a.node_rank}, logs={logs}", flush=True)
     if a.prepare_only:
-        print("Prepared only; launch both hosts with the same name and --skip-build.")
+        print("Prepared only; launch all hosts with the same name and --skip-build.")
         return 0
     from target_ready import synchronize
-    print(f"Waiting for both prepared hosts at {a.master_addr}:{a.ready_port} (up to {a.ready_timeout}s)", flush=True)
+    print(f"Waiting for all {a.num_nodes} prepared hosts at {a.master_addr}:{a.ready_port} (up to {a.ready_timeout}s)", flush=True)
     agreed = synchronize(a.node_rank, a.master_addr, a.ready_port, run_id(a),
-                         peer_identity(json.loads(identity_path.read_text())), a.ready_timeout)
+                         peer_identity(json.loads(identity_path.read_text())), a.ready_timeout, a.num_nodes)
     (logs / "agreement.json").write_text(json.dumps(agreed, indent=2) + "\n", encoding="utf-8")
     run_logged([python, *test_command], env, logs / "30-test.log")
     if a.mode == "reference":

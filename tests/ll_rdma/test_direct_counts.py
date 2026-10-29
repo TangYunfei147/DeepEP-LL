@@ -102,10 +102,10 @@ struct Fixture {
 int main() {
     std::mt19937 rng(27029);unsigned cases=0;
     constexpr int32_t guard=0x5a5a5a5a;
-    for(unsigned experts: {32U,64U,384U,1024U})
-      for(unsigned n: {1U,7U,8U,31U,63U,64U,65U,255U,256U,2048U,8192U,12000U})
-        for(unsigned dst: {0U,15U,16U,31U}) for(unsigned pattern=0;pattern<4;++pattern) {
-          const unsigned local=experts/32,aligned=(local+1+7)/8*8,routeWords=(n+63)/64*64;
+    for(unsigned world: {32U,64U,128U,256U}) for(unsigned experts: {32U,64U,384U,1024U})
+      if(experts>=world && experts%world==0) for(unsigned n: {1U,7U,8U,31U,63U,64U,65U,255U,256U,2048U,8192U,12000U})
+        for(unsigned dst: {0U,world/2-1,world/2,world-1}) for(unsigned pattern=0;pattern<4;++pattern) {
+          const unsigned local=experts/world,aligned=(local+1+7)/8*8,routeWords=(n+63)/64*64;
           std::vector<int32_t> status(aligned*8+8,guard),ids(routeWords,guard),selected(routeWords+8,guard);
           std::vector<uint8_t> mask(routeWords*4+32,0xa5);
           for(unsigned i=0;i<n;++i)ids[i]=pattern==0?-1:pattern==1?int32_t(dst*local):
@@ -134,7 +134,8 @@ int main() {
 def test_remote_protocol_is_wired_consistently():
     source = COUNTS.read_text(encoding='utf-8')
     send = block(source, 'void ServerDedupCounts::SendCnt()')
-    assert 'CountAssignment(' in send and 'assignment.remoteRank' in send
+    assert 'CountAssignment(' in send and 'CountRemotePeer(' in send
+    assert 'task += coreNum_' in send
     assert 'CountRemoteRank(first, remoteFrame, assignment.remoteRecords);' in send
     assert 'LlTransport::DirectCountFrame' in send
     assert 'auto remoteFrame = workBuf_.Get<int32_t>();' in send

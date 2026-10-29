@@ -1,4 +1,4 @@
-"""Two-node preparation gate before the existing HCCL/ST entry point.
+"""All-node preparation gate before the existing HCCL/ST entry point.
 
 This exchanges only build/configuration identities after local preparation. It
 does not create a process group, synchronize an operator, or carry operator data
@@ -11,10 +11,12 @@ import math
 import socket
 import struct
 import time
+from contextlib import ExitStack
 
 
-PROTOCOL = "deepep-ll-target-ready-v1"
+PROTOCOL = "deepep-ll-target-ready-v2"
 MAX_FRAME_BYTES = 64 * 1024
+MAX_NODES = 256 // 16  # Existing LL rank capacity / confirmed ranks per host.
 
 
 class TargetReadyError(RuntimeError):
@@ -51,16 +53,16 @@ def _validate_identity(value):
         raise TargetReadyError("Preparation identity must contain JSON values only")
 
 
-def identity_differences(node0, node1, path=""):
+def identity_differences(node0, node1, path="", peer_rank=1):
     """Readable strict differences; array positions retain their argument context."""
     if type(node0) is dict and type(node1) is dict:
         result = []
         for key in sorted(node0.keys() | node1.keys()):
             child = f"{path}.{key}" if path else key
             if key not in node0 or key not in node1:
-                result.append(f"{child}: missing on node {0 if key not in node0 else 1}")
+                result.append(f"{child}: missing on node {0 if key not in node0 else peer_rank}")
             else:
-                result.extend(identity_differences(node0[key], node1[key], child))
+                result.extend(identity_differences(node0[key], node1[key], child, peer_rank))
         return result
     if type(node0) is list and type(node1) is list and len(node0) == len(node1):
         result = []
@@ -68,7 +70,7 @@ def identity_differences(node0, node1, path=""):
             label = f"{path}[{index}]"
             if index and isinstance(node0[index - 1], str) and node0[index - 1].startswith("--"):
                 label += f" ({node0[index - 1]})"
-            result.extend(identity_differences(left, right, label))
+            result.extend(identity_differences(left, right, label, peer_rank))
         return result
     if _json_bytes(node0) == _json_bytes(node1):
         return []
@@ -77,16 +79,16 @@ def identity_differences(node0, node1, path=""):
         text = json.dumps(value, ensure_ascii=True, sort_keys=True, allow_nan=False)
         return text if len(text) <= 120 else text[:117] + "..."
 
-    return [f"{path or '<identity>'}: node0={preview(node0)}, node1={preview(node1)}"]
+    return [f"{path or '<identity>'}: node0={preview(node0)}, node{peer_rank}={preview(node1)}"]
 
 
-def mismatch_message(node0, node1):
-    differences = identity_differences(node0, node1)
+def mismatch_message(node0, node1, peer_rank=1):
+    differences = identity_differences(node0, node1, peer_rank=peer_rank)
     details = "; ".join(differences)
     prefix = "Preparation identity mismatch: "
     # Both peers accept the existing protocol's <=1024-character error field.
     if len(details) > 990:
-        details = details[:930] + "; ... compare the two saved identity.json files"
+        details = details[:930] + "; ... compare the saved identity.json files"
     return prefix + details
 
 
@@ -171,19 +173,21 @@ def _connect(master_addr, port, family, deadline):
         time.sleep(min(0.1, remaining))
 
 
-def synchronize(node_rank, master_addr, port, run_id, identity, timeout_seconds=1800):
-    """Return matching preparation reports for nodes 0/1, or raise.
+def synchronize(node_rank, master_addr, port, run_id, identity, timeout_seconds=1800, num_nodes=2):
+    """Return matching preparation reports for every requested node, or raise.
 
     Call once per node only after its local build/install/checks have succeeded.
     ``master_addr`` must be a numeric IPv4/IPv6 address so DNS cannot escape the
     deadline. The caller supplies only non-secret build/configuration facts.
     ``port`` is the separate, explicit preparation port (the launcher normally
-    chooses master_port + 2). Node 1 retries connection establishment until the
+    chooses master_port + 2). Clients retry connection establishment until the
     deadline; established exchanges and tests are never retried. Identity equality
     includes JSON types, so ``True``, ``1``, and ``1.0`` are distinct.
     """
-    if type(node_rank) is not int or node_rank not in (0, 1):
-        raise ValueError("Preparation node_rank must be 0 or 1")
+    if type(num_nodes) is not int or not 1 <= num_nodes <= MAX_NODES:
+        raise ValueError(f"Preparation num_nodes must be in [1, {MAX_NODES}] for existing LL capacity")
+    if type(node_rank) is not int or not 0 <= node_rank < num_nodes:
+        raise ValueError("Preparation node_rank must be in [0, num_nodes)")
     if type(port) is not int or not 1 <= port <= 65535:
         raise ValueError("Preparation port must be an explicit integer in [1, 65535]")
     if not isinstance(master_addr, str):
@@ -209,17 +213,23 @@ def synchronize(node_rank, master_addr, port, run_id, identity, timeout_seconds=
         raise TargetReadyError("Preparation identity is cyclic or too deeply nested") from exc
     identity_bytes = _json_bytes(identity)
     snapshot = json.loads(identity_bytes)
-    hello = {"protocol": PROTOCOL, "type": "prepared", "node_rank": 1,
+    hello = {"protocol": PROTOCOL, "type": "prepared", "node_rank": node_rank, "num_nodes": num_nodes,
              "run_id": run_id, "identity": snapshot}
     report = {"protocol": PROTOCOL, "run_id": run_id, "status": "ready",
-              "nodes": [{"node_rank": rank, "identity": snapshot} for rank in (0, 1)]}
+              "nodes": [{"node_rank": rank, "identity": snapshot} for rank in range(num_nodes)]}
+    # All nodes agreed on the same identity. Carry it once on the wire so the
+    # bounded message size does not shrink the admissible identity with N.
+    wire_report = {"protocol": PROTOCOL, "run_id": run_id, "status": "ready",
+                   "num_nodes": num_nodes, "identity": snapshot}
     success = {"protocol": PROTOCOL, "type": "result", "run_id": run_id,
-               "ok": True, "report": report}
+               "ok": True, "report": wire_report}
     # Fail locally before opening a socket if either protocol message is too big.
     _frame(hello)
     _frame(success)
     deadline = time.monotonic() + timeout_seconds
-    if node_rank == 1:
+    if num_nodes == 1:
+        return report
+    if node_rank != 0:
         with _connect(master_addr, port, family, deadline) as connection:
             _send(connection, hello, deadline)
             result = _receive(connection, deadline)
@@ -231,40 +241,50 @@ def synchronize(node_rank, master_addr, port, run_id, identity, timeout_seconds=
                 raise TargetReadyError("Peer rejected preparation with an invalid error response")
             raise TargetReadyError(f"Peer rejected preparation: {error}")
         if (result.get("ok") is not True or result.get("run_id") != run_id
-                or _json_bytes(result.get("report")) != _json_bytes(report)):
+                or _json_bytes(result.get("report")) != _json_bytes(wire_report)):
             raise TargetReadyError("Preparation result does not match this run and identity")
         return report
 
     try:
-        listener = socket.create_server((master_addr, port), family=family, backlog=1)
+        listener = socket.create_server((master_addr, port), family=family, backlog=num_nodes - 1)
     except OSError as exc:
         raise TargetReadyError(f"Cannot listen on preparation address {master_addr}:{port}: {exc}") from exc
-    with listener:
-        listener.settimeout(_remaining(deadline, "waiting for node 1"))
+    with listener, ExitStack() as connections:
+        peers = {}
+        accepted = []
         try:
-            connection, _ = listener.accept()
-        except socket.timeout as exc:
-            raise TargetReadyError("Preparation handshake timed out waiting for node 1") from exc
-        except OSError as exc:
-            raise TargetReadyError(f"Preparation connection accept failed: {exc}") from exc
-        with connection:
-            try:
+            while len(peers) < num_nodes - 1:
+                listener.settimeout(_remaining(deadline, "waiting for all prepared nodes"))
+                try:
+                    connection, _ = listener.accept()
+                except socket.timeout as exc:
+                    raise TargetReadyError("Preparation handshake timed out waiting for all prepared nodes") from exc
+                except OSError as exc:
+                    raise TargetReadyError(f"Preparation connection accept failed: {exc}") from exc
+                connections.enter_context(connection)
+                accepted.append(connection)
                 peer = _receive(connection, deadline)
                 if (set(peer) != set(hello) or peer.get("protocol") != PROTOCOL
                         or peer.get("type") != "prepared" or type(peer.get("node_rank")) is not int
-                        or peer["node_rank"] != 1):
-                    raise TargetReadyError("Preparation listener requires a node 1 prepared message")
+                        or not 1 <= peer["node_rank"] < num_nodes or peer["node_rank"] in peers):
+                    raise TargetReadyError("Preparation listener requires a unique nonzero node_rank prepared message")
+                if type(peer.get("num_nodes")) is not int or peer["num_nodes"] != num_nodes:
+                    raise TargetReadyError("Preparation num_nodes mismatch")
                 if peer.get("run_id") != run_id:
                     raise TargetReadyError("Preparation run_id mismatch")
                 if type(peer.get("identity")) is not dict or _json_bytes(peer["identity"]) != identity_bytes:
-                    raise TargetReadyError(mismatch_message(snapshot, peer.get("identity")))
+                    raise TargetReadyError(mismatch_message(snapshot, peer.get("identity"), peer["node_rank"]))
+                peers[peer["node_rank"]] = connection
+            # No client is released until all distinct nodes passed identity checks.
+            for connection in peers.values():
                 _send(connection, success, deadline)
-            except TargetReadyError as exc:
-                failure = {"protocol": PROTOCOL, "type": "result", "run_id": run_id,
-                           "ok": False, "error": str(exc)[:1024]}
+        except TargetReadyError as exc:
+            failure = {"protocol": PROTOCOL, "type": "result", "run_id": run_id,
+                       "ok": False, "error": str(exc)[:1024]}
+            for connection in accepted:
                 try:
                     _send(connection, failure, deadline)
                 except TargetReadyError:
                     pass
-                raise
+            raise
     return report

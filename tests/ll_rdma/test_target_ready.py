@@ -123,7 +123,7 @@ def test_listener_requires_node_one():
         server = workers.submit(ready.synchronize, 0, "127.0.0.1", port, "run", IDENTITY, 2)
         with client(port) as connection:
             connection.sendall(struct.pack("!I", len(payload)) + payload)
-            with pytest.raises(ready.TargetReadyError, match="requires a node 1"):
+            with pytest.raises(ready.TargetReadyError, match="unique nonzero node_rank"):
                 server.result(timeout=3)
 
 
