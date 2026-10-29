@@ -38,7 +38,7 @@ int main() {
                 batch.Init(&args,bytes);
                 std::fill(remote.begin(),remote.end(),0);
                 std::vector<std::vector<uint8_t>> saved;
-                uint32_t capacity=std::min(8U,LlRdma::kCoreBytes/bytes);
+                uint32_t capacity=(LlRdma::kCoreBytes/bytes);
                 auto quiets=Model::quiets, puts=Model::puts;
                 Model::before=[&](const Model::Request& req) {
                     assert(req.qp==core && req.peer>=16);

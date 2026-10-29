@@ -178,7 +178,7 @@ def installed_identity(a):
             info.get("shmem", {}).get("build") != sdk["build"]):
         raise RuntimeError("Installed wheel and current SHMEM SDK identity differ; rebuild the wheel")
     histogram = os.environ.get("DEEPEP_LL_COUNT_HISTOGRAM", "OFF") == "ON"
-    expected_protocol = 31 if histogram else 30
+    expected_protocol = 33 if histogram else 32
     if (getattr(native, "low_latency_implementation", None) != "ndr-hns1825"
             or native.low_latency_core_protocol != expected_protocol
             or info.get("ll_count_histogram", False) != histogram):

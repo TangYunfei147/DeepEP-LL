@@ -7,14 +7,14 @@ namespace LlTransport {
 // One staged-but-not-posted packet. Reuse the existing GM batch and output
 // lanes; the next packet must use a different UB lane until SubmitPending.
 class DispatchRdmaBatch {
-    static constexpr uint32_t kMaxPackets = 8U;
+    static constexpr uint32_t kPeerWords = (DispatchDedup::DISPATCH_DEDUP_MAX_RANK_SIZE + 31U) / 32U;
     const __gm__ Args* args_ = nullptr;
     uint32_t bytes_ = 0, capacity_ = 0, count_ = 0;
     GM_ADDR stageBase_ = nullptr;
     GM_ADDR pendingStage_ = nullptr;
-    uint32_t firstPeers_ = 0U, pendingPeer_ = 0U;
+    uint32_t pendingPeer_ = 0U;
     uint64_t pendingOffset_ = 0U;
-    uint32_t peers_[kMaxPackets]{};
+    uint32_t peerMask_[kPeerWords]{};
     LocalTensor<uint8_t> pendingScratch_;
     bool staged_ = false;
     CountRetirement* countRetirement_ = nullptr;
@@ -29,15 +29,20 @@ class DispatchRdmaBatch {
 #else
         (void)secondTriggered;
 #endif
-        for (uint32_t i = 0; i < count_; ++i)
-            if (firstPeers_ & (uint32_t(1) << i)) {
-                Quiet(peers_[i], scratch);
-                if (countRetirement_) countRetirement_->Completed(peers_[i]);
+        for (uint32_t word = 0; word < kPeerWords; ++word) {
+            const uint32_t mask = peerMask_[word];
+            if (!mask) continue;
+            for (uint32_t bit = 0; bit < 32U; ++bit) if (mask & (1U << bit)) {
+                const uint32_t peer = word * 32U + bit;
+                Quiet(peer, scratch);
+                if (countRetirement_) countRetirement_->Completed(peer);
             }
+            peerMask_[word] = 0U;
+        }
 #ifdef DEEPEP_LL_REFERENCE_PROFILE
         if (profile_) profile_->FlushDone(quietBegin, secondTriggered);
 #endif
-        count_ = 0; firstPeers_ = 0U;
+        count_ = 0;
     }
 public:
     __aicore__ inline void SetCountRetirement(CountRetirement* p) { countRetirement_ = p; }
@@ -49,7 +54,7 @@ public:
         args_ = args; bytes_ = bytes; count_ = 0;
         if (!bytes || bytes % 512U || bytes > LlRdma::kCoreBytes) { Trap(); return; }
         const uint32_t slots = LlRdma::kCoreBytes / bytes_;
-        capacity_ = slots < kMaxPackets ? slots : kMaxPackets;
+        capacity_ = slots; // use every complete packet slot in the 128KiB GM stage
         if (uint32_t(args_->rankSize) > DispatchDedup::kLlPhysicalRanksPerHost)
             stageBase_ = Stage(args_, capacity_ * bytes_);
     }
@@ -69,10 +74,7 @@ public:
         pendingPeer_ = peer; pendingOffset_ = offset; pendingScratch_ = packet;
         DataCopy(Tensor(pendingStage_, true), packet, bytes_);
         SetFlag<HardEvent::MTE3_S>(7U); // same event as the old immediate Sync
-        peers_[count_] = peer;
-        bool first = true;
-        for (uint32_t i = 0; i < count_; ++i) if (peers_[i] == peer) { first = false; break; }
-        if (first) firstPeers_ |= uint32_t(1) << count_;
+        peerMask_[peer / 32U] |= 1U << (peer % 32U);
         ++count_; staged_ = true;
 #ifdef DEEPEP_LL_REFERENCE_PROFILE
         if (profile_) profile_->StageQueued(pendingSecond_, defer);

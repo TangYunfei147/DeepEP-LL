@@ -22,7 +22,7 @@ int main(){
   LlTransport::DispatchRdmaBatch batch;batch.Init(&a,bytes);
   const uint32_t stride=bytes+4096U;
   std::vector<unsigned> order,expected;std::vector<bool> isRemote(n);
-  unsigned capacity=std::min(8U,LlRdma::kCoreBytes/bytes),remoteCount=0;
+  unsigned capacity=(LlRdma::kCoreBytes/bytes),remoteCount=0;
   Model::onPost=[&](Model::Request& req){
    unsigned index=unsigned((req.dst-Model::remote-uint64_t(req.peer)*1024)/stride);
    assert(req.qp==core && isRemote[index]);
