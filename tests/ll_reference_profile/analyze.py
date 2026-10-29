@@ -146,6 +146,10 @@ def compact_report(report, selected_iteration):
               '配置：`'+json.dumps(report['config'], ensure_ascii=False, sort_keys=True)+'`',
               '采样：`'+json.dumps(report['sampling'], ensure_ascii=False, sort_keys=True)+'`', '',
               '原始sample与完整core_stage_timings.xlsx、summary.json、stages.csv保留目标机。此文件省略逐核原始cycle及未展示核的阶段明细。']
+    if report.get('packet_trace_coverage'):
+        cov=report['packet_trace_coverage']
+        lines += ['', f"包顺序覆盖（选轮{cov['selected_iteration']}）：{cov['records']}/{cov['tasks']}个R任务，截断核数{cov['truncated_cores']}。",
+                  'S包时序、R就绪/处理顺序和原始扩展记录见本机CSV及Excel；发现顺序不等于到达顺序，提交不等于远端消费完成。']
     content = '\n'.join(lines)+'\n'
     if len(content.encode('utf-8')) > 60000:
         raise ValueError('Compact report exceeds 60000 UTF-8 bytes')
@@ -180,6 +184,11 @@ def process_directory(source, output=None, frequency_hz=None, iteration='last', 
     selected = [saved for path in paths for saved, _ in [read_sample(path, frequency_hz)]
                 if saved['metadata']['iteration'] == chosen]
     exporter.validate_selected(report, selected, timer)
+    packet_tables = exporter.packet_tables(selected, timer, report['frequency_hz'])
+    coverage = packet_tables[2][1:]
+    report['packet_trace_coverage'] = dict(selected_iteration=chosen,
+        tasks=sum(row[2] for row in coverage), records=sum(row[3] for row in coverage),
+        truncated_cores=sum(bool(row[4]) for row in coverage))
     text = compact_report(report, chosen)
     output = Path(output) if output is not None else source/'reference-analysis'
     output.mkdir(parents=True, exist_ok=False)
@@ -203,6 +212,10 @@ def process_directory(source, output=None, frequency_hz=None, iteration='last', 
     tables.csv_table(output/'stages.csv', headers, wide)
     tables.csv_table(output/'stages_mean.csv', headers, tables.mean_rows(report, headers, stages))
     tables.csv_table(output/'stage_calls.csv', headers, calls)
+    for name, rows in zip(('sender_packet_timing.csv','receiver_packet_order.csv','packet_trace_coverage.csv','packet_detail_raw.csv'), packet_tables):
+        tables.csv_table(output/name, rows[0], rows[1:])
+    ready_rows = sorted(packet_tables[1][1:], key=lambda row:(row[0],row[1],row[4]))
+    tables.csv_table(output/'receiver_ready_order.csv',packet_tables[1][0],ready_rows)
     exporter.export_workbook(output/'core_stage_timings.xlsx', report, selected, timer)
     (output/'return_report.md').write_text(text, encoding='utf-8')
     print(f'{source} -> {output} (dispatch; all iterations summarized; selected {chosen})')

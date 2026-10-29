@@ -179,7 +179,7 @@ def test_installed_check_rejects_stale_or_mixed_builds(tmp_path, monkeypatch, mo
         low_latency_roce_qps_per_peer=4 if fault == "qps" else 0,
         low_latency_stage_timer_enabled=(mode == "timer") != (fault == "timer"),
         low_latency_reference_profile_enabled=(mode == "reference") != (fault == "reference"),
-        low_latency_reference_profile_layout=lambda: dict(schema=1, slots=8, fields=8,
+        low_latency_reference_profile_layout=lambda: dict(schema=2, slots=80, fields=8,
                 words=list(WORDS)),
         low_latency_ranks_per_group=lambda world: 16,
         low_latency_stage_timer_layout=lambda: {"schema": 3},

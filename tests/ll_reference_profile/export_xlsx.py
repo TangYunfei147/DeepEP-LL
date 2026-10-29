@@ -12,7 +12,7 @@ from zipfile import ZipFile, ZIP_DEFLATED
 
 NS = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'
 REL = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
-SHEET_NAMES = ('采样汇总', '逐核耗时', '阶段说明', '原始Cycle')
+SHEET_NAMES = ('采样汇总', '逐核耗时', '阶段说明', '原始Cycle', 'S包时序', 'R包顺序', '包记录覆盖', '包原始记录')
 IDENTITY_HEADERS = ('Rank', '核号', '收发角色', '任务数')
 EXACT_LIMIT = 999_999_999_999_999
 
@@ -151,6 +151,38 @@ def validate_selected(report, selected_saved, timer):
     return sorted(selected, key=lambda value: value[1]['rank'])
 
 
+def packet_tables(selected_saved, timer, frequency):
+    unit = 'µs' if frequency is not None else 'ticks'
+    metrics = timer.SENDER_PACKET_METRICS
+    sender = [['Rank','核号','跨机包数','本组包数','lane数','第2跨机包有效','第2包token','第2包header_k',
+               '第2包专家','第2包peer','第2包触发整批quiet','跨机与本组区间交错','quiet批次数',
+               *[f'{label} ({unit})' for label in metrics.values()]]]
+    receiver = [['Rank','核号','稳定任务j','输出行','发现就绪顺序','就绪批次','处理顺序','源rank','源token',
+                 'header_k（Terminal为首跳k）','角色','转发成员数','目标专家','q','槽位']]
+    coverage = [['Rank','核号','任务数','记录数','是否截断','lane数','导出耗时 ('+unit+')','DIRECT数（已记录）','FIRST_HOP数（已记录）','Terminal数（已记录）','转发成员数（已记录）']]
+    raw = [['Rank','核号',*[f'w{i} {timer.WORDS[i]}' for i in range(64,128)]]]
+    for saved in sorted(selected_saved, key=lambda value: value['metadata']['rank']):
+        parsed = timer.parse_records(saved['raw'], frequency_hz=frequency)
+        rank=parsed['rank']
+        for core in parsed['cores']:
+            d=core['packet_detail']; c=core['core']
+            raw.append([rank,c,*d['raw_metadata']])
+            if d['kind']=='sender':
+                second=d['second'] or {}
+                sender.append([rank,c,d['remote_packets'],d['group_packets'],d['lanes'],d['second'] is not None,
+                               *[second.get(k) for k in ('token','header_k','expert','peer','triggered_flush')],
+                               d['intervals_interleave'],d['batch_flushes'],*[d['durations'].get(k) for k in metrics]])
+            else:
+                coverage.append([rank,c,d['total_tasks'],d['recorded_tasks'],d['truncated'],d['lanes'],
+                                 d['export_ticks']*1e6/frequency if frequency is not None else d['export_ticks'],
+                                 *[sum(e['packet_role']==role for e in d['entries']) for role in ('DIRECT','FIRST_HOP','TERMINAL')],
+                                 sum(e['forward_members'] for e in d['entries'])])
+                for e in sorted(d['entries'],key=lambda e:e['process_order']):
+                    receiver.append([rank,c,*[e[k] for k in ('task','output_row','ready_order','ready_batch','process_order',
+                        'source_rank','source_token','header_k','packet_role','forward_members','destination_expert','q','slot')]])
+    return sender,receiver,coverage,raw
+
+
 def export_workbook(output_path, report, selected_saved, timer):
     selected = validate_selected(report, selected_saved, timer)
     frequency = report['frequency_hz']
@@ -235,12 +267,21 @@ def export_workbook(output_path, report, selected_saved, timer):
     ]
 
     def raw_rows():
-        yield ['Rank', '核号', *[f'w{i} {name}' for i, name in enumerate(timer.WORDS)],
+        yield ['Rank', '核号', *[f'w{i} {name}' for i, name in enumerate(timer.WORDS[:64])],
                *[f"{timer.STAGE_INFO[name]['label']} 精确ticks（整数作差）" for name in stages]]
         for identity, words, records, _ in per_core():
-            yield [identity[0], identity[1], *words,
+            yield [identity[0], identity[1], *words[:64],
                    *[records[name]['total_ticks'] if name in records else None for name in stages]]
 
+    packet_sender, packet_receiver, packet_coverage, packet_raw = packet_tables(selected_saved, timer, frequency)
+    definitions += [
+        ['第2跨机包', '每个S核实际第2次跨机packet', '主q在SendPacket入口之前；调度区间另扣除成员q区间，仍含打点和已有流水等待。'],
+        ['提交与退休', 'put返回不是远端消费完成', '第二包发送不含自动Flush quiet；批次quiet单列。跨机退休区间结束于末批quiet。'],
+        ['交错区间', '同核首开始至末提交', '跨机与本组可能交错；整体区间可以包含另一类工作，不能相加或解释为纯链路传输时间。'],
+        ['R包顺序', '记录在UB，w21后导出', '发现顺序不是实际到达顺序；处理顺序按ConsumeLoaded入口。Terminal header_k为首跳返回k。'],
+        ['覆盖', '最多128个稳定任务，且仅用剩余UB', '不减少原lane；空间不足截断，包记录覆盖页标记。截断不能当作完整角色/转发计数。'],
+        ['导出', 'w102→w103', '业务w21之前不做日志DMA；写出前总耗时w57包括此诊断导出。'],
+    ]
     path = Path(output_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     # x mode is essential: analysis must never replace an existing measurement.
@@ -250,4 +291,6 @@ def export_workbook(output_path, report, selected_saved, timer):
         _sheet(archive, 2, detail_rows(), row_count, 34, [10, 10, 12, 12, 22], freeze=5, numeric_from=5)
         _sheet(archive, 3, definitions, len(definitions), 4, [36, 48, 95, 38], header=5)
         _sheet(archive, 4, raw_rows(), row_count, 66+len(stages), [10, 10, 27], freeze=2)
+        for number, rows in enumerate((packet_sender,packet_receiver,packet_coverage,packet_raw),5):
+            _sheet(archive, number, rows, len(rows), len(rows[0]), [10,10,24], freeze=2)
     return path

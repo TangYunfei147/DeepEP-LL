@@ -1,3 +1,5 @@
+> 当前reference为schema2，增加S核第二跨机包时序及R核UB包顺序日志；原核总耗时边界不变，写出前总耗时包含日志导出。详见 [PACKET_TRACE.md](PACKET_TRACE.md)。
+
 > 当前协议24：已撤销全部8QP派生调度与缓冲改动，恢复原token分片、核内FIRST_HOP/DIRECT顺序和逐次Vector q；保留路由SO。当前实现以 [PER_CORE_QP_AB.md](PER_CORE_QP_AB.md) 为准，下方实验历史不作为现行行为。
 
 > 2026-10-28更新：本分支当前协议23，每物理核QP，已恢复逐次Vector求q；不启用q预计算。测试脚本normal路由直接调用按用户tmp.py移植的make_random_expert_indices，默认倍率2、seed偏移0的输出与原脚本一致；hotspot保持原方式。下方协议22/保留q预计算描述属于历史对照7fbc309。

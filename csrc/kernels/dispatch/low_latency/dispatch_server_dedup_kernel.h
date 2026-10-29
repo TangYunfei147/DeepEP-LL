@@ -91,6 +91,9 @@ public:
         if (profile_) profile_->Mark<20>();  // w20: final_drain_begin
         counts_.Finish();
         if (profile_) profile_->Mark<21>();  // w21: final_drain_end_PIPE_ALL
+#ifdef DEEPEP_LL_REFERENCE_PROFILE
+        if (core_ >= sendCores_) receiver_.ExportPacketTrace(profile_);
+#endif
 
         // No shared work follows local completion. Same-stream kernel completion
         // orders the next launch after all cores finish their writes and cleanup.

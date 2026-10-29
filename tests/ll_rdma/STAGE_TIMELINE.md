@@ -1,3 +1,5 @@
+> 当前reference为schema2，增加S核第二跨机包时序及R核UB包顺序日志；原核总耗时边界不变，写出前总耗时包含日志导出。详见 [PACKET_TRACE.md](PACKET_TRACE.md)。
+
 # LL dispatch 打点顺序与 Excel 耗时对应
 
 ## 1. 当前唯一打点方式

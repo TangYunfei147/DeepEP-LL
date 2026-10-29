@@ -42,15 +42,20 @@ def sample(rank=0, iteration=0, cores=16, world=16, frequency=1e9, offset=10**17
             if counts[37]:
                 points.update({32:155, 35:165, 36:166, 42:157})
                 counts.update({33:2*scale, 34:4*scale, 41:2})
-        words = [0]*64
+        words = [0]*timer.WORD_COUNT
         for index, value in points.items():
             words[index] = base + value*scale
         for index, value in counts.items():
             words[index] = value
-        words[50:57] = [rank, core, world, cores, 1, 1, 1]
+        words[50:57] = [rank, core, world, cores, 1, timer.SCHEMA, 1]
         words[58] = sum(1 << index for index in (*points, *counts))
         words[59:62] = [timer.MAGIC, 1, 1]
-        raw.append([words[n:n+8] for n in range(0,64,8)])
+        words[64] = 1
+        if core >= cores//2:
+            total=counts[37]
+            words[96:108] = [0,0,total,total,total,1 if total else 0,
+                             words[21],words[21],0,1,1,int(total>0)]
+        raw.append([words[n:n+8] for n in range(0,timer.WORD_COUNT,8)])
     return dict(format=timer.FORMAT, raw=raw, operation='dispatch', frequency_hz=frequency,
                 metadata=dict(rank=rank, world_size=world, iteration=iteration, correctness='passed',
                               run_id='synthetic-only', case_id=0, route='normal', seed=7,
@@ -110,7 +115,7 @@ def test_zero_timestamp_and_executed_zero_differ_from_absent():
     assert zero['total_ticks'] == 0 and zero['calls'] == 0
 
 
-@pytest.mark.parametrize('index,value', [(55,2),(56,2),(59,0),(60,2),(61,0),(62,1),(53,56),(50,16),(52,8),(44,1)])
+@pytest.mark.parametrize('index,value', [(55,1),(56,2),(59,0),(60,2),(61,0),(62,1),(53,56),(50,16),(52,8),(44,1)])
 def test_header_and_reserved_damage_rejected(index, value):
     raw = sample()['raw']; setword(raw,0,index,value)
     with pytest.raises(ValueError): timer.parse_records(raw)
@@ -132,7 +137,7 @@ def test_cpp_word_names_and_constants_match():
     source = (ROOT/'csrc/kernels/dispatch/low_latency/common/ll_reference_profile_layout.h').read_text()
     block = source.split('kNames[kWordsPerCore] = {',1)[1].split('};',1)[0]
     assert tuple(re.findall(r'"([^"]+)"', block)) == timer.WORDS
-    assert 'kSchema = 1U' in source and 'kMagic = 0x4c4c4350ULL' in source
+    assert 'kSchema = 2U' in source and 'kMagic = 0x4c4c4350ULL' in source
 
 
 @pytest.mark.parametrize('world', [16, 32, 64, 128, 256])

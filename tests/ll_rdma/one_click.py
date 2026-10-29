@@ -204,7 +204,7 @@ def installed_identity(a):
     return {"schema": 1, "project_root": str(ROOT.resolve()), "git_revision": revision,
             "source_sha256": fingerprint, "sdk_revision": lock["revision"], "sdk_build": sdk["build"],
             "core_protocol": 24, "roce_qps_per_peer": native.low_latency_core_config()["active_aiv"], "timer_schema": 3, "reference_profile": reference,
-            "reference_profile_schema": 1 if reference else None, "mode": a.mode, "arguments": shared_args}
+            "reference_profile_schema": 2 if reference else None, "mode": a.mode, "arguments": shared_args}
 
 
 def peer_identity(identity):

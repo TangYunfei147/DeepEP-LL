@@ -66,8 +66,8 @@ def test_record_is_core_local_exact_and_off_has_no_device_work(tmp_path, enabled
 #include <cstring>
 using namespace LlReferenceProfile;
 int main() {
-    static_assert(kSchema == 1 && kWordsPerCore == 64 && kSlots == 8 && kFields == 8);
-    static_assert(kWordsPerCore * sizeof(uint64_t) == 512);
+    static_assert(kSchema == 2 && kWordsPerCore == 640 && kSlots == 80 && kFields == 8);
+    static_assert(kWordsPerCore * sizeof(uint64_t) == 5120);
     constexpr uint64_t guard = 0x55aaccff12345678ULL;
     alignas(512) uint64_t raw[74 * kWordsPerCore];
     for (uint32_t cores : {16U, 56U, 72U}) {
@@ -102,11 +102,11 @@ int main() {
             assert(row[50]==31 && row[51]==core && row[52]==64 && row[53]==cores && row[54]==1);
             assert(row[55]==kSchema && row[56]==1 && row[59]==kMagic && row[60]==1 && row[61]==1);
             assert(row[22]==0 && row[23]==0 && row[44]==0 && row[49]==0 && row[62]==0 && row[63]==0);
-            assert(flushedAddress == reinterpret_cast<uint8_t*>(row) && flushedLength == 511);
+            assert(flushedAddress == reinterpret_cast<uint8_t*>(row) && flushedLength == 1023);
             // A helper with inclusive end must flush only this core's eight
             // 64B cachelines, not the following core or the trailing guard.
             assert((reinterpret_cast<uintptr_t>(flushedAddress)+flushedLength)/64 ==
-                   reinterpret_cast<uintptr_t>(row)/64+7);
+                   reinterpret_cast<uintptr_t>(row)/64+15);
 #else
             static_assert(sizeof(DeviceProfile) == 1);
             assert(!profile.Enabled() && entry == 0 && profile.Clock() == 0);
@@ -180,7 +180,8 @@ def test_reference_points_preserve_business_boundaries_and_async_tail():
     packet = recv.split('for (uint32_t i = count; i > 0U; --i)', 1)[1].split('++consumed;', 1)[0]
     assert not re.search(r'profile|Clock|Mark|GetSystemCycle', retry)
     assert not re.search(r'profile|Clock|Mark|GetSystemCycle', packet)
-    assert recv.count('profile->Clock()') == 3
+    assert recv.count('profile->Clock()') == 5
+    assert kernel.index('profile_->Mark<21>') < kernel.index('receiver_.ExportPacketTrace')
     assert '#ifdef DEEPEP_LL_REFERENCE_PROFILE\n        // Three clocks' in recv
     assert recv.index('profile->Mark<35>') < recv.index('profile->Mark<36>') < recv.index('profile->Value<33>(pollCycles)')
     zero_tasks = recv.split('if (tasks_.Count() == 0U)', 1)[1].split('return;', 1)[0]
@@ -194,6 +195,6 @@ def test_recorder_has_no_ub_event_or_new_pipeline_barrier():
     assert 'record_[Word] = value;' in device
     assert 'valid_ |= uint64_t(1) << Word;' in device
     assert 'uint64_t values[' not in device
-    assert 'kWordsPerCore * sizeof(uint64_t) - 1U' in device
+    assert 'kPacketLogWord * sizeof(uint64_t) - 1U' in device
     # No device recorder reads its output buffer to update any duration/count.
     assert not re.search(r'=\s*record_\[', device)

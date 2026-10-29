@@ -68,6 +68,10 @@ public:
     __aicore__ inline void Process(TBufPool<TPosition::VECCALC, 16>& scratch, uint32_t reservedBytes,
                                    LlReferenceProfile::DeviceProfile* profile = nullptr)
     {
+#ifdef DEEPEP_LL_REFERENCE_PROFILE
+        packetProfile_ = profile;
+        rdmaBatch_.SetProfile(profile);
+#endif
         // Count assigned original routes, not deduplicated packets. Auto splits
         // flat routes independently of the token slice used for output weights.
         if (profile && profile->Enabled()) {
@@ -132,6 +136,9 @@ public:
         const uint32_t available = (kEpServerDedupCountUbBytes - usedBytes_) / uint32_t(data_.tokenStride);
         lanes_ = available < 8U ? available : 8U;
         Allocate(outBuf_, lanes_ * uint32_t(data_.tokenStride));
+#ifdef DEEPEP_LL_REFERENCE_PROFILE
+        if (packetProfile_) packetProfile_->SendLanes(lanes_);
+#endif
         routeIds_ = idsBuf_.Get<int32_t>();
         if (count_ != 0U) routeWeights_ = weightInBuf_.Get<float>();
         if (count_ != 0U) {
@@ -403,7 +410,14 @@ private:
             if (members & (uint32_t(1) << k)) {
                 const uint32_t routeIndex = (start_ + token) * k_ + k;
                 const uint32_t expert = uint32_t(routeIds_.GetValue(routeIndex));
+#ifdef DEEPEP_LL_REFERENCE_PROFILE
+                const bool traceQ = packetProfile_ && packetProfile_->SecondRemote();
+                const uint64_t qBegin = traceQ ? packetProfile_->Clock() : 0U;
+#endif
                 const uint32_t q = CalTokenSendExpertCnt(expert, routeIndex);
+#ifdef DEEPEP_LL_REFERENCE_PROFILE
+                if (traceQ) packetProfile_->MemberQ(packetProfile_->Clock() - qBegin);
+#endif
                 ++entries;
                 index.SetValue(entries * 2U, expert | (q << 16U));
                 weights.SetValue(entries * 2U + 1U, routeWeights_.GetValue(token * k_ + k));
@@ -490,6 +504,10 @@ private:
     {
 
         const uint32_t destination = expert / localExperts_;
+#ifdef DEEPEP_LL_REFERENCE_PROFILE
+        if (packetProfile_) packetProfile_->SendBegin(LlTransport::RemoteWrite(args_, destination),
+            destination / Group == uint32_t(args_->rank) / Group, token, firstK, expert, destination);
+#endif
         SenderInputOperations inputOperations{*this, input};
         inputReuse_.Prepare(token, inputOperations);
         auto payload = cachedPayload_;
@@ -527,6 +545,9 @@ private:
             DispatchServerDedupDispatchOffset(data_, args_->rank, destination,
                 expert % localExperts_, q, args_->rankSize, localExperts_, bs_), out, uint32_t(data_.tokenStride), 7U);
         }
+#ifdef DEEPEP_LL_REFERENCE_PROFILE
+        if (packetProfile_) packetProfile_->GroupSubmitted();
+#endif
         SetFlag<HardEvent::MTE3_V>(lane);
         ++packets_;
 
@@ -535,6 +556,9 @@ private:
     const __gm__ DispatchDedup::CommArgs* args_ = nullptr;
     TPipe* pipe_ = nullptr;
     LlTransport::DispatchRdmaBatch rdmaBatch_;
+#ifdef DEEPEP_LL_REFERENCE_PROFILE
+    LlReferenceProfile::DeviceProfile* packetProfile_ = nullptr;
+#endif
     LlSenderInputReuse inputReuse_;
     LocalTensor<XType> cachedInput_;
     LocalTensor<uint8_t> cachedPayload_;

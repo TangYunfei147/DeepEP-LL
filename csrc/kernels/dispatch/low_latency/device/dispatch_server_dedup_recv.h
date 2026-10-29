@@ -117,6 +117,18 @@ public:
         lanes_ = available < 8U ? available : 8U;  // Safe inputs guarantee at least one lane.
         if (lanes_ > tasks_.Count()) lanes_ = tasks_.Count();
         pipe_->InitBuffer(lanesBuf_, lanes_ * laneStride_);
+#ifdef DEEPEP_LL_REFERENCE_PROFILE
+        if (profile && profile->Enabled()) {
+            traceEnabled_ = true;
+            const uint32_t spare = kEpServerDedupCountUbBytes - fixed - lanes_ * laneStride_;
+            traceCapacity_ = spare / 32U;
+            if (traceCapacity_ > LlReferenceProfile::kPacketTraceCapacity)
+                traceCapacity_ = LlReferenceProfile::kPacketTraceCapacity;
+            if (traceCapacity_ > tasks_.Count()) traceCapacity_ = tasks_.Count();
+            if (traceCapacity_) pipe_->InitBuffer(packetTraceBuf_, traceCapacity_ * 32U);
+        }
+#endif
+
         for (uint32_t lane = 0; lane < lanes_; ++lane) SetFlag<HardEvent::MTE3_MTE2>(lane);
 
         auto snapshot = probeIdxBuf_.Get<uint32_t>();
@@ -164,6 +176,11 @@ public:
             // order. Higher-index removals cannot change lower pending entries.
             // Probe 已把本批任务编号保存为不可变 snapshot。按批内下标倒序加载/消费，
             // 避免 RemovePending 用末项填洞时破坏本批尚未处理的较低下标。
+#ifdef DEEPEP_LL_REFERENCE_PROFILE
+            if (referenceEnabled) {
+                RecordReady(snapshot, probe.readyMask, count);
+            }
+#endif
             uint32_t nextLoad = count;
             for (uint32_t i = count; i > 0U; --i) {
                 const uint32_t index = i - 1U;
@@ -212,7 +229,68 @@ public:
 
     }
 
+#ifdef DEEPEP_LL_REFERENCE_PROFILE
+    // Called after kernel w21 and every original business drain. No live lane
+    // survives here. Only this diagnostic export adds synchronization.
+    __aicore__ inline void ExportPacketTrace(LlReferenceProfile::DeviceProfile* profile) {
+        if (!profile || !profile->Enabled()) return;
+        profile->Detail(96U, traceCapacity_);
+        profile->Detail(97U, traceCapacity_);
+        profile->Detail(98U, tasks_.Count());
+        profile->Detail(99U, traceReady_);
+        profile->Detail(100U, traceProcessed_);
+        profile->Detail(101U, lanes_);
+        profile->Detail(104U, tasks_.Begin());
+        profile->Detail(105U, bs_);
+        profile->Detail(106U, localExperts_);
+        profile->Detail(107U, tasks_.Count() > traceCapacity_ ? 1U : 0U);
+        profile->Detail(102U, profile->Clock());
+        if (traceCapacity_) {
+            ServerDedupReceiveSync<HardEvent::S_MTE3>();
+            DataCopy(LlTransport::Tensor(profile->PacketLogAddress(), true),
+                     packetTraceBuf_.Get<uint8_t>(), traceCapacity_ * 32U);
+            ServerDedupReceiveSync<HardEvent::MTE3_S>();
+        }
+        profile->Detail(103U, profile->Clock());
+    }
+#endif
+
 private:
+#ifdef DEEPEP_LL_REFERENCE_PROFILE
+    __aicore__ inline void RecordReady(LocalTensor<uint32_t> snapshot, uint32_t readyMask, uint32_t count) {
+        ++traceBatches_;
+        for (uint32_t i = 0; i < count; ++i) {
+            if (!(readyMask & (uint32_t(1) << i))) continue;
+            const uint32_t j = snapshot.GetValue(i);
+            ++traceReady_;
+            if (j < traceCapacity_) {
+                auto record = packetTraceBuf_.Get<uint32_t>()[j * 8U];
+                record.SetValue(0U, traceReady_);
+                record.SetValue(1U, traceBatches_);
+            }
+        }
+    }
+    __aicore__ inline void RecordProcessed(uint32_t j, LocalTensor<uint8_t> wire, uint32_t headerOffset, bool keepFlags) {
+        if (traceEnabled_) ++traceProcessed_;
+        if (traceEnabled_ && j < traceCapacity_) {
+            auto record = packetTraceBuf_.Get<uint32_t>()[j * 8U];
+            auto header = wire[headerOffset].template ReinterpretCast<uint32_t>();
+            const uint32_t role = header.GetValue(3U);
+            const uint32_t members = role == uint32_t(EpServerDedupTokenType::FirstHop)
+                ? wire[uint32_t(keepFlags ? data_.relayReadIndexWireOffset : data_.readIndexPayloadOffset)]
+                    .template ReinterpretCast<uint32_t>().GetValue(0U) : 0U;
+            record.SetValue(2U, traceProcessed_);
+            record.SetValue(3U, header.GetValue(0U));
+            record.SetValue(4U, header.GetValue(1U));
+            record.SetValue(5U, header.GetValue(2U));
+            record.SetValue(6U, role | (members << 8U));
+            record.SetValue(7U, tasks_.Position(j));
+        }
+    }
+    TBuf<> packetTraceBuf_;
+    bool traceEnabled_ = false;
+    uint32_t traceCapacity_ = 0U, traceReady_ = 0U, traceProcessed_ = 0U, traceBatches_ = 0U;
+#endif
     static constexpr uint32_t kProbeBatch = 16U;
     struct ProbeResult {
         uint32_t readyMask = 0U;
@@ -281,6 +359,9 @@ private:
         auto wire = lanesBuf_.Get<uint8_t>()[lane * laneStride_];
         const uint32_t row = tasks_.Begin() + j;
         const uint32_t headerOffset = uint32_t(keepFlags ? data_.headerWireOffset : data_.headerPayloadOffset);
+#ifdef DEEPEP_LL_REFERENCE_PROFILE
+        RecordProcessed(j, wire, headerOffset, keepFlags);
+#endif
         if (!enableDedup_ && !keepFlags) {
             // Compact offsets are logical payload offsets. Retain this lane
             // until all payload, scale and metadata output reads complete.

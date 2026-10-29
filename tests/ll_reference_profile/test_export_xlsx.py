@@ -57,7 +57,7 @@ def test_export_preserves_raw_precision_formulas_missing_zero_and_layout(tmp_pat
         assert z.testzip() is None
         for name in z.namelist(): ET.fromstring(z.read(name))
         names = [s.attrib['name'] for s in ET.fromstring(z.read('xl/workbook.xml')).findall('m:sheets/m:sheet',NS)]
-        assert names == ['采样汇总','逐核耗时','阶段说明','原始Cycle']
+        assert names == ['采样汇总','逐核耗时','阶段说明','原始Cycle','S包时序','R包顺序','包记录覆盖','包原始记录']
     with pytest.raises(FileExistsError): analyzer.exporter.export_workbook(path,report,selected,timer)
 
 

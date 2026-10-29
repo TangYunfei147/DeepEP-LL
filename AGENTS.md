@@ -1,3 +1,7 @@
+## 包级reference诊断（2026-10-28）
+
+用户要求：主q排除于调度，S核只细分第二跨机packet并记录跨机/本组提交整体区间与原batch quiet；R核记录成功就绪和实际消费的稳定任务身份/顺序，在UB保存、本核w21后一次DMA导出。schema2每核5120B；R日志只取原lane后的剩余UB，最多128条，必须显式标记截断，不减少lane，不逐包加clock或新增业务屏障。当前通信协议24不变、SDK不改；OFF不含包诊断。交错区间不相加，put不是完成，quiet不是接收消费；w57包含导出，ON完整task扰动须另测。详见tests/ll_rdma/PACKET_TRACE.md。
+
 > 当前协议24：已撤销全部8QP派生调度与缓冲改动，恢复原token分片、核内FIRST_HOP/DIRECT顺序和逐次Vector q；保留路由SO。当前实现以 [PER_CORE_QP_AB.md](tests/ll_rdma/PER_CORE_QP_AB.md) 为准，下方实验历史不作为现行行为。
 
 > 2026-10-28更新：本分支当前协议23，每物理核QP，已恢复逐次Vector求q；不启用q预计算。测试脚本normal路由直接调用按用户tmp.py移植的make_random_expert_indices，默认倍率2、seed偏移0的输出与原脚本一致；hotspot保持原方式。下方协议22/保留q预计算描述属于历史对照7fbc309。
