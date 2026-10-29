@@ -180,3 +180,22 @@ int main(){
         '-I'+str(tmp_path),'-I'+str(ROOT/'tests/ll_rdma/stubs'),'-I'+str(ROOT/'csrc'),
         str(source),'-o',str(exe)],check=True,timeout=180)
     subprocess.run([str(exe)],check=True,timeout=30)
+
+
+def test_receiver_batch_table_keeps_tuple_alignment_and_unknown_truncated_count():
+    from tests.ll_reference_profile.export_xlsx import receiver_batch_rows
+    saved=receiver_raw()
+    setword(saved['raw'],15,41,1)
+    rows=receiver_batch_rows([saved],timer,1e9)
+    first=rows[1]
+    assert first[:6]==[0,15,1,2,2,True]
+    assert first[6:9]==['(DIRECT, FIRST_HOP)','(0, 1)','(0, 0)']
+    assert first[9]=='((DIRECT, 0, 0), (FIRST_HOP, 1, 0))'
+    assert first[11]=='(2, 1)'
+    # A truncated trace can omit an entire successful batch.
+    setword(saved['raw'],15,41,2)
+    setword(saved['raw'],15,96,1);setword(saved['raw'],15,97,1);setword(saved['raw'],15,107,1)
+    for i in range(132,136):setword(saved['raw'],15,i,0)
+    rows=receiver_batch_rows([saved],timer,1e9)
+    assert rows[1][3] is None and rows[1][4:6]==[1,False]
+    assert rows[2][3] is None and rows[2][4]==0

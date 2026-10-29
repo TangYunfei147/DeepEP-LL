@@ -66,12 +66,18 @@ ndr_reference() {
 原core_stage_timings.xlsx前四页保留；新增：
 
 1. S包时序：第二包细分、整体区间、交错标记、quiet批次数。
-2. R包顺序：每核按处理序号显示，带发现序号和批次，可对比同批逆序消费。
+2. R包顺序：每核每个成功就绪批次一行，各包按发现顺序组成元组，另列实际处理序号。
 3. 包记录覆盖：任务数、记录数、截断、原lane数、导出耗时和已记录角色/成员汇总。
 4. 包原始记录：扩展元数据原始ticks，超过Excel精度阈值写文本。
 
-同目录新增sender_packet_timing.csv、receiver_packet_order.csv、receiver_ready_order.csv、packet_trace_coverage.csv、packet_detail_raw.csv。就绪CSV按发现序号，处理CSV按处理序号。完整JSON保留所有capture的原始记录；整轮回传报告仍≤60000字节，只增加覆盖摘要，完整包表留目标机。
+同目录新增sender_packet_timing.csv、receiver_packet_order.csv、receiver_ready_order.csv、packet_trace_coverage.csv、packet_detail_raw.csv。就绪/包顺序CSV按成功批次归并；逐包处理顺序和完整字段另存receiver_packets_detail.csv。完整JSON保留所有capture的原始记录；整轮回传报告仍≤60000字节，只增加覆盖摘要，完整包表留目标机。
 
 先检查覆盖是否完整，再用R表定位晚发现的来源/角色，以及FIRST_HOP成员数。用S第二包判断准备、暂存、put提交中的耗时分布；整体区间看核内发送推进，不跨rank直接相减时钟。不要把没有时间戳的R记录推导成精确到达时间或逐包时延。
 
 本地验证覆盖第二包、满批quiet分离、稳定任务与pending换位、截断、schema身份、整数tick精度和Excel/CSV导出；尚未执行CANN编译或NPU验证。
+
+## R包顺序按扫描批次展示
+
+R包顺序页、receiver_packet_order.csv及receiver_ready_order.csv现在每核每个成功就绪扫描批次一行。先列本次就绪包数，再将包类型、源rank、源token分别组成按发现顺序排列的元组，另列(类型,源rank,源token)组合元组、稳定任务j和处理序号元组；同一位置代表同一包。空扫描从未记录，不补造空扫描行。日志截断时实际就绪包数留空，明确显示已记录包数和记录不完整；即使某批没有保留下来的包，也保留该批次行。逐包完整字段另存receiver_packets_detail.csv。
+
+DEEPEP_LL_NO_COMM目前仍会改变源码路径：定义后绕过DispatchRdmaBatch，进入LlTransport::Packet逐包put+quiet，并非不通信。一键构建未启用此宏，本次保留，不能将它当作无通信基线。

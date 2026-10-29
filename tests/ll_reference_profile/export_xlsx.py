@@ -183,6 +183,27 @@ def packet_tables(selected_saved, timer, frequency):
     return sender,receiver,coverage,raw
 
 
+def receiver_batch_rows(selected_saved, timer, frequency):
+    rows=[['Rank','核号','成功就绪扫描批次','本次就绪包数','已记录包数','本核记录完整',
+           '包类型（发现顺序）','源rank（发现顺序）','源token（发现顺序）',
+           '包信息（类型,源rank,源token）','稳定任务j','处理序号','转发成员数']]
+    def tup(values):
+        return '(' + ', '.join(str(v) for v in values) + ')'
+    for saved in sorted(selected_saved,key=lambda value:value['metadata']['rank']):
+        parsed=timer.parse_records(saved['raw'],frequency_hz=frequency)
+        for core in parsed['cores']:
+            detail=core['packet_detail']
+            if detail['kind']!='receiver': continue
+            for batch in range(1,core['batch_count']+1):
+                packets=sorted((e for e in detail['entries'] if e['ready_batch']==batch),key=lambda e:e['ready_order'])
+                rows.append([parsed['rank'],core['core'],batch,
+                    None if detail['truncated'] else len(packets),len(packets),not detail['truncated'],
+                    *[tup(e[key] for e in packets) for key in ('packet_role','source_rank','source_token')],
+                    tup(tup((e['packet_role'],e['source_rank'],e['source_token'])) for e in packets),
+                    *[tup(e[key] for e in packets) for key in ('task','process_order','forward_members')]])
+    return rows
+
+
 def export_workbook(output_path, report, selected_saved, timer):
     selected = validate_selected(report, selected_saved, timer)
     frequency = report['frequency_hz']
@@ -273,7 +294,8 @@ def export_workbook(output_path, report, selected_saved, timer):
             yield [identity[0], identity[1], *words[:64],
                    *[records[name]['total_ticks'] if name in records else None for name in stages]]
 
-    packet_sender, packet_receiver, packet_coverage, packet_raw = packet_tables(selected_saved, timer, frequency)
+    packet_sender, _, packet_coverage, packet_raw = packet_tables(selected_saved, timer, frequency)
+    packet_receiver = receiver_batch_rows(selected_saved, timer, frequency)
     definitions += [
         ['第2跨机包', '每个S核实际第2次跨机packet', '主q在SendPacket入口之前；调度区间另扣除成员q区间，仍含打点和已有流水等待。'],
         ['提交与退休', 'put返回不是远端消费完成', '第二包发送不含自动Flush quiet；批次quiet单列。跨机退休区间结束于末批quiet。'],

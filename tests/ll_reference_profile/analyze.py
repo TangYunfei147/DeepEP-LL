@@ -212,10 +212,11 @@ def process_directory(source, output=None, frequency_hz=None, iteration='last', 
     tables.csv_table(output/'stages.csv', headers, wide)
     tables.csv_table(output/'stages_mean.csv', headers, tables.mean_rows(report, headers, stages))
     tables.csv_table(output/'stage_calls.csv', headers, calls)
-    for name, rows in zip(('sender_packet_timing.csv','receiver_packet_order.csv','packet_trace_coverage.csv','packet_detail_raw.csv'), packet_tables):
+    for name, rows in zip(('sender_packet_timing.csv','receiver_packets_detail.csv','packet_trace_coverage.csv','packet_detail_raw.csv'), packet_tables):
         tables.csv_table(output/name, rows[0], rows[1:])
-    ready_rows = sorted(packet_tables[1][1:], key=lambda row:(row[0],row[1],row[4]))
-    tables.csv_table(output/'receiver_ready_order.csv',packet_tables[1][0],ready_rows)
+    batch_rows=exporter.receiver_batch_rows(selected,timer,report['frequency_hz'])
+    for name in ('receiver_packet_order.csv','receiver_ready_order.csv'):
+        tables.csv_table(output/name,batch_rows[0],batch_rows[1:])
     exporter.export_workbook(output/'core_stage_timings.xlsx', report, selected, timer)
     (output/'return_report.md').write_text(text, encoding='utf-8')
     print(f'{source} -> {output} (dispatch; all iterations summarized; selected {chosen})')
