@@ -1,4 +1,10 @@
-## 多机32P特例清理（2026-10-29，当前协议28）
+## 跨机count直方图编译对照（2026-10-29）
+
+- 用户要求硬件直方图优化并提供环境变量编译对照。DEEPEP_LL_COUNT_HISTOGRAM默认OFF/身份28，ON/身份29；同wire但全rank同变体完整wheel，不可仅改运行环境。
+- 仅替换CountRemoteRank，Vector归一化+MicroAPI Histograms BIN0 FREQUENCY，最终一次显式V_S，每专家一次Scalar填32B记录。subExp/dstExp/work复用，无新增UB/lane；本机计数、首跳、SDK、put/quiet不改。
+- Host/Device宏、构建缓存及_build_info、one_click安装身份和全节点握手同步区分。无CANN/NPU实测，不宣称加速。指南tests/ll_rdma/COUNT_HISTOGRAM_AB.md。
+
+## 多机32P特例清理（2026-10-29，默认协议28）
 
 - 用户要求删除未确认的32P多机限制并审计风险。当前工作区/分支保持DeepEP-LL-ndr-overhead/kernel/ll-ndr-ab-per-core-qp；对照7293457/协议27。
 - count对所有跨物理机RDMA启用，跳过本机16rank，task=core、core+C分轮；每帧quiet保护同核GM/UB复用。Host容量核算同步；本机count与原payload lane保留区不变。
