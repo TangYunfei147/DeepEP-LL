@@ -10,7 +10,8 @@ class DispatchRdmaBatch {
     static constexpr uint32_t kMaxPackets = 8U;
     const __gm__ Args* args_ = nullptr;
     uint32_t bytes_ = 0, capacity_ = 0, count_ = 0;
-    GM_ADDR stageBase_ = nullptr, pendingStage_ = nullptr;
+    GM_ADDR stageBase_ = nullptr;
+    GM_ADDR pendingStage_ = nullptr;
     uint32_t firstPeers_ = 0U, pendingPeer_ = 0U;
     uint64_t pendingOffset_ = 0U;
     uint32_t peers_[kMaxPackets]{};
