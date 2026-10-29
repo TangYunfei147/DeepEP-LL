@@ -66,7 +66,7 @@ def test_record_is_core_local_exact_and_off_has_no_device_work(tmp_path, enabled
 #include <cstring>
 using namespace LlReferenceProfile;
 int main() {
-    static_assert(kSchema == 2 && kWordsPerCore == 640 && kSlots == 80 && kFields == 8);
+    static_assert(kSchema == 4 && kWordsPerCore == 640 && kSlots == 80 && kFields == 8);
     static_assert(kWordsPerCore * sizeof(uint64_t) == 5120);
     constexpr uint64_t guard = 0x55aaccff12345678ULL;
     alignas(512) uint64_t raw[74 * kWordsPerCore];

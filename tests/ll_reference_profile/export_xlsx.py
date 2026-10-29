@@ -155,7 +155,7 @@ def packet_tables(selected_saved, timer, frequency):
     unit = 'µs' if frequency is not None else 'ticks'
     metrics = timer.SENDER_PACKET_METRICS
     sender = [['Rank','核号','跨机包数','本组包数','lane数','第2跨机包有效','第2包token','第2包header_k',
-               '第2包专家','第2包peer','第2包触发整批quiet','跨机与本组区间交错','quiet批次数',
+               '第2包专家','第2包peer','第2包触发整批quiet','跨机与本组时间区间重叠','packet类别顺序交错','quiet批次数','延后提交跨机包数','第二包延后提交',
                *[f'{label} ({unit})' for label in metrics.values()]]]
     receiver = [['Rank','核号','稳定任务j','输出行','发现就绪顺序','就绪批次','处理顺序','源rank','源token',
                  'header_k（Terminal为首跳k）','角色','转发成员数','目标专家','q','槽位']]
@@ -171,7 +171,7 @@ def packet_tables(selected_saved, timer, frequency):
                 second=d['second'] or {}
                 sender.append([rank,c,d['remote_packets'],d['group_packets'],d['lanes'],d['second'] is not None,
                                *[second.get(k) for k in ('token','header_k','expert','peer','triggered_flush')],
-                               d['intervals_interleave'],d['batch_flushes'],*[d['durations'].get(k) for k in metrics]])
+                               d['intervals_interleave'],d['packet_order_interleaves'],d['batch_flushes'],d['deferred_packets'],second.get('deferred'),*[d['durations'].get(k) for k in metrics]])
             else:
                 coverage.append([rank,c,d['total_tasks'],d['recorded_tasks'],d['truncated'],d['lanes'],
                                  d['export_ticks']*1e6/frequency if frequency is not None else d['export_ticks'],
@@ -297,7 +297,7 @@ def export_workbook(output_path, report, selected_saved, timer):
     packet_sender, _, packet_coverage, packet_raw = packet_tables(selected_saved, timer, frequency)
     packet_receiver = receiver_batch_rows(selected_saved, timer, frequency)
     definitions += [
-        ['第2跨机包', '每个S核实际第2次跨机packet', '主q在SendPacket入口之前；调度区间另扣除成员q区间，仍含打点和已有流水等待。'],
+        ['第2跨机包', '每个S核实际第2次跨机packet', '主q在SendPacket入口之前；调度另扣除成员q和前包提交区间。暂存至put前经过包含下一包准备，剩余等待另列。'],
         ['提交与退休', 'put返回不是远端消费完成', '第二包发送不含自动Flush quiet；批次quiet单列。跨机退休区间结束于末批quiet。'],
         ['交错区间', '同核首开始至末提交', '跨机与本组可能交错；整体区间可以包含另一类工作，不能相加或解释为纯链路传输时间。'],
         ['R包顺序', '记录在UB，w21后导出', '发现顺序不是实际到达顺序；处理顺序按ConsumeLoaded入口。Terminal header_k为首跳返回k。'],

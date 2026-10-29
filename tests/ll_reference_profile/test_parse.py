@@ -137,7 +137,7 @@ def test_cpp_word_names_and_constants_match():
     source = (ROOT/'csrc/kernels/dispatch/low_latency/common/ll_reference_profile_layout.h').read_text()
     block = source.split('kNames[kWordsPerCore] = {',1)[1].split('};',1)[0]
     assert tuple(re.findall(r'"([^"]+)"', block)) == timer.WORDS
-    assert 'kSchema = 2U' in source and 'kMagic = 0x4c4c4350ULL' in source
+    assert 'kSchema = 4U' in source and 'kMagic = 0x4c4c4350ULL' in source
 
 
 @pytest.mark.parametrize('world', [16, 32, 64, 128, 256])

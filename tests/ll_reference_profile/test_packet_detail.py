@@ -17,6 +17,7 @@ def sender_raw():
     w[71]=base+120;w[72]=base+130;w[73]=base+135;w[74]=base+140;w[75]=3
     w[76:80]=[0,1,12,1]
     w[80:90]=[6,1,base+159,1,1,5,2,4,5,8]
+    w[90:96]=[base+131,base+132,base+134,3,2,1]
     saved['raw'][0]=[w[i:i+8] for i in range(0,timer.WORD_COUNT,8)]
     return saved
 
@@ -34,7 +35,8 @@ def receiver_raw():
 
 def test_second_packet_excludes_member_q_and_batch_quiet():
     d=timer.parse_records(sender_raw()['raw'])['cores'][0]['packet_detail']
-    assert d['ticks']==dict(second_schedule_without_q=7,second_member_q=3,second_stage=5,
+    assert d['ticks']==dict(second_schedule_without_q=5,second_member_q=3,second_stage=5,
+        second_previous_submit=2,second_defer_gap=1,second_stage_wait=2,
         second_put_call=5,second_enqueue_to_put_return=10,remote_submit_span=53,
         remote_retire_span=57,group_submit_span=40,batch_quiet_total=6)
     assert d['intervals_interleave'] and d['second']['triggered_flush']
@@ -199,3 +201,45 @@ def test_receiver_batch_table_keeps_tuple_alignment_and_unknown_truncated_count(
     rows=receiver_batch_rows([saved],timer,1e9)
     assert rows[1][3] is None and rows[1][4:6]==[1,False]
     assert rows[2][3] is None and rows[2][4]==0
+
+
+
+def test_delayed_second_packet_keeps_identity_when_next_packet_is_local(tmp_path):
+    (tmp_path/'shmem.h').write_text('#pragma once\ninline void dcci_cachelines(uint8_t*,uint64_t) {}\n')
+    source=tmp_path/'deferred-profile.cpp'
+    source.write_text(r"""
+#include <cassert>
+#include <vector>
+#define DEEPEP_LL_RDMA 1
+#include "kernels/dispatch/low_latency/device/ll_dispatch_rdma_batch.h"
+using namespace AscendC;
+int main(){
+ core=0;cores=16;cycles=100;
+ std::vector<uint8_t> local(1U<<20),remote(1U<<20),stage(16U*LlRdma::kCoreBytes),aUB(65536),bUB(65536);
+ Model::local=local.data();Model::remote=remote.data();
+ DispatchDedup::CommArgs a{};a.rank=0;a.rankSize=32;a.peerMemBytes=1U<<20;a.reserved0=16;
+ a.reservedConfig[0]=LlRdma::kBackend;a.reservedConfig[1]=16;
+ a.reservedAddresses[0]=local.data();a.reservedAddresses[1]=stage.data();
+ uint64_t raw[16*LlReferenceProfile::kWordsPerCore]{};
+ LlReferenceProfile::DeviceProfile p;p.Init(reinterpret_cast<uint8_t*>(raw));
+ LlTransport::DispatchRdmaBatch batch;batch.SetProfile(&p);batch.Init(&a,65536);
+ Model::onPost=[](Model::Request&){cycles+=10;};Model::onQuiet=[](uint32_t,uint32_t){cycles+=20;};
+ p.SendBegin(true,false,0,0,192,16);batch.Enqueue(16,0,{aUB.data()},true);
+ cycles+=5;p.SendBegin(true,false,1,3,193,16); // prepare packet2 while packet1 staged
+ auto begin=p.Clock();batch.SubmitPending();p.PreviousSubmit(p.Clock()-begin);
+ cycles+=7;batch.Enqueue(16,65536,{bUB.data()},true);
+ cycles+=9;p.SendBegin(false,true,7,1,2,0); // mutable current identity is now local
+ batch.SubmitPending(); // must still record remote packet2, including its full batch quiet
+ cycles+=3;p.GroupSubmitted();p.Finish(0,32,8);
+ assert(raw[65]==2 && raw[66]==1 && raw[76]==1 && raw[77]==3 && raw[78]==193);
+ assert(raw[74]-raw[73]==10 && raw[83]==1 && raw[80]==20);
+ assert(raw[93]==2 && raw[94]==10 && raw[95]==1);
+ assert(raw[90]<=raw[91] && raw[91]<=raw[92] && raw[92]<=raw[73]);
+ assert(raw[69]<raw[74] && raw[86]>raw[85]); // time overlap without packet-order interleave
+}
+""",encoding='utf-8')
+    exe=tmp_path/'deferred-profile.exe'
+    subprocess.run(compiler()+['-std=c++17','-UNDEBUG','-DDEEPEP_LL_REFERENCE_PROFILE=1',
+        '-I'+str(tmp_path),'-I'+str(ROOT/'tests/ll_rdma/stubs'),'-I'+str(ROOT/'csrc'),
+        str(source),'-o',str(exe)],check=True,timeout=180)
+    subprocess.run([str(exe)],check=True,timeout=30)

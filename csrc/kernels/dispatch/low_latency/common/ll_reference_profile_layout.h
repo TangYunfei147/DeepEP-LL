@@ -3,7 +3,7 @@
 
 namespace LlReferenceProfile {
 // Independent LL dispatch reference record; not the stage-timer schema.
-constexpr uint32_t kSchema = 2U;
+constexpr uint32_t kSchema = 4U;
 constexpr uint64_t kMagic = 0x4c4c4350ULL;
 constexpr uint32_t kSlots = 80U;
 constexpr uint32_t kFields = 8U;
@@ -23,7 +23,7 @@ constexpr const char* kNames[kWordsPerCore] = {
     "packet_detail_version", "send_remote_packets", "send_group_packets", "remote_first_begin", "remote_last_put_return", "group_first_begin", "group_last_submit_return", "second_remote_begin",
     "second_remote_enqueue", "second_remote_put_begin", "second_remote_put_return", "second_remote_member_q_ticks", "second_remote_token", "second_remote_k", "second_remote_expert", "second_remote_peer",
     "batch_quiet_ticks", "batch_flush_count", "last_quiet_end", "second_remote_triggered_flush", "remote_first_order", "remote_last_order", "group_first_order", "group_last_order",
-    "send_packet_count", "send_lanes", "detail_reserved", "detail_reserved", "detail_reserved", "detail_reserved", "detail_reserved", "detail_reserved",
+    "send_packet_count", "send_lanes", "second_stage_queued", "second_stage_wait_begin", "second_stage_wait_end", "deferred_remote_packets", "second_previous_submit_ticks", "second_post_deferred",
     "recv_trace_rows", "recv_trace_capacity", "recv_trace_total_tasks", "recv_trace_ready_seen", "recv_trace_processed_seen", "recv_trace_lanes", "recv_trace_export_begin", "recv_trace_export_end",
     "recv_trace_row_begin", "recv_trace_bs", "recv_trace_local_experts", "recv_trace_truncated", "detail_reserved", "detail_reserved", "detail_reserved", "detail_reserved",
     "detail_reserved", "detail_reserved", "detail_reserved", "detail_reserved", "detail_reserved", "detail_reserved", "detail_reserved", "detail_reserved",

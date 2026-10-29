@@ -48,7 +48,7 @@ class CaptureTests(unittest.TestCase):
                 created.append(('view', shape))
                 return self
         torch = SimpleNamespace(int64='int64', zeros=lambda words, **kw: created.append((words, kw)) or Tensor())
-        layout = dict(schema=2, slots=80, fields=8, words=list(reference.WORDS))
+        layout = dict(schema=4, slots=80, fields=8, words=list(reference.WORDS))
         native = SimpleNamespace(low_latency_reference_profile_enabled=True, low_latency_stage_timer_enabled=False,
                                  low_latency_reference_profile_layout=lambda: layout,
                                  low_latency_core_config=lambda: dict(active_aiv=56, device=3, runtime_device_queried=True))
@@ -60,7 +60,7 @@ class CaptureTests(unittest.TestCase):
             layout['schema'] = True
             with self.assertRaisesRegex(RuntimeError, 'layout mismatch'):
                 reference.ReferenceTrace(object())
-            layout['schema'] = 2
+            layout['schema'] = 4
             native.low_latency_reference_profile_enabled = 1
             with self.assertRaisesRegex(RuntimeError, 'Rebuild'):
                 reference.ReferenceTrace(object())
@@ -155,7 +155,7 @@ class LauncherTests(unittest.TestCase):
                 self.assertEqual(command, ['git', 'submodule', 'update', '--init', '--recursive', '--depth', '1', '--', 'third-party/shmem'])
 
     def test_reference_identity_is_typed_and_needs_source_fingerprint(self):
-        valid = dict(reference_profile=True, stage_timer=False, reference_profile_schema=2,
+        valid = dict(reference_profile=True, stage_timer=False, reference_profile_schema=4,
                      installed_source_sha256='a' * 64)
         st.validate_reference_profile_capability(True, valid)
         for key, value in (('reference_profile', 1), ('stage_timer', 0), ('reference_profile_schema', True),

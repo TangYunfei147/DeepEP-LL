@@ -171,6 +171,7 @@ public:
             SendWithDedup(input);
         else
             SendWithoutDedup(input);
+        rdmaBatch_.SubmitPending(); // keep w39 after the final actual put
         // Reference boundary: packet scheduling has returned. The existing
         // trailing RDMA batch Flush remains in the drain/metadata interval.
         if (profile) profile->Mark<39>();  // w39: send_packets_issue_end
@@ -533,11 +534,21 @@ private:
         SetFlag<HardEvent::V_MTE3>(lane);
         WaitFlag<HardEvent::V_MTE3>(lane);
 
+        // The previous remote packet owns a different output lane when deferred.
+        // Posting it here preserves submission order relative to this local/remote packet.
+#ifdef DEEPEP_LL_REFERENCE_PROFILE
+        const bool tracePrevious = packetProfile_ && packetProfile_->SecondRemote() && rdmaBatch_.HasStaged();
+        const uint64_t previousBegin = tracePrevious ? packetProfile_->Clock() : 0U;
+#endif
+        rdmaBatch_.SubmitPending();
+#ifdef DEEPEP_LL_REFERENCE_PROFILE
+        if (tracePrevious) packetProfile_->PreviousSubmit(packetProfile_->Clock() - previousBegin);
+#endif
 #ifndef DEEPEP_LL_NO_COMM
         if (LlTransport::RemoteWrite(args_, destination)) {
             rdmaBatch_.Enqueue(destination,
                 DispatchServerDedupDispatchOffset(data_, args_->rank, destination,
-                    expert % localExperts_, q, args_->rankSize, localExperts_, bs_), out);
+                    expert % localExperts_, q, args_->rankSize, localExperts_, bs_), out, lanes_ > 1U);
         } else
 #endif
         {

@@ -88,20 +88,30 @@ public:
         return record_ && sendRemote_ && send_[1] == 2U;
     }
     __aicore__ inline void SecondEnqueue() { if (SecondRemote()) send_[8] = Clock(); }
-    __aicore__ inline void SecondPutBegin() { if (SecondRemote()) send_[9] = Clock(); }
-    __aicore__ inline void PutReturned() {
+    __aicore__ inline void SecondPutBegin(bool selected) { if (record_ && selected) send_[9] = Clock(); }
+    __aicore__ inline void SecondPutBegin() { SecondPutBegin(SecondRemote()); }
+    __aicore__ inline void PutReturned(bool selected) {
         if (!record_) return;
         const uint64_t now = Clock();
         send_[4] = now;
-        if (SecondRemote()) send_[10] = now;
+        if (selected) send_[10] = now;
     }
+    __aicore__ inline void PutReturned() { PutReturned(SecondRemote()); }
+    __aicore__ inline void StageQueued(bool selected, bool deferred) {
+        if (!record_) return;
+        if (deferred) ++send_[29];
+        if (selected) { send_[26] = Clock(); send_[31] = deferred ? 1U : 0U; }
+    }
+    __aicore__ inline void StageWaitBegin(bool selected) { if (record_ && selected) send_[27] = Clock(); }
+    __aicore__ inline void StageWaitEnd(bool selected) { if (record_ && selected) send_[28] = Clock(); }
+    __aicore__ inline void PreviousSubmit(uint64_t ticks) { if (SecondRemote()) send_[30] += ticks; }
     __aicore__ inline void GroupSubmitted() { if (record_ && sendGroup_) send_[6] = Clock(); }
     __aicore__ inline void MemberQ(uint64_t ticks) { if (SecondRemote()) send_[11] += ticks; }
-    __aicore__ inline void FlushDone(uint64_t begin, bool insideEnqueue) {
+    __aicore__ inline void FlushDone(uint64_t begin, bool secondTriggered) {
         if (!record_) return;
         const uint64_t end = Clock();
         send_[16] += end - begin; ++send_[17]; send_[18] = end;
-        if (insideEnqueue && SecondRemote()) send_[19] = 1U;
+        if (secondTriggered) send_[19] = 1U;
     }
     __aicore__ inline void SendLanes(uint32_t lanes) { if (record_) send_[25] = lanes; }
     __aicore__ inline void Detail(uint32_t word, uint64_t value) { if (record_) record_[word] = value; }

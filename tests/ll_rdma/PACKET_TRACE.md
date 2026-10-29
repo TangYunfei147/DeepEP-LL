@@ -1,3 +1,5 @@
+> 当前为一包深度暂存/put流水，实现身份26、reference schema4；复用原lane，单lane立即提交。S表区分暂存经过、延后间隔、剩余等待及前包提交，不改packet所属核/顺序。详见 [ONE_PACKET_PIPELINE.md](ONE_PACKET_PIPELINE.md)；覆盖下方旧立即提交及schema2说明。
+
 # Reference schema2：S核第二跨机包与R核包顺序
 
 2026-10-28，当前kernel/ll-ndr-ab-per-core-qp。通信协议仍24，诊断schema从1升级为2；全rank更新完整wheel。只在DEEPEP_LL_REFERENCE_PROFILE=ON且当前capture有记录地址时记录；OFF的发送调度、q算法、QP、UB/lane布局和通信协议不改。SDK不改。

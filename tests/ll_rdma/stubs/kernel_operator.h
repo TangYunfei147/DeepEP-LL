@@ -11,20 +11,37 @@
 #define __ubuf__
 constexpr int PIPE_ALL=0;
 namespace AscendC {
-enum class HardEvent { S_MTE3, MTE3_S, MTE2_S, V_S, S_MTE2, MTE2_V };
-inline thread_local bool events[6][8]{};
+enum class HardEvent { S_MTE3, MTE3_S, MTE2_S, V_S, S_MTE2, MTE2_V, MTE3_V };
+inline thread_local bool events[7][8]{};
 inline std::mutex memoryMutex;
 #ifdef DEEPEP_TEST_ROUTE_THREADS
 struct DeferredMte2Copy { void* dst;const void* src;uint32_t bytes; };
 inline thread_local std::vector<DeferredMte2Copy> deferredMte2;
 #endif
+#ifdef DEEPEP_TEST_DEFERRED_MTE3
+struct DeferredMte3Copy { void* dst; const void* src; uint32_t bytes; uint64_t serial; };
+inline thread_local std::vector<DeferredMte3Copy> deferredMte3;
+inline thread_local uint64_t issuedMte3=0, mte3Fence[7][8]{};
+#endif
 template<HardEvent E> void SetFlag(uint32_t id) {
     if(id>=8 || events[int(E)][id]) throw std::runtime_error("event reused while live");
     events[int(E)][id]=true;
+#ifdef DEEPEP_TEST_DEFERRED_MTE3
+    if constexpr(E==HardEvent::MTE3_S || E==HardEvent::MTE3_V) mte3Fence[int(E)][id]=issuedMte3;
+#endif
 }
 template<HardEvent E> void WaitFlag(uint32_t id) {
     if(id>=8 || !events[int(E)][id]) throw std::runtime_error("wait without event");
     events[int(E)][id]=false;
+#ifdef DEEPEP_TEST_DEFERRED_MTE3
+    if constexpr(E==HardEvent::MTE3_S || E==HardEvent::MTE3_V) {
+        std::lock_guard<std::mutex> guard(memoryMutex);
+        while(!deferredMte3.empty() && deferredMte3.front().serial<=mte3Fence[int(E)][id]) {
+            auto copy=deferredMte3.front();std::memcpy(copy.dst,copy.src,copy.bytes);
+            deferredMte3.erase(deferredMte3.begin());
+        }
+    }
+#endif
 #ifdef DEEPEP_TEST_ROUTE_THREADS
     if constexpr(E==HardEvent::MTE2_S || E==HardEvent::MTE2_V) {
         std::lock_guard<std::mutex> guard(memoryMutex);
@@ -80,7 +97,13 @@ template<class T> void DataCopy(LocalTensor<T> dst, GlobalTensor<T> src, DataCop
                     c.blockLen*32U);
 }
 template<class T> struct DataCopyPadExtParams { bool pad; uint8_t left, right; T value; };
-template<class T> void DataCopy(GlobalTensor<T> d, LocalTensor<T> s, uint32_t n) { std::lock_guard<std::mutex> guard(memoryMutex); std::memcpy(d.p,s.p,n*sizeof(T)); }
+template<class T> void DataCopy(GlobalTensor<T> d, LocalTensor<T> s, uint32_t n) {
+#ifdef DEEPEP_TEST_DEFERRED_MTE3
+    deferredMte3.push_back({d.p,s.p,uint32_t(n*sizeof(T)),++issuedMte3});
+#else
+    std::lock_guard<std::mutex> guard(memoryMutex); std::memcpy(d.p,s.p,n*sizeof(T));
+#endif
+}
 template<class T> void DataCopy(LocalTensor<T> d, GlobalTensor<T> s, uint32_t n) {
 #ifdef DEEPEP_TEST_ROUTE_THREADS
     deferredMte2.push_back({d.p,s.p,uint32_t(n*sizeof(T))});
