@@ -49,7 +49,7 @@ int main() {
     assert(!BuildCountReadPlan(384,32,0,0,0,14,plan));
     assert(!BuildCountReadPlan(384,32,56,32,0,14,plan));
     assert(!BuildCountReadPlan(384,32,56,0,380,8,plan));
-    assert(!BuildCountReadPlan(1024,32,16,0,0,129,plan));
+    assert(!BuildCountReadPlan(1024,32,16,0,0,513,plan));
     assert(BuildCountReadPlan(1024,32,16,0,31,128,plan) && plan.size==5);
     std::cout<<"PASS "<<cases<<" receiver partitions; body/commit order and UB padding preserved\n";
 }

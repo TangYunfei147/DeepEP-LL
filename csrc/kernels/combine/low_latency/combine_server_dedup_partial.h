@@ -7,6 +7,7 @@
 #include "kernel_operator.h"
 #include "../../dispatch/low_latency/device/ll_transport.h"
 #include "combine_rdma_return.h"
+#include "combine_stage_wire.h"
 #include "../../dispatch/low_latency/common/comm_args.h"
 #include "../../dispatch/low_latency/common/dispatch_dedup_types.h"
 #include "ep_memory_server_dedup_buffer_layout.h"
@@ -44,7 +45,7 @@ public:
         blocks_ = (h * 2U + 479U) / 480U;
         packetBytes_ = blocks_ * 512U;
         inputBytes_ = layout.inputBytes;
-        stageStride_ = EpCombineAlign(h * 2U, 512U);
+        stageStride_ = packetBytes_;
         stageBase_ = window + COMBINE_DEDUP_EP_SERVER_DEDUP_SHARED_DATA_OFFSET + uint64_t(bs) * k * packetBytes_;
         inputLanes_ = layout.inputLanes;
         outputLanes_ = layout.outputLanes;
@@ -215,7 +216,7 @@ private:
                 (((uint64_t(source) + memberRank) % uint32_t(args_->rankSize)) * localExperts_ + localExpert) * bs_ + q;
             if (memberRank / Group != uint32_t(args_->rank) / Group) { Trap(); return; }
 
-            LlTransport::LoadLocalPeer(args_, memberRank, stageBase_ + slot * stageStride_,
+            LoadStageWire(args_, memberRank, stageBase_ + slot * stageStride_,
                 inputs_[lane * inputBytes_ / 2U], h_ * 2U);
         }
         SetFlag<HardEvent::MTE2_V>(lane);

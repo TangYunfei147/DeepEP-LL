@@ -41,7 +41,7 @@ public:
                                 bool enableDedup = true, uint32_t coreNum = 0U)
     {
         args_ = args;
-        sendCores_ = (coreNum == 0U ? GetBlockNum() : coreNum) / 2U;
+        sendCores_ = PayloadCores(coreNum == 0U ? GetBlockNum() : coreNum);
         pipe_ = pipe;
         enableDedup_ = enableDedup;
         fullMeshFirstHop_ = Group == kLlPhysicalRanksPerHost && LlTransport::Rdma(args);
@@ -50,7 +50,7 @@ public:
         k_ = k;
         experts_ = experts;
         localExperts_ = experts / args->rankSize;
-        const uint32_t core = GetBlockIdx();
+        const uint32_t core = (GetBlockIdx() - kLlMetadataCores);
         const uint32_t base = bs / sendCores_, remainder = bs % sendCores_;
         count_ = base + (core < remainder ? 1U : 0U);
         start_ = core * base + (core < remainder ? core : remainder);
@@ -65,9 +65,8 @@ public:
     }
 
     // 摘要：执行本核发送主流程：准备 UB、优先发送去重首跳、再发送 DIRECT，最后写回源端元数据。
-    __aicore__ inline void Process(TBufPool<TPosition::VECCALC, 16>& scratch, uint32_t reservedBytes,
-                                   LlReferenceProfile::DeviceProfile* profile = nullptr,
-                                   LlTransport::CountRetirement* retirement = nullptr)
+    __aicore__ inline void Process(TBufPool<TPosition::VECCALC, 16>& scratch,
+                                   LlReferenceProfile::DeviceProfile* profile = nullptr)
     {
 #ifdef DEEPEP_LL_REFERENCE_PROFILE
         packetProfile_ = profile;
@@ -78,16 +77,14 @@ public:
         if (profile && profile->Enabled()) {
             const uint32_t routes = bs_ * k_;
             const uint32_t assigned = enableDedup_ ? count_ * k_ :
-                routes / sendCores_ + (GetBlockIdx() < routes % sendCores_ ? 1U : 0U);
+                routes / sendCores_ + ((GetBlockIdx() - kLlMetadataCores) < routes % sendCores_ ? 1U : 0U);
             profile->Value<43>(assigned);  // w43: send_route_count
         }
-        // 1. 无 token 分片的发送核直接返回；有任务的核复用 SendCnt 释放出的 scratch。
-        // reservedBytes 对应仍可能被计数发送读取的 UB，不能当作可用空间覆盖。
-        if (!LlSenderHasWork(enableDedup_, count_, bs_ * k_, GetBlockIdx())) return;
+        // S核独占payload scratch；没有count发送记录占用或退休依赖。
+        if (!LlSenderHasWork(enableDedup_, count_, bs_ * k_, (GetBlockIdx() - kLlMetadataCores))) return;
 
         if (LlTransport::Rdma(args_)) {
             rdmaBatch_.Init(args_, uint32_t(data_.tokenStride));
-            rdmaBatch_.SetCountRetirement(retirement);
         }
 
         scratch_ = &scratch;
@@ -99,7 +96,7 @@ public:
         const uint32_t inputBytes =
             NeedQuantize ? uint32_t(data_.quantCount * sizeof(XType)) : uint32_t(data_.packedPayloadBytes);
         scratch_->InitBuffer(input, 2U, inputBytes);
-        usedBytes_ = reservedBytes + 2U * inputBytes;
+        usedBytes_ = 2U * inputBytes;
         if constexpr (NeedQuantize) {
             // Alias the two input buffers exactly as Memory does. Quantization
             // reads the compute padding, so initialize it once before copying input.
@@ -203,8 +200,6 @@ public:
 
     }
 
-    __aicore__ inline bool HasFinalScratch() const { return scratch_ != nullptr; }
-    __aicore__ inline LocalTensor<uint8_t> FinalScratch() { return outBuf_.Get<uint8_t>(); }
     // 摘要：去重发送主流程：先发同 server 合并的 FIRST_HOP，再按 server 顺序发缓存的 DIRECT。
     __aicore__ inline void SendWithDedup(TQue<QuePosition::VECIN, 1>& input)
     {
@@ -214,7 +209,7 @@ public:
         // 由目标接收端继续转发。所有首跳优先发出，尽早启动远端 relay。
 
         const uint32_t rankInGroup = uint32_t(args_->rank) % Group;
-        const uint32_t sendCore = GetBlockIdx();
+        const uint32_t sendCore = (GetBlockIdx() - kLlMetadataCores);
         for (uint32_t token = 0; token < count_; ++token) {
             uint32_t directMask = 0, firstHopCount = 0;
 
@@ -278,7 +273,7 @@ public:
     __aicore__ inline void SendWithoutDedup(TQue<QuePosition::VECIN, 1>& input)
     {
         // Route ownership is independent of the token partition used to copy weights.
-        const uint32_t total = bs_ * k_, core = GetBlockIdx();
+        const uint32_t total = bs_ * k_, core = (GetBlockIdx() - kLlMetadataCores);
         const uint32_t base = total / sendCores_;
         const uint32_t remainder = total % sendCores_;
         const uint32_t begin = core * base + (core < remainder ? core : remainder);

@@ -20,7 +20,7 @@ inline bool BuildLayout(int64_t p, int64_t b, int64_t h, int64_t k, int64_t e, L
     if (!EpCombinePayloadLaneCount(peak, h) || !EpCombineM45Layout(peak, b, h, k, coreNum / 2U).inputLanes) return false;
     const uint64_t packet = (h * 2 + 479) / 480 * 512;
     const uint64_t bytes =
-        COMBINE_DEDUP_EP_SERVER_DEDUP_SHARED_DATA_OFFSET + b * k * packet + e * b * ((h * 2 + 511) / 512 * 512);
+        COMBINE_DEDUP_EP_SERVER_DEDUP_SHARED_DATA_OFFSET + b * k * packet + e * b * packet;
     if (bytes > DispatchDedup::kEpServerDedupWindowUsableBytes ||
         DispatchDedup::DispatchServerDedupCountLayout(e, coreNum).stateBytes >
             COMBINE_DEDUP_EP_SERVER_DEDUP_COMBINE_CONTROL_OFFSET)

@@ -76,7 +76,7 @@ bool MultiplyBytes(uint64_t lhs, uint64_t rhs, uint64_t* out)
 inline int BuildDispatchServerDedupLayout(int64_t rankSize, int64_t bs, int64_t h, int64_t topK, int64_t moeExpertNum,
                                           EpMemoryServerDedupLayout* out, EpServerDedupInputMode mode, uint32_t coreNum)
 {
-    if (out == nullptr || !LlCoreCountValid(coreNum)) {
+    if (out == nullptr || !LlCoreCountValid(coreNum) || !MetadataSplitValid(coreNum)) {
         return DispatchDedup::DISPATCH_DEDUP_ERROR_PARA_CHECK_FAIL;
     }
     *out = EpMemoryServerDedupLayout{};
@@ -90,7 +90,7 @@ inline int BuildDispatchServerDedupLayout(int64_t rankSize, int64_t bs, int64_t 
     }
 
     const uint32_t countCores =
-        bs < kEpServerDedupAllCoreCountBsThreshold ? coreNum : coreNum / 2U;
+        kLlMetadataCores;
     uint32_t minimumCountRecords = 0U;
 #ifdef DEEPEP_LL_RDMA
     // Each multi-host remote frame needs every local expert plus its SO tail.
@@ -179,12 +179,11 @@ namespace DispatchDedup {
 inline bool DispatchDedupPacketUbFits(const EpMemoryServerDedupLayout& layout, int64_t b, int64_t k,
                                       int64_t num_experts, int64_t world_size, uint32_t coreNum = kLlDefaultPlanCoreNum)
 {
-    if (!LlCoreCountValid(coreNum)) return false;
+    if (!LlCoreCountValid(coreNum) || !MetadataSplitValid(coreNum)) return false;
     const auto align = [](uint64_t n, uint64_t a) { return (n + a - 1) / a * a; };
-    const uint64_t cores = b < kEpServerDedupAllCoreCountBsThreshold ? coreNum : coreNum / 2U;
-    const uint64_t reserved =
-        b < kEpServerDedupAllCoreCountBsThreshold ? align((num_experts + cores - 1) / cores, 8) * 32 : 0;
-    const uint64_t tokens = (b + coreNum / 2U - 1U) / (coreNum / 2U);
+    const uint64_t cores = PayloadCores(coreNum);
+    const uint64_t reserved = 0U;
+    const uint64_t tokens = (b + cores - 1U) / cores;
     const uint64_t groups = std::min<uint64_t>(world_size / LlGroupForWorld(uint32_t(world_size)) - 1, k / 2);
     const bool needQuantize = layout.inputMode == EpServerDedupInputMode::Quantize16;
     const uint64_t inputBytes = needQuantize ? layout.data.quantCount * 2U : layout.data.packedPayloadBytes;
@@ -198,12 +197,15 @@ inline bool DispatchDedupPacketUbFits(const EpMemoryServerDedupLayout& layout, i
                             align(tokens * 4, 32) + align(tokens * k * 16, 32) + 64 + align(groups * 4, 32) +
                             layout.data.tokenStride;
     const uint64_t serverStateExtra = std::max<uint64_t>(64U, align(world_size / LlGroupForWorld(uint32_t(world_size)) * 4U, 32U)) - 64U;
-    const uint64_t receiver = align(num_experts * 4, 32) + 2 * align(((layout.capacityRows + coreNum / 2U - 1U) / (coreNum / 2U)) * 4, 32) +
-                              16 * layout.data.blockCount * 32 + 256 +
-                              16 * align((layout.data.blockCount + 7) / 8, 32) * 4 + 256 + 16 * 36 +
-                              layout.data.tokenStride + 64;
+    const uint64_t candidates = (uint64_t(num_experts)*b + cores-1U)/cores;
+    const uint64_t bitmap = std::max<uint64_t>(32U,align((candidates+31U)/32U*4U,32U));
+    const uint64_t receiver = align(num_experts*4U,32U)+bitmap+
+        2U*align(((layout.capacityRows+cores-1U)/cores)*4U,32U)+64U+
+        16U*layout.data.blockCount*32U+256U+16U*32U+
+        16U*align((layout.data.blockCount+7U)/8U,32U)*4U+256U+16U*4U+
+        layout.data.blockCount*32U+layout.data.tokenStride+64U;
     return layout.data.blockCount > 0 && layout.data.blockCount <= UINT8_MAX &&
-           sender + serverStateExtra <= kEpServerDedupCountUbBytes && receiver <= kEpServerDedupCountUbBytes;
+           layout.capacityRows * 4U <= layout.data.relayBytes && sender + serverStateExtra <= kEpServerDedupCountUbBytes && receiver <= kEpServerDedupCountUbBytes;
 }
 }  // namespace DispatchDedup
 

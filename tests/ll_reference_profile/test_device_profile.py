@@ -66,7 +66,7 @@ def test_record_is_core_local_exact_and_off_has_no_device_work(tmp_path, enabled
 #include <cstring>
 using namespace LlReferenceProfile;
 int main() {
-    static_assert(kSchema == 4 && kWordsPerCore == 640 && kSlots == 80 && kFields == 8);
+    static_assert(kSchema == 5 && kWordsPerCore == 640 && kSlots == 80 && kFields == 8);
     static_assert(kWordsPerCore * sizeof(uint64_t) == 5120);
     constexpr uint64_t guard = 0x55aaccff12345678ULL;
     alignas(512) uint64_t raw[74 * kWordsPerCore];
@@ -101,7 +101,7 @@ int main() {
             assert(row[58] == mask && row[32] == 0 && row[33] == 0);
             assert(row[50]==31 && row[51]==core && row[52]==64 && row[53]==cores && row[54]==1);
             assert(row[55]==kSchema && row[56]==1 && row[59]==kMagic && row[60]==1 && row[61]==1);
-            assert(row[22]==0 && row[23]==0 && row[44]==0 && row[49]==0 && row[62]==0 && row[63]==0);
+            assert(row[22]==0 && row[23]==0 && row[44]==0 && row[49]==0 && row[62]==4 && row[63]==(core<4?2U:core<(cores+4)/2?0U:1U));
             assert(flushedAddress == reinterpret_cast<uint8_t*>(row) && flushedLength == 1023);
             // A helper with inclusive end must flush only this core's eight
             // 64B cachelines, not the following core or the trailing guard.
@@ -162,31 +162,28 @@ def test_reference_points_preserve_business_boundaries_and_async_tail():
     assert variant.index('DeviceProfile::EntryClock') < variant.index('util_set_ffts_config')
     assert variant.index('kernel.Process();') < variant.index('profile.Finish(')
     kernel = read('dispatch_server_dedup_kernel.h')
-    for begin, business, end in ((2,'RotateDispatchServerDedupMagic',3), (6,'counts_.SendCnt()',7),
-            (8,'sender_.Process(',9), (10,'counts_.RecvCnt()',11), (12,'counts_.CalcCumsum()',13),
-            (14,'counts_.CompleteCumsum()',15), (16,'PipeBarrier<PIPE_ALL>()',17),
-            (18,'receiver_.Process(',19), (20,'counts_.Finish()',21)):
+    for begin, business, end in ((2,'RotateDispatchServerDedupMagic',3), (6,'counts.SendCnt()',7),
+            (8,'sender_.Process(',9), (10,'counts.RecvCnt()',11), (12,'counts.CalcCumsum()',13),
+            (14,'counts.CompleteCumsum()',15), (16,'counts.Finish()',17),
+            (18,'receiver_.Process(',19), (20,'PipeBarrier<PIPE_ALL>()',21)):
         assert kernel.index(f'profile_->Mark<{begin}>') < kernel.index(business) < kernel.index(f'profile_->Mark<{end}>')
     send = read('device/dispatch_server_dedup_send.h')
     assert send.index('SendWithoutDedup(input);') < send.index('profile->Mark<39>') < send.index('rdmaBatch_.Flush(')
     assert send.index('rdmaBatch_.Flush(') < send.index('profile->Mark<40>')
-    assert 'routes / sendCores_ + (GetBlockIdx() < routes % sendCores_' in send
+    assert 'routes / sendCores_ + ((GetBlockIdx() - kLlMetadataCores) < routes % sendCores_' in send
     counts = read('device/dispatch_server_dedup_counts.h')
     assert counts.index('profile_->Mark<24>') < counts.index('while (sumOfFlag != compareTarget)') < counts.index('profile_->Mark<25>')
     prefix = counts[counts.index('const uint32_t offset = GetCumSum(newAivId);'):]
     assert prefix.index('profile_->Mark<27>') < prefix.index('if (packedFrames_) WaitDispatchClearStatus()')
     recv = read('device/dispatch_server_dedup_recv.h')
-    retry = recv.split('do {', 1)[1].split('} while (probe.readyMask == 0U);', 1)[0]
-    packet = recv.split('for (uint32_t i = count; i > 0U; --i)', 1)[1].split('++consumed;', 1)[0]
-    assert not re.search(r'profile|Clock|Mark|GetSystemCycle', retry)
-    assert not re.search(r'profile|Clock|Mark|GetSystemCycle', packet)
-    assert recv.count('profile->Clock()') == 5
+    # The alternating forward/output sweeps cannot use the retired blocking
+    # ready-batch loop. Schema5 shares a wait interval across alternating sweeps.
+    for method in ('void ForwardBatch(', 'void OutputBatch('):
+        body=recv[recv.index(method):]
+        assert 'StartPoll()' in body and 'ReadyPoll()' in body and 'Probe(count)' in body
     assert kernel.index('profile_->Mark<21>') < kernel.index('receiver_.ExportPacketTrace')
-    assert '#ifdef DEEPEP_LL_REFERENCE_PROFILE\n        // Three clocks' in recv
-    assert recv.index('profile->Mark<35>') < recv.index('profile->Mark<36>') < recv.index('profile->Value<33>(pollCycles)')
-    zero_tasks = recv.split('if (tasks_.Count() == 0U)', 1)[1].split('return;', 1)[0]
-    for word in (33, 34, 41):
-        assert f'profile->Value<{word}>(0U)' in zero_tasks
+    assert recv.index('profile_->Mark<35>') < recv.index('profile_->Mark<36>') < recv.index('profile_->Value<33>(pollTicks_)')
+    assert 'while(!prefixReady_ || forwardLeft_ || pending_)' in recv
 
 
 def test_recorder_has_no_ub_event_or_new_pipeline_barrier():

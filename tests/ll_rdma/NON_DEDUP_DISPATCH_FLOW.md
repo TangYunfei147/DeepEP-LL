@@ -1,3 +1,5 @@
+> 本文保留旧分工分析；当前独立元数据核、固定转发与均衡搬出见 [METADATA_CORES.md](METADATA_CORES.md)。
+
 # NDR非去重dispatch执行流程
 
 本说明对应`kernel/ll-ndr-hns1825`的源码`92cbf6823132d3753b995b9f073336f62c07bd69`，
@@ -537,7 +539,7 @@ pending清空后，处理各lane归还依赖，再按**稳定token_pos表**发�
 清理，保留payload。最终PIPE_ALL确认输出及flag清理完成；这里没有新增Scalar完成屏障。
 随后Counts.Finish恢复原CTRL状态。不能使用已压缩为空的pending表来决定清理哪些槽。
 
-源码：[任务构造](../../csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_receive_tasks.h#L18)、
+源码：[任务构造](../../csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_recv.h#L18)、
 [Probe和加载](../../csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_recv.h#L194)、
 [非去重输出快路径](../../csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_recv.h#L259)、
 [清flag](../../csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_recv.h#L358)。

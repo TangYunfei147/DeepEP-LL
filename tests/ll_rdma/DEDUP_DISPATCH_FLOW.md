@@ -1,3 +1,5 @@
+> 本文保留旧分工分析；当前独立元数据核、固定转发与均衡搬出见 [METADATA_CORES.md](METADATA_CORES.md)。
+
 # NDR去重dispatch执行流程
 
 本文于2026-10-27按`kernel/ll-ndr-hns1825@1d54829`更新：核心协议10、
@@ -461,7 +463,7 @@ TERMINAL不再转发，也不写一份有意义的relayReadIndex。
 pending清空后，处理各lane归还依赖，按稳定slot表发起本核packet flags清理；最终PIPE_ALL确认
 输出、relay和清理完成。这里不新增Scalar完成屏障。payload保留，flags清零供后续bank复用。
 
-源码：[任务构造](../../csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_receive_tasks.h)、
+源码：[任务构造](../../csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_recv.h)、
 [role快照](../../csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_receive_packet.h)、
 [FIRST_HOP消费和转发](../../csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_recv.h)。
 

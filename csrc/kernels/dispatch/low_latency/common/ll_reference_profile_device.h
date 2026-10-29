@@ -1,6 +1,7 @@
 #pragma once
 #include "kernel_operator.h"
 #include "ll_reference_profile_layout.h"
+#include "ll_metadata_config.h"
 #ifdef DEEPEP_LL_REFERENCE_PROFILE
 #include "shmem.h"
 #endif
@@ -137,6 +138,9 @@ public:
         record_[59] = kMagic;                       // w59: magic
         record_[60] = 1U;                           // w60: boundary_mode, observe
         record_[61] = 1U;                           // w61: complete
+        record_[62] = DispatchDedup::kLlMetadataCores;
+        record_[63] = AscendC::GetBlockIdx() < DispatchDedup::kLlMetadataCores ? 2U :
+            (AscendC::GetBlockIdx() < DispatchDedup::ReceiveBegin(AscendC::GetBlockNum()) ? 0U : 1U);
         // Python supplies a fresh zeroed tensor; reserved/absent words remain
         // zero. Publish Scalar header/meta after business finish and log DMA.
         // This matches the reference dispatch cache publication, not PIPE_ALL.

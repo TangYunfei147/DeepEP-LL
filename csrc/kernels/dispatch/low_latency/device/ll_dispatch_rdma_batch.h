@@ -1,6 +1,5 @@
 #pragma once
 #include "ll_transport.h"
-#include "ll_count_frame_transport.h"
 #include "../common/ll_reference_profile_device.h"
 
 namespace LlTransport {
@@ -17,7 +16,6 @@ class DispatchRdmaBatch {
     uint32_t peerMask_[kPeerWords]{};
     LocalTensor<uint8_t> pendingScratch_;
     bool staged_ = false;
-    CountRetirement* countRetirement_ = nullptr;
 #ifdef DEEPEP_LL_REFERENCE_PROFILE
     LlReferenceProfile::DeviceProfile* profile_ = nullptr;
     bool pendingSecond_ = false;
@@ -35,7 +33,6 @@ class DispatchRdmaBatch {
             for (uint32_t bit = 0; bit < 32U; ++bit) if (mask & (1U << bit)) {
                 const uint32_t peer = word * 32U + bit;
                 Quiet(peer, scratch);
-                if (countRetirement_) countRetirement_->Completed(peer);
             }
             peerMask_[word] = 0U;
         }
@@ -45,7 +42,6 @@ class DispatchRdmaBatch {
         count_ = 0;
     }
 public:
-    __aicore__ inline void SetCountRetirement(CountRetirement* p) { countRetirement_ = p; }
 #ifdef DEEPEP_LL_REFERENCE_PROFILE
     __aicore__ inline void SetProfile(LlReferenceProfile::DeviceProfile* p) { profile_ = p; }
 #endif

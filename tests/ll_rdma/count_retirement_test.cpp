@@ -5,6 +5,7 @@
 #define DEEPEP_LL_RDMA 1
 #define DEEPEP_TEST_DEFERRED_MTE3 1
 #include "kernels/dispatch/low_latency/device/ll_dispatch_rdma_batch.h"
+#include "kernels/dispatch/low_latency/device/ll_count_frame_transport.h"
 #include "kernels/dispatch/low_latency/common/ll_count_assignment.h"
 using namespace AscendC;
 int main(){
@@ -23,7 +24,7 @@ int main(){
   for(unsigned task=worker;task<world-16;task+=c){
    const auto peer=DispatchDedup::CountRemotePeer(rank,world,task);peers.push_back(peer);
    std::fill(record.begin(),record.end(),uint8_t(peer));
-   LlTransport::DirectCountFrame(&a,peer,0,{record.data()},experts,{scratch.data()});pending.Posted(task);
+   LlTransport::DirectCountFrame(&a,peer,0,{record.data()},experts,{scratch.data()});pending.Posted(peer);
    assert(Model::quiets==before);
   }
   // Every UB frame and ALL shared payload staging may change before NIC reads
@@ -33,11 +34,7 @@ int main(){
    assert(request.src>=local.data()+LlTransport::kCountTxBase);
    for(unsigned i=0;i<bytes;++i)assert(request.src[i]==uint8_t(request.peer));
   }
-  // Existing payload batch quiet retires its earlier count on exactly this QP.
-  if(!peers.empty()){
-   LlTransport::DispatchRdmaBatch batch;batch.Init(&a,512);batch.SetCountRetirement(&pending);
-   batch.Enqueue(peers.front(),100000,{record.data()},false);batch.Flush({scratch.data()});
-  }
+  // Metadata cores retire their own QPs; payload cores have disjoint QPs.
   pending.Finish({scratch.data()});
   assert(!pending.Pending() && Model::pending.empty());
   assert(Model::quiets-before==peers.size()); // no duplicate count quiet
@@ -45,10 +42,10 @@ int main(){
   pending.Init(&a);before=Model::quiets;
   for(unsigned task=worker;task<world-16;task+=c){
    auto peer=DispatchDedup::CountRemotePeer(rank,world,task);
-   LlTransport::DirectCountFrame(&a,peer,0,{record.data()},experts,{scratch.data()});pending.Posted(task);
+   LlTransport::DirectCountFrame(&a,peer,0,{record.data()},experts,{scratch.data()});pending.Posted(peer);
   }
   pending.Finish({scratch.data()});assert(Model::quiets-before==peers.size() && Model::pending.empty());
   ++cases;
  }
- std::cout<<"PASS isolated count sources and CQ merge "<<cases<<" cases\n";
+ std::cout<<"PASS isolated count sources and metadata CQ retirement "<<cases<<" cases\n";
 }

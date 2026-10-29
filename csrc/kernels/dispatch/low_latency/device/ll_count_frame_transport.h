@@ -4,27 +4,16 @@ namespace LlTransport {
 // Per-core CQ bookkeeping, independent of receiver publication. A payload
 // quiet on the same peer/QP also retires the earlier count request.
 class CountRetirement {
-    const __gm__ Args* args_ = nullptr;
-    uint32_t pending_ = 0U;
+    uint32_t pending_[8]{};
 public:
-    __aicore__ inline void Init(const __gm__ Args* args) { args_ = args; pending_ = 0U; }
-    __aicore__ inline void Posted(uint32_t task) { pending_ |= 1U << (task / GetBlockNum()); }
-    __aicore__ inline bool Pending() const { return pending_ != 0U; }
-    __aicore__ inline void Completed(uint32_t peer) {
-        const uint32_t host = uint32_t(args_->rank) / 16U * 16U;
-        if (peer >= host && peer < host + 16U) return;
-        const uint32_t task = peer < host ? peer : peer - 16U;
-        if (task % GetBlockNum() == GetBlockIdx()) pending_ &= ~(1U << (task / GetBlockNum()));
-    }
+    __aicore__ inline void Init(const __gm__ Args*) { for (uint32_t i=0;i<8;++i) pending_[i]=0; }
+    __aicore__ inline void Posted(uint32_t peer) { pending_[peer/32] |= 1U<<(peer%32); }
+    __aicore__ inline bool Pending() const { for (uint32_t i=0;i<8;++i) if(pending_[i]) return true; return false; }
     __aicore__ inline void Finish(LocalTensor<uint8_t> scratch) {
-        const uint32_t host = uint32_t(args_->rank) / 16U * 16U;
-        for (uint32_t task = GetBlockIdx(), bit = 1U; task < uint32_t(args_->rankSize) - 16U;
-             task += GetBlockNum(), bit <<= 1U) {
-            if (!(pending_ & bit)) continue;
-            const uint32_t peer = task < host ? task : task + 16U;
-            Quiet(peer, scratch);
+        for(uint32_t i=0;i<8;++i) {
+            for(uint32_t b=0;b<32;++b) if(pending_[i]&(1U<<b)) Quiet(i*32+b,scratch);
+            pending_[i]=0;
         }
-        pending_ = 0U;
     }
 };
 

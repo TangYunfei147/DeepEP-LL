@@ -43,9 +43,9 @@ def test_export_preserves_raw_precision_formulas_missing_zero_and_layout(tmp_pat
     assert detail['E2'].find('m:f',NS).text == "'原始Cycle'!BO2/'阶段说明'!$B$2"
     assert float(detail['E2'].find('m:v',NS).text) == .36
     assert detail['AE3'].find('m:f',NS) is None  # empty sender has no packet-submit segment
-    receiver_row = 30
+    receiver_row = 32
     assert float(detail[f'Z{receiver_row}'].find('m:v',NS).text) == 0
-    assert detail['D2'].find('m:v',NS).text == '1'
+    assert detail['D2'].find('m:v',NS).text == '4'  # metadata record partition
     raw, _ = cells(path,4)
     assert raw['C2'].attrib['t'] == 'inlineStr'
     assert text(raw['C2']) == str(10**17)

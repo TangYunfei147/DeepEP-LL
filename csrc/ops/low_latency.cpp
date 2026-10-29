@@ -218,6 +218,7 @@ void bind_low_latency(py::module_& module)
         result["stages"] = names;
         return result;
     });
+    module.attr("low_latency_dispatch_metadata_cores") = DispatchDedup::kLlMetadataCores;
     module.def("low_latency_core_config", []() {
         const auto cfg = query_ll_core_config();
         py::dict result;
@@ -226,6 +227,10 @@ void bind_low_latency(py::module_& module)
         result["recv_cores"] = cfg.active / 2U; result["device"] = cfg.device;
         result["runtime_device_queried"] = cfg.device >= 0;
         result["control_capacity_aiv"] = DispatchDedup::kLlMaxCoreNum;
+        result["dispatch_metadata_cores"] = DispatchDedup::kLlMetadataCores;
+        result["dispatch_split_valid"] = DispatchDedup::MetadataSplitValid(cfg.active);
+        result["dispatch_send_cores"] = DispatchDedup::MetadataSplitValid(cfg.active) ? DispatchDedup::PayloadCores(cfg.active) : 0U;
+        result["dispatch_recv_cores"] = DispatchDedup::MetadataSplitValid(cfg.active) ? DispatchDedup::PayloadCores(cfg.active) : 0U;
         return result;
     });
     for (uint32_t world : {16U, 32U, 64U, 128U, 256U})

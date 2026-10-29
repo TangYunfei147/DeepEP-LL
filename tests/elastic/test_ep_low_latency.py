@@ -57,8 +57,8 @@ def validate_reference_profile_capability(requested, capability):
     if not requested:
         return
     if (capability.get('reference_profile') is not True or capability.get('stage_timer') is not False or
-            type(capability.get('reference_profile_schema')) is not int or capability['reference_profile_schema'] != 4):
-        raise RuntimeError('All ranks need the matching reference-profile schema 1 wheel with legacy stage tracing OFF')
+            type(capability.get('reference_profile_schema')) is not int or capability['reference_profile_schema'] != 5):
+        raise RuntimeError('All ranks need the matching reference-profile schema 5 wheel with legacy stage tracing OFF')
     fingerprint = capability.get('installed_source_sha256')
     if not isinstance(fingerprint, str) or re.fullmatch(r'[0-9a-f]{64}', fingerprint) is None:
         raise RuntimeError('Reference profiling requires the installed source fingerprint on every rank')

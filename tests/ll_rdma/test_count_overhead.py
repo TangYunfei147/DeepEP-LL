@@ -37,9 +37,9 @@ def test_count_prefix_is_loaded_only_by_its_output_owner():
     assert owner.index("SyncFunc<HardEvent::MTE2_S>()") < owner.index("prefix.GetValue(")
     assert "DataCopyPad(expertTokenNumsOutGMTensor_" in owner
     assert "LocalTensor<int32_t> Prefix()" not in counts
-    receiver = _block(_source("dispatch_server_dedup_recv.h"), "void Process(")
-    assert receiver.index("pipe_->Reset();") < receiver.index("DataCopyPad(prefix, prefixGlobal")
-    assert receiver.index("ServerDedupReceiveSync<HardEvent::MTE2_S>()") < receiver.index("tasks_.Build(prefix")
+    receiver = _block(_source("dispatch_server_dedup_recv.h"), "void AcquirePrefix(")
+    assert receiver.index("outputReadyOffset") < receiver.index("layout.prefixOffset")
+    assert receiver.index("ServerDedupReceiveSync<HardEvent::MTE2_S>()") < receiver.index("prefixReady_=true")
 
 
 def test_direct_count_records_live_until_the_existing_reuse_barrier():
@@ -53,13 +53,11 @@ def test_direct_count_records_live_until_the_existing_reuse_barrier():
     assert "Reset(" not in send
     assert "tpipe_->InitBuffer(statusBuf_, ReservedBytes())" in send
     assert "kEpServerDedupCountUbBytes - ReservedBytes()" in send
-    assert "return stagePool_;" in _block(counts, "ScratchPool()")
+    assert "ScratchPool()" not in counts
     assert "PipeBarrier<PIPE_ALL>();" in _block(counts, "void Finish()")
     kernel = (DEVICE.parent / "dispatch_server_dedup_kernel.h").read_text(encoding="utf-8")
-    assert "sender_.Process(counts_.ScratchPool(), counts_.ReservedBytes(), profile_, counts_.Retirement())" in kernel
-    complete = kernel.index("counts_.CompleteCumsum();")
-    consume = kernel.index("receiver_.Process(profile_);")
-    assert "PipeBarrier<PIPE_ALL>();" in kernel[complete:consume]
+    assert "sender_.Process(senderScratch_,profile_)" in kernel
+    assert kernel.index("counts.Finish();") < kernel.index("counts.RetireOwnScratch();")
     loaded = send.index("DataCopyPad(validExpertIdsTensor_, expertIdsGMTensor_")
     assert "SyncFunc<HardEvent::MTE2_V>();" in send[loaded:send.index("CountRemoteRank(first,")]
 
@@ -159,12 +157,12 @@ def test_shared_prefix_publication_and_consumers_keep_the_ready_dependency():
     assert publish.index("PipeBarrier<PIPE_MTE3>()") < publish.index("layout_.cumsumFlagOffset")
     owner = _block(_block(counts, "void ServerDedupCounts::CompleteCumsum()"), "if (receiver == 0U)")
     assert "DataCopyPad(prefix, workspace, copy, pad);" in owner
-    receive = _block(_source("dispatch_server_dedup_recv.h"), "void Process(")
-    assert "counts.cntOffset + counts.prefixOffset" in receive
+    receive = _block(_source("dispatch_server_dedup_recv.h"), "void AcquirePrefix(")
+    assert "layout.cntOffset" in receive and "layout.prefixOffset" in receive
     assert "counts.prefixStride" not in receive
     # Sum/readiness matrices still have their independent consumer rows.
     assert "newAivId * UB_ALIGN" in _block(counts, "uint32_t ServerDedupCounts::GetCumSum(")
-    assert "(aivId_ - aivUsedAllToAll_) * aivUsedCumSum_ * UB_ALIGN" in _block(counts, "void ServerDedupCounts::WaitCumSumFlag()")
+    assert "(aivId_) * aivUsedCumSum_ * UB_ALIGN" in _block(counts, "void ServerDedupCounts::WaitCumSumFlag()")
 
 
 def test_shared_prefix_layout_and_delayed_fragments(tmp_path):
@@ -190,15 +188,15 @@ int main() {
     constexpr uint32_t guard=0x5a5a5a5aU;
     unsigned cases=0;
     for(uint32_t cores: {16U,28U,56U,72U}) for(uint32_t experts: {32U,64U,384U,1024U}) {
-        const uint32_t receivers=cores/2U,active=std::min(receivers,experts);
+        const uint32_t receivers=kLlMetadataCores,active=std::min(receivers,experts);
         const auto layout=DispatchServerDedupCountLayout(experts,cores);
         const uint64_t matrix=uint64_t(receivers)*receivers*32U;
-        // Capacity and every control offset remain bit-for-bit compatible.
+        // Metadata matrices and one shared prefix precede R descriptors/notices.
         assert(layout.cumsumOffset==uint64_t(experts)*512U);
         assert(layout.prefixOffset==layout.cumsumOffset+matrix);
         assert(layout.prefixStride==(uint64_t(experts)*4U+31U)/32U*32U);
-        assert(layout.cumsumFlagOffset==layout.prefixOffset+receivers*layout.prefixStride);
-        const uint64_t oldBytes=layout.cntOffset+layout.cumsumFlagOffset+matrix;
+        assert(layout.cumsumFlagOffset==layout.prefixOffset+layout.prefixStride);
+        const uint64_t oldBytes=layout.cntOffset+layout.cumsumFlagOffset+matrix+PayloadCores(cores)*64U;
         assert(layout.counterOffset==(oldBytes+1023U)/1024U*1024U);
         assert(layout.stateBytes==layout.counterOffset+1024U);
         for(unsigned iteration=0;iteration<4;++iteration) {

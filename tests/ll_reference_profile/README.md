@@ -1,3 +1,5 @@
+> 本分支最新：独立metadata核默认4，协议40008/40009，reference schema5。部署、所有权及复用约束以 [METADATA_CORES.md](../ll_rdma/METADATA_CORES.md) 为准；下方旧版本说明保留作历史。
+
 > 当前为一包深度暂存/put流水，实现身份26、reference schema4；复用原lane，单lane立即提交。S表区分暂存经过、延后间隔、剩余等待及前包提交，不改packet所属核/顺序。详见 [ONE_PACKET_PIPELINE.md](../ll_rdma/ONE_PACKET_PIPELINE.md)；覆盖下方旧立即提交及schema2说明。
 
 > 当前reference schema2新增包诊断，完整边界、覆盖规则及命令见 [PACKET_TRACE.md](../ll_rdma/PACKET_TRACE.md)。旧schema1结果请用旧提交解析，不混装。

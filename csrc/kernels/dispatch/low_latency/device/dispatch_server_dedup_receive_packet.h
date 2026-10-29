@@ -19,11 +19,6 @@ __aicore__ inline void ServerDedupReceiveSync()
     WaitFlag<event>(0U);
 }
 
-__aicore__ inline uint32_t ServerDedupWireOffset(uint32_t logical)
-{
-    return logical + logical / 480U * 32U;
-}
-
 // Init supplies physical offsets. The entire index segment fits in one payload
 // block, so every block is contiguous and no per-entry Flag mapping is needed.
 class ServerDedupPacketTail {
@@ -55,31 +50,6 @@ __aicore__ inline void ReadServerDedupFlags(GM_ADDR slot, uint32_t blocks, Local
     input.SetGlobalBuffer(reinterpret_cast<__gm__ float*>(slot + 480U));
     if (uncached) input.SetL2CacheHint(CacheMode::CACHE_MODE_DISABLE);
     DataCopy(flags, input, DataCopyParams{uint16_t(blocks), 1U, 15U, 0U});
-}
-
-// Copy one logical output interval from the original packet, skipping Flag
-// blocks. Logical starts are 32B aligned; GM starts and final lengths may not be.
-__aicore__ inline void WriteServerDedupPayloadRange(GlobalTensor<uint8_t> output, LocalTensor<uint8_t> wire,
-                                                    uint32_t logical, uint32_t bytes)
-{
-    uint32_t written = 0U;
-    const uint32_t within = logical % 480U;
-    if (within != 0U && bytes != 0U) {
-        const uint32_t available = 480U - within;
-        const uint32_t head = bytes < available ? bytes : available;
-        DataCopyPad(output, wire[ServerDedupWireOffset(logical)], {1U, head, 0U, 0U, 0U});
-        logical += head;
-        bytes -= head;
-        written += head;
-    }
-    const uint32_t full = bytes / 480U;
-    if (full != 0U) {
-        DataCopyPad(output[written], wire[ServerDedupWireOffset(logical)], {uint16_t(full), 480U, 1U, 0U, 0U});
-        logical += full * 480U;
-        bytes -= full * 480U;
-        written += full * 480U;
-    }
-    if (bytes != 0U) DataCopyPad(output[written], wire[ServerDedupWireOffset(logical)], {1U, bytes, 0U, 0U, 0U});
 }
 
 // Snapshot the local role independently of the header that forwarding changes.

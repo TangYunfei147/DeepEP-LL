@@ -10,6 +10,7 @@
 #include "ep_memory_server_dedup_buffer_layout.h"
 #include "ep_memory_server_dedup_combine_config.h"
 #include "combine_server_dedup_partial.h"
+#include "combine_stage_wire.h"
 #include "combine_server_dedup_source_aggregate.h"
 #include "combine_server_dedup_select.h"
 
@@ -79,7 +80,7 @@ public:
         resultStride_ = blocks_ * 512U;
         window_ = (uint64_t(magic) % 2U) * DispatchDedup::kEpServerDedupWindowBytes;
         control_ = window_ + COMBINE_DEDUP_EP_SERVER_DEDUP_COMBINE_CONTROL_OFFSET;
-        stageStride_ = (uint64_t(h_) * 2U + 511U) / 512U * 512U;
+        stageStride_ = resultStride_;
         stageBase_ = window_ + COMBINE_DEDUP_EP_SERVER_DEDUP_SHARED_DATA_OFFSET + uint64_t(bs) * topK * resultStride_;
         expert_.SetGlobalBuffer(reinterpret_cast<__gm__ uint16_t*>(expertOut));
         table_.SetGlobalBuffer(reinterpret_cast<__gm__ int32_t*>(assistInfoForCombine));
@@ -220,6 +221,11 @@ private:
     __aicore__ inline void CopyLocalPendingTokens()
     {
         SelectRows(3);
+        // Result lanes have no users in this phase. Keep zero gaps in a source
+        // sized by packet blocks, not by the unrelated prepare-core row count.
+        auto stageZeros = resultUb_.ReinterpretCast<float>();
+        Duplicate<float>(stageZeros, 0.0f, blocks_ * 8U);
+        Sync<HardEvent::V_MTE3>();
         const uint32_t base = uint32_t(selected_) / coreNum_, extra = uint32_t(selected_) % coreNum_;
         const uint32_t count = base + (core_ < extra ? 1U : 0U);
         const uint32_t start = core_ * base + (core_ < extra ? core_ : extra);
@@ -235,7 +241,7 @@ private:
             DataCopyPad(payload, expert_[uint64_t(row) * h_], {1U, h_ * 2U, 0U, 0U, 0U}, {false, 0U, 0U, uint16_t(0)});
             SetFlag<HardEvent::MTE2_MTE3>(lane);
             WaitFlag<HardEvent::MTE2_MTE3>(lane);
-            DataCopyPad(stage_[uint64_t(slot) * stageStride_ / 2U], payload, {1U, h_ * 2U, 0U, 0U, 0U});
+            StoreStageWire(stage_[uint64_t(slot) * stageStride_ / 2U], payload, stageZeros, h_ * 2U);
             SetFlag<HardEvent::MTE3_MTE2>(lane);
         }
         // Also consumes seeded, unused lane events. All stage stores complete

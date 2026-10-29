@@ -16,7 +16,8 @@ namespace PacketReceiveLayout {
 constexpr uint32_t kMarkerOffset = 480U;
 constexpr float kCompact = 1.0f;
 constexpr float kKeepFlags = 1.5f;
-enum class State { Pending, Compact, KeepFlags };
+constexpr float kTaken = 1.25f;
+enum class State { Pending, Compact, KeepFlags, Taken };
 
 #if defined(__CCE__) && defined(__CCE_IS_AICORE__)
 __aicore__ inline
@@ -26,7 +27,7 @@ __aicore__ inline
 {
     return sum == float(blocks * 8U)
                ? State::Compact
-               : (sum == float(blocks * 8U) + (kKeepFlags - kCompact) ? State::KeepFlags : State::Pending);
+               : (sum == float(blocks * 8U) + (kKeepFlags - kCompact) ? State::KeepFlags : (sum == float(blocks * 8U) + 0.25f ? State::Taken : State::Pending));
 }
 }  // namespace PacketReceiveLayout
 }  // namespace DispatchDedup

@@ -8,15 +8,9 @@
 #include "ll_core_config.h"
 #include "dispatch_dedup_types.h"
 
-// Count participation threshold is independent of the runtime send/receive split.
-#ifndef DISPATCH_SERVER_DEDUP_ALL_CORE_COUNT_BS_THRESHOLD
-#define DISPATCH_SERVER_DEDUP_ALL_CORE_COUNT_BS_THRESHOLD 512U
-#endif
 #include "ep_memory_server_dedup_mode.h"
 
 namespace DispatchDedup {
-// BS below this threshold uses all launched cores for Count; otherwise only receivers.
-constexpr uint32_t kEpServerDedupAllCoreCountBsThreshold = DISPATCH_SERVER_DEDUP_ALL_CORE_COUNT_BS_THRESHOLD;
 constexpr uint32_t kEpServerDedupMaxExperts = 1024U;
 constexpr uint32_t kEpServerDedupCountRecordBytes = 32U;
 constexpr uint32_t kEpServerDedupCountGmStride = 512U;
@@ -50,7 +44,8 @@ struct EpServerDedupCountLayout {
     uint64_t cumsumOffset;
     uint64_t cumsumFlagOffset;
     uint64_t prefixOffset;  // One shared, read-only prefix begins here.
-    uint64_t prefixStride;  // Retained replica reservation: keep control offsets/capacity unchanged.
+    uint64_t prefixStride;  // One aligned shared prefix.
+    uint64_t outputInfoOffset, outputReadyOffset;
     uint64_t counterOffset;  // Retired counter: preserve its reserved layout, never read/write it.
     uint64_t stateBytes;
 };
@@ -67,16 +62,17 @@ DISPATCH_DEDUP_EP_DEDUP_INLINE uint64_t DispatchServerDedupWindowOffset(int64_t 
 DISPATCH_DEDUP_EP_DEDUP_INLINE EpServerDedupCountLayout DispatchServerDedupCountLayout(uint32_t experts, uint32_t coreNum = kLlDefaultPlanCoreNum)
 {
     EpServerDedupCountLayout layout{};
-    const uint32_t recvCores = coreNum / 2U;
+    const uint32_t recvCores = kLlMetadataCores;
     const uint64_t matrixBytes = uint64_t(recvCores) * recvCores * kEpServerDedupCountRecordBytes;
     layout.cntOffset = kEpServerDedupControlPrefixBytes;
     layout.cumsumOffset = uint64_t(experts) * kEpServerDedupCountGmStride;
     layout.prefixOffset = layout.cumsumOffset + matrixBytes;
     layout.prefixStride = (uint64_t(experts) * sizeof(int32_t) + 31U) / 32U * 32U;
-    // Only the first prefixStride is used. Retain the old reservation so this
-    // optimization does not move readiness controls or change the wire layout.
-    layout.cumsumFlagOffset = layout.prefixOffset + recvCores * layout.prefixStride;
-    const uint64_t bytes = layout.cntOffset + layout.cumsumFlagOffset + matrixBytes;
+    // Independent metadata consumers and output consumers have separate notices.
+    layout.cumsumFlagOffset = layout.prefixOffset + layout.prefixStride;
+    layout.outputInfoOffset = layout.cumsumFlagOffset + matrixBytes;
+    layout.outputReadyOffset = layout.outputInfoOffset + (MetadataSplitValid(coreNum) ? PayloadCores(coreNum) : 0U) * 32U;
+    const uint64_t bytes = layout.cntOffset + layout.outputReadyOffset + (MetadataSplitValid(coreNum) ? PayloadCores(coreNum) : 0U) * 32U;
     layout.counterOffset = (bytes + 1023U) / 1024U * 1024U;
     layout.stateBytes = layout.counterOffset + 1024U;
     return layout;

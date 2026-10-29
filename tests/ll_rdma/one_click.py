@@ -12,7 +12,7 @@ import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parents[2]
-BRANCH = "kernel/ll-ndr-ab-per-core-qp"
+BRANCH = "kernel/ll-ndr-metadata-cores"
 VISIBILITY = ("CUDA_VISIBLE_DEVICES", "ASCEND_RT_VISIBLE_DEVICES", "ASCEND_VISIBLE_DEVICES", "PROBE_VISIBLE_DEVICES")
 RANK_ENV = ("RANK", "WORLD_SIZE", "LOCAL_RANK", "LOCAL_WORLD_SIZE", "GROUP_RANK", "ROLE_RANK",
             "MASTER_ADDR", "MASTER_PORT", "DEEPEP_SHMEM_ENDPOINT")
@@ -123,6 +123,10 @@ def validate_test_arguments(a):
 
 def child_environment(a):
     env = dict(os.environ)
+    raw = env.get('DEEPEP_LL_METADATA_CORES', '4')
+    if not re.fullmatch(r'[1-9][0-9]*', raw) or not 2 <= int(raw) <= 70 or int(raw) % 2:
+        raise ValueError('DEEPEP_LL_METADATA_CORES must be even in [2,70]')
+    env['DEEPEP_LL_METADATA_CORES'] = str(int(raw))
     for key in (*RANK_ENV, "SHMEM_ROOT", "CATLASS_ROOT", "DEEPEP_LL_RDMA",
                 "DEEPEP_LL_RANKS_PER_GROUP", "DEEPEP_LL_SEND_CORES", "DEEPEP_LL_RECV_CORES"):
         env.pop(key, None)
@@ -178,7 +182,12 @@ def installed_identity(a):
             info.get("shmem", {}).get("build") != sdk["build"]):
         raise RuntimeError("Installed wheel and current SHMEM SDK identity differ; rebuild the wheel")
     histogram = os.environ.get("DEEPEP_LL_COUNT_HISTOGRAM", "OFF") == "ON"
-    expected_protocol = 35 if histogram else 34
+    metadata = build_support.metadata_cores()
+    expected_protocol = 40000 + 2 * metadata + int(histogram)
+    if (getattr(native, "low_latency_dispatch_metadata_cores", None) != metadata
+            or info.get("ll_metadata_cores") != metadata
+            or native.low_latency_core_config()["active_aiv"] < metadata + 2):
+        raise RuntimeError("Metadata core count mismatch or no S/R cores remain; rebuild/check configuration")
     if (getattr(native, "low_latency_implementation", None) != "ndr-hns1825"
             or native.low_latency_core_protocol != expected_protocol
             or info.get("ll_count_histogram", False) != histogram):
@@ -214,9 +223,9 @@ def installed_identity(a):
     shared_args[shared_args.index("--node-rank") + 1] = "<node>"
     return {"schema": 1, "project_root": str(ROOT.resolve()), "git_revision": revision,
             "source_sha256": fingerprint, "sdk_revision": lock["revision"], "sdk_build": sdk["build"],
-            "core_protocol": expected_protocol, "count_histogram": histogram,
+            "core_protocol": expected_protocol, "count_histogram": histogram, "metadata_cores": metadata,
             "roce_qps_per_peer": native.low_latency_core_config()["active_aiv"], "timer_schema": 3, "reference_profile": reference,
-            "reference_profile_schema": 4 if reference else None, "mode": a.mode, "arguments": shared_args}
+            "reference_profile_schema": 5 if reference else None, "mode": a.mode, "arguments": shared_args}
 
 
 def peer_identity(identity):

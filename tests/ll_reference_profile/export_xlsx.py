@@ -143,7 +143,8 @@ def validate_selected(report, selected_saved, timer):
             if meta.get(key) != report.get(key):
                 raise ValueError('Selected metadata mismatch: ' + key)
         if (parsed['rank'] != rank or parsed['world_size'] != report['world_size'] or
-                parsed['active_aiv'] != report['active_aiv'] or parsed['num_tokens'] != report['num_tokens']):
+                parsed['active_aiv'] != report['active_aiv'] or parsed['num_tokens'] != report['num_tokens'] or
+                parsed['metadata_cores'] != report['metadata_cores']):
             raise ValueError('Selected raw identity mismatch')
         selected.append((saved, parsed))
     if seen != expected or len(iterations) != 1 or not iterations.issubset(set(report['iterations'])):
@@ -172,7 +173,7 @@ def packet_tables(selected_saved, timer, frequency):
                 sender.append([rank,c,d['remote_packets'],d['group_packets'],d['lanes'],d['second'] is not None,
                                *[second.get(k) for k in ('token','header_k','expert','peer','triggered_flush')],
                                d['intervals_interleave'],d['packet_order_interleaves'],d['batch_flushes'],d['deferred_packets'],second.get('deferred'),*[d['durations'].get(k) for k in metrics]])
-            else:
+            elif d['kind']=='receiver':
                 coverage.append([rank,c,d['total_tasks'],d['recorded_tasks'],d['truncated'],d['lanes'],
                                  d['export_ticks']*1e6/frequency if frequency is not None else d['export_ticks'],
                                  *[sum(e['packet_role']==role for e in d['entries']) for role in ('DIRECT','FIRST_HOP','TERMINAL')],
@@ -194,7 +195,7 @@ def receiver_batch_rows(selected_saved, timer, frequency):
         for core in parsed['cores']:
             detail=core['packet_detail']
             if detail['kind']!='receiver': continue
-            for batch in range(1,core['batch_count']+1):
+            for batch in range(1,detail['ready_batches']+1):
                 packets=sorted((e for e in detail['entries'] if e['ready_batch']==batch),key=lambda e:e['ready_order'])
                 rows.append([parsed['rank'],core['core'],batch,
                     None if detail['truncated'] else len(packets),len(packets),not detail['truncated'],
@@ -228,7 +229,7 @@ def export_workbook(output_path, report, selected_saved, timer):
     for key, value in sorted(report['config'].items()):
         summary.append([key, json.dumps(value, ensure_ascii=False)])
     summary += [['采样', json.dumps(report['sampling'], ensure_ascii=False)],
-                ['实际核数 / EP', report['active_aiv'], report['world_size']],
+                ['实际核数 / EP / metadata核', report['active_aiv'], report['world_size'], report['metadata_cores']],
                 ['身份字段', '逐核页保留global Rank和核号；省略实验组、服务器、本地卡及轮次列，run/case和选轮见本页。'],
                 ['阶段语义', '主阶段包含细分，不能相加；空白=未执行或无点，0=确有记录且耗时为0。']]
 
@@ -239,7 +240,7 @@ def export_workbook(output_path, report, selected_saved, timer):
                 by_core[record['core']][record['stage']] = record
             for core in parsed['cores']:
                 index = core['core']; rank = parsed['rank']
-                identity = [rank, index, '发送' if core['role'] == 'send' else '接收', core['task_count']]
+                identity = [rank, index, {'send':'发送','receive':'接收','metadata':'元数据'}[core['role']], core['task_count']]
                 words = [v for row in saved['raw'][index] for v in row]
                 yield identity, words, by_core[index], core
 
@@ -284,7 +285,7 @@ def export_workbook(output_path, report, selected_saved, timer):
         ['原始精度', '超过15位整数保存为文本', 'BO列起保留Python整数域作差得到的29项ticks；大时钟公式引用这些差值，避免Excel大数消减。'],
         ['核时钟', '仅同核相减', '不做跨rank绝对时钟对齐；不从嵌套阶段之和推算总时长。'],
         ['NDR边界', '参考阶段命名保留', '同名SendCnt包含当前NDR已有路由交换；payload提交可能包含RDMA post/quiet；不移植参考业务逻辑。'],
-        ['接收批次', '标量累计两段', '只对完整ready批次和加载消费区间累计，不对每次空扫描插点。'],
+        ['接收批次', '标量累计两段', '空扫描不重复读clock；等待区间跨交替扫描/prefix查询，至可接管、搬出或清理的批次；处理段单列。'],
     ]
 
     def raw_rows():
@@ -300,7 +301,7 @@ def export_workbook(output_path, report, selected_saved, timer):
         ['第2跨机包', '每个S核实际第2次跨机packet', '主q在SendPacket入口之前；调度另扣除成员q和前包提交区间。暂存至put前经过包含下一包准备，剩余等待另列。'],
         ['提交与退休', 'put返回不是远端消费完成', '第二包发送不含自动Flush quiet；批次quiet单列。跨机退休区间结束于末批quiet。'],
         ['交错区间', '同核首开始至末提交', '跨机与本组可能交错；整体区间可以包含另一类工作，不能相加或解释为纯链路传输时间。'],
-        ['R包顺序', '记录在UB，w21后导出', '发现顺序不是实际到达顺序；处理顺序按ConsumeLoaded入口。Terminal header_k为首跳返回k。'],
+        ['R包顺序', '搬出owner记录在UB，w21后导出', '发现顺序不是实际到达顺序；处理顺序为Move。转发owner独立，包中成员数不代表本核转发次数。Terminal header_k为首跳返回k。'],
         ['覆盖', '最多128个稳定任务，且仅用剩余UB', '不减少原lane；空间不足截断，包记录覆盖页标记。截断不能当作完整角色/转发计数。'],
         ['导出', 'w102→w103', '业务w21之前不做日志DMA；写出前总耗时w57包括此诊断导出。'],
     ]

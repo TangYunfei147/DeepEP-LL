@@ -69,7 +69,7 @@ def analyze(paths, frequency_hz=None, require_all_ranks=False):
     for path in sorted(map(Path, paths)):
         saved, parsed = read_sample(path, frequency_hz)
         meta = saved['metadata']
-        common = ([meta.get(k) for k in COMMON_KEYS], parsed['active_aiv'], parsed['frequency_hz'], parsed['num_tokens'])
+        common = ([meta.get(k) for k in COMMON_KEYS], parsed['active_aiv'], parsed['frequency_hz'], parsed['num_tokens'], parsed['metadata_cores'])
         if identity is not None and common != identity:
             raise ValueError('Mixed configuration, source, case, route, sampling, or frequency')
         identity = common
@@ -88,7 +88,7 @@ def analyze(paths, frequency_hz=None, require_all_ranks=False):
             stage_groups.setdefault(key, []).append(row['total_us'] if unit == 'us' else row['total_ticks'])
     if identity is None:
         raise ValueError('No reference samples')
-    common, active, frequency, tokens = identity
+    common, active, frequency, tokens, metadata_cores = identity
     result = dict(zip(COMMON_KEYS, common))
     world = result['world_size']
     present = set(ranks)
@@ -103,7 +103,7 @@ def analyze(paths, frequency_hz=None, require_all_ranks=False):
     if iterations != set(range(declared)) or any(values != iterations for values in ranks.values()):
         raise ValueError('Missing or misaligned diagnostic iterations')
     result.update(format=timer.FORMAT, schema=timer.SCHEMA, operation='dispatch',
-                  active_aiv=active, frequency_hz=frequency, num_tokens=tokens, unit=unit,
+                  active_aiv=active, metadata_cores=metadata_cores, frequency_hz=frequency, num_tokens=tokens, unit=unit,
                   boundary_mode='reference', analyzed_ranks=sorted(present),
                   missing_remote_ranks=sorted(set(range(world))-present),
                   analysis_scope='all_ranks' if present == set(range(world)) else 'local_rank_subset',
@@ -122,7 +122,7 @@ def compact_report(report, selected_iteration):
     unit = report['unit']
     lines = ['# LL dispatch 参考打点', '',
              f"run={report['run_id']}；case={report['case_id']}；route={report.get('route')}。",
-             f"EP={report['world_size']}；AIV={report['active_aiv']}；频率={report['frequency_hz']} Hz；单位={unit}。",
+             f"EP={report['world_size']}；AIV={report['active_aiv']}；metadata={report['metadata_cores']}；频率={report['frequency_hz']} Hz；单位={unit}。",
              f"范围={report['analysis_scope']}；global ranks={report['analyzed_ranks']}；全部轮次={report['iterations']}；逐核表选轮={selected_iteration}（从0开始）。", '',
              '每rank每轮取最长单核w21-w0再统计。包含区间内打点指令，不含末尾诊断身份发布/cache写回，不能代替OFF profiler性能。细分包含于主阶段，不能相加；缺失不补零。', '',
              '| Rank | 轮数 | mean | p50 | min | max |', '|---|---|---|---|---|---|']

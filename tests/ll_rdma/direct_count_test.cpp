@@ -84,7 +84,7 @@ int main() {
     assert(DispatchServerDedupCountSendUbBytes(1,1024,72,33)==2624);
     assert(DispatchServerDedupCountSendUbBytes(12033,1024,72,33)==
            DispatchServerDedupCountSendUbBytes(12033,1024,72));
-    assert(BuildDispatchServerDedupLayout(32,415,256,29,1024,&layout,false,72)==0);
+    assert(BuildDispatchServerDedupLayout(32,415,256,29,1024,&layout,false,72)!=0);
     // Check the guide's concrete E1024/H3584/K8/capacity256 FP8+BF16 case
     // against real Host allocation/UB rules at the target 56-core setting.
     for(unsigned world: {16U,32U,64U,128U,256U}) {

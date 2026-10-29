@@ -172,25 +172,27 @@ def test_installed_check_rejects_stale_or_mixed_builds(tmp_path, monkeypatch, mo
     info = {"source_sha256": "source", "shmem": {"revision": "sdk", "build": dict(sdk["build"])},
             "ll_stage_timer": mode == "timer", "ll_reference_profile": (mode == "reference") != (fault == "reference_metadata")}
     if fault == "source": info["source_sha256"] = "old"
+    info['ll_metadata_cores'] = 4
     info['ll_count_histogram'] = histogram != (fault == 'histogram')
     if fault == "sdk": info["shmem"]["revision"] = "old"
     if fault == "firmware": info["shmem"]["build"]["hns_1825_pi_on_chip"] = 1
     (package / "_build_info.json").write_text(json.dumps(info))
     native = SimpleNamespace(
         low_latency_implementation="wrong" if fault == "branch" else "ndr-hns1825",
-        low_latency_core_protocol=11 if fault == "protocol" else (35 if histogram else 34), low_latency_rdma_enabled=True,
+        low_latency_core_protocol=11 if fault == "protocol" else (40009 if histogram else 40008), low_latency_rdma_enabled=True,
+        low_latency_dispatch_metadata_cores=4,
         low_latency_core_config=lambda: {"active_aiv": 56},
         low_latency_roce_qps_per_peer=4 if fault == "qps" else 0,
         low_latency_stage_timer_enabled=(mode == "timer") != (fault == "timer"),
         low_latency_reference_profile_enabled=(mode == "reference") != (fault == "reference"),
-        low_latency_reference_profile_layout=lambda: dict(schema=4, slots=80, fields=8,
+        low_latency_reference_profile_layout=lambda: dict(schema=5, slots=80, fields=8,
                 words=list(WORDS)),
         low_latency_ranks_per_group=lambda world: (99 if fault == "group" else (4 if world <= 16 else 16)),
         low_latency_stage_timer_layout=lambda: {"schema": 3},
         shmem_library_path=lambda: str(root / ("wrong.so" if fault == "library" else "third-party/shmem/install/shmem/lib/libshmem.so")))
     monkeypatch.setattr(launch, "ROOT", root)
     monkeypatch.setitem(sys.modules, "build_support", SimpleNamespace(
-        validate_shmem_sdk=lambda *args: sdk, source_fingerprint=lambda: "source"))
+        validate_shmem_sdk=lambda *args: sdk, source_fingerprint=lambda: "source", metadata_cores=lambda: 4))
     monkeypatch.setitem(sys.modules, "deep_ep._native", SimpleNamespace(require_native=lambda _: native))
     monkeypatch.setattr(launch.runpy, "run_path", lambda _: {"_import_installed_deep_ep":
         lambda: SimpleNamespace(__file__=str(package / "__init__.py"))})

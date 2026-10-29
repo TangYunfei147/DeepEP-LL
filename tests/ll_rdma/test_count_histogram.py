@@ -54,7 +54,7 @@ void Histograms(RegTensor<U>& out,RegTensor<T>& in,MaskReg mask){
 #include "kernels/dispatch/low_latency/device/ll_count_histogram.h"
 #include "kernels/dispatch/low_latency/common/ll_core_config.h"
 int main(){
- static_assert(DispatchDedup::kLlCoreProtocolVersion==35);
+ static_assert(DispatchDedup::kLlCoreProtocolVersion==40009);
  std::mt19937 rng(29029);unsigned cases=0;
  for(unsigned world:{32U,64U,128U,256U})for(unsigned experts:{world,1024U})
  for(unsigned rank:{0U,world/2,world-1})for(unsigned n:{1U,7U,8U,63U,64U,65U,256U,2048U,8192U,12160U})
