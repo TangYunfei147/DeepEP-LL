@@ -1,3 +1,5 @@
+> 本独立分支采用B<C−1时S=B、R=C−B的dispatch实验，通信协议25，reference schema3以w62/w63记录实际分工；combine仍1:1。当前说明见 [SMALL_BS_CORE_SPLIT.md](../ll_rdma/SMALL_BS_CORE_SPLIT.md)，覆盖下方历史固定1:1及schema2角色说明。
+
 > 当前reference schema2新增包诊断，完整边界、覆盖规则及命令见 [PACKET_TRACE.md](../ll_rdma/PACKET_TRACE.md)。旧schema1结果请用旧提交解析，不混装。
 
 # LL dispatch 参考式逐核打点与 Excel

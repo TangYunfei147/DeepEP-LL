@@ -26,7 +26,7 @@ def receiver_raw():
     w[96:102]=[2,2,2,2,2,2];w[107]=0
     # Both found in batch1, scan finds j0 then j1, consumption runs reverse.
     # Position1 decodes source1 with B1/localExperts1/rank0.
-    for j,fields in enumerate(([1,1,2,0,0,0,1,0],[2,1,1,1,0,0,2|(3<<8),1])):
+    for j,fields in enumerate(([1,1,2,0,0,0,1,0],[2,1,1,1,0,0,2|(3<<8),128])):
         w[128+j*4:132+j*4]=[fields[i]|(fields[i+1]<<32) for i in range(0,8,2)]
     saved['raw'][c]=[w[i:i+8] for i in range(0,timer.WORD_COUNT,8)]
     return saved

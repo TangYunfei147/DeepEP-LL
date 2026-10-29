@@ -38,14 +38,15 @@ public:
         epWorldSize_ = args_->rankSize;
         aivId_ = GetBlockIdx();
         coreNum_ = GetBlockNum();
-        aivUsedAllToAll_ = aivUsedCumSum_ = coreNum_ / 2U;
+        aivUsedAllToAll_ = LlDispatchSendCores(coreNum_, bs);
+        aivUsedCumSum_ = LlDispatchRecvCores(coreNum_, bs);
         axisBS_ = bs;
         axisK_ = topK;
         expertIdsCnt_ = bs * topK;
         rscvStatusNum_ = experts;
         moeExpertNumPerRank_ = experts / epWorldSize_;
         expertTokenNumsType_ = expertTokenNumsType;
-        useAllCoreCount_ = bs < kEpServerDedupAllCoreCountBsThreshold;
+        useAllCoreCount_ = !LlSmallBsCoreSplit(coreNum_, bs) && bs < kEpServerDedupAllCoreCountBsThreshold;
         packedFrames_ = LlTransport::Rdma(args_) && epWorldSize_ > 16U;
         pairedRoutes_ = LlTransport::Rdma(args_) && epWorldSize_ == 32U &&
                         expertIdsCnt_ <= kRouteExchangeMaxBytes / sizeof(int32_t);

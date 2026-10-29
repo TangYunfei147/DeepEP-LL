@@ -35,14 +35,14 @@ public:
         args_ = args;
 
         coreNum_ = GetBlockNum();
-        recvCoreNum_ = coreNum_ / 2U;
+        recvCoreNum_ = LlDispatchRecvCores(coreNum_, bs);
         pipe_ = pipe;
         enableDedup_ = enableDedup;
         bs_ = bs;
         k_ = k;
         experts_ = experts;
         localExperts_ = experts / uint32_t(args_->rankSize);
-        receiver_ = GetBlockIdx() - recvCoreNum_;
+        receiver_ = GetBlockIdx() - LlDispatchSendCores(coreNum_, bs);
         hiddenBytes_ = WireFp8 ? h : h * uint32_t(sizeof(XType));
         data_ = DispatchServerDedupDataLayout(bs, h, k, experts, InputMode);
         windowOffset_ = DispatchServerDedupWindowOffset(magic);

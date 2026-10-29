@@ -41,7 +41,7 @@ public:
                                 bool enableDedup = true, uint32_t coreNum = 0U)
     {
         args_ = args;
-        sendCores_ = (coreNum == 0U ? GetBlockNum() : coreNum) / 2U;
+        sendCores_ = LlDispatchSendCores(coreNum == 0U ? GetBlockNum() : coreNum, bs);
         pipe_ = pipe;
         enableDedup_ = enableDedup;
         fullMeshFirstHop_ = Group == 16U && args->rankSize == 32 && LlTransport::Rdma(args);

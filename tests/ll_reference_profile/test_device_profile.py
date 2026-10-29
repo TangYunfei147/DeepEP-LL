@@ -66,7 +66,7 @@ def test_record_is_core_local_exact_and_off_has_no_device_work(tmp_path, enabled
 #include <cstring>
 using namespace LlReferenceProfile;
 int main() {
-    static_assert(kSchema == 2 && kWordsPerCore == 640 && kSlots == 80 && kFields == 8);
+    static_assert(kSchema == 3 && kWordsPerCore == 640 && kSlots == 80 && kFields == 8);
     static_assert(kWordsPerCore * sizeof(uint64_t) == 5120);
     constexpr uint64_t guard = 0x55aaccff12345678ULL;
     alignas(512) uint64_t raw[74 * kWordsPerCore];
@@ -101,7 +101,7 @@ int main() {
             assert(row[58] == mask && row[32] == 0 && row[33] == 0);
             assert(row[50]==31 && row[51]==core && row[52]==64 && row[53]==cores && row[54]==1);
             assert(row[55]==kSchema && row[56]==1 && row[59]==kMagic && row[60]==1 && row[61]==1);
-            assert(row[22]==0 && row[23]==0 && row[44]==0 && row[49]==0 && row[62]==0 && row[63]==0);
+            assert(row[22]==0 && row[23]==0 && row[44]==0 && row[49]==0 && row[62]==1 && row[63]==cores-1);
             assert(flushedAddress == reinterpret_cast<uint8_t*>(row) && flushedLength == 1023);
             // A helper with inclusive end must flush only this core's eight
             // 64B cachelines, not the following core or the trailing guard.

@@ -6,6 +6,7 @@
 
 #include "comm_args.h"
 #include "ll_core_config.h"
+#include "ll_dispatch_core_split.h"
 #include "dispatch_dedup_types.h"
 
 // Count participation threshold is independent of the runtime send/receive split.
@@ -15,7 +16,7 @@
 #include "ep_memory_server_dedup_mode.h"
 
 namespace DispatchDedup {
-// BS below this threshold uses all launched cores for Count; otherwise only receivers.
+// Outside the small-B split, preserve the original all-core Count threshold.
 constexpr uint32_t kEpServerDedupAllCoreCountBsThreshold = DISPATCH_SERVER_DEDUP_ALL_CORE_COUNT_BS_THRESHOLD;
 constexpr uint32_t kEpServerDedupMaxExperts = 1024U;
 constexpr uint32_t kEpServerDedupCountRecordBytes = 32U;
@@ -43,6 +44,11 @@ constexpr uint64_t kEpServerDedupWindowUsableBytes =
 #define DISPATCH_DEDUP_EP_DEDUP_INLINE inline
 #endif
 
+// Worst case (E=1024, AIV=72) including alignment stays below combine's 1MiB controls.
+static_assert(kEpServerDedupControlPrefixBytes + uint64_t(kEpServerDedupMaxExperts) * (544U + 4U) +
+              2ULL * (kLlMaxCoreNum - 1U) * (kLlMaxCoreNum - 1U) * 32U + 2048U < 1024U * 1024U,
+              "dynamic dispatch count controls overlap combine controls");
+
 // Matrix offsets are relative to cntOffset; cntOffset, counterOffset and
 // stateBytes are relative to the selected window. Leading padding is retained.
 struct EpServerDedupCountLayout {
@@ -50,13 +56,14 @@ struct EpServerDedupCountLayout {
     uint64_t cumsumOffset;
     uint64_t cumsumFlagOffset;
     uint64_t prefixOffset;  // One shared, read-only prefix begins here.
-    uint64_t prefixStride;  // Retained replica reservation: keep control offsets/capacity unchanged.
+    uint64_t prefixStride;  // One shared prefix, independent of the current B split.
     uint64_t counterOffset;  // Retired counter: preserve its reserved layout, never read/write it.
     uint64_t stateBytes;
 };
 
-// Keep each rank's core split fixed for the communicator lifetime: prefix storage is not
-// cleared and can overlap another split's control flags. All ranks must use the
+// Keep experts and total AIV count fixed for the communicator lifetime. The
+// reservation is independent of the B-dependent split; prefix never aliases
+// a sum/ready matrix when B changes. All ranks must use the
 // same communicator call order and serialize its kernels
 // on one stream. Count publication (including zeros) protects two-call reuse.
 DISPATCH_DEDUP_EP_DEDUP_INLINE uint64_t DispatchServerDedupWindowOffset(int64_t magic)
@@ -67,15 +74,15 @@ DISPATCH_DEDUP_EP_DEDUP_INLINE uint64_t DispatchServerDedupWindowOffset(int64_t 
 DISPATCH_DEDUP_EP_DEDUP_INLINE EpServerDedupCountLayout DispatchServerDedupCountLayout(uint32_t experts, uint32_t coreNum = kLlDefaultPlanCoreNum)
 {
     EpServerDedupCountLayout layout{};
-    const uint32_t recvCores = coreNum / 2U;
+    const uint32_t recvCores = coreNum - 1U; // fixed reservation across B-dependent splits
     const uint64_t matrixBytes = uint64_t(recvCores) * recvCores * kEpServerDedupCountRecordBytes;
     layout.cntOffset = kEpServerDedupControlPrefixBytes;
-    layout.cumsumOffset = uint64_t(experts) * kEpServerDedupCountGmStride;
+    layout.cumsumOffset = uint64_t(experts) * (kEpServerDedupCountGmStride + 32U);
     layout.prefixOffset = layout.cumsumOffset + matrixBytes;
     layout.prefixStride = (uint64_t(experts) * sizeof(int32_t) + 31U) / 32U * 32U;
-    // Only the first prefixStride is used. Retain the old reservation so this
-    // optimization does not move readiness controls or change the wire layout.
-    layout.cumsumFlagOffset = layout.prefixOffset + recvCores * layout.prefixStride;
+    // One shared prefix. Reserve both matrices for the maximum possible R
+    // count, without unused prefix replicas, to stay below combine controls.
+    layout.cumsumFlagOffset = layout.prefixOffset + layout.prefixStride;
     const uint64_t bytes = layout.cntOffset + layout.cumsumFlagOffset + matrixBytes;
     layout.counterOffset = (bytes + 1023U) / 1024U * 1024U;
     layout.stateBytes = layout.counterOffset + 1024U;

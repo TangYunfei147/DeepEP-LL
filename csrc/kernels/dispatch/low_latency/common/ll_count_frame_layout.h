@@ -2,8 +2,9 @@
 #include <cstdint>
 
 namespace DispatchDedup {
-// Same E*512B reservation, physical source-major frames; logical prefixes stay
-// expert-major. One frame is the intersection of a count-core and target rank.
+// Preserve source-major body offsets; commits occupy a separate E*32B area
+// after E*512B bodies. Changing producer splits cannot turn an old body into
+// a new ready commit. One frame intersects a producer range and target rank.
 struct LlCountFrame {
     uint64_t recordOffset, commitOffset, frameOffset;
     uint32_t firstExpert, records;
@@ -26,6 +27,6 @@ LlCountFrame CountFrame(uint32_t experts, uint32_t world, uint32_t countCores,
     const uint32_t last = end < (destination + 1U) * local ? end - destination * local : local;
     const uint64_t frame = (uint64_t(source) * local + first) * 512U;
     return {frame + uint64_t(localExpert - first) * 32U,
-            frame + uint64_t(last - first) * 512U - 32U, frame, first, last - first};
+            uint64_t(experts) * 512U + (uint64_t(source) * local + first) * 32U, frame, first, last - first};
 }
 }

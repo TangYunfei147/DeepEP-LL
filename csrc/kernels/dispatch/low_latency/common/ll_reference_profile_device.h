@@ -1,6 +1,7 @@
 #pragma once
 #include "kernel_operator.h"
 #include "ll_reference_profile_layout.h"
+#include "ll_dispatch_core_split.h"
 #ifdef DEEPEP_LL_REFERENCE_PROFILE
 #include "shmem.h"
 #endif
@@ -126,6 +127,8 @@ public:
         record_[58] = valid_;                       // w58: valid_mask, absent != zero
         record_[59] = kMagic;                       // w59: magic
         record_[60] = 1U;                           // w60: boundary_mode, observe
+        record_[62] = DispatchDedup::LlDispatchSendCores(AscendC::GetBlockNum(), bs);
+        record_[63] = DispatchDedup::LlDispatchRecvCores(AscendC::GetBlockNum(), bs);
         record_[61] = 1U;                           // w61: complete
         // Python supplies a fresh zeroed tensor; reserved/absent words remain
         // zero. Publish Scalar header/meta after business finish and log DMA.

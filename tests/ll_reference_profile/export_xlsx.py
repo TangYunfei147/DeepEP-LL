@@ -208,6 +208,7 @@ def export_workbook(output_path, report, selected_saved, timer):
         summary.append([key, json.dumps(value, ensure_ascii=False)])
     summary += [['采样', json.dumps(report['sampling'], ensure_ascii=False)],
                 ['实际核数 / EP', report['active_aiv'], report['world_size']],
+                ['dispatch S / R', selected[0][1]['send_cores'], selected[0][1]['recv_cores']],
                 ['身份字段', '逐核页保留global Rank和核号；省略实验组、服务器、本地卡及轮次列，run/case和选轮见本页。'],
                 ['阶段语义', '主阶段包含细分，不能相加；空白=未执行或无点，0=确有记录且耗时为0。']]
 

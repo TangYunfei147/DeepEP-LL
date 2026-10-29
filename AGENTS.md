@@ -1,3 +1,5 @@
+> 本独立分支采用B<C−1时S=B、R=C−B的dispatch实验，通信协议25，reference schema3以w62/w63记录实际分工；combine仍1:1。当前说明见 [SMALL_BS_CORE_SPLIT.md](tests/ll_rdma/SMALL_BS_CORE_SPLIT.md)，覆盖下方历史固定1:1及schema2角色说明。
+
 ## 包级reference诊断（2026-10-28）
 
 用户要求：主q排除于调度，S核只细分第二跨机packet并记录跨机/本组提交整体区间与原batch quiet；R核记录成功就绪和实际消费的稳定任务身份/顺序，在UB保存、本核w21后一次DMA导出。schema2每核5120B；R日志只取原lane后的剩余UB，最多128条，必须显式标记截断，不减少lane，不逐包加clock或新增业务屏障。当前通信协议24不变、SDK不改；OFF不含包诊断。交错区间不相加，put不是完成，quiet不是接收消费；w57包含导出，ON完整task扰动须另测。详见tests/ll_rdma/PACKET_TRACE.md。

@@ -17,7 +17,7 @@ int main() {
             auto f=DispatchDedup::CountFrame(experts,world,countCores,dst,src,e);
             assert(f.records>0 && f.firstExpert<=e && e<f.firstExpert+f.records);
             assert(f.recordOffset>=f.frameOffset && f.recordOffset+32<=f.commitOffset);
-            assert(f.commitOffset+32<=uint64_t(experts)*512);
+            assert(f.commitOffset>=uint64_t(experts)*512 && f.commitOffset+32<=uint64_t(experts)*544);
             assert(records.insert(f.recordOffset).second);
             unsigned global=dst*local+e;
             unsigned owner=0,start=0,end=0;

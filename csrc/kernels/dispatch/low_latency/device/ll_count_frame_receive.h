@@ -13,7 +13,7 @@ __aicore__ inline void ReadCountFrames(AscendC::LocalTensor<float> snapshot,
     for (uint32_t i = 0; i < plan.size; ++i) {
         const auto& run = plan.runs[i];
         const uint64_t offset = body ? run.recordOffset : run.commitOffset;
-        const AscendC::DataCopyParams copy{uint16_t(run.records), 1U, uint16_t(plan.sourceStrideBlocks), 0U};
+        const AscendC::DataCopyParams copy{uint16_t(run.records), 1U, uint16_t(body ? plan.sourceStrideBlocks : plan.commitSourceStrideBlocks), 0U};
         AscendC::DataCopy(snapshot[run.first * 8U], state[offset / sizeof(float)], copy);
     }
 }

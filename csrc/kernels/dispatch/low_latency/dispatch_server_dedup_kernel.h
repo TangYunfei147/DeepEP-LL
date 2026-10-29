@@ -26,7 +26,7 @@ public:
         profile_ = profile;
         args_ = reinterpret_cast<const __gm__ DispatchDedup::CommArgs*>(commArgs);
         core_ = GetBlockIdx();
-        sendCores_ = GetBlockNum() / 2U;
+        sendCores_ = LlDispatchSendCores(GetBlockNum(), bs);
         pipe_ = pipe;
 
         if (profile_) profile_->Mark<2>();  // w2: magic_begin

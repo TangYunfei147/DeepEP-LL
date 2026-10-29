@@ -215,12 +215,12 @@ int main() {
     for(uint32_t cores: {16U,28U,56U,72U}) for(uint32_t experts: {32U,64U,384U,1024U}) {
         const uint32_t receivers=cores/2U,active=std::min(receivers,experts);
         const auto layout=DispatchServerDedupCountLayout(experts,cores);
-        const uint64_t matrix=uint64_t(receivers)*receivers*32U;
+        const uint64_t matrix=uint64_t(cores-1)*(cores-1)*32U;
         // Capacity and every control offset remain bit-for-bit compatible.
-        assert(layout.cumsumOffset==uint64_t(experts)*512U);
+        assert(layout.cumsumOffset==uint64_t(experts)*544U);
         assert(layout.prefixOffset==layout.cumsumOffset+matrix);
         assert(layout.prefixStride==(uint64_t(experts)*4U+31U)/32U*32U);
-        assert(layout.cumsumFlagOffset==layout.prefixOffset+receivers*layout.prefixStride);
+        assert(layout.cumsumFlagOffset==layout.prefixOffset+layout.prefixStride);
         const uint64_t oldBytes=layout.cntOffset+layout.cumsumFlagOffset+matrix;
         assert(layout.counterOffset==(oldBytes+1023U)/1024U*1024U);
         assert(layout.stateBytes==layout.counterOffset+1024U);

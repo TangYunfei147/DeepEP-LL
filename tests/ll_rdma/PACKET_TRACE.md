@@ -1,3 +1,5 @@
+> 本独立分支采用B<C−1时S=B、R=C−B的dispatch实验，通信协议25，reference schema3以w62/w63记录实际分工；combine仍1:1。当前说明见 [SMALL_BS_CORE_SPLIT.md](SMALL_BS_CORE_SPLIT.md)，覆盖下方历史固定1:1及schema2角色说明。
+
 # Reference schema2：S核第二跨机包与R核包顺序
 
 2026-10-28，当前kernel/ll-ndr-ab-per-core-qp。通信协议仍24，诊断schema从1升级为2；全rank更新完整wheel。只在DEEPEP_LL_REFERENCE_PROFILE=ON且当前capture有记录地址时记录；OFF的发送调度、q算法、QP、UB/lane布局和通信协议不改。SDK不改。

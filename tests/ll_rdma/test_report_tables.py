@@ -33,7 +33,7 @@ def test_reference_two_cases_retargets_formula_and_preserves_precision(tmp_path)
         assert z.testzip() is None
         sheets = ET.fromstring(z.read('xl/workbook.xml')).findall('m:sheets/m:sheet', NS)
         names = [s.attrib['name'] for s in sheets]
-        assert len(names) == 15 and len(set(names)) == 15
+        assert len(names) == 23 and len(set(names)) == 23
         assert 'C001_逐核耗时' in names and 'C002_全部轮次明细' in names
         detail = z.read('xl/worksheets/sheet3.xml').decode()
         assert "'C001_原始Cycle'!" in detail and "'原始Cycle'!" not in detail

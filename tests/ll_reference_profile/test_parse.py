@@ -21,15 +21,16 @@ timer = load('reference_parser_test', ROOT/'deep_ep/utils/ll_reference_profile_p
 analyzer = load('reference_analyzer_test', Path(__file__).with_name('analyze.py'))
 
 
-def sample(rank=0, iteration=0, cores=16, world=16, frequency=1e9, offset=10**17):
+def sample(rank=0, iteration=0, cores=16, world=16, frequency=1e9, offset=10**17, bs=128):
     raw = []
     scale = iteration + 1
+    send = bs if bs < cores-1 else cores//2
     for core in range(cores):
         base = offset + rank*10000 + core*1000
         points = {0:0, 1:10, 2:12, 3:20, 4:30, 5:40, 6:41, 7:100,
                   20:170, 21:180, 57:181}
         counts = {}
-        if core < cores//2:
+        if core < send:
             points.update({8:101, 9:160})
             counts[43] = int(core == 0)
             if counts[43]:
@@ -47,20 +48,21 @@ def sample(rank=0, iteration=0, cores=16, world=16, frequency=1e9, offset=10**17
             words[index] = base + value*scale
         for index, value in counts.items():
             words[index] = value
-        words[50:57] = [rank, core, world, cores, 1, timer.SCHEMA, 1]
+        words[50:57] = [rank, core, world, cores, bs, timer.SCHEMA, 1]
         words[58] = sum(1 << index for index in (*points, *counts))
         words[59:62] = [timer.MAGIC, 1, 1]
+        words[62:64] = [send, cores-send]
         words[64] = 1
-        if core >= cores//2:
+        if core >= send:
             total=counts[37]
             words[96:108] = [0,0,total,total,total,1 if total else 0,
-                             words[21],words[21],0,1,1,int(total>0)]
+                             words[21],words[21],0,bs,1,int(total>0)]
         raw.append([words[n:n+8] for n in range(0,timer.WORD_COUNT,8)])
     return dict(format=timer.FORMAT, raw=raw, operation='dispatch', frequency_hz=frequency,
                 metadata=dict(rank=rank, world_size=world, iteration=iteration, correctness='passed',
                               run_id='synthetic-only', case_id=0, route='normal', seed=7,
                               profile_seed=7, route_sha256='1'*64,
-                              config=dict(num_tokens=1, hidden=3584, dtype='fp8'),
+                              config=dict(num_tokens=bs, hidden=3584, dtype='fp8'),
                               sampling=dict(diagnostic_iters=2),
                               comparison=dict(source_revision='test-source', source_dirty=False,
                                               installed_source_sha256='2'*64)))
@@ -137,7 +139,7 @@ def test_cpp_word_names_and_constants_match():
     source = (ROOT/'csrc/kernels/dispatch/low_latency/common/ll_reference_profile_layout.h').read_text()
     block = source.split('kNames[kWordsPerCore] = {',1)[1].split('};',1)[0]
     assert tuple(re.findall(r'"([^"]+)"', block)) == timer.WORDS
-    assert 'kSchema = 2U' in source and 'kMagic = 0x4c4c4350ULL' in source
+    assert 'kSchema = 3U' in source and 'kMagic = 0x4c4c4350ULL' in source
 
 
 @pytest.mark.parametrize('world', [16, 32, 64, 128, 256])

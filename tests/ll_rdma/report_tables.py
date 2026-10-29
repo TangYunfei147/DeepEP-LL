@@ -32,7 +32,7 @@ def wide_records(selected, timer, frequency):
             by_core[record['core']][record['stage']] = record
         for core, records in by_core.items():
             identity = [saved['operation'], rank, rank//16, rank%16, core,
-                        'send' if core < parsed['active_aiv']//2 else 'receive', iteration,
+                        'send' if core < parsed.get('send_cores', parsed['active_aiv']//2) else 'receive', iteration,
                         'us' if frequency is not None else 'ticks']
             rows.append(identity + [records[s].get('total_us', records[s]['total_ticks']) if s in records else None for s in stages])
             calls.append(identity[:7] + ['calls'] + [records[s]['calls'] if s in records else None for s in stages])
