@@ -1,3 +1,5 @@
+> 当前协议27：EP32源卡按物理核0..15分别计算一张跨机目标卡的count，一帧SO直发；删除配对路由交换及远端源count的机内转发。仍保留原payload一包流水、每核QP和reference schema4。详见 [DIRECT_RANK_COUNTS.md](DIRECT_RANK_COUNTS.md)。下方协议26及更早描述仅作历史说明。
+
 > 当前为一包深度暂存/put流水，实现身份26、reference schema4；复用原lane，单lane立即提交。S表区分暂存经过、延后间隔、剩余等待及前包提交，不改packet所属核/顺序。详见 [ONE_PACKET_PIPELINE.md](ONE_PACKET_PIPELINE.md)；覆盖下方旧立即提交及schema2说明。
 
 > 当前reference为schema2，增加S核第二跨机包时序及R核UB包顺序日志；原核总耗时边界不变，写出前总耗时包含日志导出。详见 [PACKET_TRACE.md](PACKET_TRACE.md)。
@@ -28,7 +30,7 @@
 此NDR性能分支仅编译LL，跳过与当前SHMEM内部UDMA接口不匹配的HT路径；
 不会初始化CATLASS子模块。HT调用明确拒绝。
 
-当前通信实现为[协议14：路由SO与8QP](ROCE_SO_ROUTE_8QP.md)，全rank更新完整wheel，不能混装旧协议。
+当前通信实现为[协议27：源端直发count](DIRECT_RANK_COUNTS.md)，全rank更新完整wheel，不能混装旧协议。
 
 ## 使用
 

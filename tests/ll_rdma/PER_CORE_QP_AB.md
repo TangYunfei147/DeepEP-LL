@@ -1,3 +1,5 @@
+> 2026-10-29当前协议27：源端按跨机目标rank分核计数并直接发布，详见 [DIRECT_RANK_COUNTS.md](DIRECT_RANK_COUNTS.md)。本文原QP实验与版本号作为历史对照；每物理核QP仍保留。
+
 # 原始分片与每核QP基线（协议24）
 
 当前分支kernel/ll-ndr-ab-per-core-qp已按用户要求撤销所有8QP派生实现。原四条独立实验分支不改。

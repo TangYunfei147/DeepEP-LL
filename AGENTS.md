@@ -1,3 +1,10 @@
+## EP32源端直发count（2026-10-29，当前）
+
+- 用户要求参照main源端计数直达最终卡，跨机按一核一目标卡分工、减少Scalar。当前协议27，分支kernel/ll-ndr-ab-per-core-qp；对照d251739/协议26。
+- NDR EP32物理核0..15各统计一个跨机目标rank的全部专家，Vector EQ+GatherMask取数量，每专家只写最终count；同一WQE发送body+32B尾FLAG，每帧put+quiet。删除活跃配对路由交换/代算/远端源count机内分发。本机源count仍按原专家分片直接MTE发布；部分remote owner兼有本机任务。
+- 接收混合布局保留expert/source逻辑顺序、全部快照后清共享commit、零计数、双bank及combine_reuse；SDK/payload/q/权重/每核QP/原一包流水保持。跨机临时帧复用workBuf，SDK scratch复用已退休selected输出；Host峰值同步核算work容量，sender长期保留区仍只含原本机count，不因新帧缩减lane。
+- EP16/MTE及其他EP域保留原计数通信路径。CANN/设备性能未验证，不把CPU模型通过称为性能收益。全rank完整wheel升级，不混装。测试及复用证明见tests/ll_rdma/DIRECT_RANK_COUNTS.md。
+
 > 当前为一包深度暂存/put流水，实现身份26、reference schema4；复用原lane，单lane立即提交。S表区分暂存经过、延后间隔、剩余等待及前包提交，不改packet所属核/顺序。详见 [ONE_PACKET_PIPELINE.md](tests/ll_rdma/ONE_PACKET_PIPELINE.md)；覆盖下方旧立即提交及schema2说明。
 
 ## 包级reference诊断（2026-10-28）

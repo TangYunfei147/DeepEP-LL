@@ -5,21 +5,16 @@ import subprocess
 import pytest
 ROOT=Path(__file__).resolve().parents[2]
 
-def test_count_wiring_skips_empty_cores_and_retains_source_identity():
+# The paired-route primitive below remains a historical regression only;
+# protocol27 no longer includes or calls it from dispatch counts.
+def test_dispatch_no_longer_uses_paired_route_exchange():
     code=(ROOT/'csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_counts.h').read_text(encoding='utf-8')
-    send=code.split('void ServerDedupCounts::SendCnt()',1)[1].split('void ServerDedupCounts::CountByVectorRange',1)[0]
-    assert send.index('start=start<hostFirst?hostFirst:start') < send.index('statusCntAlign_ =')
-    empty=send.split('if (count == 0U && pairedRoutes_ && aivId_ != 0U)',1)[1].split('// 3.',1)[0]
-    assert 'return;' in empty and 'routeExchange_.' not in empty
-    assert (send.index('routeExchange_.PostFrame') < send.index('CountByVectorRange(start, end, maskBytes)')
-            < send.index('if (count) SendExpertCntRange(start, end)')
-            < send.index('routeExchange_.ReadPeer'))
-    assert 'publishingSource_=routeExchange_.Peer()' in send
-    assert send.index('routeExchange_.ReadPeer') < send.index('routeExchange_.FinishSend')
-    # Paired SendCnt clipped the whole expert range once, before both sources.
-    assert 'pairedRoutes_ && !LlTransport::SameHost(args_,dst)' not in code
-    assert 'start<hostEnd && end>hostFirst' not in send
-    assert 'stateOffset_ + frame.frameOffset' in code
+    assert 'll_route_exchange.h' not in code and 'routeExchange_' not in code
+    assert 'directRanks_ = LlTransport::Rdma(args_) && epWorldSize_ == 32U' in code
+    assert 'epRankId_, localExpert, directRanks_' in code
+    assert 'epRankId_, source, expert, directRanks_' in code
+    assert 'readPlan, directRanks_' in code
+
 
 def test_production_exchange_with_autonomous_network_and_delays(tmp_path):
     zig=os.environ.get('DEEPEP_TEST_ZIG')

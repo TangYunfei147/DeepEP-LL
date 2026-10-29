@@ -172,8 +172,8 @@ def installed_identity(a):
     if (info.get("shmem", {}).get("revision") != lock["revision"] or
             info.get("shmem", {}).get("build") != sdk["build"]):
         raise RuntimeError("Installed wheel and current SHMEM SDK identity differ; rebuild the wheel")
-    if getattr(native, "low_latency_implementation", None) != "ndr-hns1825" or native.low_latency_core_protocol != 26:
-        raise RuntimeError("Installed wheel is not the current NDR protocol-26 SO/per-physical-core-QP implementation")
+    if getattr(native, "low_latency_implementation", None) != "ndr-hns1825" or native.low_latency_core_protocol != 27:
+        raise RuntimeError("Installed wheel is not the current NDR protocol-27 direct-count/SO/per-physical-core-QP implementation")
     if not native.low_latency_rdma_enabled or bool(native.low_latency_stage_timer_enabled):
         raise RuntimeError("Installed RDMA/timer capability does not match the requested mode")
     if getattr(native, 'low_latency_roce_qps_per_peer', None) != 0:
@@ -203,7 +203,7 @@ def installed_identity(a):
     shared_args[shared_args.index("--node-rank") + 1] = "<node>"
     return {"schema": 1, "project_root": str(ROOT.resolve()), "git_revision": revision,
             "source_sha256": fingerprint, "sdk_revision": lock["revision"], "sdk_build": sdk["build"],
-            "core_protocol": 26, "roce_qps_per_peer": native.low_latency_core_config()["active_aiv"], "timer_schema": 3, "reference_profile": reference,
+            "core_protocol": 27, "roce_qps_per_peer": native.low_latency_core_config()["active_aiv"], "timer_schema": 3, "reference_profile": reference,
             "reference_profile_schema": 4 if reference else None, "mode": a.mode, "arguments": shared_args}
 
 

@@ -82,16 +82,20 @@ DISPATCH_DEDUP_EP_DEDUP_INLINE EpServerDedupCountLayout DispatchServerDedupCount
     return layout;
 }
 
-// Peak sendCnt allocation: four route-sized UB buffers plus count records/histogram.
+// Peak sendCnt allocation: three route buffers, work scratch (also the remote
+// frame), and local count records/histogram. Only local records remain reserved.
 // Sender/receive scratch overlays those four buffers and the histogram after
 // filtering; the records remain reserved until the asynchronous writes retire.
 DISPATCH_DEDUP_EP_DEDUP_INLINE uint64_t DispatchServerDedupCountSendUbBytes(uint64_t routes, uint32_t experts,
-                                                                            uint32_t countCores)
+                                                                            uint32_t countCores,
+                                                                            uint32_t remoteRecords = 0U)
 {
     const uint64_t routeBytes = (routes * sizeof(int32_t) + 255U) / 256U * 256U;
     const uint32_t records = (experts + countCores - 1U) / countCores;
     const uint32_t alignedRecords = (records + 7U) / 8U * 8U;
-    return 4U * routeBytes + uint64_t(alignedRecords) * (32U + sizeof(int32_t));
+    const uint64_t remoteBytes = uint64_t((remoteRecords + 7U) / 8U * 8U) * 32U;
+    const uint64_t workBytes = routeBytes < remoteBytes ? remoteBytes : routeBytes;
+    return 3U * routeBytes + workBytes + uint64_t(alignedRecords) * (32U + sizeof(int32_t));
 }
 
 #undef DISPATCH_DEDUP_EP_DEDUP_INLINE

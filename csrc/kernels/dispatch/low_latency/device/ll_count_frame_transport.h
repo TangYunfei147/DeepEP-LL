@@ -1,6 +1,20 @@
 #pragma once
 #include "ll_transport.h"
 namespace LlTransport {
+// Remote rank-owned counts only. records includes a fully initialized tail
+// record with ready=1, even when every expert count is zero. Quiet retires the
+// registered GM source and SDK scratch before this core computes local counts.
+__aicore__ inline void DirectCountFrame(const __gm__ Args* args, uint32_t peer,
+                                       uint64_t frameOffset, LocalTensor<uint8_t> records,
+                                       uint32_t count, LocalTensor<uint8_t> scratch) {
+    const uint32_t bytes = (count + 1U) * 32U;
+    Check(args, peer, frameOffset, bytes);
+    auto stage = Stage(args, bytes);
+    DataCopy(Tensor(stage,true), records, bytes);
+    Sync<HardEvent::MTE3_S>(7U);
+    Put(args,peer,Address(args,peer,frameOffset),stage,bytes,scratch);
+    Quiet(peer,scratch);
+}
 // One contiguous body plus one separate 32B commit. The receiver must not read
 // body ready/count words until it has acquired the frame commit.
 __aicore__ inline void CountFrame(const __gm__ Args* args, uint32_t peer,

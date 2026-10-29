@@ -3,8 +3,9 @@
 
 namespace DispatchDedup {
 // At most ceil(1024 / 8)=128 logical records per receiver and world>=32.
-// A partition can start mid-row, so at most five source-contiguous runs.
-constexpr uint32_t kLlCountReadMaxRuns = 5U;
+// EP32 direct counts change layout at each 16-source host boundary. A
+// 128-record partition starting mid-host needs at most nine contiguous runs.
+constexpr uint32_t kLlCountReadMaxRuns = 9U;
 struct LlCountReadRun {
     uint64_t recordOffset = 0, commitOffset = 0;
     uint32_t first = 0, records = 0; // first is relative to this receiver's UB
@@ -20,7 +21,8 @@ __aicore__ inline
 inline
 #endif
 bool BuildCountReadPlan(uint32_t experts, uint32_t world, uint32_t countCores,
-                       uint32_t destination, uint32_t first, uint32_t count, LlCountReadPlan& out)
+                       uint32_t destination, uint32_t first, uint32_t count, LlCountReadPlan& out,
+                       bool directRanks = false)
 {
     out.size = 0;
     if (world < 32U || world > 256U || experts < world || experts > 1024U || experts % world ||
@@ -31,9 +33,9 @@ bool BuildCountReadPlan(uint32_t experts, uint32_t world, uint32_t countCores,
         if (out.size == kLlCountReadMaxRuns) return false;
         const uint32_t logical = first + consumed;
         const uint32_t source = logical % world;
-        const uint32_t available = world - source;
+        const uint32_t available = directRanks ? 16U - source % 16U : world - source;
         const uint32_t length = count - consumed < available ? count - consumed : available;
-        const auto frame = CountFrame(experts, world, countCores, destination, source, logical / world);
+        const auto frame = CountFrame(experts, world, countCores, destination, source, logical / world, directRanks);
         out.runs[out.size++] = {frame.recordOffset, frame.commitOffset, consumed, length};
         consumed += length;
     }

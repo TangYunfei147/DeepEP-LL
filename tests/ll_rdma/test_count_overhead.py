@@ -42,14 +42,14 @@ def test_count_prefix_is_loaded_only_by_its_output_owner():
     assert receiver.index("ServerDedupReceiveSync<HardEvent::MTE2_S>()") < receiver.index("tasks_.Build(prefix")
 
 
-def test_paired_count_records_live_until_the_existing_reuse_barrier():
+def test_direct_count_records_live_until_the_existing_reuse_barrier():
     counts = _source("dispatch_server_dedup_counts.h")
     send = _block(counts, "void ServerDedupCounts::SendCnt()")
-    first = send.index("if (count) SendExpertCntRange(start, end)")
-    overwrite = send.index("routeExchange_.ReadPeer")
-    assert "SyncFunc<HardEvent::MTE3_S>();" in send[first:overwrite]
-    last = send.index("SendExpertCntRange(start,end)")
-    assert "SyncFunc<HardEvent::MTE3_S>();" not in send[last:]
+    assert "routeExchange_" not in counts
+    remote = _block(send, "if (remoteOwner)")
+    assert remote.index("CountRemoteRank(first,") < remote.index("LlTransport::DirectCountFrame")
+    assert remote.index("LlTransport::DirectCountFrame") < remote.index("SyncFunc<HardEvent::S_V>()")
+    assert send.index("LlTransport::DirectCountFrame") < send.index("CountByVectorRange(start, end, maskBytes)")
     assert "Reset(" not in send
     assert "tpipe_->InitBuffer(statusBuf_, ReservedBytes())" in send
     assert "kEpServerDedupCountUbBytes - ReservedBytes()" in send
@@ -60,31 +60,8 @@ def test_paired_count_records_live_until_the_existing_reuse_barrier():
     complete = kernel.index("counts_.CompleteCumsum();")
     consume = kernel.index("receiver_.Process(profile_);")
     assert "PipeBarrier<PIPE_ALL>();" in kernel[complete:consume]
-
-
-def test_only_the_route_owner_waits_for_scalar_body_preparation():
-    send = _block(_source("dispatch_server_dedup_counts.h"), "void ServerDedupCounts::SendCnt()")
-    owner = _block(send, "if (pairedRoutes_ && aivId_ == 0U)")
-    assert "SyncFunc<HardEvent::MTE2_S>();" in owner
-    assert owner.index("SyncFunc<HardEvent::MTE2_S>();") < owner.index("routeExchange_.PostFrame")
-    assert send.count("SyncFunc<HardEvent::MTE2_S>();") == 1
-    # All count workers still acquire input for Vector before their first use.
     loaded = send.index("DataCopyPad(validExpertIdsTensor_, expertIdsGMTensor_")
-    counted = send.index("CountByVectorRange(start, end, maskBytes)")
-    assert "SyncFunc<HardEvent::MTE2_V>();" in send[loaded:counted]
-
-
-def test_async_route_load_is_acquired_by_its_vector_consumer():
-    route = _block(_source("ll_route_exchange.h"), "void ReadPeerAsync(")
-    assert route.index("WaitFrame()") < route.index("DataCopy(")
-    assert "HardEvent::S_MTE2" in route
-    assert "HardEvent::MTE2_S" not in route
-    send = _block(_source("dispatch_server_dedup_counts.h"), "void ServerDedupCounts::SendCnt()")
-    loaded = send.index("routeExchange_.ReadPeerAsync(validExpertIdsTensor_)")
-    acquired = send.index("SyncFunc<HardEvent::MTE2_V>();", loaded)
-    consumed = send.index("CountByVectorRange(start,end,maskBytes)", loaded)
-    assert loaded < acquired < consumed
-    assert send.index("SyncFunc<HardEvent::V_MTE2>();") < loaded
+    assert "SyncFunc<HardEvent::MTE2_V>();" in send[loaded:send.index("CountRemoteRank(first,")]
 
 
 def test_prefix_subtotal_executes_production_scalar_scan(tmp_path):

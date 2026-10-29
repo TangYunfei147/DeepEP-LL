@@ -1,3 +1,5 @@
+> 2026-10-29：当前协议27已撤下EP32配对路由路径，改为源端按跨机目标卡分核直发count，见 [DIRECT_RANK_COUNTS.md](DIRECT_RANK_COUNTS.md)。本文仅记录历史实现。
+
 # 每卡独立网口的 EP32 配对路由交换（协议9）
 
 > 2026-10-28更新：当前协议14，路由表同WQE尾FLAG发布，每对跨机卡共8个QP；本文旧QP/独立commit描述作为历史记录。当前实现见 [ROCE_SO_ROUTE_8QP.md](ROCE_SO_ROUTE_8QP.md)。
