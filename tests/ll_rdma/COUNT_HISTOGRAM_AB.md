@@ -1,3 +1,5 @@
+> 当前count源已隔离，SendCnt无quiet；默认身份30、直方图身份31。旧身份及立即quiet描述为历史。见[COUNT_SOURCE_ISOLATION.md](COUNT_SOURCE_ISOLATION.md)。
+
 # 跨机count硬件直方图编译对照
 
 `DEEPEP_LL_COUNT_HISTOGRAM=OFF`（默认）：保留逐专家Compares/GatherMask/V_S，身份28。

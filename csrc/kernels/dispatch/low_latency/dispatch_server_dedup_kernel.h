@@ -58,7 +58,7 @@ public:
         if (core_ < sendCores_) {
 
             if (profile_) profile_->Mark<8>();  // w8: sender_begin
-            sender_.Process(counts_.ScratchPool(), counts_.ReservedBytes(), profile_);
+            sender_.Process(counts_.ScratchPool(), counts_.ReservedBytes(), profile_, counts_.Retirement());
             if (profile_) profile_->Mark<9>();  // w9: sender_end_after_MTE3_S
 
         } else {
@@ -90,6 +90,13 @@ public:
 
         if (profile_) profile_->Mark<20>();  // w20: final_drain_begin
         counts_.Finish();
+        // Finish retired all MTE/V users. Reuse only role-owned live buffers;
+        // receiver Reset invalidated the original count buffers. No new UB.
+        if (counts_.Retirement()->Pending()) {
+            if (core_ >= sendCores_) counts_.Retirement()->Finish(receiver_.FinalScratch());
+            else if (sender_.HasFinalScratch()) counts_.Retirement()->Finish(sender_.FinalScratch());
+            else counts_.RetireOwnScratch();
+        }
         if (profile_) profile_->Mark<21>();  // w21: final_drain_end_PIPE_ALL
 #ifdef DEEPEP_LL_REFERENCE_PROFILE
         if (core_ >= sendCores_) receiver_.ExportPacketTrace(profile_);

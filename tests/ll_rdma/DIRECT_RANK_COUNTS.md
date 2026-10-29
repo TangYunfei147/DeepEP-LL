@@ -1,3 +1,5 @@
+> 当前count源已隔离，SendCnt无quiet；默认身份30、直方图身份31。旧身份及立即quiet描述为历史。见[COUNT_SOURCE_ISOLATION.md](COUNT_SOURCE_ISOLATION.md)。
+
 # 多机源端计数、按跨机目标卡分核直发（协议28）
 
 分支 `kernel/ll-ndr-ab-per-core-qp`。协议27/7293457是原EP32直发实现；协议28移除

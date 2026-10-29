@@ -456,6 +456,10 @@ private:
         }
     }
 
+public:
+    // Prefix was consumed by task construction; valid even on zero-task cores.
+    __aicore__ inline LocalTensor<uint8_t> FinalScratch() { return prefixBuf_.Get<uint8_t>(); }
+private:
     const __gm__ DispatchDedup::CommArgs* args_ = nullptr;
     TPipe* pipe_ = nullptr;
     bool enableDedup_ = false;

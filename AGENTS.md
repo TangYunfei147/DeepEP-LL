@@ -1,3 +1,10 @@
+## Count源隔离（当前默认30/直方图31）
+
+- 用户明确要求按算子数学逻辑判断；共享暂存区造成的实现依赖不能作为count必须等待payload前完成的理由。
+- SendCnt无quiet：每bank 1280KiB空闲区按目标rank分配独立GM源，最多40KiB，不再共用payload Stage；UB复制完成后可复用，SO尾FLAG供接收侧判定。
+- 未退休CQ仅在本核末尾处理，已有同peer/同QP的payload quiet覆盖count则去重。零payload/空接收核也回收；角色PIPE_ALL后复用有效scratch，不新增UB/lane/QP。末尾回收在w21前计时。
+- 其他quiet区分数学依赖与有限源存储复用；详见tests/ll_rdma/COUNT_SOURCE_ISOLATION.md。SDK保持，无NPU验证。
+
 ## 跨机count直方图编译对照（2026-10-29）
 
 - 用户要求硬件直方图优化并提供环境变量编译对照。DEEPEP_LL_COUNT_HISTOGRAM默认OFF/身份28，ON/身份29；同wire但全rank同变体完整wheel，不可仅改运行环境。

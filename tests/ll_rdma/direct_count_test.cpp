@@ -113,7 +113,7 @@ int main() {
         }
       }
 
-    std::vector<uint8_t> local(1<<20),remote(1<<20),stage(72*LlRdma::kCoreBytes),scratch(256),records(8192);
+    std::vector<uint8_t> local(2<<20),remote(2<<20),stage(72*LlRdma::kCoreBytes),scratch(256),records(8192);
     Model::local=local.data(); Model::remote=remote.data();
     CommArgs args{}; args.rankSize=32; args.reserved0=16; args.peerMemBytes=512*1024;
     args.reservedAddresses[0]=local.data(); args.reservedAddresses[1]=stage.data();
@@ -128,7 +128,7 @@ int main() {
         for(unsigned iteration=0;iteration<3;++iteration) {
           // Reverse source/core completion; a whole zero-count round is valid.
           for(unsigned source=world;source-->0;) {
-            args.rank=source; args.peerMems[dst]=target;
+            args.rank=source; args.peerMems[source]=local.data(); args.peerMems[dst]=target;
             for(unsigned worker=coreCount;worker-->0;) {
               core=worker;
               const auto a=CountAssignment(source,world,experts,coreCount,worker,all,true);
@@ -172,7 +172,9 @@ int main() {
                   }
                 };
                 LlTransport::DirectCountFrame(&args,dst,f.frameOffset,{records.data()},f.records,{scratch.data()});
-                assert(Model::puts==puts+1 && Model::quiets==quiets+1 && Model::pending.empty());
+                assert(Model::puts==puts+1 && Model::quiets==quiets && !Model::pending.empty());
+                LlTransport::Quiet(dst,{scratch.data()});
+                assert(Model::pending.empty());
                 Model::onPost={}; Model::before={};
               } else {
                 LlTransport::CountFrame(&args,dst,f.frameOffset,f.commitOffset,{records.data()},f.records,{scratch.data()});

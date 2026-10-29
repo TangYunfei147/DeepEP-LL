@@ -145,5 +145,5 @@ def test_remote_protocol_is_wired_consistently():
     assert 'epRankId_, source, expert, directRanks_' in source
     transport = (COUNTS.parent / 'll_count_frame_transport.h').read_text(encoding='utf-8')
     remote = block(transport, 'void DirectCountFrame(')
-    assert remote.count('Put(') == remote.count('Quiet(') == 1
-    assert remote.index('Sync<HardEvent::MTE3_S>') < remote.index('Put(') < remote.index('Quiet(')
+    assert remote.count('Put(') == 1 and 'Quiet(' not in remote
+    assert remote.index('Sync<HardEvent::MTE3_S>') < remote.index('Put(')

@@ -66,7 +66,8 @@ public:
 
     // 摘要：执行本核发送主流程：准备 UB、优先发送去重首跳、再发送 DIRECT，最后写回源端元数据。
     __aicore__ inline void Process(TBufPool<TPosition::VECCALC, 16>& scratch, uint32_t reservedBytes,
-                                   LlReferenceProfile::DeviceProfile* profile = nullptr)
+                                   LlReferenceProfile::DeviceProfile* profile = nullptr,
+                                   LlTransport::CountRetirement* retirement = nullptr)
     {
 #ifdef DEEPEP_LL_REFERENCE_PROFILE
         packetProfile_ = profile;
@@ -84,7 +85,10 @@ public:
         // reservedBytes 对应仍可能被计数发送读取的 UB，不能当作可用空间覆盖。
         if (!LlSenderHasWork(enableDedup_, count_, bs_ * k_, GetBlockIdx())) return;
 
-        if (LlTransport::Rdma(args_)) rdmaBatch_.Init(args_, uint32_t(data_.tokenStride));
+        if (LlTransport::Rdma(args_)) {
+            rdmaBatch_.Init(args_, uint32_t(data_.tokenStride));
+            rdmaBatch_.SetCountRetirement(retirement);
+        }
 
         scratch_ = &scratch;
         TQue<QuePosition::VECIN, 1> input;
@@ -199,6 +203,8 @@ public:
 
     }
 
+    __aicore__ inline bool HasFinalScratch() const { return scratch_ != nullptr; }
+    __aicore__ inline LocalTensor<uint8_t> FinalScratch() { return outBuf_.Get<uint8_t>(); }
     // 摘要：去重发送主流程：先发同 server 合并的 FIRST_HOP，再按 server 顺序发缓存的 DIRECT。
     __aicore__ inline void SendWithDedup(TQue<QuePosition::VECIN, 1>& input)
     {

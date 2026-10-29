@@ -51,6 +51,8 @@ public:
         useAllCoreCount_ = bs < kEpServerDedupAllCoreCountBsThreshold;
         packedFrames_ = LlTransport::Rdma(args_) && epWorldSize_ > 16U;
         directRanks_ = LlTransport::Rdma(args_) && epWorldSize_ > kLlPhysicalRanksPerHost;
+        countWindow_ = DispatchServerDedupWindowOffset(magic);
+        retirement_.Init(args_);
         layout_ = DispatchServerDedupCountLayout(experts, coreNum_);
         stateOffset_ = DispatchServerDedupWindowOffset(magic) + layout_.cntOffset;
         GM_ADDR localState = args_->peerMems[epRankId_] + stateOffset_;
@@ -90,6 +92,8 @@ public:
     {
         return statusCntAlign_ * kEpServerDedupCountRecordBytes;
     }
+    __aicore__ inline LlTransport::CountRetirement* Retirement() { return &retirement_; }
+    __aicore__ inline void RetireOwnScratch() { retirement_.Finish(dstExpBuf_.Get<uint8_t>()); }
     // 摘要：等待本核全部流水收尾，并恢复初始化前的 CTRL[60] 设置。
     __aicore__ inline void Finish()
     {
@@ -164,6 +168,8 @@ private:
     bool useAllCoreCount_ = false;
     bool packedFrames_ = false;
     bool directRanks_ = false;
+    uint64_t countWindow_ = 0U;
+    LlTransport::CountRetirement retirement_;
     GM_ADDR recvCntWorkspaceGM_ = nullptr;
     GM_ADDR sendCountsOutGM_ = nullptr;
     GlobalTensor<int32_t> expertIdsGMTensor_;
@@ -190,8 +196,8 @@ __aicore__ inline void ServerDedupCounts::SendCnt()
                                             coreNum_, aivId_, useAllCoreCount_, directRanks_);
     const uint32_t start = assignment.first, end = assignment.end, count = end - start;
     const bool remoteOwner = assignment.remoteRank < epWorldSize_;
-    // Only local records stay reserved into payload. The remote frame lives in
-    // workBuf_ and is retired by quiet before that shared scratch is reused.
+    // Only local records stay reserved into payload. MTE3_S retires the remote
+    // UB frame copy; its isolated GM source survives independently until CQ retirement.
     statusCntAlign_ = assignment.alignedRecords;
     if (statusCntAlign_) tpipe_->InitBuffer(statusBuf_, ReservedBytes());
     tpipe_->InitBufPool(stagePool_, kEpServerDedupCountUbBytes - ReservedBytes());
@@ -224,9 +230,10 @@ __aicore__ inline void ServerDedupCounts::SendCnt()
             const auto frame = CountFrame(rscvStatusNum_, epWorldSize_, cores,
                                           destination, epRankId_, 0U, true);
             LlTransport::DirectCountFrame(args_, destination, stateOffset_ + frame.frameOffset,
-                remoteFrame.ReinterpretCast<uint8_t>(), moeExpertNumPerRank_, dstExpBuf_.Get<uint8_t>());
-            // Each frame's quiet retires GM/CQ before another peer reuses this
-            // core's stage. Acquire SDK scratch before the next Vector pass.
+                remoteFrame.ReinterpretCast<uint8_t>(), moeExpertNumPerRank_, dstExpBuf_.Get<uint8_t>(), countWindow_);
+            retirement_.Posted(task);
+            // Source GM slots are disjoint. Acquire the SDK's retired UB scratch
+            // before the next Vector pass; no network completion wait here.
             SyncFunc<HardEvent::S_V>();
         }
     }
