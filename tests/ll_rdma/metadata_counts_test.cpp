@@ -2,9 +2,16 @@
 #include <thread>
 #include <iostream>
 #include <random>
+#define DEEPEP_TEST_METADATA_COPY 1
 #include "kernels/dispatch/low_latency/device/dispatch_server_dedup_counts.h"
 using namespace AscendC;
 using namespace DispatchDedup;
+struct SourceSnapshot { const void* source;std::vector<uint8_t> bytes; };
+static std::vector<SourceSnapshot> countSources;
+static void rememberSource(void*,const void* source,uint32_t bytes) {
+    auto p=static_cast<const uint8_t*>(source);
+    countSources.push_back({source,std::vector<uint8_t>(p,p+bytes)});
+}
 int main(){
     constexpr uint32_t P=16,C=72,K=4;
     unsigned cases=0;
@@ -31,7 +38,12 @@ int main(){
                 counts[at].Init(reinterpret_cast<uint8_t*>(&args[rank]),reinterpret_cast<uint8_t*>(ids[rank].data()),
                     reinterpret_cast<uint8_t*>(experts[rank].data()),reinterpret_cast<uint8_t*>(prefix[rank].data()),
                     B,K,E,1,0,&pipes[at],nullptr,reinterpret_cast<uint8_t*>(tasks[rank].data()));
-                counts[at].SendCnt();
+                // Hold every local MTE source live until SendCnt returns.
+                // Computing later round-robin targets may not overwrite it.
+                countSources.clear();observeStore=rememberSource;
+                counts[at].SendCnt();observeStore=nullptr;
+                for(const auto &snapshot:countSources)
+                    assert(std::memcmp(snapshot.source,snapshot.bytes.data(),snapshot.bytes.size())==0);
             }
             for(uint32_t rank=0;rank<P;++rank){
               std::vector<std::thread> workers;

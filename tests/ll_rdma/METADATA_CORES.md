@@ -5,7 +5,32 @@
 编译变量 `DEEPEP_LL_METADATA_CORES=M`，默认4，要求2～70内的偶数，且实际AIV核数C至少为M+2。
 核0..M-1执行原count交换、接收、cumsum和任务生成；随后 `(C-M)/2` 个S核直接发送；最后同样数量的R核负责转发和搬出。56核默认4M+26S+26R。
 combine仍使用原C/2分工，SDK、物理核QP编号、动态AIV查询和公开张量接口保持。
-协议身份为 `40000+2*M+histogram`，默认40008，直方图40009；全rank必须更新完整wheel，不能混装旧协议或不同M。
+协议身份为 `41000+2*M+histogram`，默认41008，直方图41009；全rank必须更新完整wheel，不能混装旧协议或不同M。
+
+## SendCnt目标rank轮转（2026-10-30）
+
+本机count不再按全局专家区间分核后取交集，而是与跨机count一样按目标rank轮转。
+源rank所属主机的起点为 `host_first=floor(rank/16)*16`。元数据核m负责本机rank：
+`host_first+m, host_first+m+M, ... < host_first+16`；每个目标rank的全部本地专家由同一核统计并发送。
+跨机仍按跳过本机16rank后的目标列表，以 `m,m+M,...` 轮转。两份列表分别保证各核目标数最多差1；M=4时两机各核均为4本机+4跨机目标。
+
+EP32/E384/M4，源rank0所在机器：
+
+| 核 | 本机目标rank | 跨机目标rank | 本机/跨机专家计数项 |
+|---|---|---|---|
+| 0 | 0,4,8,12 | 16,20,24,28 | 48 / 48 |
+| 1 | 1,5,9,13 | 17,21,25,29 | 48 / 48 |
+| 2 | 2,6,10,14 | 18,22,26,30 | 48 / 48 |
+| 3 | 3,7,11,15 | 19,23,27,31 | 48 / 48 |
+
+源rank16所在机器的本机目标相应为16,20,24,28等，跨机为0,4,8,12等。核内仍先跨机后本机；每个目标的计数基于完整B×K路由，零计数也发布。目标数均衡不等于已证明耗时均衡或性能收益。
+
+每个本机目标有独立的UB记录槽，避免计算后续目标时覆盖前一目标仍在使用的MTE源。直方图工作区可复用；Host同步按最重核核算持久记录和临时缓冲，兼顾同binary的MTE selector。
+本机packed帧仍沿用原有分段地址/commit边界；目标核依次发布该rank的所有片段，接收布局、清理与cumsum规则不变。跨机put数量、远端计数算法、CQ退休及SDK均不变。
+MTE-only域按原覆盖的全域rank轮转，EP16即本机16rank，不遗漏目标。
+
+本次实施身份41008/41009，旧40008/40009保留为2a0c304对照；全rank更新完整wheel。reference仍为schema5。
+319项相关CPU检查通过：真实count/prefix执行及本机源记录保留、EP16～256/M2～70目标覆盖与数量均衡、真实本机发布函数/延迟commit/零计数/跨case，以及安装身份与入口检查。未执行CANN/NPU或远端验证。
 
 ## 两套所有权
 
@@ -61,7 +86,7 @@ cd DeepEP-LL-ndr-metadata-cores
 export DEEPEP_LL_METADATA_CORES=4
 export NODE_RANK=0
 export MASTER_ADDR=192.0.2.1
-if bash tests/ll_rdma/one_click.sh "$NODE_RANK" "$MASTER_ADDR" meta4-perf-001 \
+if bash tests/ll_rdma/one_click.sh "$NODE_RANK" "$MASTER_ADDR" meta4-rank-perf-001 \
     --num-nodes 2 --mode perf --tokens 1 8 32 --dtype bf16 fp8; then
     echo "PASS: correctness and OFF dispatch/combine"
 else
@@ -76,9 +101,9 @@ SDK沿用本项目正常构建与身份检查，不修改其实现。
 独立reference重编测试（所有主机执行，使用新名字）：
 
 ```bash
-if bash tests/ll_rdma/one_click.sh "$NODE_RANK" "$MASTER_ADDR" meta4-reference-001 \
+if bash tests/ll_rdma/one_click.sh "$NODE_RANK" "$MASTER_ADDR" meta4-rank-reference-001 \
     --num-nodes 2 --mode reference --tokens 8 --dtype fp8 --reference-iters 1; then
-    echo "PASS: inspect results/ll-ndr/meta4-reference-001-reference"
+    echo "PASS: inspect results/ll-ndr/meta4-rank-reference-001-reference"
 else
     echo "FAILED: inspect .logs/ndr-one-click"
 fi
@@ -87,4 +112,4 @@ fi
 完整Excel、日志与raw留目标机；只回传run目录导出的单个`table-analysis/return_report.md`（入口控制在60000 UTF-8字节以内）。
 本地CPU模型覆盖真实元数据/接收器、零计数、独立owner、延迟prefix/包、转发去重、接管前搬出但不清flag、连续case及combine零间隔；不代表CANN编译、NPU数值或性能已通过。
 
-本地验证记录：核心CPU用例分批共586项通过、2项因缺少Torch跳过；最后139项相关回归（含13个subtest）复测通过，与前述用例重叠，不相加。覆盖M=2/4/18的实际count流程、M=2/4/6/18/70的编译分工、16/72核ON/OFF接收、BF16/预量化FP8/非去重、E/B变化和combine stage交替。另49项构建流程检查通过；8项已有Linux编译器探测/符号链接测试在Windows环境失败，不属于CANN编译结果。
+初版2a0c304验证记录（与本次319项重叠，不相加）：核心CPU用例分批共586项通过、2项因缺少Torch跳过；最后139项相关回归（含13个subtest）复测通过，与前述用例重叠，不相加。覆盖M=2/4/18的实际count流程、M=2/4/6/18/70的编译分工、16/72核ON/OFF接收、BF16/预量化FP8/非去重、E/B变化和combine stage交替。另49项构建流程检查通过；8项已有Linux编译器探测/符号链接测试在Windows环境失败，不属于CANN编译结果。

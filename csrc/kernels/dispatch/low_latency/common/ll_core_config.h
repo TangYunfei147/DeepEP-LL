@@ -4,9 +4,9 @@
 #include "ll_metadata_config.h"
 namespace DispatchDedup {
 #ifdef DEEPEP_LL_COUNT_HISTOGRAM
-constexpr uint32_t kLlCoreProtocolVersion = 40001U + 2U * kLlMetadataCores; // same wire, distinct histogram build identity
+constexpr uint32_t kLlCoreProtocolVersion = 41001U + 2U * kLlMetadataCores; // same wire, distinct histogram build identity
 #else
-constexpr uint32_t kLlCoreProtocolVersion = 40000U + 2U * kLlMetadataCores; // multi-host direct counts and independent per-host first hops
+constexpr uint32_t kLlCoreProtocolVersion = 41000U + 2U * kLlMetadataCores; // local and remote count targets round-robin across metadata cores
 #endif
 // Capacity is not participation. Pure AIV launches use the queried even count.
 constexpr uint32_t kLlMaxCoreNum = 72U;

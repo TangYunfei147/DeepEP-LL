@@ -183,7 +183,7 @@ def installed_identity(a):
         raise RuntimeError("Installed wheel and current SHMEM SDK identity differ; rebuild the wheel")
     histogram = os.environ.get("DEEPEP_LL_COUNT_HISTOGRAM", "OFF") == "ON"
     metadata = build_support.metadata_cores()
-    expected_protocol = 40000 + 2 * metadata + int(histogram)
+    expected_protocol = 41000 + 2 * metadata + int(histogram)
     if (getattr(native, "low_latency_dispatch_metadata_cores", None) != metadata
             or info.get("ll_metadata_cores") != metadata
             or native.low_latency_core_config()["active_aiv"] < metadata + 2):

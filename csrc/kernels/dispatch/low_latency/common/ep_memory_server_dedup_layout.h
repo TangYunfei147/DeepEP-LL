@@ -91,14 +91,15 @@ inline int BuildDispatchServerDedupLayout(int64_t rankSize, int64_t bs, int64_t 
 
     const uint32_t countCores =
         kLlMetadataCores;
-    uint32_t minimumCountRecords = 0U;
+    uint64_t countUb = DispatchServerDedupCountSendUbBytes(uint64_t(bs) * topK,
+        uint32_t(moeExpertNum), countCores, uint32_t(rankSize), false);
 #ifdef DEEPEP_LL_RDMA
-    // Each multi-host remote frame needs every local expert plus its SO tail.
-    if (rankSize > kLlPhysicalRanksPerHost) minimumCountRecords = uint32_t(moeExpertNum / rankSize) + 1U;
+    // The same binary also supports the MTE selector; admit both source budgets.
+    if (rankSize > kLlPhysicalRanksPerHost)
+        countUb = std::max(countUb, DispatchServerDedupCountSendUbBytes(uint64_t(bs) * topK,
+            uint32_t(moeExpertNum), countCores, uint32_t(rankSize), true));
 #endif
-    if (DispatchServerDedupCountSendUbBytes(uint64_t(bs) * topK, uint32_t(moeExpertNum), countCores,
-                                          minimumCountRecords) >
-        kEpServerDedupCountUbBytes) {
+    if (countUb > kEpServerDedupCountUbBytes) {
         return DispatchDedup::DISPATCH_DEDUP_ERROR_PARA_CHECK_FAIL;
     }
 

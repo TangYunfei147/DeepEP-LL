@@ -28,7 +28,7 @@ def test_compiled_split_and_balanced_ranges(tmp_path,metadata):
 #include "kernels/dispatch/low_latency/common/ep_memory_server_dedup_count_layout.h"
 using namespace DispatchDedup;
 int main(){
- assert(kLlCoreProtocolVersion==40000+2*kLlMetadataCores);
+ assert(kLlCoreProtocolVersion==41000+2*kLlMetadataCores);
  for(uint32_t c=16;c<=72;c+=2){
   assert(MetadataSplitValid(c)==(c>=kLlMetadataCores+2));
   if(!MetadataSplitValid(c))continue;

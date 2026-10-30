@@ -1,4 +1,4 @@
-> 本分支最新：独立metadata核默认4，协议40008/40009，reference schema5。部署、所有权及复用约束以 [METADATA_CORES.md](METADATA_CORES.md) 为准；下方旧版本说明保留作历史。
+> 本分支最新：独立metadata核默认4，本机/跨机count均按目标rank轮转，协议41008/41009，reference schema5。部署、所有权及复用约束以 [METADATA_CORES.md](METADATA_CORES.md) 为准；下方旧版本说明保留作历史。
 
 > 当前默认身份34、直方图身份35：dispatch按GM stage容量批处理，combine回传批处理并将尾批CQ移至M5之后。见[COMBINE_BATCH_RETURN.md](COMBINE_BATCH_RETURN.md)。下方旧身份为历史。
 

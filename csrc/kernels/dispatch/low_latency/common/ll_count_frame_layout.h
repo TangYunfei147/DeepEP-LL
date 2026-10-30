@@ -4,7 +4,8 @@
 
 namespace DispatchDedup {
 // Same E*512B reservation, physical source-major frames; logical prefixes stay
-// expert-major. Legacy/local frames intersect a count-core and target rank;
+// expert-major. Local fragments retain the original expert-interval boundaries
+// as a layout rule; those intervals no longer choose the sending core.
 // Direct remote frames cover all experts of that destination rank.
 struct LlCountFrame {
     uint64_t recordOffset, commitOffset, frameOffset;

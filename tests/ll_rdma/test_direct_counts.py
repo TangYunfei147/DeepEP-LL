@@ -36,6 +36,56 @@ def test_direct_ownership_frames_and_retirement(tmp_path):
     native(Path(__file__).with_name('direct_count_test.cpp'), tmp_path)
 
 
+def test_production_local_rank_publication_preserves_fragment_layout(tmp_path):
+    body=block(COUNTS.read_text(encoding='utf-8'),'void ServerDedupCounts::SendExpertCntRange(')
+    source=tmp_path/'local-rank.cpp'
+    source.write_text(r'''
+#include <cassert>
+#include <vector>
+#include <iostream>
+#define DEEPEP_LL_RDMA 1
+#define DEEPEP_TEST_DEFERRED_MTE3 1
+#include "kernels/dispatch/low_latency/device/ll_count_frame_transport.h"
+#include "kernels/dispatch/low_latency/common/ll_count_frame_layout.h"
+#include "kernels/dispatch/low_latency/common/ep_memory_server_dedup_count_layout.h"
+using namespace AscendC;
+using namespace DispatchDedup;
+struct Fixture {
+    CommArgs* args_;uint32_t epRankId_,epWorldSize_,rscvStatusNum_,coreNum_,moeExpertNumPerRank_;
+    uint64_t stateOffset_=0;bool packedFrames_=true,directRanks_=true;
+    static constexpr uint32_t UB_ALIGN_DATA_COUNT=8;
+    LocalTensor<int32_t> statusTensor_;
+    struct Buf {uint8_t* p;template<class T>LocalTensor<T> Get(){return {reinterpret_cast<T*>(p)};}} workBuf_;
+    void Run(uint32_t start,uint32_t end){
+''' + body + r'''
+    }
+};
+int main(){
+ unsigned cases=0;std::vector<uint8_t> gm(1<<20),expected(gm.size()),scratch(256);
+ for(unsigned p:{32U,64U,128U,256U})for(unsigned e:{p,384U,1024U})if(e%p==0)
+ for(unsigned m:{2U,4U,6U,18U,70U})for(unsigned src:{0U,p-1})for(unsigned local:{0U,15U}){
+  unsigned dst=src/16*16+local,L=e/p;
+  std::fill(gm.begin(),gm.end(),0);std::fill(expected.begin(),expected.end(),0);
+  std::vector<int32_t> records(L*8,0);for(unsigned i=0;i<L;++i){records[i*8]=0x3f800000;records[i*8+1]=i%3?0:int(i+src);}
+  CommArgs a{};a.rank=src;a.rankSize=p;a.reserved0=16;a.peerMemBytes=gm.size();a.reservedConfig[0]=LlRdma::kBackend;a.peerMems[dst]=gm.data();
+  Fixture f{&a,src,p,e,m,L,0,true,true,{records.data()},{scratch.data()}};
+  const auto puts=Model::puts;
+  f.Run(dst*L,(dst+1)*L);
+  // The last commit still owns a live source; no additional put was introduced.
+  assert(!deferredMte3.empty() && Model::puts==puts);
+  LlTransport::Sync<HardEvent::MTE3_S>(7);
+  for(unsigned i=0;i<L;++i){auto frame=CountFrame(e,p,m,dst,src,i,true);
+   std::memcpy(expected.data()+frame.recordOffset,records.data()+i*8,32);
+   std::memcpy(expected.data()+frame.commitOffset,records.data()+frame.firstExpert*8,32);
+  }
+  assert(gm==expected);++cases;
+ }
+ std::cout<<"PASS production local rank publication "<<cases<<" cases\n";
+}
+''',encoding='utf-8')
+    native(source,tmp_path)
+
+
 def test_production_vector_counts(tmp_path):
     body = block(COUNTS.read_text(encoding='utf-8'), 'void ServerDedupCounts::CountRemoteRank(')
     # The actual production function runs with deferred Vector completion.

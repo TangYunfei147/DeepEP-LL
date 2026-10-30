@@ -124,8 +124,14 @@ template<class T> void DataCopy(LocalTensor<T> d, GlobalTensor<T> s, uint32_t n)
 }
 template<class T> void DataCopyPad(GlobalTensor<T> d, LocalTensor<T> s, DataCopyExtParams c) {
     std::lock_guard<std::mutex> guard(memoryMutex);
-    for (uint32_t i=0;i<c.count;++i) std::memcpy(reinterpret_cast<uint8_t*>(d.p)+i*(c.bytes+c.dstStride),
-        reinterpret_cast<uint8_t*>(s.p)+i*((c.bytes+31U)/32U*32U+c.srcStride*32U),c.bytes);
+    for (uint32_t i=0;i<c.count;++i) {
+        auto dst=reinterpret_cast<uint8_t*>(d.p)+i*(c.bytes+c.dstStride);
+        auto src=reinterpret_cast<uint8_t*>(s.p)+i*((c.bytes+31U)/32U*32U+c.srcStride*32U);
+#ifdef DEEPEP_TEST_METADATA_COPY
+        if(observeStore)observeStore(dst,src,c.bytes);
+#endif
+        std::memcpy(dst,src,c.bytes);
+    }
 }
 template<class T> void DataCopyPad(LocalTensor<T> d, GlobalTensor<T> s, DataCopyExtParams c, DataCopyPadExtParams<T>) {
     std::lock_guard<std::mutex> guard(memoryMutex);

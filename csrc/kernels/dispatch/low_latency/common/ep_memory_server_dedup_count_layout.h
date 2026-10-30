@@ -6,6 +6,7 @@
 
 #include "comm_args.h"
 #include "ll_core_config.h"
+#include "ll_group_policy.h"
 #include "dispatch_dedup_types.h"
 
 #include "ep_memory_server_dedup_mode.h"
@@ -80,18 +81,21 @@ DISPATCH_DEDUP_EP_DEDUP_INLINE EpServerDedupCountLayout DispatchServerDedupCount
 
 // Peak sendCnt allocation: three route buffers, work scratch (also the remote
 // frame), and local count records/histogram. Only local records remain reserved.
-// Sender/receive scratch overlays those four buffers and the histogram after
+// Metadata receive scratch overlays those four buffers and the histogram after
 // filtering; the records remain reserved until the asynchronous writes retire.
 DISPATCH_DEDUP_EP_DEDUP_INLINE uint64_t DispatchServerDedupCountSendUbBytes(uint64_t routes, uint32_t experts,
                                                                             uint32_t countCores,
-                                                                            uint32_t remoteRecords = 0U)
+                                                                            uint32_t world, bool directRanks)
 {
     const uint64_t routeBytes = (routes * sizeof(int32_t) + 255U) / 256U * 256U;
-    const uint32_t records = (experts + countCores - 1U) / countCores;
+    const uint32_t records = experts / world;
     const uint32_t alignedRecords = (records + 7U) / 8U * 8U;
+    const uint32_t localDomain = directRanks ? kLlPhysicalRanksPerHost : world;
+    const uint32_t localPeers = (localDomain + countCores - 1U) / countCores;
+    const uint32_t remoteRecords = directRanks ? records + 1U : 0U;
     const uint64_t remoteBytes = uint64_t((remoteRecords + 7U) / 8U * 8U) * 32U;
     const uint64_t workBytes = routeBytes < remoteBytes ? remoteBytes : routeBytes;
-    return 3U * routeBytes + workBytes + uint64_t(alignedRecords) * (32U + sizeof(int32_t));
+    return 3U * routeBytes + workBytes + uint64_t(alignedRecords) * (localPeers * 32U + sizeof(int32_t));
 }
 
 #undef DISPATCH_DEDUP_EP_DEDUP_INLINE

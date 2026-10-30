@@ -90,7 +90,8 @@ public:
     }
 
 private:
-    __aicore__ inline uint32_t ReservedBytes() const { return statusCntAlign_ * kEpServerDedupCountRecordBytes; }
+    __aicore__ inline uint32_t ReservedBytes() const { return localStatusRecords_ * kEpServerDedupCountRecordBytes; }
+    uint32_t localStatusRecords_ = 0U;
     static constexpr uint32_t UB_ALIGN = 32U;
     static constexpr uint32_t UB_ALIGN_DATA_COUNT = 8U;
     static constexpr uint32_t SIZE_ALIGN_256 = 256U;
@@ -178,19 +179,19 @@ private:
 // 摘要：统计完整原始路由的专家计数并异步发往专家所属 rank，同时保留仍被 MTE3 使用的记录 UB。
 __aicore__ inline void ServerDedupCounts::SendCnt()
 {
-    // Same-host work keeps the original expert split. Each physical core owns
-    // remote rank tasks core, core+coreNum, ... independent of the BS threshold.
+    // Both target lists use round-robin rank ownership across metadata cores.
+    // Each local target keeps a separate UB source until its writes retire.
     const uint32_t cores = coreNum_;
     const auto assignment = CountAssignment(epRankId_, epWorldSize_, rscvStatusNum_,
-                                            coreNum_, aivId_, true, directRanks_);
-    const uint32_t start = assignment.first, end = assignment.end, count = end - start;
+                                            coreNum_, aivId_, directRanks_);
     const bool remoteOwner = assignment.remoteRank < epWorldSize_;
-    // Only local records stay reserved into payload. MTE3_S retires the remote
+    // Local target records stay reserved through metadata. MTE3_S retires the remote
     // UB frame copy; its isolated GM source survives independently until CQ retirement.
     statusCntAlign_ = assignment.alignedRecords;
+    localStatusRecords_ = assignment.reservedRecords;
     if (statusCntAlign_) tpipe_->InitBuffer(statusBuf_, ReservedBytes());
     tpipe_->InitBufPool(stagePool_, kEpServerDedupCountUbBytes - ReservedBytes());
-    if (count == 0U && !remoteOwner) return;
+    if (assignment.localPeers == 0U && !remoteOwner) return;
 
     // 3. 为完整 bs×topK 路由及筛选/归约临时数据分配 UB，等待 GM 路由搬入。
     const uint32_t routeBytes = Ceil(expertIdsCnt_ * sizeof(int32_t), SIZE_ALIGN_256) * SIZE_ALIGN_256;
@@ -204,7 +205,6 @@ __aicore__ inline void ServerDedupCounts::SendCnt()
     if (statusCntAlign_) countPool_.InitBuffer(histogramBuf_, statusCntAlign_ * sizeof(int32_t));
     validExpertIdsTensor_ = expertIdsBuf_.Get<int32_t>();
     workLocalTensor_ = workBuf_.Get<float>();
-    if (count) statusTensor_ = statusBuf_.Get<int32_t>();
     const DataCopyExtParams idsCopy{1U, expertIdsCnt_ * uint32_t(sizeof(int32_t)), 0U, 0U, 0U};
     const DataCopyPadExtParams<int32_t> pad{false, 0U, 0U, 0};
     DataCopyPad(validExpertIdsTensor_, expertIdsGMTensor_, idsCopy, pad);
@@ -231,24 +231,26 @@ __aicore__ inline void ServerDedupCounts::SendCnt()
     // 两条路径都写 ready=1 和真实 count，零计数专家也发布，避免对端永久等待。
     const uint32_t maskBytes = Ceil(Ceil(expertIdsCnt_, 8U), UB_ALIGN) * UB_ALIGN;
 
-    if (count && expertIdsCnt_ >= SIZE_ALIGN_256 / sizeof(int32_t) && 2U * maskBytes <= routeBytes) {
-        CountByVectorRange(start, end, maskBytes);
-    } else if (count) {
-        CountByExpert(start, end);
+    uint32_t localIndex = 0U;
+    for (uint32_t task = aivId_; task < assignment.localDomain; task += coreNum_, ++localIndex) {
+        const uint32_t destination = CountLocalPeer(epRankId_, task, directRanks_);
+        const uint32_t start = destination * moeExpertNumPerRank_, end = start + moeExpertNumPerRank_;
+        statusTensor_ = statusBuf_.Get<int32_t>()[localIndex * statusCntAlign_ * UB_ALIGN_DATA_COUNT];
+        if (expertIdsCnt_ >= SIZE_ALIGN_256 / sizeof(int32_t) && 2U * maskBytes <= routeBytes)
+            CountByVectorRange(start, end, maskBytes);
+        else
+            CountByExpert(start, end);
+        SyncFunc<HardEvent::S_MTE3>();
+        SendExpertCntRange(start, end);
     }
-
-    // 5. Scalar 填好的记录通过 MTE3 写到目标专家所属 rank。
-    // 此处仅下发，不全量等待：statusBuf_ 保持不变，而筛选临时 UB 可以交给后续阶段。
-    SyncFunc<HardEvent::S_MTE3>();
-    if (count) SendExpertCntRange(start, end);
     // Only statusBuf_ is still read by MTE3. Count's V_S dependencies already
     // retired the shared scratch; do not Reset either pool (A5 drains MTE3).
-    // Keeping the pipe also preserves Init's CTRL[60] through FP8 quantization.
+    // Keep the local sources alive through metadata Finish.
 }
 
 // All experts of one remote rank share one frame. GatherMask's hardware count
 // supplies the multiplicity; Scalar only emits one result per expert. The
-// existing route/mask/output/work buffers are reused and retired before payload.
+// existing route/mask/output/work buffers are reused across remote targets.
 __aicore__ inline void ServerDedupCounts::CountRemoteRank(uint32_t first, LocalTensor<int32_t> frame,
                                                        uint32_t frameRecords)
 {
@@ -335,10 +337,11 @@ __aicore__ inline void ServerDedupCounts::SendExpertCntRange(uint32_t start, uin
         if (packedFrames_) {
             const auto frame = CountFrame(rscvStatusNum_, epWorldSize_,
                 coreNum_, dst, epRankId_, localExpert, directRanks_);
-            if (frame.firstExpert != localExpert || frame.records != count) { Trap(); return; }
+            // Keep the existing receive layout's fragment boundaries even when
+            // the target rank is now owned by one metadata core in its entirety.
             LlTransport::CountFrame(args_, dst, stateOffset_ + frame.frameOffset, stateOffset_ + frame.commitOffset,
-                statusTensor_[(expert - start) * UB_ALIGN_DATA_COUNT].ReinterpretCast<uint8_t>(), count, workBuf_.Get<uint8_t>());
-            expert += count;
+                statusTensor_[(expert - start) * UB_ALIGN_DATA_COUNT].ReinterpretCast<uint8_t>(), frame.records, workBuf_.Get<uint8_t>());
+            expert += frame.records;
             continue;
         }
         LlTransport::Records(args_, dst, stateOffset_ + offset,
