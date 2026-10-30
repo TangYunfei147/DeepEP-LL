@@ -9,6 +9,7 @@ Modified by Joyce_An 2026
 
 | 阅读任务 | 文档 |
 | --- | --- |
+| 首次理解当前NDR LL的dispatch/combine，准备面向新开发者的串讲 | [三篇图文串讲入口](ll_walkthrough/index.html)（整个目录下载后打开index.html；含伪代码、10幅图、贯穿例子与源码跳转） |
 | 配置环境、构建和安装 wheel | [构建指南](build.md) |
 | 创建 Buffer、管理事件与资源、了解上游兼容范围 | [API 指南](api.md) |
 | 使用 dispatch/combine，核对 HT/LL 的输入、权重和容量约束 | [Elastic 接口](elastic.md) |

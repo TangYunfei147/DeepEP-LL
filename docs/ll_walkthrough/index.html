@@ -1,0 +1,181 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="description" content="DeepEP LL dispatch/combine代码串讲，基于固定源码与可运行CPU例子"><title>一条token如何出发，又如何回到原位 · LL代码串讲</title><style>
+:root{--ink:#20324a;--muted:#52647b;--blue:#245ca8;--line:#d9e1eb;--paper:#fff;--bg:#f4f7fb}
+*{box-sizing:border-box}html{scroll-behavior:smooth;scroll-padding-top:88px}body{margin:0;background:var(--bg);color:var(--ink);font:17px/1.8 "Segoe UI","Microsoft YaHei","PingFang SC",sans-serif}a{color:var(--blue);text-decoration-thickness:1px;text-underline-offset:3px}header{position:sticky;top:0;background:#152b47;color:white;z-index:5;box-shadow:0 2px 8px #152b4720}header nav{max-width:1340px;margin:auto;padding:13px 24px;display:flex;gap:24px;align-items:center;flex-wrap:wrap}header a{color:#d9e9ff;text-decoration:none;font-size:15px}header a[aria-current]{color:white;font-weight:700;border-bottom:2px solid #75c7ba}header .brand{font-weight:750;color:white;margin-right:auto}.layout{max-width:1340px;margin:28px auto;display:grid;grid-template-columns:220px minmax(0,1fr);gap:32px;padding:0 24px}aside.toc{position:sticky;top:100px;align-self:start;font-size:14px;line-height:1.6;max-height:80vh;overflow:auto}aside.toc a{display:block;padding:6px 10px;text-decoration:none;color:var(--muted);border-left:2px solid var(--line)}aside.toc a:hover{color:var(--blue);border-color:var(--blue)}main{min-width:0;background:var(--paper);padding:38px 46px;border:1px solid var(--line);border-radius:16px}h1{font-size:36px;line-height:1.35;margin:8px 0 20px;letter-spacing:-.8px}h2{font-size:26px;line-height:1.45;border-top:1px solid var(--line);padding-top:32px;margin:44px 0 18px}h3{font-size:20px;margin:24px 0 10px}p{margin:12px 0}li{margin:8px 0}.eyebrow{font-size:13px;letter-spacing:1.3px;color:var(--blue);font-weight:700}.lead{font-size:20px;color:var(--muted)}.meta{font-size:13px;color:var(--muted);padding:12px 0;border-bottom:1px solid var(--line)}.note,.warn{padding:16px 20px;margin:22px 0;border-radius:8px;background:#edf4fc;border-left:4px solid #5188c3}.warn{background:#fff5e4;border-color:#d59a38}.note p,.warn p{margin:5px 0 0}.three{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin:20px 0}.three>div{background:#f5f8fb;border:1px solid #e0e7ee;border-radius:9px;padding:14px 16px}.three b{color:var(--blue);font-size:14px}.three p{font-size:15px;line-height:1.75;margin:6px 0 0}.table-scroll{overflow-x:auto;margin:20px 0}table{border-collapse:collapse;width:100%;font-size:15px;line-height:1.65}th,td{text-align:left;padding:11px 13px;border:1px solid var(--line);vertical-align:top}th{background:#edf3fa;font-weight:700}tbody tr:nth-child(even){background:#fafbfd}pre{font:14px/1.75 Consolas,"Cascadia Mono",monospace;background:#152b47;color:#e3edf8;border-radius:10px;padding:20px;overflow:auto;tab-size:4;white-space:pre}code:not(pre code){background:#edf1f6;border-radius:4px;padding:2px 5px;font-size:.9em;overflow-wrap:anywhere}figure{margin:26px 0}.diagram{overflow-x:auto;border:1px solid var(--line);border-radius:12px;background:#fbfcfe;padding:10px}.diagram svg{display:block;width:100%;height:auto;min-width:680px}svg text{font:16px "Segoe UI","Microsoft YaHei",sans-serif;fill:#20324a}.svgtitle{font-size:18px;font-weight:700}figcaption{font-size:14px;color:var(--muted);padding:9px 3px}details{border:1px solid var(--line);border-radius:9px;margin:18px 0}summary{cursor:pointer;padding:13px 18px;color:var(--blue);font-weight:650}details>div{padding:0 18px 18px;font-size:15px}.source{font-size:13px;display:inline-block;margin:7px 12px 0 0;overflow-wrap:anywhere}.readpath{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}.readpath a{padding:16px;border:1px solid var(--line);border-radius:10px;text-decoration:none;background:#f7faff}.readpath small{display:block;color:var(--muted)}.equation{text-align:center;background:#edf6f2;border-radius:10px;padding:22px;font:19px/1.7 Consolas,"Microsoft YaHei",monospace}.check{font-weight:600;color:#276c57}.controls{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:15px 0}button{font:inherit;cursor:pointer;border:1px solid #9eafc3;background:#fff;color:var(--blue);padding:7px 17px;border-radius:7px}button:disabled{opacity:.4;cursor:default}button:focus-visible,a:focus-visible,summary:focus-visible{outline:3px solid #e6a542;outline-offset:3px}#story-title{font-size:20px;font-weight:700}.story-caption{min-height:96px;padding:15px 20px;background:#f1f6fc;border-radius:9px}.story-fade{opacity:.22}.story-hide{display:none}.footer{margin-top:40px;padding-top:20px;border-top:1px solid var(--line);font-size:14px;color:var(--muted)}.pill{display:inline-block;font-size:13px;padding:3px 9px;border-radius:12px;background:#e9f2ed;color:#286b51}.chapter-nav{display:flex;justify-content:space-between;gap:20px;margin-top:30px}.small{font-size:14px;color:var(--muted)}@media(max-width:1000px){.layout{grid-template-columns:1fr}.toc{display:none}main{padding:26px}.three{grid-template-columns:1fr}.readpath{grid-template-columns:1fr}h1{font-size:30px}header nav{gap:12px}}@media(max-width:600px){body{font-size:16px}.layout{padding:0 9px;margin-top:12px}main{padding:20px 15px}.diagram svg{min-width:720px}header .brand{width:100%;font-size:14px}h2{font-size:23px}pre{font-size:13px}}@media print{header,.toc,.controls,.chapter-nav{display:none!important}.layout{display:block;margin:0;padding:0}body{background:white;font-size:11pt}main{border:0;padding:0}h1{font-size:25pt}h2{font-size:18pt}a{color:inherit}pre{white-space:pre-wrap;font-size:9pt;color:#20324a;background:#f3f5f7}.diagram svg{min-width:0}figure,.note,.warn,tr{break-inside:avoid}.three{grid-template-columns:repeat(3,1fr)}details{break-inside:avoid}}
+</style></head><body><header><nav><a class="brand" href="index.html">DeepEP LL · 代码串讲</a><a href="index.html" aria-current="page">01 基础与例子</a><a href="dispatch.html">02 Dispatch</a><a href="combine.html">03 Combine</a><button onclick="window.print()" style="font-size:13px">打印</button></nav></header>
+<div class="layout">
+<aside class="toc" aria-label="本篇目录"><strong>本篇路线</strong><a href="#read">先建立一条故事线，再读函数</a><a href="#problem">1. 两个算子究竟解决什么问题？</a><a href="#terms">2. 先分清这些名字</a><a href="#example">3. 一组贯穿三篇的具体数据</a><a href="#story">4. 用六步走完整个来回</a><a href="#host">5. Host把什么交给设备？</a><a href="#memory">6. 只先记住三种“地址”</a><a href="#readcode">7. 串讲时按这个顺序打开代码</a><a href="#present">8. 给讲述者的路线与检查点</a></aside><main>
+<div class="eyebrow">从数据流理解实现 / 01</div><h1>一条token如何出发，又如何回到原位</h1>
+<p class="lead">先把数学任务、数据位置和参与者对应起来，再读dispatch与combine。</p>
+<p class="meta">源码基准 <b>c3d8640</b> · kernel/ll-ndr-metadata-cores · SDK 4c671684 · 2026-10-30<br>主线：EP32 / G16 / FP8预量化dispatch＋BF16 combine；例子K=4，实际向量H=3584。图不代表测量时序。</p>
+<section id="read">
+<h2>先建立一条故事线，再读函数</h2>
+<p>这份文档面向会读C++/Python、但没有实现过dispatch或combine的开发者。首次阅读只走正文；折叠框是第二遍看源码时的补充。建议用75～90分钟串讲。</p>
+<div class="readpath"><a href="index.html">01 基础与例子<small>10～20分钟：知道数据为什么要搬</small></a><a href="dispatch.html">02 Dispatch<small>25～35分钟：计数、发送、转发、搬出</small></a><a href="combine.html">03 Combine<small>25～35分钟：准备、局部求和、回源</small></a></div>
+<aside class="note"><strong>这次讲的是哪份实现</strong>
+<p>固定源码为<code>c3d8640</code>：含独立metadata核、目标rank轮转count、1.25接管状态、combine零flag间隔和SHMEM主线更新。本文不用旧版“所有核先SendCnt”或“EP32/B32可关闭去重”的规则。</p></aside>
+<p>标记约定：<b>“为什么”讲必要性；“做什么”讲动作；“得到什么”讲下一步消费的结果。</b>源码链接固定版本，伪代码只保留依赖与所有权，不把DMA、事件和地址换算逐字搬进正文。</p></section>
+<section id="problem">
+<h2>1. 两个算子究竟解决什么问题？</h2>
+<p>在MoE里，每个token是一行长度为H的向量。路由器为它选择K个专家，并给出K个权重。专家分布在不同rank上，因此“知道该算什么”之后，还要解决“数据如何到达专家、结果如何回到源token”。</p>
+<figure>
+<div class="diagram"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 210" role="img" aria-label="图1：dispatch与combine围住专家计算；专家计算本身不在这两个kernel里。"><title>图1：dispatch与combine围住专家计算；专家计算本身不在这两个kernel里。</title><defs><marker id="arrow-1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10Z" fill="#70849e"/></marker></defs><g><rect x="10" y="65" width="150" height="84" rx="12" fill="#eaf2ff" stroke="#275da5"/><text x="85.0" y="94" text-anchor="middle" class="svgtitle">源token x</text><text x="85.0" y="118" text-anchor="middle">按原token排列</text></g><g><path d="M165 107 L205 107" fill="none" stroke="#70849e" stroke-width="2.5" marker-end="url(#arrow-1)"/></g><g><rect x="210" y="65" width="155" height="84" rx="12" fill="#eaf2ff" stroke="#275da5"/><text x="287.5" y="94" text-anchor="middle" class="svgtitle">dispatch</text><text x="287.5" y="118" text-anchor="middle">按专家重新组织</text></g><g><path d="M370 107 L410 107" fill="none" stroke="#70849e" stroke-width="2.5" marker-end="url(#arrow-1)"/></g><g><rect x="415" y="65" width="145" height="84" rx="12" fill="#f1ecff" stroke="#7052aa"/><text x="487.5" y="94" text-anchor="middle" class="svgtitle">专家 Fₑ</text><text x="487.5" y="118" text-anchor="middle">各自计算</text></g><g><path d="M565 107 L605 107" fill="none" stroke="#70849e" stroke-width="2.5" marker-end="url(#arrow-1)"/></g><g><rect x="610" y="65" width="150" height="84" rx="12" fill="#e7f5ee" stroke="#287755"/><text x="685.0" y="94" text-anchor="middle" class="svgtitle">combine</text><text x="685.0" y="118" text-anchor="middle">返回并加权求和</text></g><g><path d="M765 107 L805 107" fill="none" stroke="#70849e" stroke-width="2.5" marker-end="url(#arrow-1)"/></g><g><rect x="810" y="65" width="140" height="84" rx="12" fill="#e7f5ee" stroke="#287755"/><text x="880.0" y="94" text-anchor="middle" class="svgtitle">输出 y</text><text x="880.0" y="118" text-anchor="middle">回到源token顺序</text></g></svg></div><figcaption>图1：dispatch与combine围住专家计算；专家计算本身不在这两个kernel里。</figcaption></figure>
+<div class="equation">y[s,t] ≈ Σₖ w[s,t,k] · F<sub>expert[s,t,k]</sub>(x[s,t])</div>
+<p><b>dispatch负责重排和传输输入；combine负责把专家结果按原token归并。</b>专家网络Fₑ由调用者在两者之间执行。它既不是dispatch中的某个循环，也不是combine帮你补做的计算。</p>
+<div class="three">
+<div><b>为什么</b>
+<p>源卡上的token顺序，与目的卡上按专家执行的顺序不同。</p></div>
+<div><b>做什么</b>
+<p>dispatch展开路由，把每条专家任务放到正确的目的卡和输出行。</p></div>
+<div><b>得到什么</b>
+<p>专家可按本地专家连续处理自己的行。</p></div></div>
+<div class="three">
+<div><b>为什么</b>
+<p>一个源token会产生多份专家结果；调用者最终只需要一行。</p></div>
+<div><b>做什么</b>
+<p>combine使用dispatch留下的路由记录回传、乘权重并求和。</p></div>
+<div><b>得到什么</b>
+<p>输出重新按源rank原token编号排列。</p></div></div>
+<aside class="note"><strong>“≈”是有意写的</strong>
+<p>数学目标是加权和；FP8传输、BF16/FP16转换，以及M4先形成partial再由M5求和，可能带来舍入差异。文中小数例子刻意使用可精确表示的数，不把它当作真实精度或性能测量。</p></aside></section>
+<section id="terms">
+<h2>2. 先分清这些名字</h2>
+<div class="table-scroll">
+<table>
+<thead>
+<tr><th>名字</th><th>本篇含义</th><th>不要混淆</th></tr></thead>
+<tbody>
+<tr><td>rank / 卡</td><td>EP通信域中的一个参与者；本项目按每主机16个连续rank划分物理机界。</td><td>rank不是AIV核，也不是专家。</td></tr>
+<tr><td>AIV核 / core</td><td>一张卡内并行执行这段通信kernel的核。</td><td>56核是本文例子，实际C来自设备查询。</td></tr>
+<tr><td>expert / 专家</td><td>一个逻辑计算模块。E384、EP32时，每卡12个专家。</td><td>expert205在rank17，不是rank205。</td></tr>
+<tr><td>B / H / K / E / P</td><td>本rank实际token数 / 向量宽度 / 每token路由数 / 全局专家数 / EP规模。</td><td>本文主例B2、H3584、K4、E384、P32。</td></tr>
+<tr><td>B_cap</td><td><code>num_max_tokens_per_rank</code>，Host容量参数；主例256。</td><td>不是实际B，也不是元数据核数。</td></tr>
+<tr><td>M / S / R</td><td>dispatch元数据核数 / payload发送核数 / 接收核数。C56、M4时S=R=26。</td><td>combine并不沿用这个4+26+26拆分。</td></tr>
+<tr><td>G / group</td><td>逻辑去重组大小。当前P≤16用G4，P&gt;16用G16。</td><td>G4不代表一台机器只有4张卡。</td></tr>
+<tr><td>k / firstK</td><td>某条路由在token的top-k列表中的位置，取值0…K-1。</td><td>包头字段topK存的是这个位置，不是shape里的K。</td></tr>
+<tr><td>q</td><td>同一源rank发往某个expert的第几条路由，从0开始。</td><td>不是包到达次序，也不是输出行号。</td></tr>
+<tr><td>slot / 固定槽</td><td>通信GM中预先可计算的稀疏收件地址编号。</td><td>它无需prefix，却可能有很多空洞。</td></tr>
+<tr><td>row / 输出行</td><td>dispatch最终展开输出中的紧凑行号。</td><td>它依赖count/prefix；combine按同一行读取专家结果。</td></tr>
+<tr><td>count / prefix</td><td>每个expert/source的条数 / 按固定逻辑顺序的累计和。</td><td>计数对象是完整专家路由，不是去重后的跨机包数。</td></tr>
+<tr><td>DIRECT / FIRST_HOP / TERMINAL</td><td>专家任务在通信协议中的角色，数值为1 / 2 / 3。</td><td>不是flag里的1.0 / 1.5 / 1.25。</td></tr>
+<tr><td>GM / UB / lane</td><td>全局内存 / 核内暂存 / 一份循环复用的暂存槽。</td><td>lane不是另一张卡，也不等于GM批容量。</td></tr>
+<tr><td>MTE2 / MTE3</td><td>常见方向是GM→UB / UB→GM的数据搬运流水。</td><td>操作会异步进行，代码走到下一行不代表搬完。</td></tr>
+<tr><td>Scalar / Vector</td><td>标量控制、地址计算 / 向量计算、打包、归约。</td><td>事件名里的S是Scalar，不是业务上的S发送核。</td></tr>
+<tr><td>QP / WQE / CQ</td><td>传输队列 / 提交的工作请求 / 完成队列。</td><td>路由序号q与QP完全不同；quiet用于退休在途请求。</td></tr></tbody></table></div><a class="source" href="https://github.com/TangYunfei147/DeepEP-LL/blob/c3d86406733fd28fe4e081e563eaf7e51321c18f/csrc/kernels/dispatch/low_latency/common/ll_group_policy.h#L12" target="_blank" rel="noopener">ll_group_policy.h ↗</a><a class="source" href="https://github.com/TangYunfei147/DeepEP-LL/blob/c3d86406733fd28fe4e081e563eaf7e51321c18f/csrc/kernels/dispatch/low_latency/common/ep_memory_server_dedup_protocol.h#L24" target="_blank" rel="noopener">ep_memory_server_dedup_protocol.h ↗</a><a class="source" href="https://github.com/TangYunfei147/DeepEP-LL/blob/c3d86406733fd28fe4e081e563eaf7e51321c18f/csrc/kernels/dispatch/low_latency/common/ep_memory_server_dedup_data_layout.h#L40" target="_blank" rel="noopener">ep_memory_server_dedup_data_layout.h ↗</a></section>
+<section id="example">
+<h2>3. 一组贯穿三篇的具体数据</h2>
+<p>只展开源rank0的两个token，其他31个rank仍存在。为了让所画专家的count可手算，可让其他源rank选择expert4/5/6/7；这些合法路由会影响rank0的其他专家，不影响下表高亮专家。我们只展示向量的前两个分量，实际H仍为3584。</p>
+<div class="table-scroll">
+<table>
+<thead>
+<tr><th>源token</th><th>k0：本组DIRECT</th><th>k1：异组首跳</th><th>k2：异组成员</th><th>k3：异组成员</th></tr></thead>
+<tbody>
+<tr><td>t0</td><td>e0 → rank0；w=¼</td><td>e192 → rank16；w=¼</td><td>e205 → rank17；w=¼</td><td>e218 → rank18；w=¼</td></tr>
+<tr><td>t1</td><td>e1 → rank0；w=½</td><td>e192 → rank16；w=¼</td><td>e229 → rank19；w=⅛</td><td>e242 → rank20；w=⅛</td></tr></tbody></table></div>
+<p>专家位置由L=E/P=12计算：expert205的目标rank为205//12=17，本地专家号为205%12=1。每个token都选了三个主机B上的专家。它们先合成一份FIRST_HOP发到rank16，再在主机B内展开。rank16既是一个真实专家所在卡，也是这次转发与partial归并的承担者。</p>
+<details>
+<summary>为什么两个token的首跳都选k1？</summary>
+<div>
+<p>当前G16+RDMA实现会看该目标主机内四个连续4-rank小组，优先选包含最多专家路由的组，再选其中最小原始k；按路由条数统计，不按不同卡数。t0的rank16/17/18都在同一小组；t1的rank16/19有两条、rank20所在小组只有一条。因此两者都选k1。首跳并非总是固定rank16。</p><a class="source" href="https://github.com/TangYunfei147/DeepEP-LL/blob/c3d86406733fd28fe4e081e563eaf7e51321c18f/csrc/kernels/dispatch/low_latency/common/ll_fullmesh_first_hop.h#L44" target="_blank" rel="noopener">ll_fullmesh_first_hop.h ↗</a></div></details>
+<p>这份教学例子可直接运行，不需要Torch、CANN或NPU：</p>
+<pre><code>python docs/ll_walkthrough/example.py</code></pre>
+<p>它验证路由、q、slot、搬出核、权重恢复与包长。它只是CPU解释模型，不模拟DMA可见性或硬件调度。</p></section>
+<section id="story">
+<h2>4. 用六步走完整个来回</h2>
+<div id="story-title" aria-live="polite"></div>
+<figure>
+<div class="diagram"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 360" role="img" aria-label="图2：只画rank0、16、17、18四张卡，实际仍为EP32。箭头表示数据方向，不表示耗时。"><title>图2：只画rank0、16、17、18四张卡，实际仍为EP32。箭头表示数据方向，不表示耗时。</title><defs><marker id="arrow-2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10Z" fill="#70849e"/></marker></defs><rect x="8" y="16" width="315" height="325" rx="16" fill="#f0f5fd"/><rect x="351" y="16" width="599" height="325" rx="16" fill="#f5f1fb"/><text x="25" y="45" class="svgtitle">主机A · ranks 0–15</text><text x="370" y="45" class="svgtitle">主机B · ranks 16–31</text><g id="story-source"><rect x="35" y="82" width="245" height="86" rx="12" fill="#eaf2ff" stroke="#275da5"/><text x="157.5" y="111" text-anchor="middle" class="svgtitle">rank0 · token t0</text><text x="157.5" y="135" text-anchor="middle">expert0：DIRECT</text></g><g id="story-lead"><rect x="400" y="82" width="220" height="86" rx="12" fill="#f1ecff" stroke="#7052aa"/><text x="510.0" y="111" text-anchor="middle" class="svgtitle">rank16 · expert192</text><text x="510.0" y="135" text-anchor="middle">FIRST_HOP</text></g><g id="story-member1"><rect x="680" y="82" width="230" height="86" rx="12" fill="#f1ecff" stroke="#7052aa"/><text x="795.0" y="111" text-anchor="middle" class="svgtitle">rank17 · expert205</text><text x="795.0" y="135" text-anchor="middle">TERMINAL</text></g><g id="story-member2"><rect x="680" y="235" width="230" height="86" rx="12" fill="#f1ecff" stroke="#7052aa"/><text x="795.0" y="264" text-anchor="middle" class="svgtitle">rank18 · expert218</text><text x="795.0" y="288" text-anchor="middle">TERMINAL</text></g><g id="story-output"><rect x="35" y="235" width="245" height="86" rx="12" fill="#e7f5ee" stroke="#287755"/><text x="157.5" y="264" text-anchor="middle" class="svgtitle">rank0 · 输出槽</text><text x="157.5" y="288" text-anchor="middle">k0收DIRECT；k1收partial</text></g><g id="story-outbound"><path d="M282 122 L394 122" fill="none" stroke="#7958a6" stroke-width="2.5" marker-end="url(#arrow-2)"/><text x="338.0" y="112.0" text-anchor="middle">RoCE一次</text></g><g id="story-relay1"><path d="M622 113 L674 113" fill="none" stroke="#7958a6" stroke-width="2.5" marker-end="url(#arrow-2)"/><text x="648.0" y="103.0" text-anchor="middle">转发</text></g><g id="story-relay2"><path d="M613 158 L674 260" fill="none" stroke="#7958a6" stroke-width="2.5" marker-end="url(#arrow-2)"/><text x="643.5" y="199.0" text-anchor="middle">转发</text></g><g id="story-pull1"><path d="M680 180 L620 180" fill="none" stroke="#287755" stroke-width="2.5" marker-end="url(#arrow-2)"/><text x="650.0" y="170.0" text-anchor="middle">读stage</text></g><g id="story-pull2"><path d="M680 292 L578 181" fill="none" stroke="#287755" stroke-width="2.5" marker-end="url(#arrow-2)"/><text x="629.0" y="226.5" text-anchor="middle">读stage</text></g><g id="story-return"><path d="M425 185 L285 264" fill="none" stroke="#287755" stroke-width="2.5" marker-end="url(#arrow-2)"/><text x="355.0" y="214.5" text-anchor="middle">partial回源</text></g><g id="story-direct"><path d="M156 170 L156 229" fill="none" stroke="#275da5" stroke-width="2.5" marker-end="url(#arrow-2)"/><text x="156.0" y="189.5" text-anchor="middle">本机DIRECT</text></g></svg></div><figcaption>图2：只画rank0、16、17、18四张卡，实际仍为EP32。箭头表示数据方向，不表示耗时。</figcaption></figure>
+<div id="story-caption" class="story-caption" aria-live="polite"></div>
+<div class="controls"><button id="story-prev">← 上一步</button><span id="story-number"></span><button id="story-next">下一步 →</button></div>
+<aside class="note"><strong>减少了什么，没有减少什么</strong>
+<p>只看t0的跨机payload：三份输入跨机发送变成一份FIRST_HOP；返回时三份结果变成一份partial。三个远端专家仍各执行一次。count控制消息也仍按完整路由统计；不能把“payload少了两份”说成所有通信都只剩一个包。</p></aside></section>
+<section id="host">
+<h2>5. Host把什么交给设备？</h2>
+<div class="three">
+<div><b>为什么</b>
+<p>设备kernel需要确定尺寸、地址、格式和路由，而Python张量与会话对象不能直接当协议。</p></div>
+<div><b>做什么</b>
+<p>Python分配输出和handle，Host检查形状/类型/容量，上传CommArgs与tiling，选择编译特化。</p></div>
+<div><b>得到什么</b>
+<p>一次dispatch kernel启动，以及返回给调用者的展开数据、handle与事件。</p></div></div>
+<pre><code># 教学伪代码：返回值和参数名做了简化
+recv_x, handle = dispatch(x, expert_ids, original_weights)
+expert_y = run_local_experts(recv_x)     # 调用者负责；保持展开行的对应关系
+y = combine(expert_y, handle)           # 专家输出尚未乘router权重</code></pre>
+<p><code>CommArgs</code>回答“我是谁、可访问哪些peer、对称GM和RDMA暂存在哪”；<code>tiling</code>回答“B/H/K/E、格式、容量和G是多少”。这里的tiling不是另一份路由表。Host还固定本通信器实际核数，避免跨调用布局和QP身份发生变化。</p>
+<div class="table-scroll">
+<table>
+<thead>
+<tr><th>handle字段</th><th>主要在哪里产生</th><th>combine为什么需要</th></tr></thead>
+<tbody>
+<tr><td>token_type</td><td>R核搬出每行时</td><td>区分DIRECT、FIRST_HOP、TERMINAL。</td></tr>
+<tr><td>destination_index</td><td>R核搬出时</td><td>DIRECT/FIRST_HOP保存源rank、源token、return-k；TERMINAL保存固定slot。</td></tr>
+<tr><td>relay_read_index</td><td>FIRST_HOP搬出时</td><td>保留成员expert/q、自己及成员的原权重，供M4读取并加权。</td></tr>
+<tr><td>source_mask</td><td>源S核分类后</td><td>源卡知道哪些k真的会收到DIRECT或partial。</td></tr>
+<tr><td>source_weights</td><td>源S核</td><td>DIRECT保留原权重，FIRST_HOP返回槽权重改为1。</td></tr>
+<tr><td>send_counts</td><td>元数据核完成prefix</td><td>名字容易误导：此处存目的卡的累计接收前缀；末项是有效展开行数T。</td></tr></tbody></table></div>
+<aside class="note"><strong>不要提前做两次加权</strong>
+<p>当前LL combine读取handle里的权重；输入应是未乘router权重的BF16/FP16专家结果。公共LL路径不接受再传一份topk_weights或bias来覆盖它。</p></aside>
+<details>
+<summary>同步与容量的第一遍解释</summary>
+<div>
+<p>Python用专用通信stream和事件建立输入生产、kernel、后续消费的先后关系，并保留张量生命周期。事件wait建立stream依赖，不等于Python线程已经等到NPU执行完成。输出可能按上界预分配；真正有效行数由设备prefix给出。不要把分配容量当有效token数。<code>do_cpu_sync</code>会影响Host能否提前得到精确行数和返回张量范围，但不替代设备count协议。</p></div></details><a class="source" href="https://github.com/TangYunfei147/DeepEP-LL/blob/c3d86406733fd28fe4e081e563eaf7e51321c18f/deep_ep/buffers/elastic.py#L442" target="_blank" rel="noopener">Python dispatch入口 ↗</a><a class="source" href="https://github.com/TangYunfei147/DeepEP-LL/blob/c3d86406733fd28fe4e081e563eaf7e51321c18f/csrc/ops/low_latency.cpp#L313" target="_blank" rel="noopener">Host校验与launch ↗</a><a class="source" href="https://github.com/TangYunfei147/DeepEP-LL/blob/c3d86406733fd28fe4e081e563eaf7e51321c18f/deep_ep/buffers/elastic.py#L562" target="_blank" rel="noopener">Python combine入口 ↗</a></section>
+<section id="memory">
+<h2>6. 只先记住三种“地址”</h2>
+<p>看代码时最容易迷路的是：同一个token先后出现于多个缓冲。它们不是同一个编号空间。</p>
+<div class="table-scroll">
+<table>
+<thead>
+<tr><th>位置</th><th>如何编号</th><th>主要作用</th></tr></thead>
+<tbody>
+<tr><td>通信收件槽</td><td>source、destination、localExpert、q → slot</td><td>发送方不等prefix，也能确定写入位置。</td></tr>
+<tr><td>dispatch展开输出 / 专家结果</td><td>prefix → row</td><td>让专家输入连续，并用handle把这行结果关联回原路由。</td></tr>
+<tr><td>combine返回槽</td><td>source-token × K + return-k</td><td>源卡按source_mask等待有效返回槽，再合成一行y。</td></tr></tbody></table></div>
+<p>t0在rank16的收件slot是384，但搬到展开输出的row0；combine partial最终回到rank0的return槽1。<b>384、0、1都描述同一条首跳任务的不同阶段，不能互相替换。</b></p>
+<aside class="note"><strong>内存分层</strong>
+<p>每rank对称工作区固定8GiB，分成两个4GiB bank；每次dispatch或combine launch轮转一次bank。RDMA发送另外使用每物理核128KiB的注册GM暂存。UB负责核内计算/打包；NIC读的是注册GM源，不能直接把一个UB地址当RoCE源。</p></aside><a class="source" href="https://github.com/TangYunfei147/DeepEP-LL/blob/c3d86406733fd28fe4e081e563eaf7e51321c18f/csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_magic.h#L17" target="_blank" rel="noopener">dispatch_server_dedup_magic.h ↗</a><a class="source" href="https://github.com/TangYunfei147/DeepEP-LL/blob/c3d86406733fd28fe4e081e563eaf7e51321c18f/csrc/kernels/dispatch/low_latency/device/ll_dispatch_rdma_batch.h#L8" target="_blank" rel="noopener">ll_dispatch_rdma_batch.h ↗</a></section>
+<section id="readcode">
+<h2>7. 串讲时按这个顺序打开代码</h2>
+<div class="table-scroll">
+<table>
+<thead>
+<tr><th>顺序</th><th>先回答的问题</th><th>源码入口</th></tr></thead>
+<tbody>
+<tr><td>1</td><td>Python给设备什么，handle带回什么？</td><td><a class="source" href="https://github.com/TangYunfei147/DeepEP-LL/blob/c3d86406733fd28fe4e081e563eaf7e51321c18f/deep_ep/buffers/elastic.py#L442" target="_blank" rel="noopener">_dispatch_low_latency ↗</a> <a class="source" href="https://github.com/TangYunfei147/DeepEP-LL/blob/c3d86406733fd28fe4e081e563eaf7e51321c18f/deep_ep/buffers/elastic.py#L562" target="_blank" rel="noopener">_combine_low_latency ↗</a></td></tr>
+<tr><td>2</td><td>当前M/S/R分别执行哪些函数？</td><td><a class="source" href="https://github.com/TangYunfei147/DeepEP-LL/blob/c3d86406733fd28fe4e081e563eaf7e51321c18f/csrc/kernels/dispatch/low_latency/dispatch_server_dedup_kernel.h#L50" target="_blank" rel="noopener">dispatch Process ↗</a></td></tr>
+<tr><td>3</td><td>count如何让目的卡知道有效行数？</td><td><a class="source" href="https://github.com/TangYunfei147/DeepEP-LL/blob/c3d86406733fd28fe4e081e563eaf7e51321c18f/csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_counts.h#L180" target="_blank" rel="noopener">SendCnt ↗</a> <a class="source" href="https://github.com/TangYunfei147/DeepEP-LL/blob/c3d86406733fd28fe4e081e563eaf7e51321c18f/csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_counts.h#L355" target="_blank" rel="noopener">RecvCnt ↗</a> <a class="source" href="https://github.com/TangYunfei147/DeepEP-LL/blob/c3d86406733fd28fe4e081e563eaf7e51321c18f/csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_counts.h#L382" target="_blank" rel="noopener">CompleteCumsum ↗</a></td></tr>
+<tr><td>4</td><td>什么时候发DIRECT，什么时候只发FIRST_HOP？</td><td><a class="source" href="https://github.com/TangYunfei147/DeepEP-LL/blob/c3d86406733fd28fe4e081e563eaf7e51321c18f/csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_send.h#L322" target="_blank" rel="noopener">Classify ↗</a> <a class="source" href="https://github.com/TangYunfei147/DeepEP-LL/blob/c3d86406733fd28fe4e081e563eaf7e51321c18f/csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_send.h#L386" target="_blank" rel="noopener">FillTail ↗</a></td></tr>
+<tr><td>5</td><td>转发与搬出如何互不阻塞？</td><td><a class="source" href="https://github.com/TangYunfei147/DeepEP-LL/blob/c3d86406733fd28fe4e081e563eaf7e51321c18f/csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_recv.h#L37" target="_blank" rel="noopener">Receiver.Process ↗</a> <a class="source" href="https://github.com/TangYunfei147/DeepEP-LL/blob/c3d86406733fd28fe4e081e563eaf7e51321c18f/csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_recv.h#L261" target="_blank" rel="noopener">OutputBatch ↗</a></td></tr>
+<tr><td>6</td><td>combine为什么要准备stage和通知？</td><td><a class="source" href="https://github.com/TangYunfei147/DeepEP-LL/blob/c3d86406733fd28fe4e081e563eaf7e51321c18f/csrc/kernels/combine/low_latency/combine_server_dedup_kernel.h#L112" target="_blank" rel="noopener">combine Process ↗</a> <a class="source" href="https://github.com/TangYunfei147/DeepEP-LL/blob/c3d86406733fd28fe4e081e563eaf7e51321c18f/csrc/kernels/combine/low_latency/combine_server_dedup_kernel.h#L221" target="_blank" rel="noopener">CopyLocalPendingTokens ↗</a> <a class="source" href="https://github.com/TangYunfei147/DeepEP-LL/blob/c3d86406733fd28fe4e081e563eaf7e51321c18f/csrc/kernels/combine/low_latency/combine_server_dedup_kernel.h#L434" target="_blank" rel="noopener">NotifyServerCard ↗</a></td></tr>
+<tr><td>7</td><td>原权重在哪里乘、结果回到哪个槽？</td><td><a class="source" href="https://github.com/TangYunfei147/DeepEP-LL/blob/c3d86406733fd28fe4e081e563eaf7e51321c18f/csrc/kernels/combine/low_latency/combine_server_dedup_kernel.h#L335" target="_blank" rel="noopener">ReturnDirectTokens ↗</a> <a class="source" href="https://github.com/TangYunfei147/DeepEP-LL/blob/c3d86406733fd28fe4e081e563eaf7e51321c18f/csrc/kernels/combine/low_latency/combine_server_dedup_partial.h#L225" target="_blank" rel="noopener">Partial.Aggregate ↗</a> <a class="source" href="https://github.com/TangYunfei147/DeepEP-LL/blob/c3d86406733fd28fe4e081e563eaf7e51321c18f/csrc/kernels/combine/low_latency/combine_server_dedup_source_aggregate.h#L213" target="_blank" rel="noopener">SourceAggregate.Aggregate ↗</a></td></tr>
+<tr><td>8</td><td>什么时候允许复用UB、GM和bank？</td><td><a class="source" href="https://github.com/TangYunfei147/DeepEP-LL/blob/c3d86406733fd28fe4e081e563eaf7e51321c18f/csrc/kernels/dispatch/low_latency/device/ll_transport.h#L59" target="_blank" rel="noopener">Packet ↗</a> <a class="source" href="https://github.com/TangYunfei147/DeepEP-LL/blob/c3d86406733fd28fe4e081e563eaf7e51321c18f/csrc/kernels/dispatch/low_latency/device/ll_dispatch_rdma_batch.h#L8" target="_blank" rel="noopener">DispatchRdmaBatch ↗</a></td></tr></tbody></table></div>
+<details>
+<summary>版本与模式边界（务必在分享开场说清）</summary>
+<div>
+<p>本文讲LL，不讲HT、GMM融合或通用AllToAllV。当前P&gt;16始终去重；P=16时由B_cap&gt;32决定是否去重。公开Python LL支持BF16/FP16原样dispatch，或FP8 E4M3预量化输入；内部还编译量化特化，不能据此推断Python随意传一个参数即可走到它。combine公开输入为BF16/FP16。</p>
+<p>实际核数动态查询；示例C56不是固定启动值。CPU布局支持范围与SDK实际QP上限不同，不能据72核模型测试宣称72核跨机已支持。完整wheel、SDK、M配置与通信器调用顺序须一致。</p><a class="source" href="https://github.com/TangYunfei147/DeepEP-LL/blob/c3d86406733fd28fe4e081e563eaf7e51321c18f/csrc/kernels/dispatch/low_latency/common/ep_memory_server_dedup_mode.h#L18" target="_blank" rel="noopener">ep_memory_server_dedup_mode.h ↗</a><a class="source" href="https://github.com/TangYunfei147/DeepEP-LL/blob/c3d86406733fd28fe4e081e563eaf7e51321c18f/csrc/kernels/dispatch/low_latency/common/ll_group_policy.h#L12" target="_blank" rel="noopener">ll_group_policy.h ↗</a></div></details></section>
+<section id="present">
+<h2>8. 给讲述者的路线与检查点</h2>
+<div class="table-scroll">
+<table>
+<thead>
+<tr><th>时间</th><th>讲述重点</th><th>让听众回答</th></tr></thead>
+<tbody>
+<tr><td>0～15分钟</td><td>基础、路由表、六步动画</td><td>去重后，远端专家还要算几次？</td></tr>
+<tr><td>15～40分钟</td><td>打开dispatch篇；M/S/R、slot与row、1.25</td><td>为什么不等prefix也能转发，却不能随便搬出/清flag？</td></tr>
+<tr><td>40～65分钟</td><td>打开combine篇；M1～M5、partial、source_mask</td><td>为什么partial回到源卡后乘1？</td></tr>
+<tr><td>65～80分钟</td><td>流水依赖、quiet和双bank</td><td>看到ready、quiet完成、对端消费完是同一件事吗？</td></tr>
+<tr><td>最后10分钟</td><td>带着例子跳到源码，回答疑问</td><td>哪张表把专家结果row关联回源token？</td></tr></tbody></table></div>
+<p class="check">听众能独立解释“slot384 → row0 → return槽1 → y[t0]”，就已经掌握这条实现的主线。</p>
+<details>
+<summary>第一次串讲可以暂时跳过什么？</summary>
+<div>
+<p>先跳过宏展开、SIMT/向量指令细节、全部UB容量公式和历史优化提交。把三种所有权、两种消息（count/payload）、两次加权位置讲清后，再回到具体事件依赖。不要用文件长度决定讲述顺序。</p></div></details></section>
+<div class="chapter-nav"><span></span><a href="dispatch.html">进入Dispatch逐步流程 →</a></div>
+<div class="footer">复制本目录的4个文件后打开index.html即可离线阅读；源码链接固定到c3d8640，点击源码链接需要网络。伪代码省略硬件API细节，不能直接替换kernel。<a href="example.py">下载CPU教学例子</a> · 三篇共用同一例子，未使用NPU实测数据。</div></main></div><script>let opened=[];addEventListener('beforeprint',()=>{opened=[...document.querySelectorAll('details:not([open])')];opened.forEach(x=>x.open=true)});addEventListener('afterprint',()=>opened.forEach(x=>x.open=false));</script><script>(()=>{const all=['story-source','story-lead','story-member1','story-member2','story-output','story-outbound','story-relay1','story-relay2','story-pull1','story-pull2','story-return','story-direct'];const frames=[
+['1 / 6 · 一份输入，需要四个专家','t0的路由为expert0、192、205、218。每条路由都必须真正执行；去重只减少重复传输。',['story-source','story-lead','story-member1','story-member2']],
+['2 / 6 · 源端发两份payload','expert0在本组，走DIRECT。三个异组专家合成一个FIRST_HOP：只跨机发到rank16，携带另外两个成员的expert/q/weight。',['story-source','story-outbound','story-lead']],
+['3 / 6 · 目的主机展开成三份','rank16按包内成员信息转发给rank17、18。三个专家仍各得到一行输入。转发可早于prefix；搬到最终输出行要等prefix。',['story-lead','story-relay1','story-relay2','story-member1','story-member2']],
+['4 / 6 · 专家结果准备就绪','专家计算产生新的BF16结果。TERMINAL结果先写本机stage；组内ready保证rank16随后读到完整结果。DIRECT可以独立返回。',['story-member1','story-member2','story-source','story-direct','story-output']],
+['5 / 6 · 首跳卡读成员并形成partial','rank16主动从rank17、18的stage读取。三个结果各乘原权重后求和，得到partial=[9,4]，返回源token的k1槽。',['story-lead','story-pull1','story-pull2','story-member1','story-member2','story-return','story-output']],
+['6 / 6 · 源卡恢复一个token','源卡只等source_mask指定的k0、k1。DIRECT乘0.25，partial乘1；[1,2]+[9,4]=[10,6]。k2、k3无需单独回包。',['story-source','story-direct','story-return','story-output']]
+];let n=0;const render=()=>{document.getElementById('story-title').textContent=frames[n][0];document.getElementById('story-caption').textContent=frames[n][1];document.getElementById('story-number').textContent=(n+1)+' / '+frames.length;all.forEach(id=>{const node=document.getElementById(id),inactive=!frames[n][2].includes(id),edge=!['story-source','story-lead','story-member1','story-member2','story-output'].includes(id);node.classList.toggle('story-fade',inactive&&!edge);node.classList.toggle('story-hide',inactive&&edge)});document.getElementById('story-prev').disabled=n===0;document.getElementById('story-next').disabled=n===frames.length-1;};document.getElementById('story-prev').onclick=()=>{n=Math.max(0,n-1);render()};document.getElementById('story-next').onclick=()=>{n=Math.min(frames.length-1,n+1);render()};render()})();</script></body></html>
