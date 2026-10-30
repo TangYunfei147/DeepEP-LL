@@ -53,7 +53,7 @@ timer/reference结束后统一输出`RUN_DIR/table-analysis/stage-times.xlsx`，
 `stages.csv`改为单轮每核一行、阶段为列。已有样本可通过`one_click.sh --analyze-only`重导出，
 无需重编或重采；详见[表格导出](TABLE_EXPORT.md)。
 
-2026-10-25：SHMEM更新到官方master固定提交8e3fc610，必须重建匹配SDK和wheel，
+2026-10-30：metadata与每核QP基线统一锁定官方SHMEM master的4c671684（原8e3fc610），必须重建匹配SDK和完整wheel，
 具体兼容与部署见 [SHMEM_MASTER_UPDATE.md](SHMEM_MASTER_UPDATE.md)。
 每卡3 fullmesh + 4 Clos + 1跨机网口的消息合并、首跳策略及A/B方法见
 [EIGHT_PORT_OPTIMIZATION.md](EIGHT_PORT_OPTIMIZATION.md)。
