@@ -1,3 +1,5 @@
+> 历史指南：旧打点及入口适用于原提交（最后完整旧实现e4d114c）。当前已删除旧插桩/解析；构建与采样以[reference schema7指南](../ll_reference_profile/README.md)为准。下文算法与历史结果保留。
+
 # cb59 dispatch replay with current sparse capture
 
 Current build policy (2026-10-26): SDK checks/reuse have been removed. Use the

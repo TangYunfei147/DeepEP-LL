@@ -164,7 +164,7 @@ runpy.run_path(entry,run_name='__main__')
           '--master-addr','127.0.0.1','--master-port','29500','--shmem-port','29501',
           '--num-tokens','3','--num-max-tokens-per-rank','256',
           '--hidden','3584','--num-topk','8','--num-experts','384','--dtype','fp8',
-          '--ll-stage-timer','--ll-timer-iters','5','--ll-timer-mode','observe','--do-cpu-sync','0',
+          '--ll-reference-profile','--reference-iters','5','--dispatch-only','--do-cpu-sync','0',
           '--send-cores','10','--recv-cores','46','--output-dir',str(tmp_path/'reports'),
           '--run-name',run_name,*extra]
     result=subprocess.run(args,cwd=tmp_path,capture_output=True,text=True,encoding='utf-8')
@@ -200,7 +200,7 @@ def test_full_command_no_accelerator_and_no_overwrite(tmp_path):
 
 def test_relocated_project_with_spaces_and_matrix(tmp_path):
     project=tmp_path/'project with spaces';project.mkdir()
-    files=['tests/elastic/test_ep_low_latency.py','tests/elastic/inspect_dispatch_routes.py',
+    files=['tests/elastic/test_ep_low_latency.py','tests/elastic/inspect_dispatch_routes.py','scripts/ll_dispatch_implementation.py',
            'csrc/kernels/dispatch/low_latency/common/ll_core_config.h',
            'csrc/kernels/dispatch/low_latency/common/ll_group_local_send.h',
            'csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_receive_tasks.h',

@@ -1,4 +1,4 @@
-"""CPU verification of the immutable cb59 algorithm replay and sparse boundaries."""
+"""CPU verification of the immutable cb59 algorithm replay and reference boundaries."""
 from __future__ import annotations
 
 import importlib.util
@@ -66,59 +66,14 @@ def test_include_change_cannot_hide_behind_token_normalization() -> None:
         REPLAY.validate_file(relative, changed, MANIFEST["files"][relative])
 
 
-def test_sparse_points_preserve_the_count_protocol_order() -> None:
-    text = source("device/dispatch_server_dedup_counts.h")
-    gather = text[text.index("__aicore__ inline void ServerDedupCounts::GatherSumRecvCnt"):]
-    assert gather.index("SyncFunc<AscendC::HardEvent::V_S>();") < gather.index("LL_SPARSE_MARK(COUNTS_RECEIVED);")
-    assert gather.index("LL_SPARSE_MARK(COUNTS_RECEIVED);") < gather.index("uint32_t cumulative = 0;")
-    assert gather.index("prefix.SetValue(i, cumulative);") < gather.index("LL_SPARSE_MARK(PREFIX_LOCAL_DONE);")
-    assert gather.index("LL_SPARSE_MARK(PREFIX_LOCAL_DONE);") < gather.index("PublishRecvCntSum(sumOfRecvCnt);")
-    wait = text[text.index("__aicore__ inline void ServerDedupCounts::WaitDispatch()"):]
-    assert wait.index("GatherSumRecvCnt(gatherMaskOutTensor, gatherTmpTensor, statusSumOutTensor);") < wait.index("WaitDispatchClearStatus();")
-    assert "SendExpertCntRange(start, end);\n    LL_SPARSE_MARK(COUNTS_SENT);" in text
-    kernel = source(REPLAY.FILES[0])
-    assert "PipeBarrier<PIPE_ALL>();\n            LL_SPARSE_MARK(PREFIX_READY);" in kernel
-    assert kernel.index("counts_.CompleteCumsum();") < kernel.index("LL_SPARSE_MARK(PREFIX_READY);") < kernel.index("receiver_.Process(timer_);")
-    assert "counts_.Finish();\n        LL_SPARSE_AFTER(FIRST_SEND, SEND_DONE);" in kernel
 
 
-def test_sparse_sender_points_do_not_add_a_completion_barrier() -> None:
-    text = source("device/dispatch_server_dedup_send.h")
-    assert "PipeBarrier<PIPE_V>();\n\n        LL_SPARSE_MARK(SEND_PREPARED);" in text
-    assert "LL_SPARSE_MARK(FIRST_SEND);\n        DataCopy(destinationGm, out, uint32_t(data_.tokenStride));" in text
-    assert "LL_SPARSE_MARK(SEND_DONE)" not in text
-    assert text.count("LL_SPARSE_MARK(FIRST_SEND)") == 1
 
 
-def test_sparse_receiver_points_cover_empty_and_nonempty_workers() -> None:
-    text = source("device/dispatch_server_dedup_recv.h")
-    assert "if (tasks_.Count() == 0U) {\n            LL_SPARSE_MARK(RECV_PREPARED);\n            return;" in text
-    assert text.count("LL_SPARSE_MARK(RECV_PREPARED)") == 2
-    assert "} while (probe.readyMask == 0U);\n            LL_SPARSE_MARK(FIRST_RECV_READY);" in text
-    assert "PipeBarrier<PIPE_ALL>();\n        LL_SPARSE_MARK(RECV_DONE);" in text
-    probe = text[text.index("__aicore__ inline ProbeResult Probe("):]
-    assert probe.index("LL_SPARSE_MARK(FIRST_RECV_PROBE);") < probe.index("ReadServerDedupFlags(")
-    assert "timer_ = timer;" in text
 
 
 def test_manifest_records_cross_implementation_point_difference() -> None:
     assert MANIFEST["reference_commit"] == REPLAY.REFERENCE
     assert MANIFEST["milestone_contract"] == REPLAY.MILESTONE_CONTRACT
-    assert MANIFEST["milestone_contract"]["diagnostic_synchronization_added"] is False
-    assert "current keeps its historical point after count-clear" in MANIFEST["milestone_contract"]["counts_received_current_difference"]
-
-
-def test_sparse_business_and_initialization_points_are_explicit() -> None:
-    observed = set()
-    for relative in REPLAY.FILES:
-        for call in re.findall(r'LL_SPARSE_(?:MARK|AFTER)\(([^)]*)\)', source(relative)):
-            observed.update(word.strip() for word in call.split(","))
-    assert observed == {
-        "COUNTS_SENT", "COUNTS_RECEIVED", "PREFIX_LOCAL_DONE", "PREFIX_READY",
-        "SEND_PREPARED", "FIRST_SEND", "SEND_DONE", "RECV_PREPARED",
-        "FIRST_RECV_PROBE", "FIRST_RECV_READY", "RECV_DONE", "MAGIC_DONE",
-    }
-    # ENTRY / INIT_DONE / WORK_DONE stay in the common seven-TU wrapper. No
-    # old scope, counter, hidden metric or additional clock read is introduced.
-    for relative in REPLAY.FILES:
-        assert "GetSystemCycle" not in source(relative)
+    assert MANIFEST["milestone_contract"]["business_synchronization_added"] is False
+    assert MANIFEST["milestone_contract"]["schema"] == 7

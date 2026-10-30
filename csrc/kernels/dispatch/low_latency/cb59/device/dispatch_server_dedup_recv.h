@@ -1,10 +1,11 @@
+#include "../../common/ll_reference_receiver_log.h"
+#include "../count_layout.h"
 // Copyright (c) 2026, Lu Lu
 // Modified by ryan_li 2026
 
 #ifndef DISPATCH_SERVER_DEDUP_RECV_H
 #define DISPATCH_SERVER_DEDUP_RECV_H
-#include "../../common/ll_stage_timer_device.h"
-#include "../count_layout.h"
+#include "../../common/ll_core_config.h"
 
 #include "kernel_operator.h"
 #include "adv_api/reduce/sum.h"
@@ -26,6 +27,16 @@ class ServerDedupReceiver {
                      : (WireFp8 ? EpServerDedupInputMode::Quantize16 : EpServerDedupInputMode::Plain16);
 
 public:
+/* LL_REFERENCE_BEGIN */
+__aicore__ inline void SetProfile(LlReferenceProfile::DeviceProfile* profile) { profile_ = profile; }
+__aicore__ inline void ExportProfile() {
+#ifdef DEEPEP_LL_REFERENCE_PROFILE
+        if (!profile_ || !profile_->Enabled() || !profileReceiving_) return;
+        trace_.Export(profile_, tasks_.Count(), tasks_.Begin(), bs_, localExperts_, lanes_);
+#endif
+    }
+/* LL_REFERENCE_END */
+
     // 摘要：绑定本 rank 接收输出，确定接收核编号和本轮双窗口偏移。
     __aicore__ inline void Init(const __gm__ DispatchDedup::CommArgs* args, GM_ADDR expandX, GM_ADDR dynamicScales,
                                 GM_ADDR tokenType, GM_ADDR destinationIndex, GM_ADDR relayReadIndex, uint32_t bs,
@@ -54,9 +65,15 @@ public:
     }
 
     // 摘要：执行接收主流程：加载前缀、构建任务、批量探测、预取并消费就绪包，最后清理本核槽位标记。
-    __aicore__ inline void Process(LlStageTimer::DeviceTimer* timer = nullptr)
+    __aicore__ inline void Process()
     {
-        timer_ = timer;
+/* LL_REFERENCE_BEGIN */
+if (profile_) profile_->Mark<18>();
+#ifdef DEEPEP_LL_REFERENCE_PROFILE
+        profileReceiving_ = true;
+#endif
+/* LL_REFERENCE_END */
+
         // 1. 调用方已完成计数阶段的写入，才能 Reset TPipe 回收旧计数 UB。
         // 从当前 magic 窗口加载本接收核的完整前缀副本，MTE2_S 后 Scalar 才能使用。
 
@@ -76,13 +93,25 @@ public:
 
         // 2. 按前缀定义的接收输出行均分任务，建立稳定槽位表和可压缩的 pending 表。
         // j 始终标识固定输出行/槽位；pending 下标只表示尚未消费的任务位置。
-        tasks_.Build(prefix, uint32_t(args_->rank), uint32_t(args_->rankSize), experts_, bs_, receiver_, pipe_, recvCoreNum_);
+
+/* LL_REFERENCE_BEGIN */
+if (profile_) profile_->Mark<30>();
+/* LL_REFERENCE_END */
+tasks_.Build(prefix, uint32_t(args_->rank), uint32_t(args_->rankSize), experts_, bs_, receiver_, pipe_, recvCoreNum_);
+/* LL_REFERENCE_BEGIN */
+if (profile_) profile_->Mark<31>();
+/* LL_REFERENCE_END */
+
 
 
         // 空任务核没有拥有的接收槽，完成打点后直接返回，无需参与 packet 轮询。
         if (tasks_.Count() == 0U) {
-            LL_SPARSE_MARK(RECV_PREPARED);
-            return;
+/* LL_REFERENCE_BEGIN */
+if (profile_) profile_->Mark<32>();
+if (profile_) profile_->ReceiveTotals(0U);
+if (profile_) profile_->Mark<19>();
+/* LL_REFERENCE_END */
+return;
         }
 
         // 3. 为每批最多 16 个 packet 的块标记分配探测/归约空间。
@@ -106,7 +135,25 @@ public:
         laneStride_ = uint32_t(data_.tokenStride) + 64U;
         const uint32_t available = (kEpServerDedupCountUbBytes - fixed) / laneStride_;
         lanes_ = available < 8U ? available : 8U;  // Safe inputs guarantee at least one lane.
-        pipe_->InitBuffer(lanesBuf_, lanes_ * laneStride_);
+
+/* LL_REFERENCE_BEGIN */
+uint32_t referenceBytes = 0U;
+#ifdef DEEPEP_LL_REFERENCE_PROFILE
+        if (profile_ && profile_->Enabled()) referenceBytes = trace_.Bytes(profile_, kEpServerDedupCountUbBytes - fixed - lanes_ * laneStride_, tasks_.Count());
+#endif
+/* LL_REFERENCE_END */
+        pipe_->InitBuffer(lanesBuf_, lanes_ * laneStride_
+/* LL_REFERENCE_BEGIN */
++ referenceBytes
+/* LL_REFERENCE_END */
+);
+/* LL_REFERENCE_BEGIN */
+
+#ifdef DEEPEP_LL_REFERENCE_PROFILE
+        if (referenceBytes) trace_.Init(lanesBuf_.Get<uint32_t>()[lanes_ * laneStride_ / 4U]);
+#endif
+/* LL_REFERENCE_END */
+
         for (uint32_t lane = 0; lane < lanes_; ++lane) SetFlag<HardEvent::MTE3_MTE2>(lane);
 
         auto snapshot = probeIdxBuf_.Get<uint32_t>();
@@ -114,9 +161,16 @@ public:
         const uint32_t depth = lanes_;
         // 4. issued/consumed 是跨批累计的加载/消费序号，二者之差限制在 lane 深度内。
         // 它们按相同顺序推进，保证 consumed % lanes_ 对应之前预取的同一个 packet。
-        LL_SPARSE_MARK(RECV_PREPARED);
+
+/* LL_REFERENCE_BEGIN */
+if (profile_) profile_->Mark<32>();
+/* LL_REFERENCE_END */
         uint32_t scan = 0U, issued = 0U, consumed = 0U;
         while (tasks_.PendingCount() != 0U) {
+/* LL_REFERENCE_BEGIN */
+if (profile_) profile_->PollBegin();
+/* LL_REFERENCE_END */
+
             // Include all empty scans in one wait interval. Recording every
             // retry perturbs the polling loop and can exhaust the trace buffer.
             // 从 pending 表分批循环探测；一批没有就绪项就继续扫描，直到至少一个包到齐。
@@ -131,7 +185,13 @@ public:
                 probe = Probe(scan, count);
                 if (probe.readyMask == 0U) scan += count;
             } while (probe.readyMask == 0U);
-            LL_SPARSE_MARK(FIRST_RECV_READY);
+/* LL_REFERENCE_BEGIN */
+if (profile_) profile_->BatchReady();
+#ifdef DEEPEP_LL_REFERENCE_PROFILE
+            trace_.Ready(snapshot, probe.readyMask, count);
+#endif
+/* LL_REFERENCE_END */
+
 
             // Load and consume the immutable snapshot in the same descending
             // order. Higher-index removals cannot change lower pending entries.
@@ -156,6 +216,10 @@ public:
                 tasks_.RemovePending(scan + index);
                 ++consumed;
             }
+/* LL_REFERENCE_BEGIN */
+if (profile_) profile_->BatchDone();
+/* LL_REFERENCE_END */
+
         }
         // 5. pending 清空后，等待各 lane 在途写入，随后统一清除本核所有槽位的块标记。
         // 清理使用稳定任务表，不能使用已压缩为空的 pending 表；payload 本身不清零。
@@ -165,12 +229,36 @@ public:
         // completion barrier. The existing final PIPE_ALL establishes completion.
 
         ClearFlags();
+/* LL_REFERENCE_BEGIN */
+if (profile_) profile_->Mark<35>();
+/* LL_REFERENCE_END */
+
 
         // 最终流水屏障确保输出、relay 和标记清理完成。
         PipeBarrier<PIPE_ALL>();
-        LL_SPARSE_MARK(RECV_DONE);
-    }
+/* LL_REFERENCE_BEGIN */
+if (profile_) profile_->Mark<36>();
+/* LL_REFERENCE_END */
 
+
+/* LL_REFERENCE_BEGIN */
+if (profile_) profile_->ReceiveTotals(tasks_.Count());
+if (profile_) profile_->Mark<19>();
+/* LL_REFERENCE_END */
+}
+
+
+/* LL_REFERENCE_BEGIN */
+private:
+    LlReferenceProfile::DeviceProfile* profile_ = nullptr;
+
+#ifdef DEEPEP_LL_REFERENCE_PROFILE
+    LlReferenceProfile::ReceiverLog trace_;
+    bool profileReceiving_ = false;
+#endif
+
+public:
+/* LL_REFERENCE_END */
 private:
     static constexpr uint32_t kProbeBatch = 16U;
     struct ProbeResult {
@@ -186,7 +274,6 @@ private:
     // 摘要：保存最多 16 项 pending 任务快照，检查每个包全部块的标记，返回就绪位图。
     __aicore__ inline ProbeResult Probe(uint32_t start, uint32_t count)
     {
-        LL_SPARSE_MARK(FIRST_RECV_PROBE);
         auto indices = probeIdxBuf_.Get<uint32_t>();
         auto flags = flagsBuf_.Get<float>();
         auto sums = sumBuf_.Get<float>();
@@ -235,6 +322,15 @@ private:
         auto wire = lanesBuf_.Get<uint8_t>()[lane * laneStride_];
         const uint32_t row = tasks_.Begin() + j;
         const uint32_t headerOffset = uint32_t(keepFlags ? data_.headerWireOffset : data_.headerPayloadOffset);
+/* LL_REFERENCE_BEGIN */
+
+#ifdef DEEPEP_LL_REFERENCE_PROFILE
+        if (profile_ && profile_->Enabled()) trace_.Processed(j, wire, headerOffset,
+            uint32_t(keepFlags ? data_.relayReadIndexWireOffset : data_.readIndexPayloadOffset),
+            tasks_.Position(j));
+#endif
+/* LL_REFERENCE_END */
+
         if (!enableDedup_ && !keepFlags) {
             // Compact offsets are logical payload offsets. Retain this lane
             // until all payload, scale and metadata output reads complete.
@@ -313,7 +409,6 @@ private:
         }
     }
 
-    LlStageTimer::DeviceTimer* timer_ = nullptr;
     const __gm__ DispatchDedup::CommArgs* args_ = nullptr;
     TPipe* pipe_ = nullptr;
     bool enableDedup_ = false;

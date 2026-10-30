@@ -1,3 +1,5 @@
+> 历史指南：旧打点及入口适用于原提交（最后完整旧实现e4d114c）。当前已删除旧插桩/解析；构建与采样以[reference schema7指南](../ll_reference_profile/README.md)为准。下文算法与历史结果保留。
+
 # M<=32 / B<=32 direct dispatch candidate
 
 Branch `kernel/ll-g4-small-b`, based on197052c (plain q table, receiver-header

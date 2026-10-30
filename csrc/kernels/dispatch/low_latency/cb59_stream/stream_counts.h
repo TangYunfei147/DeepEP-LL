@@ -1,9 +1,10 @@
+#include "../common/ll_reference_profile_device.h"
 // Copyright (c) 2026, Lu Lu
 #pragma once
 
 #include "kernel_operator.h"
 #include "../cb59/count_layout.h"
-#include "../common/ll_stage_timer_device.h"
+#include "../common/ll_core_config.h"
 #ifndef DEEPEP_LL_STREAM_DEVICE_CONTEXT
 #define DEEPEP_LL_STREAM_DEVICE_CONTEXT 1
 #define DEEPEP_LL_STREAM_COUNTS_OWNS_CONTEXT 1
@@ -23,13 +24,17 @@ using namespace AscendC;
 // and streaming calls leave the same matrices clear for ping-pong reuse.
 class StreamCounts {
 public:
+/* LL_REFERENCE_BEGIN */
+__aicore__ inline void SetProfile(LlReferenceProfile::DeviceProfile* profile) { profile_ = profile; }
+
+/* LL_REFERENCE_END */
+
     __aicore__ inline void Init(const __gm__ CommArgs* args, GM_ADDR expertTokenNumsOut,
                                 GM_ADDR sendCountsOut, uint32_t bs, uint32_t k, uint32_t experts,
-                                uint32_t expertTokenNumsType, uint32_t magic, TPipe* pipe,
-                                LlStageTimer::DeviceTimer* timer)
+                                uint32_t expertTokenNumsType, uint32_t magic, TPipe* pipe)
     {
         pipe_ = pipe;
-        timer_ = timer;
+
         ranks_ = uint32_t(args->rankSize);
         experts_ = experts;
         receivers_ = GetBlockNum() / 2U;
@@ -64,18 +69,26 @@ public:
         Allocate(pool, expertCountsBuf_, uint32_t(LlStreamAlign(uint64_t(expertEnds) * 8U, 32U)));
 
         ReadCounts();
-        LL_SPARSE_MARK(COUNTS_RECEIVED);
+
+
+/* LL_REFERENCE_BEGIN */
+if (profile_) profile_->Mark<12>();
+/* LL_REFERENCE_END */
         auto snapshot = countSnapshotBuf_.Get<uint32_t>();
         auto prefix = localPrefixBuf_.Get<uint32_t>();
         for (uint32_t i = 0U; i < n; ++i) {
             count_ += snapshot.GetValue(i * 8U + 1U);
             prefix.SetValue(i, count_);
         }
-        LL_SPARSE_MARK(PREFIX_LOCAL_DONE);
+
         PublishSums();
         ClearCounts();
         ReadPredecessors();
         ClearPredecessors();
+/* LL_REFERENCE_BEGIN */
+if (profile_) profile_->Mark<13>();
+/* LL_REFERENCE_END */
+
         PublishOutputs();
         // No Reset or global drain here. Every MTE3 source remains allocated and
         // immutable while the receiver operates in the remainder of this pool.
@@ -88,6 +101,13 @@ public:
     __aicore__ inline uint32_t Count() const { return count_; }
     __aicore__ inline uint32_t UbBytes() const { return ubBytes_; }
 
+
+/* LL_REFERENCE_BEGIN */
+private:
+    LlReferenceProfile::DeviceProfile* profile_ = nullptr;
+
+public:
+/* LL_REFERENCE_END */
 private:
     template<class Pool>
     __aicore__ inline void Allocate(Pool& pool, TBuf<>& buffer, uint32_t bytes) {
@@ -102,6 +122,14 @@ private:
     }
 
     __aicore__ inline void ReadCounts() {
+/* LL_REFERENCE_BEGIN */
+if (profile_) profile_->Mark<10>();
+/* LL_REFERENCE_END */
+
+/* LL_REFERENCE_BEGIN */
+if (profile_) profile_->Mark<24>();
+/* LL_REFERENCE_END */
+
         auto snapshot = countSnapshotBuf_.Get<uint32_t>();
         const DataCopyParams copy{uint16_t(slice_.Count()), 1U, 15U, 0U};
         while (true) {
@@ -110,11 +138,47 @@ private:
             bool ready = true;
             for (uint32_t i = 0U; i < slice_.Count(); ++i)
                 ready = ready && snapshot.GetValue(i * 8U) == 0x3f800000U;
-            if (ready) return;
+            if (ready)
+/* LL_REFERENCE_BEGIN */
+{
+/* LL_REFERENCE_END */
+
+/* LL_REFERENCE_BEGIN */
+if (profile_) profile_->Mark<25>();
+
+/* LL_REFERENCE_END */
+
+/* LL_REFERENCE_BEGIN */
+{
+/* LL_REFERENCE_END */
+
+/* LL_REFERENCE_BEGIN */
+if (profile_) profile_->Mark<11>();
+
+/* LL_REFERENCE_END */
+return;
+/* LL_REFERENCE_BEGIN */
+}
+/* LL_REFERENCE_END */
+
+/* LL_REFERENCE_BEGIN */
+}
+/* LL_REFERENCE_END */
+
             // Retire all Scalar snapshot reads before MTE2 overwrites it.
             Sync<HardEvent::S_MTE2>();
         }
-    }
+
+/* LL_REFERENCE_BEGIN */
+if (profile_) profile_->Mark<25>();
+
+/* LL_REFERENCE_END */
+
+/* LL_REFERENCE_BEGIN */
+if (profile_) profile_->Mark<11>();
+
+/* LL_REFERENCE_END */
+}
 
     __aicore__ inline void PublishSums() {
         const uint32_t followers = active_ - receiver_ - 1U;
@@ -150,7 +214,24 @@ private:
     }
 
     __aicore__ inline void ReadPredecessors() {
-        if (!receiver_) return;
+/* LL_REFERENCE_BEGIN */
+if (profile_) profile_->Mark<26>();
+/* LL_REFERENCE_END */
+
+        if (!receiver_)
+/* LL_REFERENCE_BEGIN */
+{
+/* LL_REFERENCE_END */
+
+/* LL_REFERENCE_BEGIN */
+if (profile_) profile_->Mark<27>();
+
+/* LL_REFERENCE_END */
+return;
+/* LL_REFERENCE_BEGIN */
+}
+/* LL_REFERENCE_END */
+
         auto sums = sumSnapshotBuf_.Get<uint32_t>();
         const DataCopyParams copy{uint16_t(receiver_), 1U, uint16_t(receivers_ - 1U), 0U};
         while (true) {
@@ -163,7 +244,12 @@ private:
             Sync<HardEvent::S_MTE2>();
         }
         for (uint32_t p = 0U; p < receiver_; ++p) outputBegin_ += sums.GetValue(p * 8U);
-    }
+
+/* LL_REFERENCE_BEGIN */
+if (profile_) profile_->Mark<27>();
+
+/* LL_REFERENCE_END */
+}
 
     __aicore__ inline void ClearPredecessors() {
         if (!receiver_) return;
@@ -194,6 +280,10 @@ private:
     }
 
     __aicore__ inline void PublishOutputs() {
+/* LL_REFERENCE_BEGIN */
+if (profile_) profile_->Mark<14>();
+/* LL_REFERENCE_END */
+
         auto prefix = localPrefixBuf_.Get<uint32_t>();
         auto output = publicPrefixBuf_.Get<uint32_t>();
         for (uint32_t i = 0U; i < slice_.Count(); ++i) output.SetValue(i, outputBegin_ + prefix.GetValue(i));
@@ -202,7 +292,20 @@ private:
                     DataCopyExtParams{1U, slice_.Count() * uint32_t(sizeof(uint32_t)), 0U, 0U, 0U});
         const uint32_t firstExpert = slice_.begin / ranks_;
         const uint32_t expertEnds = slice_.end / ranks_ - firstExpert;
-        if (!expertEnds) return;
+        if (!expertEnds)
+/* LL_REFERENCE_BEGIN */
+{
+/* LL_REFERENCE_END */
+
+/* LL_REFERENCE_BEGIN */
+if (profile_) profile_->Mark<15>();
+
+/* LL_REFERENCE_END */
+return;
+/* LL_REFERENCE_BEGIN */
+}
+/* LL_REFERENCE_END */
+
         auto experts = expertCountsBuf_.Get<int64_t>();
         for (uint32_t i = 0U; i < expertEnds; ++i) {
             const uint32_t expert = firstExpert + i;
@@ -213,10 +316,15 @@ private:
         Sync<HardEvent::S_MTE3>();
         DataCopyPad(expertCounts_[firstExpert], experts,
                     DataCopyExtParams{1U, expertEnds * uint32_t(sizeof(int64_t)), 0U, 0U, 0U});
-    }
+
+/* LL_REFERENCE_BEGIN */
+if (profile_) profile_->Mark<15>();
+
+/* LL_REFERENCE_END */
+}
 
     TPipe* pipe_ = nullptr;
-    LlStageTimer::DeviceTimer* timer_ = nullptr;
+
     LlStreamSlice slice_{};
     uint32_t ranks_ = 0U, experts_ = 0U, receiver_ = 0U, receivers_ = 0U, active_ = 0U;
     uint32_t count_ = 0U, outputBegin_ = 0U, ubBytes_ = 0U, expertTokenNumsType_ = 0U;

@@ -8,7 +8,6 @@ Use --help for launch, configuration, and profiling options.
 """
 
 import argparse
-from contextlib import nullcontext
 import csv
 import math
 import re
@@ -25,6 +24,8 @@ from datetime import datetime, timedelta
 
 __test__ = False
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+SAMPLING_PROTOCOL = "initial-reduce-exp100-batch-v3"
+EXP_PREFIX_REPEATS = 100
 _DISPATCH = runpy.run_path(str(PROJECT_ROOT / 'scripts/ll_dispatch_implementation.py'))
 
 
@@ -68,33 +69,26 @@ def validate_dispatch_algorithm_capability(capability, world):
         raise RuntimeError('Install the matching dispatch algorithm/group/q configuration from this checkout')
 
 
-def validate_stage_timer_capability(capability):
-    if not capability["stage_timer"]:
-        raise RuntimeError("All ranks must install a DEEPEP_LL_STAGE_TIMER=ON wheel")
-    if capability['stage_timer_schema'] != 16:
-        raise RuntimeError('Sparse LL diagnostics require timer schema 16; '
-                           f'got {capability["stage_timer_schema"]}; '
-                           'rebuild/install the matching wheel on every rank')
-    expected = dict(timer_profile='sparse', timer_profile_id=6,
-                    stage_timer_slots=8, stage_timer_fields=8,
-                    stage_timer_recording='sparse-milestones')
-    if any(capability.get(key) != value for key, value in expected.items()):
-        raise RuntimeError('Sparse LL diagnostics require the matching sparse profile 6 / 512-byte layout; '
-                           'rebuild/install the matching wheel on every rank')
-    points = runpy.run_path(str(PROJECT_ROOT / 'deep_ep/utils/ll_stage_timer.py'))['SPARSE_POINTS']
-    if capability.get('stage_timer_points') != list(points):
-        raise RuntimeError('Sparse LL milestone names/order differ from this checkout; '
-                           'rebuild/install the matching wheel on every rank')
 
 
-def validate_sparse_timer_layout(layout):
-    """Check both OFF/ON native layouts against the current CPU decoder contract."""
-    validate_stage_timer_capability(dict(stage_timer=True,
-        stage_timer_schema=layout.get('schema'), stage_timer_slots=layout.get('slots'),
-        stage_timer_fields=layout.get('fields'), stage_timer_recording=layout.get('recording'),
-        stage_timer_points=layout.get('points'), timer_profile=layout.get('timer_profile'),
-        timer_profile_id=layout.get('timer_profile_id')))
 
+
+def installed_instrumentation_identity(package, native):
+    """Reject mixed source/package/native launch layouts before communication."""
+    expected = ('reference-mte7', 144, 88)
+    try:
+        info = json.loads((Path(package.__file__).resolve().parent / '_build_info.json').read_text(encoding='utf-8'))
+    except (OSError, ValueError) as exc:
+        raise RuntimeError('Missing LL instrumentation build identity; install the matching complete reference wheel') from exc
+    actual = (getattr(native, 'low_latency_instrumentation_source', None),
+              getattr(native, 'dispatch_launch_bytes', None),
+              getattr(native, 'combine_launch_bytes', None))
+    recorded = (info.get('ll_instrumentation_source'), info.get('dispatch_launch_bytes'), info.get('combine_launch_bytes'))
+    if (actual != expected or recorded != expected
+            or any(type(value) is not int for value in actual[1:] + recorded[1:])):
+        raise RuntimeError('LL instrumentation source/launch ABI differs between source, package and native library')
+
+    return dict(instrumentation_source=actual[0], dispatch_launch_bytes=actual[1], combine_launch_bytes=actual[2])
 
 def installed_source_fingerprint(package):
     """Read the installed binary's build identity, not the checkout Git label."""
@@ -140,7 +134,7 @@ def installed_dispatch_identity(package, native, environment=None):
 
 def validate_matching_capabilities(capabilities):
     if not capabilities or any(item != capabilities[0] for item in capabilities):
-        raise RuntimeError('LL AIV/group/protocol/timer/profile/source build differs across ranks')
+        raise RuntimeError('LL AIV/group/protocol/source/launch ABI build differs across ranks')
 
 
 MATRIX_FIELDS = ("num_tokens", "dtype", "num_experts", "hidden", "num_topk", "do_cpu_sync", "fp8_scale_dtype")
@@ -198,17 +192,17 @@ def comparison_metadata(args, world, m):
             runtime['dispatch_impl'], world, args.num_tokens, m)
     route_identity = getattr(args, 'profile_route_identity', {})
     return dict(**runtime, **path_identity, **route_identity, effective_small_b_prefix_cores=effective_prefix,
-                comparison_schema=1, sampling_protocol='exp-reduce-stable-tail-v2',
+                comparison_schema=1, sampling_protocol=SAMPLING_PROTOCOL, exp_prefix_repeats=EXP_PREFIX_REPEATS,
+                per_iteration_exp=0, per_iteration_all_reduce=False,
+                installed_source_sha256=runtime.get("source_sha256"),
+                reference_capture=args.ll_reference_profile, reference_iters=args.reference_iters if args.ll_reference_profile else 0,
+                reference_frequency_hz=args.reference_frequency_hz,
                 perf_enabled=not args.skip_perf_test, world_size=world,
                 local_world_size=int(os.environ.get('LOCAL_WORLD_SIZE',args.num_processes)),
                 case=case_config(args,m), route=args.route, seed=args.seed,
                 warmup=args.warmup, num_iters=args.num_iters, perf_tail=args.perf_tail,
                 delay_rows=args.delay_rows, delay_cols=args.delay_cols, group_backend=args.group_backend,
-                timer_mode=args.ll_timer_mode if args.ll_stage_timer else None,
-                timer_iters=args.ll_timer_iters if args.ll_stage_timer else 0,
-                frequency_hz=args.ll_timer_frequency_hz, stage_capture=args.ll_stage_timer,
-                profile_capture=bool(getattr(args,'ll_profile_capture',False)),
-                expert_capture=args.ll_expert_timer, do_handle_copy=args.do_handle_copy,
+                do_handle_copy=args.do_handle_copy,
                 correctness_repeats=args.correctness_repeats, repeat_combine=args.repeat_combine,
                 skip_check=args.skip_check, dispatch_only=args.dispatch_only,
                 fresh_buffer_per_case=args.fresh_buffer_per_case,
@@ -314,12 +308,9 @@ def make_parser():
     )
     parser.add_argument("--warmup", type=int, default=10)
     parser.add_argument("--num-iters", type=int, default=100)
-    parser.add_argument("--ll-stage-timer", action="store_true", help="Separate device-stage diagnostic calls; requires timer-enabled wheel")
-    parser.add_argument("--ll-profile-capture", action="store_true", help="Profile the actual instrumented capture kernels in a separate trace, including initialization/SyncAll/Flush")
-    parser.add_argument('--ll-expert-timer', action='store_true', help='Legacy option: explicitly rejected by reference segment capture')
-    parser.add_argument("--ll-timer-iters", type=int, default=5)
-    parser.add_argument("--ll-timer-mode", choices=("observe",), default="observe", help="Sparse milestone capture observes existing boundaries without adding synchronization")
-    parser.add_argument("--ll-timer-frequency-hz", type=float, default=1_000_000_000, help="GetSystemCycle frequency; default 1GHz (ticks/1000 us)")
+    parser.add_argument("--ll-reference-profile", action="store_true", help="Independent dispatch reference capture after stabilization")
+    parser.add_argument("--reference-iters", type=int, default=1)
+    parser.add_argument("--reference-frequency-hz", type=float, default=1_000_000_000)
     parser.add_argument("--dispatch-only", action="store_true")
     parser.add_argument("--repeat-combine", type=int, default=2)
     parser.add_argument("--correctness-repeats", type=int, default=3, help="Fresh routes on the same Buffer; outside profiling")
@@ -449,7 +440,7 @@ def write_reports(directory, report):
             perf = result[operation]
             identity=result.get('comparison') or {}
             base = {"case_id": result["case_id"], **result["config"], "route": result["route"], "operation": operation,
-                    **{key:identity.get(key) for key in ('implementation','dispatch_impl','effective_dispatch_impl','transport','logical_group','active_aiv','send_cores','recv_cores','core_protocol','source_revision')}}
+                    **{key:identity.get(key) for key in ('implementation','dispatch_impl','effective_dispatch_impl','transport','logical_group','active_aiv','send_cores','recv_cores','core_protocol','source_revision','source_sha256','instrumentation_source','dispatch_launch_bytes','combine_launch_bytes','profile_seed','profile_route_sha256')}}
             summaries.append(
                 {
                     **base,
@@ -536,7 +527,6 @@ def parse_args(argv=None):
                     ]
                 )
     args = make_parser().parse_args(configured + argv)
-    if args.ll_expert_timer: args.ll_stage_timer=True
     for name in ("output_dir", "output"):
         value = getattr(args, name)
         if value:
@@ -575,20 +565,20 @@ def launch_config(args, environ):
 
 
 def resolve_delay_counts(args):
-    for name, default in (("delay_exp_before", 1), ("delay_exp_after", 0)):
+    for name, default in (("delay_exp_before", EXP_PREFIX_REPEATS), ("delay_exp_after", 0)):
         if getattr(args, name) is None:
             setattr(args, name, default)
 
 
 def validate_args(args, world):
+    if not 1 <= args.reference_iters <= 1000:
+        raise ValueError("reference-iters must be 1..1000")
+    if args.reference_frequency_hz is not None and (not math.isfinite(args.reference_frequency_hz) or args.reference_frequency_hz <= 0):
+        raise ValueError("Reference frequency must be finite and positive")
+    if args.ll_reference_profile and (not args.dispatch_only or args.skip_check):
+        raise ValueError("Reference capture requires --dispatch-only and correctness checks")
     if args.use_1g_huge_pages:
         raise ValueError('The current LL MTE-only session requires --use-1g-huge-pages 0')
-    if args.ll_expert_timer:
-        raise ValueError("Sparse milestone capture rejects legacy per-expert GM instrumentation")
-    if getattr(args,'ll_profile_capture',False) and not args.ll_stage_timer:
-        raise ValueError('--ll-profile-capture requires --ll-stage-timer')
-    if args.ll_timer_mode != "observe":
-        raise ValueError("Sparse milestone capture supports only observe; relay-complete/drain remain offline-analysis only")
     resolve_delay_counts(args)
     if any(isinstance(getattr(args, key), list) for key in MATRIX_FIELDS):
         capacities = []
@@ -613,13 +603,6 @@ def validate_args(args, world):
         raise ValueError("Require K=1..16, EP<=E<=1024 and E divisible by EP")
     if args.num_sms != 0 or args.num_qps != 0:
         raise ValueError("LL ST requires --num-sms=0 and --num-qps=0; no HT fallback is permitted")
-    if not 1 <= args.ll_timer_iters <= 1000:
-        raise ValueError("ll-timer-iters must be 1..1000")
-    if args.ll_timer_frequency_hz is not None and (not math.isfinite(args.ll_timer_frequency_hz) or args.ll_timer_frequency_hz <= 0):
-        raise ValueError("Timer counter frequency must be positive and finite")
-    if args.ll_expert_timer: args.ll_stage_timer=True
-    if args.ll_stage_timer and args.skip_check:
-        raise ValueError("Stage diagnostics require correctness checks")
     if args.warmup < 0 or args.num_iters < 1 or args.repeat_combine < 2:
         raise ValueError("Require warmup>=0, num-iters>=1 and repeat-combine>=2")
     if not 1 <= args.num_cpu_timeout_secs <= 300:
@@ -628,8 +611,8 @@ def validate_args(args, world):
         raise ValueError("num-bytes must be 2 MiB aligned and between 2 MiB and 32 GiB")
     if args.delay_rows <= 0 or args.delay_cols <= 0 or min(args.delay_exp_before, args.delay_exp_after) < 0:
         raise ValueError("Delay tensor dimensions must be positive and exp counts nonnegative")
-    if (args.delay_exp_before, args.delay_exp_after) != (1, 0):
-        raise ValueError("Reference profiler requires delay-exp-before=1 and delay-exp-after=0")
+    if (args.delay_exp_before, args.delay_exp_after) != (EXP_PREFIX_REPEATS, 0):
+        raise ValueError("Reference profiler requires a fixed batch prefix: delay-exp-before=100 and delay-exp-after=0")
     if not 0 <= args.perf_tail <= args.num_iters:
         raise ValueError("Require 0 <= perf-tail <= num-iters")
     if args.output and Path(args.output).exists():
@@ -892,15 +875,11 @@ def record_case_progress(args, rank, m, mode, phase, error=None):
         print("[LL ST] " + json.dumps(entry, ensure_ascii=False), flush=True)
 
 
-def sampling_prelude(delay, alignment, args):
-    """The same Exp + scalar collective before normal and diagnostic samples."""
+def enqueue_exp_prefix(delay):
+    """Queue the fixed batch prefix, without a host wait or collective after it."""
     import torch
-    import torch.distributed as dist
-    torch.exp(delay, out=delay)
-    alignment.fill_(1)
-    if args.group_backend == 'gloo':
-        torch.npu.synchronize()
-    dist.all_reduce(alignment, op=dist.ReduceOp.SUM, async_op=False)
+    for _ in range(EXP_PREFIX_REPEATS):
+        torch.exp(delay, out=delay)
 
 
 def measure(invoke, args, operation, profile_dir, progress=None, after_profile=None):
@@ -930,9 +909,11 @@ def measure(invoke, args, operation, profile_dir, progress=None, after_profile=N
         for _ in range(args.warmup):
             output = invoke()
         torch.npu.synchronize()
+        # Submit the padding while the profiler is still in its warmup step.
+        # Do not synchronize after it: Host should enqueue the active batch.
+        enqueue_exp_prefix(delay)
         profiler.step()
         for _ in range(args.num_iters):
-            sampling_prelude(delay, alignment, args)
             output = invoke()
         dist.barrier()
         torch.npu.synchronize()
@@ -968,78 +949,38 @@ def create_run_directory(parent, name=None):
     return str(selected)
 
 
-def new_stage_trace(buffer, operation, args, rank):
-    from deep_ep.utils.ll_stage_timer import StageTrace
-    if getattr(args, 'll_expert_timer', False) and operation == 'dispatch':
-        import torch.distributed as dist
-        return StageTrace(buffer, operation, args.ll_timer_mode, args.ll_timer_frequency_hz,
-                          expert_config=dict(rank=rank,world=dist.get_world_size(),experts=args.num_experts))
-    return StageTrace(buffer, operation, args.ll_timer_mode, args.ll_timer_frequency_hz)
 
 
-def active_capture_profiler(directory):
-    """A separate profiler window containing only the prepared active captures."""
-    import torch_npu
-    directory = Path(directory)
-    directory.mkdir(parents=True, exist_ok=False)
-    return torch_npu.profiler.profile(
-        schedule=torch_npu.profiler.schedule(wait=0, warmup=0, active=1, repeat=1, skip_first=0),
-        on_trace_ready=torch_npu.profiler.tensorboard_trace_handler(str(directory)),
-        experimental_config=torch_npu.profiler._ExperimentalConfig(
-            aic_metrics=torch_npu.profiler.AiCMetrics.PipeUtilization,
-            profiler_level=torch_npu.profiler.ProfilerLevel.Level1,
-            export_type=torch_npu.profiler.ExportType.Text,
-            l2_cache=False, data_simplification=False),
-        profile_memory=True, with_stack=False, with_flops=False, with_modules=False,
-    )
 
 
-def read_active_capture_profile(directory, operation, expected, rank):
-    """Do not invent task durations when exported tasks are missing/ambiguous."""
-    kernel = f'{operation}_server_dedup_kernel'
-    result = dict(rank=rank, operation=operation, expected_samples=expected,
-                  measurement='instrumented_full_device_kernel_task_us', kernel=kernel)
-    try:
-        values = kernel_durations(directory, kernel, expected, require_order=True)
-    except (OSError, ValueError, KeyError, csv.Error) as error:
-        result.update(status='unavailable', reason=f'{type(error).__name__}: {error}')
-    else:
-        result.update(status='available', kernel_us=values, statistics=sample_stats(values))
-    return result
 
 
-def summarize_active_capture_profiles(rows, operation):
-    expected_ranks = list(range(len(rows)))
-    available = (bool(rows) and all(isinstance(row, dict) for row in rows)
-                 and [row.get('rank') for row in rows] == expected_ranks
-                 and all(row.get('status') == 'available' and row.get('operation') == operation
-                         and type(row.get('expected_samples')) is int and row['expected_samples'] > 0
-                         and len(row.get('kernel_us', [])) == row['expected_samples'] for row in rows)
-                 and len({row['expected_samples'] for row in rows}) == 1)
-    result = dict(status='available' if available else 'unavailable', ranks=rows,
-                  measurement='instrumented_full_device_kernel_task_us',
-                  interpretation='Separate active-capture profiler; includes INIT, KERNEL, final synchronization and timer export. Not the uninstrumented formal baseline.')
-    if available:
-        result['summary'] = summarize_kernel([row['kernel_us'] for row in rows],
-                                              f'{operation}_server_dedup_kernel', 0)
-    return result
+
+
+
+
+def new_reference_trace(buffer, operation, args, rank):
+    from deep_ep.utils.ll_reference_profile import ReferenceTrace
+    return ReferenceTrace(buffer, operation, frequency_hz=args.reference_frequency_hz)
 
 
 def diagnostic_calls(buffer, invoke, check, args, operation, rank, m, mode,
                      *, prepared=None, prelude_buffers=None):
     """Sample a stabilized tail, retaining outputs/timers until all launches finish."""
-    from deep_ep.utils.ll_stage_timer import capture, StageTrace
+    from deep_ep.utils.ll_reference_profile import capture
     from deep_ep._native import require_native
     import torch
     import torch.distributed as dist
     world = dist.get_world_size()
     logical_group = compiled_group(require_native("LL timer"),world)
-    directory = Path(args.run_directory) / f"case_{args.case_id:05d}" / mode / "ll_stage_timer" / operation / f"rank_{rank:03d}"
+    capture_mode = 'reference'
+    capture_directory = 'll_reference_profile'
+    directory = Path(args.run_directory) / f"case_{args.case_id:05d}" / mode / capture_directory / operation / f"rank_{rank:03d}"
     if prepared is None:
         prepared = []
         def allocate():
-            for _ in range(args.ll_timer_iters):
-                prepared.append(new_stage_trace(buffer, operation, args, rank))
+            for _ in range(args.reference_iters):
+                prepared.append(new_reference_trace(buffer, operation, args, rank))
         agree_check(allocate, args, rank)
     after_perf = prelude_buffers is not None
     if not after_perf:
@@ -1050,87 +991,64 @@ def diagnostic_calls(buffer, invoke, check, args, operation, rank, m, mode,
         for _ in range(args.warmup):
             output = invoke()
         torch.npu.synchronize()
+        enqueue_exp_prefix(delay)
         for _ in range(args.num_iters):
-            sampling_prelude(delay, alignment, args)
             output = invoke()
     else:
         delay, alignment = prelude_buffers
-    profile_capture = bool(getattr(args, 'll_profile_capture', False))
-    profile_directory = Path(args.run_directory) / f'case_{args.case_id:05d}' / mode / 'active_capture_profile' / operation / f'rank_{rank:03d}'
+        # Profiler export can leave an idle gap. Prefix the diagnostic batch
+        # once, sharing the original startup all_reduce, not adding another.
+        enqueue_exp_prefix(delay)
     pending = []
-    with (active_capture_profiler(profile_directory) if profile_capture else nullcontext()) as profiler:
-        for iteration, trace in enumerate(prepared):
-            sampling_prelude(delay, alignment, args)
-            with capture(buffer, operation, args.ll_timer_mode, args.ll_timer_frequency_hz,
-                         prepared=trace, defer_complete=True):
-                output = invoke()
-                output[-1].current_stream_wait()
-            pending.append((iteration, trace, output))
-        # No CPU copy, correctness collective or filesystem operation in the sample loop.
-        completion_boundary(args)
-        if profiler is not None:
-            profiler.step()
-    active_local, active_report = None, None
-    if profile_capture:
-        active_local = read_active_capture_profile(profile_directory, operation, len(prepared), rank)
-        all_ranks = [None] * world
-        dist.all_gather_object(all_ranks, active_local)
-        active_report = summarize_active_capture_profiles(all_ranks, operation)
+    for iteration, trace in enumerate(prepared):
+        with capture(buffer, operation, capture_mode, args.reference_frequency_hz,
+                     prepared=trace, defer_complete=True):
+            output = invoke()
+            output[-1].current_stream_wait()
+        pending.append((iteration, trace, output))
+    # No CPU copy, correctness collective or filesystem operation in the sample loop.
+    completion_boundary(args)
     for iteration, trace, output in pending:
         agree_check(trace.complete, args, rank)
         agree_check(lambda: check(output), args, rank)
         metadata = dict(rank=rank, world_size=world, iteration=iteration,
                         comparison=comparison_metadata(args,world,m),
-                        run_id=Path(args.run_directory).name, seed=args.seed, case_id=args.case_id,
+                        run_id=Path(args.run_directory).name, seed=args.seed, route=mode, case_id=args.case_id,
+                        routing=dict(generator='current make_routes', seed=args.seed, route=mode, world=world, topk=args.num_topk, experts=args.num_experts),
                         correctness="passed", config={**case_config(args, m),
                         "logical_group_size": logical_group},
-                        protocol="stabilized diagnostic tail; Exp+scalar all_reduce; deferred validation/export; excluded from formal baseline profiler",
+                        protocol="initial scalar all_reduce; fixed Exp100 batch prefix; no per-iteration prelude; deferred validation/export; excluded from profiler",
                         sampling=dict(after_perf=after_perf, warmup=args.warmup, settle_iters=args.num_iters,
-                                      diagnostic_iters=args.ll_timer_iters, delay_rows=args.delay_rows,
+                                      diagnostic_iters=args.reference_iters, delay_rows=args.delay_rows,
                                       delay_cols=args.delay_cols, group_backend=args.group_backend,
-                                      expert_timer=bool(getattr(args,'ll_expert_timer',False))))
-        if active_local is not None:
-            metadata['active_capture_profile'] = dict(
-                status=active_local['status'], all_ranks_status=active_report['status'],
-                measurement=active_local['measurement'],
-                kernel_us=active_local['kernel_us'][iteration] if active_local['status']=='available' else None,
-                reason=active_local.get('reason'))
+                                      sampling_protocol=SAMPLING_PROTOCOL, exp_prefix_repeats=EXP_PREFIX_REPEATS,
+                                      prefix_before='diagnostic_capture' if after_perf else 'settle_batch',
+                                      initial_all_reduce='shared_with_perf' if after_perf else 'before_warmup',
+                                      per_iteration_exp=0, per_iteration_all_reduce=False,
+                                      reference_profile=True))
+        metadata.update(profile_seed=args.profile_route_identity['profile_seed'], route_sha256=args.profile_route_identity['profile_route_sha256'])
         agree_check(lambda: trace.save(directory / f"sample_{iteration:04d}.json", metadata), args, rank)
-    if active_report is not None:
-        active_report.update(operation=operation, route=mode, config=case_config(args,m),
-                             comparison=comparison_metadata(args,world,m), correctness='passed',
-                             diagnostic_iters=len(prepared))
-        def save_active_report():
-            if rank == 0:
-                path = Path(args.run_directory) / f'case_{args.case_id:05d}' / mode / f'active_capture_{operation}.json'
-                path.parent.mkdir(parents=True, exist_ok=True)
-                with path.open('x', encoding='utf-8') as stream:
-                    json.dump(active_report, stream, indent=2)
-                    stream.write('\n')
-        agree_check(save_active_report, args, rank)
-
 
 def sample_operation(buffer, invoke, check, args, operation, rank, m, mode, progress):
     """Keep the diagnostic tail identical with and without external profiling."""
     prepared = None
-    if args.ll_stage_timer:
-        from deep_ep.utils.ll_stage_timer import StageTrace
+    if args.ll_reference_profile:
         prepared = []
         def allocate():
-            for _ in range(args.ll_timer_iters):
-                prepared.append(new_stage_trace(buffer, operation, args, rank))
+            for _ in range(args.reference_iters):
+                prepared.append(new_reference_trace(buffer, operation, args, rank))
         agree_check(allocate, args, rank)
     def diagnostic(delay=None, alignment=None):
         diagnostic_calls(buffer, invoke, check, args, operation, rank, m, mode, prepared=prepared,
                          prelude_buffers=None if delay is None else (delay, alignment))
     if args.skip_perf_test:
-        if args.ll_stage_timer:
+        if args.ll_reference_profile:
             progress(f'{operation}.diagnostic')
             diagnostic()
         return None
     profile = Path(args.run_directory) / f'case_{args.case_id:05d}' / mode / operation / f'rank_{rank:03d}'
     return measure(invoke, args, operation, profile, progress,
-                   after_profile=diagnostic if args.ll_stage_timer else None)
+                   after_profile=diagnostic if args.ll_reference_profile else None)
 
 
 def run_case(buffer, args, rank, world, m, mode):
@@ -1287,7 +1205,7 @@ def run_case(buffer, args, rank, world, m, mode):
         "config": case_config(args, m),
         "profile_route_identity": dict(args.profile_route_identity),
     }
-    if not args.skip_perf_test or args.ll_stage_timer:
+    if not args.skip_perf_test or args.ll_reference_profile:
         if rank == 0:
             print(f"[LL ST] timing dispatch/combine: warmup={args.warmup}, iterations={args.num_iters}", flush=True)
         perf = sample_operation(buffer, dispatch,
@@ -1351,7 +1269,6 @@ def worker(local_rank, args):
         # One CLI choice drives Python and native initialization; stale shell state
         # does not change the selected branch's default in this experiment entry.
         os.environ['DEEPEP_LL_BACKEND']=backend
-        timer_layout = native.low_latency_stage_timer_layout()
         capability = {"active_aiv": core_config["active_aiv"],
                       "send_cores": core_config["send_cores"], "recv_cores": core_config["recv_cores"],
                       "dispatch_recv_cores": core_config["dispatch_recv_cores"],
@@ -1361,22 +1278,17 @@ def worker(local_rank, args):
                       "logical_group": compiled_group(native,world),
                       "implementation": implementation,
                       "source_sha256": installed_source_fingerprint(deep_ep),
+                      **installed_instrumentation_identity(deep_ep, native),
                       **installed_dispatch_identity(deep_ep, native),
                       **installed_prefix_identity(deep_ep, native, core_config["recv_cores"]),
                       "local_q_table": bool(getattr(native,"low_latency_q_table_enabled",False)),
                       "local_q_seed_vf": bool(getattr(native,"low_latency_q_seed_vf",False)),
                       "overlap_stage": getattr(native,"low_latency_overlap_stage",0),
-                      "core_protocol": native.low_latency_core_protocol,
-                      "stage_timer": bool(getattr(native, "low_latency_stage_timer_enabled", False)),
-                      "profile_capture_requested": bool(getattr(args, "ll_profile_capture", False)),
-                      "stage_timer_schema": timer_layout["schema"],
-                      "stage_timer_slots": timer_layout.get("slots"),
-                      "stage_timer_fields": timer_layout.get("fields"),
-                      "stage_timer_points": timer_layout.get("points"),
-                      "stage_timer_recording": timer_layout.get("recording"),
-                      "timer_profile": getattr(native,"low_latency_stage_timer_profile",None),
-                      "timer_profile_id": getattr(native,"low_latency_stage_timer_profile_id",None),
-                      "expert_timer_requested": bool(args.ll_expert_timer)}
+                      "core_protocol": native.low_latency_core_protocol}
+        capability.update(reference_profile=getattr(native, 'low_latency_reference_profile_enabled', None),
+                          reference_profile_schema=native.low_latency_reference_profile_layout().get('schema'))
+        if capability['reference_profile_schema'] != 7 or (args.ll_reference_profile and capability['reference_profile'] is not True):
+            raise RuntimeError('Install the matching reference schema7 ON wheel on every rank')
         capabilities = [None] * world
         dist.all_gather_object(capabilities, capability)
         validate_matching_capabilities(capabilities)
@@ -1390,11 +1302,7 @@ def worker(local_rank, args):
             raise RuntimeError('Installed wheel belongs to a different kernel branch')
         if capability['transport']=='rdma' and not capability['rdma_compiled']:
             raise RuntimeError('Requested RDMA is not compiled in this wheel; no MTE fallback')
-        if args.ll_stage_timer:
-            validate_stage_timer_capability(capability)
-        if args.ll_expert_timer and not 8001 <= capability['core_protocol'] <= 8055:
-            raise RuntimeError('Expert diagnostics require a matching configured-split wheel on every rank')
-        args.ll_stage_timer_capabilities = capabilities
+        args.runtime_capabilities = capabilities
         run_directory = [None]
 
         def reserve_directory():

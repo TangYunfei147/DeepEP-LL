@@ -14,8 +14,12 @@ import json
 from pathlib import Path
 import re
 import subprocess
+import importlib.util
 
 ROOT = Path(__file__).resolve().parents[1]
+spec = importlib.util.spec_from_file_location('ll_reference_insertion', ROOT/'scripts/ll_reference_instrumentation.py')
+reference = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(reference)
 REFERENCE = "cb59bff99ecd39d27ef57788c5e6fd0009e4e636"
 BASE = "csrc/kernels/dispatch/low_latency"
 DEST = ROOT / BASE / "cb59"
@@ -29,16 +33,13 @@ FILES = (
     "device/dispatch_server_dedup_receive_tasks.h",
 )
 MILESTONE_CONTRACT = {
-    "schema": 15,
-    "diagnostic_synchronization_added": False,
-    "counts_received": "cb59: accepted count snapshot, extraction and existing Sum V_S complete; before local prefix, sum publication, and count clear",
-    "counts_received_current_difference": "current keeps its historical point after count-clear submission; do not compare this adjacent stage across implementations",
-    "prefix_local_done": "producer-local scalar prefix complete, before asynchronous sum publication",
-    "prefix_ready": "CompleteCumsum returned and the original caller PIPE_ALL retired its sources, before receiver Reset/reload",
-    "send_done": "only when FIRST_SEND exists, after the original Counts::Finish PIPE_ALL",
-    "recv_done": "only nonempty receive workers, after their original final PIPE_ALL",
-    "cross_implementation_comparison": "whole OFF task and qualified ENTRY-to-PREFIX_READY/FIRST_RECV_PROBE/WORK_DONE endpoints; producer cohorts and adjacent stages differ",
+    "schema": 7,
+    "reference": "kernel/ll-ndr-metadata-cores@c3d8640",
+    "recording": "fixed scalar timestamps, ready-batch accumulators and spare-UB packet log",
+    "business_synchronization_added": False,
+    "publication": "diagnostic packet export and cache publication after original Counts.Finish",
 }
+
 _OLD_TIMER = re.compile(
     r"^[ \t]*if \(timer_?\) timer_?->(?:Start|End)\(LlStageTimer::\w+\);[ \t]*\n",
     re.M,
@@ -53,71 +54,36 @@ def replace_once(source: str, old: str, new: str) -> str:
     return source.replace(old, new, 1)
 
 
+def strip_historical_plumbing(source: str) -> str:
+    """Discard the original immutable cb59 tracing while extracting its business code."""
+    source = _OLD_TIMER.sub('', source)
+    source = source.replace('ll_stage_timer_device.h', 'll_core_config.h')
+    source = re.sub(r',\s*LlStageTimer::DeviceTimer\* timer = nullptr|LlStageTimer::DeviceTimer\* timer = nullptr', '', source)
+    source = re.sub(r'LlStageTimer::DeviceTimer\* timer_ = nullptr;|\btimer_ = timer;', '', source)
+    source = source.replace(', timer_', '').replace('Process(timer_)', 'Process()')
+    return source
+
+
 def adapt(relative: str, source: str) -> str:
-    """Only explicit, reviewable substitutions; no business-expression rewrites."""
-    source = _OLD_TIMER.sub("", source)
+    """Extract immutable business code and add only the current reference trace."""
+    source = strip_historical_plumbing(source)
     source = replace_once(source, "namespace DispatchDedup {", "namespace DispatchDedup::Cb59Replay {")
     source = source.replace("}  // namespace DispatchDedup", "}  // namespace DispatchDedup::Cb59Replay")
     if relative == FILES[0]:
-        source = source.replace('"common/ll_stage_timer_device.h"', '"../common/ll_stage_timer_device.h"')
+        source = source.replace('"common/ll_core_config.h"', '"../common/ll_core_config.h"')
         source = source.replace('"device/dispatch_server_dedup_magic.h"', '"../device/dispatch_server_dedup_magic.h"')
-        source = source.replace('#include "../common/ll_stage_timer_device.h"',
-                                '#include "../common/ll_stage_timer_device.h"\n#include "../common/ll_expert_timer_device.h"')
-        source = replace_once(source, "LlStageTimer::DeviceTimer* timer = nullptr)",
-                              "LlStageTimer::DeviceTimer* timer = nullptr,\n"
-                              "                                LlExpertTimer::DeviceTimer* expertTimer = nullptr)")
-        source = replace_once(source, "        timer_ = timer;", "        (void)expertTimer;\n        timer_ = timer;")
-        source = replace_once(source, "        const uint32_t magic = RotateDispatchServerDedupMagic(args_, core_, pipe);",
-                              "        const uint32_t magic = RotateDispatchServerDedupMagic(args_, core_, pipe);\n        LL_SPARSE_MARK(MAGIC_DONE);")
-        source = replace_once(source, "                     magic, pipe);",
-                              "                     magic, pipe);\n        counts_.SetTimer(timer_);")
-        source = replace_once(source, "            PipeBarrier<PIPE_ALL>();",
-                              "            PipeBarrier<PIPE_ALL>();\n            LL_SPARSE_MARK(PREFIX_READY);")
-        source = replace_once(source, "        counts_.Finish();",
-                              "        counts_.Finish();\n        LL_SPARSE_AFTER(FIRST_SEND, SEND_DONE);")
     else:
         source = source.replace('"../common/', '"../../common/')
         source = source.replace('"../../../common/', '"../../../../common/')
         if relative == FILES[1]:
             source = source.replace('"../../common/ep_memory_server_dedup_count_layout.h"', '"../count_layout.h"')
-            source = replace_once(source, '#include "../count_layout.h"',
-                                  '#include "../count_layout.h"\n#include "../../common/ll_stage_timer_device.h"')
-            source = replace_once(source, "public:\n", "public:\n"
-                                  "    __aicore__ inline void SetTimer(LlStageTimer::DeviceTimer* timer) { timer_ = timer; }\n")
-            source = replace_once(source, "    TPipe* tpipe_ = nullptr;",
-                                  "    LlStageTimer::DeviceTimer* timer_ = nullptr;\n    TPipe* tpipe_ = nullptr;")
-            source = replace_once(source, "    SendExpertCntRange(start, end);",
-                                  "    SendExpertCntRange(start, end);\n    LL_SPARSE_MARK(COUNTS_SENT);")
-            source = replace_once(source, "    float sumOfRecvCnt = statusSumOutTensor.ReinterpretCast<float>().GetValue(0);",
-                                  "    float sumOfRecvCnt = statusSumOutTensor.ReinterpretCast<float>().GetValue(0);\n"
-                                  "    LL_SPARSE_MARK(COUNTS_RECEIVED);")
-            source = replace_once(source, "    PublishRecvCntSum(sumOfRecvCnt);",
-                                  "    LL_SPARSE_MARK(PREFIX_LOCAL_DONE);\n    PublishRecvCntSum(sumOfRecvCnt);")
         elif relative == FILES[2]:
             source = source.replace('"dispatch_dedup_mxfp8_quant.h"', '"../../device/dispatch_dedup_mxfp8_quant.h"')
-            source = replace_once(source, '#include "../../common/ll_stage_timer_device.h"',
-                                  '#include "../../common/ll_stage_timer_device.h"\n#include "../count_layout.h"')
-            source = replace_once(source, "        if (enableDedup_)\n            SendWithDedup(input);",
-                                  "        LL_SPARSE_MARK(SEND_PREPARED);\n        if (enableDedup_)\n            SendWithDedup(input);")
-            source = replace_once(source, "        DataCopy(destinationGm, out, uint32_t(data_.tokenStride));",
-                                  "        LL_SPARSE_MARK(FIRST_SEND);\n        DataCopy(destinationGm, out, uint32_t(data_.tokenStride));")
+            source = '#include "../count_layout.h"\n' + source
         elif relative == FILES[3]:
-            source = replace_once(source, '#include "../../common/ll_stage_timer_device.h"',
-                                  '#include "../../common/ll_stage_timer_device.h"\n#include "../count_layout.h"')
-            source = replace_once(source, "    {\n        // 1. 调用方已完成计数阶段的写入", "    {\n        timer_ = timer;\n        // 1. 调用方已完成计数阶段的写入")
-            source = replace_once(source, "        if (tasks_.Count() == 0U) {\n            return;",
-                                  "        if (tasks_.Count() == 0U) {\n            LL_SPARSE_MARK(RECV_PREPARED);\n            return;")
-            source = replace_once(source, "        uint32_t scan = 0U, issued = 0U, consumed = 0U;",
-                                  "        LL_SPARSE_MARK(RECV_PREPARED);\n        uint32_t scan = 0U, issued = 0U, consumed = 0U;")
-            source = replace_once(source, "            } while (probe.readyMask == 0U);",
-                                  "            } while (probe.readyMask == 0U);\n            LL_SPARSE_MARK(FIRST_RECV_READY);")
-            source = replace_once(source, "        PipeBarrier<PIPE_ALL>();",
-                                  "        PipeBarrier<PIPE_ALL>();\n        LL_SPARSE_MARK(RECV_DONE);")
-            source = replace_once(source, "    __aicore__ inline ProbeResult Probe(uint32_t start, uint32_t count)\n    {",
-                                  "    __aicore__ inline ProbeResult Probe(uint32_t start, uint32_t count)\n    {\n        LL_SPARSE_MARK(FIRST_RECV_PROBE);")
-            source = replace_once(source, "    const __gm__ DispatchDedup::CommArgs* args_ = nullptr;",
-                                  "    LlStageTimer::DeviceTimer* timer_ = nullptr;\n    const __gm__ DispatchDedup::CommArgs* args_ = nullptr;")
-    return source
+            source = '#include "../count_layout.h"\n' + source
+    return '\n'.join(line.rstrip() for line in reference.instrument_cb59(relative, source).splitlines()).rstrip() + '\n'
+
 
 
 def includes(source: str) -> list[str]:
@@ -125,21 +91,13 @@ def includes(source: str) -> list[str]:
 
 
 def business_source(source: str) -> str:
-    """Remove only enumerated diagnostic/namespace/include adaptations."""
-    source = _OLD_TIMER.sub("", source)
+    """Remove only marked new diagnostics and immutable-source legacy plumbing."""
+    source = reference.strip_reference(source)
+    source = strip_historical_plumbing(source)
     source = _COMMENTS.sub("", source)
     source = re.sub(r'^#include[^\n]*\n', '', source, flags=re.M)
-    source = source.replace("namespace DispatchDedup::Cb59Replay {", "namespace DispatchDedup {")
-    source = re.sub(r'LL_SPARSE_(?:MARK|AFTER)\([^;]*\);', '', source)
-    source = re.sub(r'__aicore__ inline void SetTimer\(LlStageTimer::DeviceTimer\* timer\)\s*\{\s*timer_ = timer;\s*\}', '', source)
-    source = re.sub(r'counts_\.SetTimer\(timer_\);', '', source)
-    source = re.sub(r'LlStageTimer::DeviceTimer\* timer_ = nullptr;', '', source)
-    source = re.sub(r'\btimer_ = timer;', '', source)
-    source = re.sub(r',\s*LlExpertTimer::DeviceTimer\* expertTimer = nullptr', '', source)
-    source = source.replace('(void)expertTimer;', '')
-    # The legacy timer parameters/calls are retained in both sources; unlike
-    # adding stubs, this does not create any old stage IDs or runtime metrics.
-    return source
+    return source.replace("namespace DispatchDedup::Cb59Replay {", "namespace DispatchDedup {")
+
 
 
 def business_tokens(source: str) -> list[str]:
@@ -194,7 +152,7 @@ def main() -> int:
         validate_file(relative, output, entry)
         entries[relative] = entry
         outputs[relative] = output
-    manifest = {"reference_commit": REFERENCE, "normalization_version": 1,
+    manifest = {"reference_commit": REFERENCE, "normalization_version": 2,
                 "milestone_contract": MILESTONE_CONTRACT, "files": entries}
     if args.check:
         saved = json.loads(MANIFEST.read_text(encoding="utf-8"))

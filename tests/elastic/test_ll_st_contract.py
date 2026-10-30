@@ -277,7 +277,7 @@ def test_json_fp8_scale_matrix_covers_sync_modes(tmp_path):
 @pytest.mark.parametrize("iterations,expected", [(1, 20), (40, 20), (41, 20), (100, 50), (101, 50)])
 def test_delay_defaults_follow_operator_iterations(iterations, expected):
     args = st.parse_args(["--num-iters", str(iterations)])
-    assert (args.delay_exp_before, args.delay_exp_after) == (1, 0)
+    assert (args.delay_exp_before, args.delay_exp_after) == (100, 0)
 
 
 def test_delay_defaults_honor_json_and_explicit_overrides(tmp_path):

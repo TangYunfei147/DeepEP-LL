@@ -11,6 +11,9 @@ import subprocess
 import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
+
+import runpy
+_reference_contract = runpy.run_path(str(ROOT/'tests/ll_reference_profile/business_contract.py'))
 spec = importlib.util.spec_from_file_location("cb59_small_generator", ROOT / "scripts/generate_cb59_small.py")
 small = importlib.util.module_from_spec(spec)
 assert spec.loader is not None
@@ -131,7 +134,7 @@ int main() {
 def test_small_keeps_runtime_packet_layout_and_route_ownership():
     sender = (small.DEST / small.FILES[2]).read_text(encoding="utf-8")
     receiver = (small.DEST / small.FILES[3]).read_text(encoding="utf-8")
-    assert "if (enableDedup_ && count_ == 0U) return;" in sender
+    assert 'if(enableDedup_&&count_==0U)return;' in _reference_contract['compact'](sender)
     assert "if constexpr (enableDedup_ && count_ == 0U)" not in sender
     assert "if (!enableDedup_ && !keepFlags)" in receiver
     assert "if constexpr (!enableDedup_ && !keepFlags)" not in receiver

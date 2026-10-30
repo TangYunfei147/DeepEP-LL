@@ -33,7 +33,7 @@ def test_invalid_prefix_rejected_before_sdk_discovery(build, value):
 
 
 def test_prefix_separates_on_and_off_native_cache(build):
-    keys = {build.build_cache_key(dict(ll_stage_timer=timer, ll_send_cores=30, ll_recv_cores=26,
+    keys = {build.build_cache_key(dict(ll_reference_profile=timer, ll_send_cores=30, ll_recv_cores=26,
                                       ll_small_b_prefix_cores=prefix))
             for timer in (False, True) for prefix in (0, 1, 6, 26)}
     assert len(keys) == 8
@@ -43,7 +43,7 @@ def test_prefix_separates_on_and_off_native_cache(build):
 def test_prefix_reaches_cmake_and_installed_identity(build, monkeypatch, tmp_path, prefix):
     from setuptools import Distribution, Extension
     monkeypatch.setitem(sys.modules, 'pybind11', SimpleNamespace(get_cmake_dir=lambda: 'pybind11-cmake'))
-    configuration = dict(ll_stage_timer=True, ll_timer_profile='sparse', build_type='Release',
+    configuration = dict(ll_reference_profile=True, build_type='Release',
                          ll_send_cores=30, ll_recv_cores=26, ll_small_b_prefix_cores=prefix,
                          cmake_path='cmake', compiler_path='c++', ASCEND_HOME_PATH='cann', SHMEM_ROOT='shmem')
     monkeypatch.setattr(build, 'build_configuration', lambda: configuration)

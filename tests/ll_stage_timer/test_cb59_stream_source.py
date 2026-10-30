@@ -3,6 +3,9 @@ from pathlib import Path
 import re
 
 ROOT = Path(__file__).resolve().parents[2]
+
+import runpy
+_reference_contract = runpy.run_path(str(ROOT/'tests/ll_reference_profile/business_contract.py'))
 BASE = ROOT / 'csrc/kernels/dispatch/low_latency'
 
 
@@ -15,7 +18,7 @@ def function_body(source, name):
     while depth:
         depth += (source[end] == '{') - (source[end] == '}')
         end += 1
-    return source[begin:end]
+    return re.sub(r'\s+', ' ', _reference_contract['code'](source[begin:end]))
 
 
 def test_stream_keeps_original_wire_probe_copy_metadata_and_cleanup():
@@ -26,8 +29,8 @@ def test_stream_keeps_original_wire_probe_copy_metadata_and_cleanup():
     # Scheduling inside the owned packet slice remains exactly the established
     # ready bitmap / bounded lane pipeline. Only slice ownership is redesigned.
     begin = '        uint32_t scan = 0U, issued = 0U, consumed = 0U;'
-    end = '        LL_SPARSE_MARK(RECV_DONE);'
-    assert candidate.split(begin, 1)[1].split(end, 1)[0] == original.split(begin, 1)[1].split(end, 1)[0]
+    end = '        PipeBarrier<PIPE_ALL>();'
+    assert _reference_contract['tokens'](candidate.split(begin, 1)[1].split(end, 1)[0]) == _reference_contract['tokens'](original.split(begin, 1)[1].split(end, 1)[0])
 
 
 def test_stream_does_not_modify_source_count_or_sender_algorithm():

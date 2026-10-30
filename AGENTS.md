@@ -1,5 +1,14 @@
 # LL 编译维护约束
 
+## Reference 打点整套替换（2026-10-30，最新要求）
+
+- 用户要求完全参考kernel/ll-ndr-metadata-cores的打点及解析，不保留旧代码。本分支以c3d86406733fd28fe4e081e563eaf7e51321c18f为参考，删除旧stage/expert/sparse设备、Python解析和诊断入口；仅dispatch支持新reference，combine只保留业务。覆盖下方旧生产文件不可改和旧schema16要求。
+- 固定边界一次clock+GM写、ready批次三clock累计、剩余UB包日志、w21后导出、整数差分/有效位/逐核Excel与单报告沿用参考；MTE实际分核和兼任S/R用schema7显式记录，不伪造M核、RDMA quiet或1.25接管。29阶段框架、每核640word/5120B；Host参数144/88B及reference7链接/项目身份拒混。
+- 保持全部五selector、7TU/O2、业务Scalar/DMA/同步、q/归约/wire/core协议、原SDK。cb59及small仍由生成器更新，并核验业务token与同步序列。日志仅使用原lane分配后的剩余空间，不减lane、不加活跃pool项。
+- 当前ST采用参考initial-reduce-exp100-batch-v3：初始一次all_reduce、预热同步后100Exp，再连续调用；循环内无采样Exp/all_reduce，Exp后不额外同步。默认独立capture1轮，当前诊断dispatch-only；旧逐轮协议不能混作同条件A/B。
+- 新目标入口tests/ll_reference_profile/one_click.sh，独立clone/venv，SHMEM只拉指定子模块、清理重编一次，完整wheel成功及Host检查后采样；--skip-build仅复用完成构建。只回传一个≤60000字节报告，xlsx/原始记录留目标机；不SSH/CANN/NPU。本地CPU/桩编译不能称设备验证。
+- no_timer_ab.py/cb59_original.py/inspect_reference.py作为固定Git历史入口保留，旧实验源码/采样不改；当前生产和解析链不再保留旧timer实现。详见tests/ll_reference_profile/README.md与STAGE_TIMELINE.md。
+
 ## 子模块只拉取 SHMEM（2026-10-26，最新用户要求）
 
 - 只初始化、拉取和更新 SHMEM 及其必要子模块，禁止拉取 CATLASS。依赖准备统一使用 `git submodule update --init --recursive --depth 1 -- third-party/shmem`，禁止不带路径的全量 submodule update 或全量递归 clone。

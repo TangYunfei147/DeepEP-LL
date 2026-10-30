@@ -1,3 +1,5 @@
+> 历史指南：旧打点及入口适用于原提交（最后完整旧实现e4d114c）。当前已删除旧插桩/解析；构建与采样以[reference schema7指南](../tests/ll_reference_profile/README.md)为准。下文算法与历史结果保留。
+
 # 四阶段 dispatch A/B 对照
 
 本分支从 kernel/ll-g4-overlap-recv@bf1c3a3 派生，保留七模式拆分编译、

@@ -104,7 +104,7 @@ static void run_case(Arena& arena, uint32_t experts, uint32_t batch, uint32_t ty
             AscendC::MockPool pool;
             Cb59Stream::StreamCounts actual;
             actual.Init(args.get(), reinterpret_cast<uint8_t*>(expertOutput.data()),
-                reinterpret_cast<uint8_t*>(output.data()), batch, topk, experts, type, epoch % 2U, &pipe, nullptr);
+                reinterpret_cast<uint8_t*>(output.data()), batch, topk, experts, type, epoch % 2U, &pipe);
             actual.Prepare(pool);
             // Independent balanced partition and route-derived expected prefix.
             const uint32_t quotient = experts / workers, remainder = experts % workers;

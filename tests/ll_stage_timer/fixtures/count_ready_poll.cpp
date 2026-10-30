@@ -9,16 +9,15 @@
 #include <cstdio>
 #include "csrc/kernels/dispatch/low_latency/device/dispatch_count_ready_extract.h"
 #define __aicore__
-#define LL_SEG_SCOPE(...)
-#define LL_SEG_BEGIN(...)
-#define LL_SEG_END(...)
-#define LL_SEG_COUNT(...)
-#define LL_SPARSE_MARK(...) (++sparseMarks)
 constexpr unsigned PIPE_V=0;
 constexpr unsigned CNT_GM_STRIDE_BLOCKS=4;
 inline unsigned configuredP=1;
-inline unsigned vfCalls=0,sparseMarks=0;
+inline unsigned vfCalls=0,referenceMarks=0;
 inline bool vfInFlight=false,snapshotVisible=false;
+struct ReferencePoints {
+ template<unsigned Word> void Mark(){static_assert(Word==25||Word==11);assert(!vfInFlight);++referenceMarks;}
+};
+inline ReferencePoints referencePoints;
 enum class HardEvent {MTE2_V,V_S,S_V};
 template<HardEvent E> inline void SyncFunc(){
  if constexpr(E==HardEvent::MTE2_V)snapshotVisible=true;
@@ -67,6 +66,7 @@ template<auto Fn>inline void asc_vf_call(uint32_t* records,uint32_t* counts,uint
 namespace DispatchDedup {
 inline unsigned LlSmallBPrefixProducerCount(unsigned world){return world==16?configuredP:26U;}
 struct ServerDedupCounts {
+ ReferencePoints* profile_=&referencePoints;
  unsigned recStatusNumPerCore_=0,epWorldSize_=16,startStatusIndex_=0,clears=0;
  Buffer waitStatusBuf_,gatherMaskOutBuf_,scalarBuf_,sumContinueBuf_;
  GlobalTensor windowInstatusFp32Tensor_;
@@ -91,16 +91,16 @@ int main(){
  unsigned cases=0;
  for(unsigned world:{16U,32U})for(unsigned p:{1U,6U,26U})
  for(unsigned n:{0U,1U,7U,8U,63U,64U,65U,384U,1024U})for(unsigned start:{0U,3U}){
-  configuredP=p;vfCalls=sparseMarks=0;vfInFlight=snapshotVisible=false;
+  configuredP=p;vfCalls=referenceMarks=0;vfInFlight=snapshotVisible=false;
   state.recStatusNumPerCore_=n;state.epWorldSize_=world;state.startStatusIndex_=start;state.clears=0;
   state.windowInstatusFp32Tensor_={gm};
   std::fill(std::begin(gm),std::end(gm),0xcab0cab0U);
   for(unsigned i=0;i<n;++i){gm[(start+i)*32]=0x3f800000U;gm[(start+i)*32+1]=0x80000001U+i;}
-  if(!n){assert(state.TryParallelRecvCnt());assert(!vfCalls && !state.clears && !sparseMarks);++cases;continue;}
+  if(!n){assert(state.TryParallelRecvCnt());assert(!vfCalls && !state.clears && referenceMarks==2);++cases;continue;}
   gm[(start+n-1)*32]=0;
   std::copy(std::begin(gm),std::end(gm),saved);
   assert(!state.TryParallelRecvCnt());
-  assert(!vfInFlight && !state.clears && !sparseMarks);
+  assert(!vfInFlight && !state.clears && !referenceMarks);
   assert(std::equal(std::begin(gm),std::end(gm),saved));
   const bool fused=world==16 && p==1;
   assert(vfCalls==unsigned(fused));
@@ -109,7 +109,7 @@ int main(){
   // snapshot must be retired before this second MTE2 copy replaces its bytes.
   for(unsigned i=0;i<n;++i){gm[(start+i)*32]=0x3f800000U;gm[(start+i)*32+1]=0xf1000001U+i;}
   assert(state.TryParallelRecvCnt());
-  assert(!vfInFlight && state.clears==1 && sparseMarks==1 && vfCalls==2U*unsigned(fused));
+  assert(!vfInFlight && state.clears==1 && referenceMarks==2 && vfCalls==2U*unsigned(fused));
   for(unsigned i=0;i<n;++i){
    assert(gm[(start+i)*32]==0);
    assert(gm[(start+i)*32+1]==0xf1000001U+i);

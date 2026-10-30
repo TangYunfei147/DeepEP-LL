@@ -14,7 +14,12 @@ def method(text,name):
 def test_sender_is_main_loop_and_dedup_unchanged():
     sender=(BASE/'device/dispatch_server_dedup_send.h').read_text(encoding='utf-8')
     old=subprocess.check_output(['git','-C',str(ROOT),'show','4ec82a5:csrc/kernels/dispatch/low_latency/device/dispatch_server_dedup_send.h'],encoding='utf-8')
-    normalize=runpy.run_path(str(ROOT/'tests/ll_stage_timer/test_segment_source.py'))['normalize']
+    contract=runpy.run_path(str(ROOT/'tests/ll_reference_profile/business_contract.py'))
+    def normalize(text):
+        # This older 4ec82a5 guard historically ignored diagnostic-only scopes;
+        # the schema6 source-contract test separately preserves every e4d brace.
+        return [t for t in contract['tokens'](contract['projection']._strip_cpp_body(text)) if t not in ('{','}')]
+    sender=contract['code'](sender)
     assert normalize(method(sender,'SendWithDedup'))==normalize(method(old,'SendWithDedup'))
     assert normalize(method(sender,'ProcessGroupLocal'))==normalize(method(old,'ProcessGroupLocal'))
     body=method(sender,'SendWithoutDedup')

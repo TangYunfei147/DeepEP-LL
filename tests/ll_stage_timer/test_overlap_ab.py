@@ -21,17 +21,14 @@ def test_stale_wheel_stage_rejected_even_without_timer():
 
 def test_common_timing_boundaries():
     base=ROOT/'csrc/kernels/dispatch/low_latency'
-    main=(base/'dispatch_server_dedup_kernel.h').read_text()
-    counts=(base/'device/dispatch_server_dedup_counts.h').read_text()
-    sender=(base/'device/dispatch_server_dedup_send.h').read_text()
-    assert 'LL_SEG_SCOPE(CAL_CUMSUM)' not in main
-    assert 'LL_SEG_SCOPE(CAL_CUMSUM);\n        CalRecvAndSetFlag();' in counts
-    assert 'LL_SEG_SCOPE(PREFIX_COMPLETE)' in counts and 'LL_SEG_SCOPE(PREFIX_LOAD)' in counts
-    start=sender.index('void Process(')
-    body=sender[start:sender.index('struct NoCooperate',start)]
-    assert body.index('LL_SEG_END(segBegin1, PREPARE_INPUT)')<body.index('LL_SEG_SCOPE(SEND_TOKENS)')
+    sender=(base/'device/dispatch_server_dedup_send.h').read_text(encoding='utf-8')
+    counts=(base/'device/dispatch_server_dedup_counts.h').read_text(encoding='utf-8')
+    assert 'profile_->Mark<12>' in counts and 'profile_->Mark<13>' in counts
+    assert 'profile_->Mark<14>' in counts and 'profile_->Mark<15>' in counts
+    assert 'profile_->Mark<38>' in sender and 'profile_->Mark<39>' in sender
     assert 'overlap_.Cooperative() ? 8U:tasks' in sender
     assert 'if (overlap_.Async())' in sender and 'if (!overlap_.Async())' in sender
+
 
 def test_real_cpp_stage_policy(tmp_path):
     cc=shutil.which('g++') or shutil.which('clang++')
@@ -51,8 +48,6 @@ int main(){using namespace DispatchDedup; LlOverlapLayout p{};
     subprocess.run([cc,'-std=c++17','-I',str(ROOT),str(source),'-o',str(exe)],check=True)
     subprocess.run([str(exe)],check=True)
 
-def test_stage_is_allowed_difference_only_between_valid_runs():
-    fixture=load('ab_parity','tests/ll_stage_timer/test_parity.py')
-    left=fixture.identity();left.update(implementation='g4-r0-prefix',overlap_stage=1,
-        active_aiv=56,send_cores=28,recv_cores=28,dispatch_recv_cores=56,core_protocol=14028,stage_timer_schema=12)
-    fixture.comparison.check_identity(left,dict(left,overlap_stage=4))
+def test_stage_is_recorded_in_reference_identity():
+    device=(ROOT/'csrc/kernels/dispatch/low_latency/common/ll_reference_profile_device.h').read_text(encoding='utf-8')
+    assert 'record_[48] = DispatchDedup::kLlCb59Replay ? 0U : DispatchDedup::kLlOverlapExperimentStage' in device

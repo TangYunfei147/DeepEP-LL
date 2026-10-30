@@ -1,3 +1,5 @@
+> 历史指南：旧打点及入口适用于原提交（最后完整旧实现e4d114c）。当前已删除旧插桩/解析；构建与采样以[reference schema7指南](../tests/ll_reference_profile/README.md)为准。下文算法与历史结果保留。
+
 # A3_docker compile validation environment
 
 User authorization: 2026-10-21. Compile-only validation; no NPU execution or wheel installation.

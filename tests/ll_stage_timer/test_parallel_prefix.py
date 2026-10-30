@@ -7,6 +7,9 @@ import pytest
 
 ROOT=Path(__file__).resolve().parents[2]
 
+import runpy
+_reference_contract = runpy.run_path(str(ROOT/'tests/ll_reference_profile/business_contract.py'))
+
 def compiler():
     cc=shlex.split(os.environ.get('CXX',''))
     if cc:return cc
@@ -59,13 +62,15 @@ def test_guard_generation_publication_and_lifetime():
     main=(base/'device/dispatch_server_dedup_counts.h').read_text(encoding='utf-8')
     body=(base/'device/dispatch_parallel_count_prefix.h').read_text(encoding='utf-8')
     assert 'return LlUseSmallDirect(axisBS_,buildLocalTasks_);' in main
+    main=_reference_contract['compact'](main)
+    body=_reference_contract['code'](body)
     assert 'if(UseParallelPrefix()){PrepareParallelRecvCnt();return;}' in main
     assert 'if(UseParallelPrefix()){CompleteParallelCumsum();return;}' in main
     assert 'if(UseParallelPrefix()){CalcParallelCumsum();return;}' in main
     assert 'prefixGeneration_=LlNextPrefixGeneration(publication.GetValue(1U));' in body
     assert body.index('DataCopyPad(workspace[startStatusIndex_]')<body.index('SyncFunc<HardEvent::MTE3_S>()')<body.index('LlPrefixReadyControlByte(aivId_)')
     assert 'ready.SetValue(0U,prefixEpoch_)' in body # Keep old epoch current across modes.
-    assert 'if(!overlap_.enabled){LL_SEG_SCOPE(TRANSITION_DRAIN);PipeBarrier<PIPE_ALL>();}' in body
+    assert 'if(!overlap_.enabled){PipeBarrier<PIPE_ALL>();}' in body
     assert 'SyncAll' not in body
     assert 'matrix' not in body
 

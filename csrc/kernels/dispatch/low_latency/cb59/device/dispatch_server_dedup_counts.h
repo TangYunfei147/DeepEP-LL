@@ -1,3 +1,4 @@
+#include "../../common/ll_reference_profile_device.h"
 // Copyright (c) 2026, Lu Lu
 // Modified by ryan_li 2026
 
@@ -7,7 +8,6 @@
 #include "kernel_operator.h"
 #include "adv_api/reduce/sum.h"
 #include "../count_layout.h"
-#include "../../common/ll_stage_timer_device.h"
 
 namespace DispatchDedup::Cb59Replay {
 using namespace AscendC;
@@ -21,7 +21,11 @@ using namespace AscendC;
 // 计数覆盖原始专家路由（含后续 relay 路由），不按去重后的跨 server 包数计数。
 class ServerDedupCounts {
 public:
-    __aicore__ inline void SetTimer(LlStageTimer::DeviceTimer* timer) { timer_ = timer; }
+/* LL_REFERENCE_BEGIN */
+__aicore__ inline void SetProfile(LlReferenceProfile::DeviceProfile* profile) { profile_ = profile; }
+
+/* LL_REFERENCE_END */
+
     // 摘要：绑定路由与计数输出，选择本轮控制区；保存并调整 CTRL[60]，供整数位模式的 FP32 归约使用。
     __aicore__ inline void Init(GM_ADDR commArgs, GM_ADDR expertIds, GM_ADDR expertTokenNumsOut, GM_ADDR sendCountsOut,
                                 uint32_t bs, uint32_t topK, uint32_t experts, uint32_t expertTokenNumsType,
@@ -62,8 +66,17 @@ public:
     // 摘要：汇合接收核片段总数，补齐跨核前缀偏移并发布完整前缀表的就绪标记。
     __aicore__ inline void CalcCumsum()
     {
+/* LL_REFERENCE_BEGIN */
+if (profile_) profile_->Mark<12>();
+/* LL_REFERENCE_END */
+
         CalRecvAndSetFlag();
-    }
+
+/* LL_REFERENCE_BEGIN */
+if (profile_) profile_->Mark<13>();
+
+/* LL_REFERENCE_END */
+}
     // 摘要：等待所有前缀片段就绪，加载本核前缀副本，并由首个接收核输出各专家计数。
     __aicore__ inline void CompleteCumsum();
     // 摘要：返回后续阶段可复用的 UB 池；在途计数发送使用的 statusBuf_ 不在复用范围内。
@@ -85,10 +98,26 @@ public:
     // 摘要：等待本核全部流水收尾，并恢复初始化前的 CTRL[60] 设置。
     __aicore__ inline void Finish()
     {
+/* LL_REFERENCE_BEGIN */
+if (profile_) profile_->Mark<20>();
+/* LL_REFERENCE_END */
+
         PipeBarrier<PIPE_ALL>();
         SetCtrlSpr<60, 60>(originalOverflowMode_);
-    }
 
+/* LL_REFERENCE_BEGIN */
+if (profile_) profile_->Mark<21>();
+
+/* LL_REFERENCE_END */
+}
+
+
+/* LL_REFERENCE_BEGIN */
+private:
+    LlReferenceProfile::DeviceProfile* profile_ = nullptr;
+
+public:
+/* LL_REFERENCE_END */
 private:
     static constexpr uint32_t UB_ALIGN = 32U;
     static constexpr uint32_t UB_ALIGN_DATA_COUNT = 8U;
@@ -140,7 +169,6 @@ private:
     // 摘要：等待所有接收核的前缀写出标记到齐，并清除本核对应的标记行。
     __aicore__ inline void WaitCumSumFlag();
 
-    LlStageTimer::DeviceTimer* timer_ = nullptr;
     TPipe* tpipe_ = nullptr;
     const __gm__ DispatchDedup::CommArgs* args_ = nullptr;
     EpServerDedupCountLayout layout_{};
@@ -172,6 +200,10 @@ private:
 // 摘要：统计完整原始路由的专家计数并异步发往专家所属 rank，同时保留仍被 MTE3 使用的记录 UB。
 __aicore__ inline void ServerDedupCounts::SendCnt()
 {
+/* LL_REFERENCE_BEGIN */
+if (profile_) profile_->Mark<6>();
+/* LL_REFERENCE_END */
+
     // 1. 按专家编号而非 token 分片分工：小 BS 由本次启动的全部核参与，
     // 否则只由接收核统计；每个参与核读取完整路由，但只负责自己的专家区间。
     const uint32_t cores = useAllCoreCount_ ? coreNum_ : aivUsedCumSum_;
@@ -185,7 +217,20 @@ __aicore__ inline void ServerDedupCounts::SendCnt()
     statusCntAlign_ = count == 0U ? 0U : Ceil(Ceil(rscvStatusNum_, cores), UB_ALIGN_DATA_COUNT) * UB_ALIGN_DATA_COUNT;
     if (count != 0U) tpipe_->InitBuffer(statusBuf_, ReservedBytes());
     tpipe_->InitBufPool(stagePool_, kEpServerDedupCountUbBytes - ReservedBytes());
-    if (count == 0U) return;
+    if (count == 0U)
+/* LL_REFERENCE_BEGIN */
+{
+/* LL_REFERENCE_END */
+
+/* LL_REFERENCE_BEGIN */
+if (profile_) profile_->Mark<7>();
+
+/* LL_REFERENCE_END */
+return;
+/* LL_REFERENCE_BEGIN */
+}
+/* LL_REFERENCE_END */
+
 
     // 3. 为完整 bs×topK 路由及筛选/归约临时数据分配 UB，等待 GM 路由搬入。
     const uint32_t routeBytes = Ceil(expertIdsCnt_ * sizeof(int32_t), SIZE_ALIGN_256) * SIZE_ALIGN_256;
@@ -217,10 +262,14 @@ __aicore__ inline void ServerDedupCounts::SendCnt()
     // 此处仅下发，不全量等待：statusBuf_ 保持不变，而筛选临时 UB 可以交给后续阶段。
     SyncFunc<HardEvent::S_MTE3>();
     SendExpertCntRange(start, end);
-    LL_SPARSE_MARK(COUNTS_SENT);
     // Only statusBuf_ is still read by MTE3. Count's V_S dependencies already
     // retired the shared scratch; do not Reset either pool (A5 drains MTE3).
     // Keeping the pipe also preserves Init's CTRL[60] through FP8 quantization.
+
+/* LL_REFERENCE_BEGIN */
+if (profile_) profile_->Mark<7>();
+
+/* LL_REFERENCE_END */
 }
 
 // 摘要：向量筛选本核专家区间内的路由，再用直方图生成每专家的 ready 标记和计数。
@@ -288,6 +337,10 @@ __aicore__ inline void ServerDedupCounts::SendExpertCntRange(uint32_t start, uin
 // 摘要：将本 rank 的计数记录分给接收核，等待本片计数到齐并计算局部前缀与总数。
 __aicore__ inline void ServerDedupCounts::RecvCnt()
 {
+/* LL_REFERENCE_BEGIN */
+if (profile_) profile_->Mark<10>();
+/* LL_REFERENCE_END */
+
     // 接收端控制区共有 localExperts×worldSize（等于 experts）条记录，
     // 按“本地专家 → 来源 rank”排列；每个接收核负责一段连续记录。
     // Each count owns a 512B GM slot, so contiguous ownership can split at any
@@ -296,7 +349,20 @@ __aicore__ inline void ServerDedupCounts::RecvCnt()
     stagePool_.InitBuffer(scalarBuf_, 3U * UB_ALIGN);
     const uint32_t receiver = aivId_ - aivUsedAllToAll_;
     // Inactive receivers only consume the final prefix in CompleteCumsum.
-    if (receiver >= activeCumSumCores_) return;
+    if (receiver >= activeCumSumCores_)
+/* LL_REFERENCE_BEGIN */
+{
+/* LL_REFERENCE_END */
+
+/* LL_REFERENCE_BEGIN */
+if (profile_) profile_->Mark<11>();
+
+/* LL_REFERENCE_END */
+return;
+/* LL_REFERENCE_BEGIN */
+}
+/* LL_REFERENCE_END */
+
     SplitToCore(rscvStatusNum_, aivUsedCumSum_, receiver, startStatusIndex_, endStatusIndex_, recStatusNumPerCore_);
     stagePool_.InitBuffer(waitStatusBuf_, Ceil(recStatusNumPerCore_ * UB_ALIGN + SIZE_ALIGN_256, SIZE_ALIGN_256) * SIZE_ALIGN_256);
     stagePool_.InitBuffer(gatherMaskOutBuf_, Ceil(rscvStatusNum_ * sizeof(int32_t), UB_ALIGN) * UB_ALIGN);
@@ -309,11 +375,20 @@ __aicore__ inline void ServerDedupCounts::RecvCnt()
     // 等待本片 ready 到齐后提取 count，并计算局部累计值、发布本片总数。
     // 本阶段不会等待 token payload；即使分到空片段也要发布总数 0，参与后续跨核汇总。
     WaitDispatch();
+
+/* LL_REFERENCE_BEGIN */
+if (profile_) profile_->Mark<11>();
+
+/* LL_REFERENCE_END */
 }
 
 // 摘要：等待所有前缀片段就绪，加载本核前缀副本，并由首个接收核输出各专家计数。
 __aicore__ inline void ServerDedupCounts::CompleteCumsum()
 {
+/* LL_REFERENCE_BEGIN */
+if (profile_) profile_->Mark<14>();
+/* LL_REFERENCE_END */
+
     // Convert the physical AIV index to its receive-group index.
     // 前缀完成阶段：把物理 AIV 编号转成接收组编号，为本核加载完整前缀副本。
     const uint32_t receiver = aivId_ - aivUsedAllToAll_;
@@ -348,6 +423,11 @@ __aicore__ inline void ServerDedupCounts::CompleteCumsum()
         DataCopyPad(expertTokenNumsOutGMTensor_, expertCounts, output);
     }
     // No listening table or payload receive/copy is constructed in this increment.
+
+/* LL_REFERENCE_BEGIN */
+if (profile_) profile_->Mark<15>();
+
+/* LL_REFERENCE_END */
 }
 
 // 摘要：对原始路由执行逐专家匹配与归约，得到该专家的路由条数。
@@ -415,7 +495,6 @@ __aicore__ inline void ServerDedupCounts::GatherSumRecvCnt(LocalTensor<float>& g
     Sum(statusSumOutTensor, gatherMaskOutTensor, sumParams);
     SyncFunc<AscendC::HardEvent::V_S>();
     float sumOfRecvCnt = statusSumOutTensor.ReinterpretCast<float>().GetValue(0);
-    LL_SPARSE_MARK(COUNTS_RECEIVED);
 
     // Compute the relative prefix while outgoing cnt may still be in flight.
     // Gather preserved the integer count bit patterns used by the FP32 Sum.
@@ -425,7 +504,6 @@ __aicore__ inline void ServerDedupCounts::GatherSumRecvCnt(LocalTensor<float>& g
         cumulative += uint32_t(prefix.GetValue(i));
         prefix.SetValue(i, cumulative);
     }
-    LL_SPARSE_MARK(PREFIX_LOCAL_DONE);
     PublishRecvCntSum(sumOfRecvCnt);
 }
 
@@ -453,6 +531,10 @@ __aicore__ inline void ServerDedupCounts::PublishRecvCntSum(float sumOfRecvCnt)
 // 摘要：等待所有接收核总数就绪，求本核之前各片段之和，再清理本核消费的汇总标记。
 __aicore__ inline uint32_t ServerDedupCounts::GetCumSum(uint32_t newAivId)
 {
+/* LL_REFERENCE_BEGIN */
+if (profile_) profile_->Mark<26>();
+/* LL_REFERENCE_END */
+
     uint32_t offset = 0;
     DataCopyParams sumIntriParams{static_cast<uint16_t>(activeCumSumCores_), 1,
                                   static_cast<uint16_t>(aivUsedCumSum_ - 1), 0};
@@ -509,12 +591,34 @@ __aicore__ inline uint32_t ServerDedupCounts::GetCumSum(uint32_t newAivId)
     SyncFunc<AscendC::HardEvent::V_MTE3>();
     DataCopy(selfRankWinInGMTensor_[(layout_.cumsumOffset + newAivId * UB_ALIGN) / sizeof(float)], sumCoreFp32Tensor,
              cleanParams);
-    return offset;
+
+/* LL_REFERENCE_BEGIN */
+{
+/* LL_REFERENCE_END */
+
+/* LL_REFERENCE_BEGIN */
+if (profile_) profile_->Mark<27>();
+
+/* LL_REFERENCE_END */
+return offset;
+/* LL_REFERENCE_BEGIN */
+}
+/* LL_REFERENCE_END */
+
+
+/* LL_REFERENCE_BEGIN */
+if (profile_) profile_->Mark<27>();
+
+/* LL_REFERENCE_END */
 }
 
 // 摘要：轮询本片所有来源计数的 ready 标记；到齐后提取计数、发布片段总数并清除 ready。
 __aicore__ inline void ServerDedupCounts::WaitDispatch()
 {
+/* LL_REFERENCE_BEGIN */
+if (profile_) profile_->Mark<24>();
+/* LL_REFERENCE_END */
+
     LocalTensor<float> gatherMaskOutTensor = gatherMaskOutBuf_.Get<float>();
     LocalTensor<uint32_t> gatherTmpTensor = scalarBuf_.GetWithOffset<uint32_t>(UB_ALIGN / sizeof(uint32_t), 0);
     LocalTensor<float> statusSumOutTensor = scalarBuf_.GetWithOffset<float>(UB_ALIGN / sizeof(float), UB_ALIGN);
@@ -539,6 +643,11 @@ __aicore__ inline void ServerDedupCounts::WaitDispatch()
 
     GatherSumRecvCnt(gatherMaskOutTensor, gatherTmpTensor, statusSumOutTensor);
     WaitDispatchClearStatus();
+
+/* LL_REFERENCE_BEGIN */
+if (profile_) profile_->Mark<25>();
+
+/* LL_REFERENCE_END */
 }
 
 // 摘要：为本片局部前缀加上跨核偏移，写出 sendCountsOut 与各核前缀副本，再发布完成标记。
@@ -590,6 +699,10 @@ __aicore__ inline void ServerDedupCounts::CalRecvAndSetFlag()
 // 摘要：等待所有接收核的前缀写出标记到齐，并清除本核对应的标记行。
 __aicore__ inline void ServerDedupCounts::WaitCumSumFlag()
 {
+/* LL_REFERENCE_BEGIN */
+if (profile_) profile_->Mark<28>();
+/* LL_REFERENCE_END */
+
     int32_t cumSumFlag = 0;
     int32_t targetFlag = activeCumSumCores_ * UB_ALIGN_DATA_COUNT;
     uint32_t cumSumFlagOffset =
@@ -615,6 +728,11 @@ __aicore__ inline void ServerDedupCounts::WaitCumSumFlag()
     SyncFunc<HardEvent::V_MTE3>();
     DataCopy(selfRankWinInGMTensor_[cumSumFlagOffset], statusCleanFp32Tensor_,
              activeCumSumCores_ * UB_ALIGN_DATA_COUNT);
+
+/* LL_REFERENCE_BEGIN */
+if (profile_) profile_->Mark<29>();
+
+/* LL_REFERENCE_END */
 }
 
 }  // namespace DispatchDedup::Cb59Replay

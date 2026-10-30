@@ -35,8 +35,7 @@ def test_variant_inventory_and_timer_lifetimes():
     cmake=(ROOT/'cmake/device/CMakeLists.txt').read_text()
     for mode in MODES: assert f'variants/{mode}.cpp' in cmake
     entry=(base/'dispatch_variant_kernel.h').read_text()
-    ordered=['timer.MarkAt<LlStageTimer::ENTRY>','kernel.Init(','timer.Mark<LlStageTimer::INIT_DONE>',
-             'kernel.Process();','timer.Mark<LlStageTimer::WORK_DONE>','timer.Flush()']
+    ordered=['profile.Value<0>', 'kernel.SetProfile(', 'kernel.Init(', 'kernel.Process();', 'kernel.ExportProfile();', 'profile.Finish(']
     positions=[entry.index(x) for x in ordered]
     assert positions==sorted(positions)
     assert entry.count('DispatchMemoryServerDedupKernel<')==1
@@ -44,7 +43,7 @@ def test_variant_inventory_and_timer_lifetimes():
     host=(ROOT/'csrc/ops/low_latency.cpp').read_text()
     assert host.count('dispatch_format_tiling(dtype)')==2
     assert 'SyncAll' not in entry
-    assert 'dispatch_server_dedup_kernel_do_sparse16(' in host
+    assert 'dispatch_server_dedup_kernel_do_reference7(' in host
 
 @pytest.mark.parametrize('timer',[False,True])
 def test_real_host_selector_all_modes_and_rejections(tmp_path,timer):
@@ -57,7 +56,7 @@ def test_real_host_selector_all_modes_and_rejections(tmp_path,timer):
 #include "csrc/kernels/dispatch/low_latency/launch.hpp"
 using namespace DispatchDedup;
 static unsigned calls=0,selected=99;
-#define STUB(name,n) extern "C" void dispatch_server_dedup_launch_sparse16_##name(void*, const deepep::EpServerDedupKernelArgs*) {++calls;selected=n;}
+#define STUB(name,n) extern "C" void dispatch_server_dedup_launch_reference7_##name(void*, const deepep::EpServerDedupKernelArgs*) {++calls;selected=n;}
 STUB(prequant_e4m3,0) STUB(fp16,1) STUB(fp16_e4m3,2) STUB(fp16_e5m2,3)
 STUB(bf16,4) STUB(bf16_e4m3,5) STUB(bf16_e5m2,6)
 int main() {
@@ -70,26 +69,26 @@ int main() {
    assert(LlDispatchVariantForTiling(dtype,quant,output,input)==expected);
  }
  deepep::EpServerDedupKernelArgs args{};
- static_assert(sizeof(args)==152);
- for(unsigned m=0;m<7;++m) { calls=0;dispatch_server_dedup_kernel_do_sparse16(nullptr,&args,m);assert(calls==1 && selected==m); }
+ static_assert(sizeof(args)==144);
+ for(unsigned m=0;m<7;++m) { calls=0;dispatch_server_dedup_kernel_do_reference7(nullptr,&args,m);assert(calls==1 && selected==m); }
  for(unsigned m:{7U,255U,0xffffffffU}) {
-   calls=0;bool threw=false;try {dispatch_server_dedup_kernel_do_sparse16(nullptr,&args,m);}catch(const std::invalid_argument&){threw=true;}
+   calls=0;bool threw=false;try {dispatch_server_dedup_kernel_do_reference7(nullptr,&args,m);}catch(const std::invalid_argument&){threw=true;}
    assert(threw && !calls);
  }
- bool threw=false;try {dispatch_server_dedup_kernel_do_sparse16(nullptr,nullptr,0);}catch(const std::invalid_argument&){threw=true;}assert(threw);
- assert(deepep_ll_stage_timer_schema()==15 && deepep_ll_stage_timer_profile_id()==6);
+ bool threw=false;try {dispatch_server_dedup_kernel_do_reference7(nullptr,nullptr,0);}catch(const std::invalid_argument&){threw=true;}assert(threw);
+ assert(deepep_ll_reference_profile_schema()==7);
  assert(deepep_ll_small_b_prefix_cores()==0);
  assert(deepep_ll_core_protocol_version()==19028);
  assert(deepep_ll_ranks_per_group()==4);
-#ifdef DEEPEP_LL_STAGE_TIMER
- assert(deepep_ll_stage_timer_enabled()==1);
+#ifdef DEEPEP_LL_REFERENCE_PROFILE
+ assert(deepep_ll_reference_profile_enabled()==1);
 #else
- assert(deepep_ll_stage_timer_enabled()==0);
+ assert(deepep_ll_reference_profile_enabled()==0);
 #endif
 }'''
     source=tmp_path/'selector.cpp';source.write_text(code)
     exe=tmp_path/'selector'
-    flags=['-DDEEPEP_LL_STAGE_TIMER=1'] if timer else []
+    flags=['-DDEEPEP_LL_REFERENCE_PROFILE=1'] if timer else []
     subprocess.run([cc,'-std=c++17','-DCATLASS_ARCH=3510',*flags,'-I',str(ROOT),str(source),str(ROOT/'csrc/kernels/dispatch/low_latency.cpp'),'-o',str(exe)],check=True)
     subprocess.run([str(exe)],check=True)
 

@@ -1,3 +1,4 @@
+#include "../common/ll_reference_profile_device.h"
 // Copyright (c) 2026, Lu Lu
 // Modified by ryan_li 2026
 
@@ -9,7 +10,7 @@
 #include "dispatch_prefix_scan.h"
 #include "../common/ll_overlap_layout.h"
 #include "../common/ll_small_b.h"
-#include "../common/ll_stage_timer_device.h"
+#include "../common/ll_core_config.h"
 #include "adv_api/reduce/sum.h"
 #include "../common/ep_memory_server_dedup_count_layout.h"
 #include "../common/ll_group_local_send.h"
@@ -26,12 +27,17 @@ using namespace AscendC;
 // 计数覆盖原始专家路由（含后续 relay 路由），不按去重后的跨 server 包数计数。
 class ServerDedupCounts {
 public:
+/* LL_REFERENCE_BEGIN */
+__aicore__ inline void SetProfile(LlReferenceProfile::DeviceProfile* profile) { profile_ = profile; }
+
+/* LL_REFERENCE_END */
+
     // 摘要：绑定路由与计数输出，选择本轮控制区；保存并调整 CTRL[60]，供整数位模式的 FP32 归约使用。
     __aicore__ inline void Init(GM_ADDR commArgs, GM_ADDR expertIds, GM_ADDR expertTokenNumsOut, GM_ADDR sendCountsOut,
                                 uint32_t bs, uint32_t topK, uint32_t experts, uint32_t expertTokenNumsType,
-                                int64_t magic, TPipe* pipe, LlStageTimer::DeviceTimer* timer = nullptr, bool enableDedup = true)
+                                int64_t magic, TPipe* pipe, bool enableDedup = true)
     {
-        timer_ = timer;
+
         buildLocalTasks_=enableDedup;
         tpipe_ = pipe;
         args_ = reinterpret_cast<const __gm__ DispatchDedup::CommArgs*>(commArgs);
@@ -76,9 +82,18 @@ public:
     // 摘要：汇合接收核片段总数，补齐跨核前缀偏移并发布完整前缀表的就绪标记。
     __aicore__ inline void CalcCumsum()
     {
-        LL_SEG_SCOPE(CAL_CUMSUM);
+/* LL_REFERENCE_BEGIN */
+if (profile_) profile_->Mark<12>();
+/* LL_REFERENCE_END */
+
+
         CalRecvAndSetFlag();
-    }
+
+/* LL_REFERENCE_BEGIN */
+if (profile_) profile_->Mark<13>();
+
+/* LL_REFERENCE_END */
+}
     // 摘要：等待所有前缀片段就绪，加载本核前缀副本，并由首个接收核输出各专家计数。
     __aicore__ inline void CompleteCumsum();
     // 摘要：返回后续阶段可复用的 UB 池；在途计数发送使用的 statusBuf_ 不在复用范围内。
@@ -95,7 +110,7 @@ public:
     // the original RecvCnt allocations. ProcessGroupLocal drains its reads first.
     __aicore__ inline TBufPool<TPosition::VECCALC,16>& LocalSendScratchPool()
     {
-        LL_SEG_SCOPE(PREPARE_INPUT);
+
         tpipe_->InitBufPool(localSendPool_,overlap_.enabled ? overlap_.sendBytes : kEpServerDedupCountUbBytes-ReservedBytes(),stagePool_);
         return localSendPool_;
     }
@@ -111,13 +126,29 @@ public:
     // 摘要：等待本核全部流水收尾，并恢复初始化前的 CTRL[60] 设置。
     __aicore__ inline void Finish()
     {
+/* LL_REFERENCE_BEGIN */
+if (profile_) profile_->Mark<20>();
+/* LL_REFERENCE_END */
+
         PipeBarrier<PIPE_ALL>();
         // The existing full drain makes asynchronous sender completion visible
         // to Scalar; MTE3_V waits in sender Retire alone do not establish this.
-        LL_SPARSE_AFTER(FIRST_SEND,SEND_DONE);
-        SetCtrlSpr<60, 60>(originalOverflowMode_);
-    }
 
+        SetCtrlSpr<60, 60>(originalOverflowMode_);
+
+/* LL_REFERENCE_BEGIN */
+if (profile_) profile_->Mark<21>();
+
+/* LL_REFERENCE_END */
+}
+
+
+/* LL_REFERENCE_BEGIN */
+private:
+    LlReferenceProfile::DeviceProfile* profile_ = nullptr;
+
+public:
+/* LL_REFERENCE_END */
 private:
     static constexpr uint32_t UB_ALIGN = 32U;
     static constexpr uint32_t UB_ALIGN_DATA_COUNT = 8U;
@@ -203,7 +234,7 @@ private:
     TBufPool<TPosition::VECCALC, 16> stagePool_;
     TBufPool<TPosition::VECCALC, 5> countPool_;
     TBufPool<TPosition::VECCALC,16> localSendPool_;
-    LlStageTimer::DeviceTimer* timer_ = nullptr;
+
     TBuf<> expertIdsBuf_, dstExpBuf_, subExpBuf_, workBuf_, statusBuf_, histogramBuf_;
     TBuf<> waitStatusBuf_, gatherMaskOutBuf_, sumContinueBuf_, scalarBuf_;
     TBuf<> prefixBuf_, readyBuf_, tokenNumBuf_;
@@ -212,7 +243,11 @@ private:
 // 摘要：统计完整原始路由的专家计数并异步发往专家所属 rank，同时保留仍被 MTE3 使用的记录 UB。
 __aicore__ inline void ServerDedupCounts::SendCnt()
 {
-    LL_SEG_BEGIN(countSetup, COUNT_SETUP);
+/* LL_REFERENCE_BEGIN */
+if (profile_) profile_->Mark<6>();
+/* LL_REFERENCE_END */
+
+
     statusCntAlign_=countPlan_.count==0U ? 0U : Ceil(countPlan_.count,UB_ALIGN_DATA_COUNT)*UB_ALIGN_DATA_COUNT;
     const uint32_t recordBytes=statusCntAlign_*kEpServerDedupCountRecordBytes;
     if (recordBytes) tpipe_->InitBuffer(statusBuf_,recordBytes);
@@ -225,10 +260,23 @@ __aicore__ inline void ServerDedupCounts::SendCnt()
     }
     tpipe_->InitBufPool(stagePool_,overlap_.enabled ? overlap_.sendBytes : kEpServerDedupCountUbBytes-ReservedBytes());
     if (overlap_.enabled && overlap_.countBytes) tpipe_->InitBufPool(recvCountPool_,overlap_.countBytes);
-    LL_SEG_END(countSetup, COUNT_SETUP);
-    if (!countPlan_.count) return;
-    LL_SEG_SCOPE(SEND_COUNTS);
-    LL_SEG_BEGIN(initCountBuffers, INIT_COUNT_BUFFERS);
+
+    if (!countPlan_.count)
+/* LL_REFERENCE_BEGIN */
+{
+/* LL_REFERENCE_END */
+
+/* LL_REFERENCE_BEGIN */
+if (profile_) profile_->Mark<7>();
+
+/* LL_REFERENCE_END */
+return;
+/* LL_REFERENCE_BEGIN */
+}
+/* LL_REFERENCE_END */
+
+
+
     tpipe_->InitBufPool(countPool_,4U*routeBytes+statusCntAlign_*sizeof(int32_t),stagePool_);
     countPool_.InitBuffer(expertIdsBuf_,routeBytes);
     countPool_.InitBuffer(dstExpBuf_,routeBytes);
@@ -246,7 +294,7 @@ __aicore__ inline void ServerDedupCounts::SendCnt()
     PipeBarrier<PIPE_V>();
     Duplicate<int32_t>(statusTensor_,0x3f800000,flagMask,statusCntAlign_/8U,1U,8U);
     SyncFunc<HardEvent::V_S>();
-    LL_SEG_END(initCountBuffers, INIT_COUNT_BUFFERS);
+
     const uint32_t maskBytes=Ceil(Ceil(expertIdsCnt_,8U),UB_ALIGN)*UB_ALIGN;
     for (uint32_t part=0;part<countPlan_.size;++part) {
         const auto range=countPlan_.ranges[part];
@@ -262,7 +310,12 @@ __aicore__ inline void ServerDedupCounts::SendCnt()
         const auto range=countPlan_.ranges[part];
         SendExpertCntRange(range.begin,range.end,range.record);
     }
-    LL_SPARSE_MARK(COUNTS_SENT);
+
+
+/* LL_REFERENCE_BEGIN */
+if (profile_) profile_->Mark<7>();
+
+/* LL_REFERENCE_END */
 }
 
 // Small direct inputs need counts only: feed the original padded IDs to the VF.
@@ -270,7 +323,7 @@ __aicore__ inline void ServerDedupCounts::SendCnt()
 // GatherMask setup and the per-expert multi-instruction reduction fallback.
 __aicore__ inline void ServerDedupCounts::CountSmallDirectRange(uint32_t start,uint32_t end,uint32_t record)
 {
-    LL_SEG_SCOPE(COUNT_COMPUTE);
+
     auto histogram=histogramBuf_.Get<int32_t>();
     auto* output=reinterpret_cast<__ubuf__ uint32_t*>(histogram.GetPhyAddr());
     auto* input=reinterpret_cast<__ubuf__ uint32_t*>(validExpertIdsTensor_.GetPhyAddr());
@@ -287,7 +340,7 @@ __aicore__ inline void ServerDedupCounts::CountSmallDirectRange(uint32_t start,u
 // 摘要：向量筛选本核专家区间内的路由，再用直方图生成每专家的 ready 标记和计数。
 __aicore__ inline void ServerDedupCounts::CountByVectorRange(uint32_t start, uint32_t end, uint32_t maskBytes, uint32_t record)
 {
-        LL_SEG_SCOPE(COUNT_COMPUTE);
+
     LocalTensor<int32_t> histogram = histogramBuf_.Get<int32_t>();
     LocalTensor<int32_t> selected = dstExpBuf_.Get<int32_t>();
     LocalTensor<uint8_t> lower = subExpBuf_.Get<uint8_t>();
@@ -320,7 +373,7 @@ __aicore__ inline void ServerDedupCounts::CountByVectorRange(uint32_t start, uin
 // 摘要：逐个专家扫描路由并计算计数，作为小规模输入的统计路径。
 __aicore__ inline void ServerDedupCounts::CountByExpert(uint32_t start, uint32_t end, uint32_t record)
 {
-        LL_SEG_SCOPE(COUNT_COMPUTE);
+
     for (uint32_t expert = start; expert < end; ++expert) {
         int32_t count = 0;
         CalTokenSendExpertCnt(expert, expertIdsCnt_, count);
@@ -334,7 +387,7 @@ __aicore__ inline void ServerDedupCounts::CountByExpert(uint32_t start, uint32_t
 // produces q: no per-route prefix reduction, remote exchange or scalar owner test.
 __aicore__ inline void ServerDedupCounts::BuildLocalTasks(uint32_t start,uint32_t end,uint32_t record)
 {
-    LL_SEG_SCOPE(COUNT_COMPUTE);
+
     SyncFunc<HardEvent::S_V>();
     auto lower=subExpBuf_.Get<uint8_t>();
     auto upper=workBuf_.Get<uint8_t>();
@@ -369,7 +422,7 @@ __aicore__ inline void ServerDedupCounts::BuildLocalTasks(uint32_t start,uint32_
 
 __aicore__ inline void ServerDedupCounts::SendExpertCntRange(uint32_t start, uint32_t end, uint32_t record)
 {
-        LL_SEG_SCOPE(COUNT_SEND_ISSUE);
+
     GlobalTensor<int32_t> peer;
     for (uint32_t expert = start; expert < end;) {
         const uint32_t dst = expert / moeExpertNumPerRank_;
@@ -388,17 +441,52 @@ __aicore__ inline void ServerDedupCounts::SendExpertCntRange(uint32_t start, uin
 // 只有R0接收全部计数，其他R核直接继续本组发送。
 __aicore__ inline void ServerDedupCounts::PrepareRecvCnt()
 {
-    if(UseParallelPrefix()){PrepareParallelRecvCnt();return;}
+/* LL_REFERENCE_BEGIN */
+if (profile_) profile_->Mark<10>();
+/* LL_REFERENCE_END */
+
+    if(UseParallelPrefix()){PrepareParallelRecvCnt();
+/* LL_REFERENCE_BEGIN */
+{
+/* LL_REFERENCE_END */
+
+/* LL_REFERENCE_BEGIN */
+if (profile_) profile_->Mark<24>();
+
+/* LL_REFERENCE_END */
+return;
+/* LL_REFERENCE_BEGIN */
+}
+/* LL_REFERENCE_END */
+}
     recStatusNumPerCore_=0U;
-    if (aivId_!=kLlSendCoreNum) return;
-    LL_SEG_SCOPE(INIT_COUNT_BUFFERS);
-    LL_SEG_SCOPE(PREFIX_CONTROL_INIT);
+    if (aivId_!=kLlSendCoreNum)
+/* LL_REFERENCE_BEGIN */
+{
+/* LL_REFERENCE_END */
+
+/* LL_REFERENCE_BEGIN */
+if (profile_) profile_->Mark<24>();
+
+/* LL_REFERENCE_END */
+return;
+/* LL_REFERENCE_BEGIN */
+}
+/* LL_REFERENCE_END */
+
+
+
     startStatusIndex_=0U;endStatusIndex_=rscvStatusNum_;recStatusNumPerCore_=rscvStatusNum_;
     RecvPool().InitBuffer(scalarBuf_,96U);
     RecvPool().InitBuffer(waitStatusBuf_,Ceil(rscvStatusNum_*32U+256U,256U)*256U);
     RecvPool().InitBuffer(gatherMaskOutBuf_,Ceil(rscvStatusNum_*4U,256U)*256U);
     RecvPool().InitBuffer(sumContinueBuf_,Ceil(rscvStatusNum_*4U,32U)*32U);
     RecvPool().InitBuffer(prefixPublishBuf_,32U);
+
+/* LL_REFERENCE_BEGIN */
+if (profile_) profile_->Mark<24>();
+
+/* LL_REFERENCE_END */
 }
 
 __aicore__ inline void ServerDedupCounts::RecvCnt()
@@ -410,16 +498,33 @@ __aicore__ inline void ServerDedupCounts::RecvCnt()
 // 摘要：等待所有前缀片段就绪，加载本核前缀副本，并由首个接收核输出各专家计数。
 __aicore__ inline void ServerDedupCounts::CompleteCumsum()
 {
-    LL_SEG_SCOPE(PREFIX_COMPLETE);
-    if(UseParallelPrefix()){CompleteParallelCumsum();return;}
+/* LL_REFERENCE_BEGIN */
+if (profile_) profile_->Mark<14>();
+/* LL_REFERENCE_END */
+
+
+    if(UseParallelPrefix()){CompleteParallelCumsum();
+/* LL_REFERENCE_BEGIN */
+{
+/* LL_REFERENCE_END */
+
+/* LL_REFERENCE_BEGIN */
+if (profile_) profile_->Mark<15>();
+
+/* LL_REFERENCE_END */
+return;
+/* LL_REFERENCE_BEGIN */
+}
+/* LL_REFERENCE_END */
+}
     const uint32_t receiver=aivId_;
-    if (!overlap_.Async()) { LL_SEG_SCOPE(TRANSITION_DRAIN); PipeBarrier<PIPE_ALL>(); }
+    if (!overlap_.Async()) {  PipeBarrier<PIPE_ALL>(); }
     if (!overlap_.enabled) tpipe_->Reset();
-    LL_SEG_BEGIN(prefixControlInit, PREFIX_CONTROL_INIT);
+
     SetCtrlSpr<60,60>(0);
     tpipe_->InitBuffer(readyBuf_,32U);
     tpipe_->InitBuffer(prefixBuf_,Ceil(rscvStatusNum_*4U,32U)*32U);
-    LL_SEG_END(prefixControlInit, PREFIX_CONTROL_INIT);
+
     WaitCumSumFlag();
     LocalTensor<int32_t> prefix = prefixBuf_.Get<int32_t>();
     GlobalTensor<int32_t> workspace;
@@ -427,7 +532,7 @@ __aicore__ inline void ServerDedupCounts::CompleteCumsum()
     workspace.SetL2CacheHint(CacheMode::CACHE_MODE_DISABLE);
     const DataCopyExtParams copy{1U, rscvStatusNum_ * uint32_t(sizeof(int32_t)), 0U, 0U, 0U};
     const DataCopyPadExtParams<int32_t> pad{false, 0U, 0U, 0};
-    { LL_SEG_SCOPE(PREFIX_LOAD);
+    {
     DataCopyPad(prefix, workspace, copy, pad);
     SyncFunc<HardEvent::MTE2_S>();
     }
@@ -435,7 +540,7 @@ __aicore__ inline void ServerDedupCounts::CompleteCumsum()
     // 每个专家最后一个来源 rank 的前缀即该专家结束位置；type=0 输出累计数，
     // 其他已验证类型输出与上一专家累计数之差，即该专家自己的接收条数。
     if (receiver == aivUsedAllToAll_) {
-        LL_SEG_SCOPE(WRITE_COUNTS_OUTPUT);
+
         tpipe_->InitBuffer(tokenNumBuf_, Ceil(moeExpertNumPerRank_ * sizeof(int64_t), UB_ALIGN) * UB_ALIGN);
         LocalTensor<int64_t> expertCounts = tokenNumBuf_.Get<int64_t>();
         int64_t previous = 0;
@@ -449,7 +554,12 @@ __aicore__ inline void ServerDedupCounts::CompleteCumsum()
         DataCopyPad(expertTokenNumsOutGMTensor_, expertCounts, output);
     }
     // No listening table or payload receive/copy is constructed in this increment.
-    LL_SPARSE_MARK(PREFIX_READY);
+
+
+/* LL_REFERENCE_BEGIN */
+if (profile_) profile_->Mark<15>();
+
+/* LL_REFERENCE_END */
 }
 
 // 摘要：对原始路由执行逐专家匹配与归约，得到该专家的路由条数。
@@ -485,7 +595,7 @@ __aicore__ inline void ServerDedupCounts::CalTokenSendExpertCnt(uint32_t dstExpe
 // 摘要：清除本核已收取记录的 ready 标记，保留计数字段，为后续窗口复用做准备。
 __aicore__ inline void ServerDedupCounts::WaitDispatchClearStatus()
 {
-        LL_SEG_SCOPE(CLEAR_RECV_STATUS);
+
     DataCopyParams intriOutParams{static_cast<uint16_t>(recStatusNumPerCore_), 1, 0,
                                   static_cast<uint16_t>(CNT_GM_STRIDE_BLOCKS - 1U)};
     uint64_t duplicateMask[2] = {0x0101010101010101ULL, 0ULL};
@@ -505,19 +615,32 @@ __aicore__ inline void ServerDedupCounts::WaitDispatchClearStatus()
 __aicore__ inline bool ServerDedupCounts::TryRecvCnt()
 {
     if(UseParallelPrefix())return TryParallelRecvCnt();
-    if (!recStatusNumPerCore_) return true;
-    LL_SEG_SCOPE(WAIT_RECV_COUNTS);
-    LL_SEG_SCOPE(POLL_RECV_COUNTS);
-    LL_SEG_COUNT(POLL_RECV_COUNTS_ITERATIONS,1U);
-    LL_SEG_BEGIN(countSnapshotIssue, COUNT_SNAPSHOT_ISSUE);
+    if (!recStatusNumPerCore_)
+/* LL_REFERENCE_BEGIN */
+{
+/* LL_REFERENCE_END */
+
+/* LL_REFERENCE_BEGIN */
+if (profile_) profile_->Mark<25>();
+if (profile_) profile_->Mark<11>();
+/* LL_REFERENCE_END */
+return true;
+/* LL_REFERENCE_BEGIN */
+}
+/* LL_REFERENCE_END */
+
+
+
+
+
     statusFp32Tensor_=waitStatusBuf_.Get<float>();
     DataCopy(statusFp32Tensor_,windowInstatusFp32Tensor_,
              DataCopyParams{uint16_t(rscvStatusNum_),1U,uint16_t(CNT_GM_STRIDE_BLOCKS-1U),0U});
-    LL_SEG_END(countSnapshotIssue, COUNT_SNAPSHOT_ISSUE);
-    LL_SEG_BEGIN(countSnapshotWait, COUNT_SNAPSHOT_WAIT);
+
+
     SyncFunc<HardEvent::MTE2_V>();
-    LL_SEG_END(countSnapshotWait, COUNT_SNAPSHOT_WAIT);
-    LL_SEG_BEGIN(countReadyCheck, COUNT_READY_CHECK);
+
+
     auto gather=gatherMaskOutBuf_.Get<float>();
     auto pattern=scalarBuf_.GetWithOffset<uint32_t>(8U,0U);
     auto sum=scalarBuf_.GetWithOffset<float>(8U,32U);
@@ -530,36 +653,49 @@ __aicore__ inline bool ServerDedupCounts::TryRecvCnt()
     ReduceSum(sum,gather,sumContinueBuf_.Get<float>(),rscvStatusNum_);
     SyncFunc<HardEvent::V_S>();
     if (sum.GetValue(0U)!=float(rscvStatusNum_)) {
-        LL_SEG_END(countReadyCheck, COUNT_READY_CHECK);
+
         return false;
     }
-    LL_SEG_END(countReadyCheck, COUNT_READY_CHECK);
-    LL_SEG_BEGIN(countValueExtract, COUNT_VALUE_EXTRACT);
+
+
     pattern.SetValue(0U,2U);
     SyncFunc<HardEvent::S_V>();
     GatherMask(gather,statusFp32Tensor_,pattern,true,2U,{1U,uint16_t(rscvStatusNum_),1U,0U},n);
     SyncFunc<HardEvent::V_S>();
-    LL_SEG_END(countValueExtract, COUNT_VALUE_EXTRACT);
+
     WaitDispatchClearStatus();
-    LL_SPARSE_MARK(COUNTS_RECEIVED);
-    return true;
+
+
+/* LL_REFERENCE_BEGIN */
+{
+/* LL_REFERENCE_END */
+
+/* LL_REFERENCE_BEGIN */
+if (profile_) profile_->Mark<25>();
+if (profile_) profile_->Mark<11>();
+/* LL_REFERENCE_END */
+return true;
+/* LL_REFERENCE_BEGIN */
+}
+/* LL_REFERENCE_END */
+
 }
 
 __aicore__ inline void ServerDedupCounts::CalRecvAndSetFlag()
 {
     if(UseParallelPrefix()){CalcParallelCumsum();return;}
     if (aivId_!=kLlSendCoreNum) return;
-    LL_SEG_SCOPE(BUILD_RECV_CUMSUM);
+
     auto prefix=gatherMaskOutBuf_.Get<int32_t>();
     // Gather completion and scalar/Vector ownership precede the VF; data-ready
     // publication below still waits for the actual prefix DMA completion.
-    LL_SEG_BEGIN(prefixLocalScan, PREFIX_LOCAL_SCAN);
+
     SyncFunc<HardEvent::S_V>();
     asc_vf_call<R0PrefixScan>(reinterpret_cast<__ubuf__ uint32_t*>(prefix.GetPhyAddr()),rscvStatusNum_);
     SyncFunc<HardEvent::V_MTE3>();
-    LL_SEG_END(prefixLocalScan, PREFIX_LOCAL_SCAN);
-    LL_SPARSE_MARK(PREFIX_LOCAL_DONE);
-    LL_SEG_BEGIN(prefixDataPublish, PREFIX_DATA_PUBLISH);
+
+
+
     GlobalTensor<int32_t> workspace,output;
     workspace.SetGlobalBuffer(reinterpret_cast<__gm__ int32_t*>(recvCntWorkspaceGM_));
     workspace.SetL2CacheHint(CacheMode::CACHE_MODE_DISABLE);
@@ -567,12 +703,12 @@ __aicore__ inline void ServerDedupCounts::CalRecvAndSetFlag()
     SyncFunc<HardEvent::S_MTE3>();
     const DataCopyExtParams copy{1U,rscvStatusNum_*4U,0U,0U,0U};
     DataCopyPad(output,prefix,copy);
-    { LL_SEG_SCOPE(BROADCAST_PREFIX);
+    {
       DataCopyPad(workspace,prefix,copy); } // One shared table, no per-core replicas.
-    LL_SEG_END(prefixDataPublish, PREFIX_DATA_PUBLISH);
+
     // Finish prefix and count-ready cleanup before releasing a single epoch.
-    { LL_SEG_SCOPE(PREFIX_PUBLISH_WAIT); SyncFunc<HardEvent::MTE3_S>(); }
-    LL_SEG_SCOPE(PUBLISH_PREFIX_FLAGS);
+    {  SyncFunc<HardEvent::MTE3_S>(); }
+
     auto ready=prefixPublishBuf_.Get<uint32_t>();
     Duplicate<uint32_t>(ready,0U,8U);
     SyncFunc<HardEvent::V_S>();
@@ -585,19 +721,28 @@ __aicore__ inline void ServerDedupCounts::CalRecvAndSetFlag()
 // 等待R0发布当前epoch，不清理共享标记；下轮由R0交替发布。
 __aicore__ inline void ServerDedupCounts::WaitCumSumFlag()
 {
-    LL_SEG_SCOPE(WAIT_CUMSUM);
-    LL_SEG_SCOPE(PREFIX_READY_WAIT);
+/* LL_REFERENCE_BEGIN */
+if (profile_) profile_->Mark<28>();
+/* LL_REFERENCE_END */
+
+
+
     auto ready=readyBuf_.Get<uint32_t>();
     do {
-        LL_SEG_COUNT(WAIT_CUMSUM_ITERATIONS,1U);
-        LL_SEG_BEGIN(prefixReadyProbe, PREFIX_READY_PROBE);
+
+
         DataCopy(ready,prefixReadyGm_,8U);
         SyncFunc<HardEvent::MTE2_S>();
-        LL_SEG_END(prefixReadyProbe, PREFIX_READY_PROBE);
+
     } while (ready.GetValue(0U)!=prefixEpoch_);
     // The original do/while scalar condition is included in READY_WAIT only;
     // preserving it avoids an extra scalar load or a control-flow rewrite.
     // Fixed unbanked epoch alternates 1/0. Consumers never clear the producer flag.
+
+/* LL_REFERENCE_BEGIN */
+if (profile_) profile_->Mark<29>();
+
+/* LL_REFERENCE_END */
 }
 
 }  // namespace DispatchDedup

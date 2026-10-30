@@ -21,7 +21,10 @@ def environment(devices):
     for key,relative in paths.items():
         path=ROOT/relative;path.mkdir(parents=True,exist_ok=True);env[key]=str(path)
     env.update({key:devices for key in VISIBILITY});env['PYTHONDONTWRITEBYTECODE']='1'
-    libraries=[str(ROOT/'third-party/shmem/install/shmem/lib')]
+    sdk = Path(env.get('SHMEM_ROOT', ROOT/'third-party/shmem/install/shmem'))
+    if not sdk.is_absolute():
+        sdk = ROOT / sdk
+    libraries=[str(sdk/'lib')]
     if env.get('DEEPEP_RDMA_PROVIDER_PATH'):
         path=Path(env['DEEPEP_RDMA_PROVIDER_PATH'])
         path=path if path.is_absolute() else ROOT/path

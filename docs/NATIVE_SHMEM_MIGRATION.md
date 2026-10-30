@@ -1,3 +1,5 @@
+> 历史指南：旧打点及入口适用于原提交（最后完整旧实现e4d114c）。当前已删除旧插桩/解析；构建与采样以[reference schema7指南](../tests/ll_reference_profile/README.md)为准。下文算法与历史结果保留。
+
 # 撤销历史 QP 扩容后的 SDK 迁移
 
 2026-10-16：两条 kernel 分支撤销自行加入的 SHMEM ROCE QP 扩容。锁定的 SHMEM revision 不升级，HNS_1825 后端及机内 MTE/跨机 RDMA 协议保留。LL 的 72 核控制容量不是 SDK QP 容量，不随此迁移删除。

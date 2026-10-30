@@ -2,7 +2,7 @@
 # Compile all specialized production LL units with tracing absent; no NPU execution.
 set -eo pipefail
 HERE=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
-source "$HERE/../../scripts/ll_timer_env.sh"
+source "$HERE/../../scripts/ll_reference_env.sh"
 set -u
 LL_OFF_SEND=${DEEPEP_LL_SEND_CORES:-28}
 LL_OFF_RECV=${DEEPEP_LL_RECV_CORES:-28}
@@ -30,12 +30,12 @@ case "$LL_OFF_IMPL" in
     if [[ $LL_OFF_IMPL == cb59-small ]]; then LL_OFF_CB59=4; fi ;;
   *) printf '%s\n' 'DEEPEP_LL_DISPATCH_IMPL must be current, cb59, cb59-stream, cb59-pair or cb59-small' >&2; exit 1 ;;
 esac
-OUT=$(mktemp -d "$LL_TIMER_ROOT/.tmp/ll-timer-off-XXXXXXXX")
-SDK="$LL_TIMER_ROOT/third-party/shmem/install/shmem"
+OUT=$(mktemp -d "$LL_REFERENCE_ROOT/.tmp/ll-reference-off-XXXXXXXX")
+SDK="$LL_REFERENCE_ROOT/third-party/shmem/install/shmem"
 test -f "$SDK/lib/libshmem.so"
-for source in "$LL_TIMER_ROOT/csrc/kernels/dispatch/low_latency.cpp" \
-              "$LL_TIMER_ROOT"/csrc/kernels/dispatch/low_latency/variants/*.cpp \
-              "$LL_TIMER_ROOT/csrc/kernels/combine/low_latency.cpp"; do
+for source in "$LL_REFERENCE_ROOT/csrc/kernels/dispatch/low_latency.cpp" \
+              "$LL_REFERENCE_ROOT"/csrc/kernels/dispatch/low_latency/variants/*.cpp \
+              "$LL_REFERENCE_ROOT/csrc/kernels/combine/low_latency.cpp"; do
   name=$(basename "$(dirname "$source")")-$(basename "$source")
   bisheng -O2 -std=c++17 -fPIC -xasc --npu-arch=dav-3510 --cce-auto-infer-kernel-type=false \
     -DCATLASS_ARCH=3510 -DUSE_SIMT -DL2_CACHE_HINT \
@@ -46,4 +46,4 @@ for source in "$LL_TIMER_ROOT/csrc/kernels/dispatch/low_latency.cpp" \
     -I"$SDK/include" -I"$SDK/src" -I"$SDK/src/device" -I"$SDK/src/device_simt" \
     -c "$source" -o "$OUT/$name.o"
 done
-printf 'PASS all specialized production LL units compile with timer OFF: %s\n' "$OUT"
+printf 'PASS all specialized production LL units compile with reference OFF: %s\n' "$OUT"

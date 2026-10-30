@@ -7,7 +7,6 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
-include("${CMAKE_CURRENT_LIST_DIR}/../LlTimerProfile.cmake")
 include("${CMAKE_CURRENT_LIST_DIR}/../Dependencies.cmake")
 set(_sdk_include "${ASCEND_HOME_PATH}/include")
 set(_arch_include "${ASCEND_HOME_PATH}/${CMAKE_SYSTEM_PROCESSOR}-linux/include")
@@ -46,10 +45,10 @@ target_compile_options(deepep_kernels PRIVATE "$<$<NOT:$<CONFIG:Debug>>:-O2>" -x
     "-ffile-prefix-map=${ASCEND_HOME_PATH}=CANN_SDK"
     "-ffile-prefix-map=${SHMEM_ROOT}=SHMEM_SDK")
 target_compile_definitions(deepep_kernels PRIVATE CATLASS_ARCH=3510 USE_SIMT L2_CACHE_HINT)
-target_compile_definitions(deepep_kernels PRIVATE DEEPEP_LL_TIMER_PROFILE_ID=${DEEPEP_LL_TIMER_PROFILE_ID})
-if(DEEPEP_LL_STAGE_TIMER)
-    target_compile_definitions(deepep_kernels PRIVATE DEEPEP_LL_STAGE_TIMER=1)
+if(DEEPEP_LL_REFERENCE_PROFILE)
+    target_compile_definitions(deepep_kernels PRIVATE DEEPEP_LL_REFERENCE_PROFILE=1)
 endif()
+
 target_include_directories(deepep_kernels PRIVATE
     "${_sdk_include}" "${_arch_include}"
     "${_tikcpp}" "${_tikcpp}/tikcfw"

@@ -18,45 +18,15 @@ def load(name, path):
     return module
 
 
-diagnose = load('prefix_diagnose', 'tests/ll_stage_timer/diagnose.py')
 benchmark = load('prefix_benchmark', 'tests/ll_stage_timer/benchmark_compile.py')
 
 
-def plan(root):
-    args, forwarded = diagnose.parser().parse_known_args(['--build-only', '--run-name', 'prefix-build'])
-    return diagnose.make_plan(args, forwarded, root=root)
 
 
-@pytest.mark.parametrize('prefix', [0, 1, 6, 26])
-def test_plan_freezes_prefix_for_both_wheels(tmp_path, monkeypatch, prefix):
-    monkeypatch.setenv('DEEPEP_LL_SEND_CORES', '30')
-    monkeypatch.setenv('DEEPEP_LL_RECV_CORES', '26')
-    monkeypatch.setenv('DEEPEP_LL_SMALL_B_PREFIX_CORES', str(prefix))
-    result = plan(tmp_path / 'Project With Spaces')
-    assert result['small_b_prefix_cores'] == prefix
-    assert not list(tmp_path.iterdir())
-    monkeypatch.setenv('DEEPEP_LL_SMALL_B_PREFIX_CORES', '8')
-    for stage in result['stages']:
-        assert stage['run'] is None and stage['analyze'] is None
-        assert diagnose._environment(result, stage)['DEEPEP_LL_SMALL_B_PREFIX_CORES'] == str(prefix)
-        code = diagnose._verify_code(stage, 'candidate', result['core_split'], result['small_b_prefix_cores'])
-        assert f"native.low_latency_small_b_prefix_cores == {prefix}" in code
-        assert 'low_latency_core_config(' not in code
 
 
-def test_plan_default_prefix_is_zero(tmp_path, monkeypatch):
-    monkeypatch.delenv('DEEPEP_LL_SMALL_B_PREFIX_CORES', raising=False)
-    assert plan(tmp_path)['small_b_prefix_cores'] == 0
 
 
-@pytest.mark.parametrize('value', ['', '-1', '27', '56', '01', '+1', '1.0', '１'])
-def test_plan_rejects_invalid_prefix_before_any_mutation(tmp_path, monkeypatch, value):
-    monkeypatch.setenv('DEEPEP_LL_SEND_CORES', '30')
-    monkeypatch.setenv('DEEPEP_LL_RECV_CORES', '26')
-    monkeypatch.setenv('DEEPEP_LL_SMALL_B_PREFIX_CORES', value)
-    with pytest.raises(ValueError, match='DEEPEP_LL_SMALL_B_PREFIX_CORES'):
-        plan(tmp_path)
-    assert not list(tmp_path.iterdir())
 
 
 def test_installed_prefix_identity_and_all_rank_agreement(tmp_path):
@@ -90,39 +60,13 @@ def test_installed_prefix_identity_and_all_rank_agreement(tmp_path):
     (16, 64, 1, 6, None), (16, 64, 48, 6, None)])
 def test_comparison_records_raw_and_only_applicable_effective_prefix(world, m, b, prefix, effective):
     args = st.parse_args(['--num-processes', str(world), '--num-tokens', str(b), '--num-max-tokens-per-rank', str(m)])
-    args.runtime_identity = dict(small_b_prefix_cores=prefix, send_cores=30, recv_cores=26, shmem_revision='a' * 40)
+    args.runtime_identity = dict(small_b_prefix_cores=prefix, send_cores=30, recv_cores=26, shmem_revision='a' * 40,source_sha256='a'*64)
     metadata = st.comparison_metadata(args, world, m)
     assert metadata['small_b_prefix_cores'] == prefix
     assert metadata['effective_small_b_prefix_cores'] == effective
     assert metadata['session_transport'] == 'mte' and metadata['shmem_revision'] == 'a' * 40
 
 
-@pytest.mark.parametrize('field,left_value,right_value', [
-    ('dispatch_impl', 'cb59', 'cb59-stream'),
-    ('effective_dispatch_impl', 'cb59', 'cb59-stream'),
-    ('small_b_prefix_cores', 6, 1), ('effective_small_b_prefix_cores', 6, 1),
-    ('session_transport', 'mte', 'rdma')])
-def test_optional_performance_identity_must_match_if_present(tmp_path, field, left_value, right_value):
-    suite = tmp_path / 'suite'
-    (suite / 'runs/off').mkdir(parents=True)
-    directory = suite / 'runs/sparse/case_00000/normal'
-    directory.mkdir(parents=True)
-    config = dict(B=1, M=32)
-    base = dict(implementation='candidate', transport='mte', logical_group=4, active_aiv=56,
-                send_cores=30, recv_cores=26, core_protocol=19030, source_revision='commit', source_sha256='a' * 64)
-    def write(left, right):
-        (suite / 'runs/off/summary.json').write_text(json.dumps(dict(results=[dict(
-            config=config, route='normal', comparison=left, dispatch=dict(max_rank_mean_kernel_us=10))])))
-        (directory / 'active_capture_dispatch.json').write_text(json.dumps(dict(
-            config=config, route='normal', comparison=right, status='available', diagnostic_iters=1,
-            summary=dict(max_rank_mean_kernel_us=12))))
-        return diagnose._performance_rows(suite)[0]
-    assert write(base, base)['ratio'] == 1.2  # Existing offline pairs remain readable.
-    left = dict(base, **{field: left_value})
-    assert write(left, left)['ratio'] == 1.2
-    for a, b in ((left, base), (base, left), (left, dict(base, **{field: right_value}))):
-        row = write(a, b)
-        assert row['status'].startswith('unavailable') and 'ratio' not in row
 
 
 def test_compile_benchmark_passes_prefix_to_every_unit(tmp_path, monkeypatch):
@@ -131,7 +75,7 @@ def test_compile_benchmark_passes_prefix_to_every_unit(tmp_path, monkeypatch):
     monkeypatch.setenv('DEEPEP_LL_SMALL_B_PREFIX_CORES', '6')
     monkeypatch.setenv('ASCEND_HOME_PATH', str(tmp_path / 'cann'))
     out = tmp_path / 'Compile With Spaces'
-    monkeypatch.setattr(sys, 'argv', ['benchmark_compile.py', '--output', str(out), '--timer', 'OFF'])
+    monkeypatch.setattr(sys, 'argv', ['benchmark_compile.py', '--output', str(out), '--reference-profile', 'OFF'])
     calls = []
     def compile_mock(command, **kwargs):
         calls.append(command)

@@ -1,3 +1,5 @@
+> 历史指南：旧打点及入口适用于原提交（最后完整旧实现e4d114c）。当前已删除旧插桩/解析；构建与采样以[reference schema7指南](../ll_reference_profile/README.md)为准。下文算法与历史结果保留。
+
 > 本文记录父分支的发送错峰设计。本分支另增加发送后共享接收，当前协议与验收以[SHARED_RECEIVE.md](SHARED_RECEIVE.md)为准。
 
 > 当前编译收发配置以[CORE_SPLIT.md](CORE_SPLIT.md)为准；以下3876de4仅为错峰分支最初创建点，不可用作固定56配置的等条件性能基线。

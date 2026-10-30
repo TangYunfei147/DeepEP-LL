@@ -1,3 +1,4 @@
+#include "../common/ll_reference_profile_device.h"
 // Copyright (c) 2026, Lu Lu
 #pragma once
 #include "kernel_operator.h"
@@ -20,11 +21,15 @@ using namespace AscendC;
 // allocated until the caller's original counts.Finish() drain.
 class PairHandoff {
 public:
+/* LL_REFERENCE_BEGIN */
+__aicore__ inline void SetProfile(LlReferenceProfile::DeviceProfile* profile) { profile_ = profile; }
+
+/* LL_REFERENCE_END */
+
     __aicore__ inline void Init(const __gm__ CommArgs* args, GM_ADDR sendCountsOut,
-                                uint32_t experts, uint32_t magic, TPipe* pipe,
-                                LlStageTimer::DeviceTimer* timer = nullptr) {
+                                uint32_t experts, uint32_t magic, TPipe* pipe) {
         pipe_ = pipe;
-        (void)timer;
+
         experts_ = experts;
         magic_ = magic;
         receivers_ = GetBlockNum() / 2U;
@@ -110,7 +115,11 @@ public:
         for (uint32_t word = 0U; word < 8U; ++word) snapshot.SetValue(word, 0U);
         Sync<HardEvent::S_MTE3>();
         DataCopy(incoming_, snapshot, 8U);
-    }
+
+/* LL_REFERENCE_BEGIN */
+if (profile_ && profile_->Has<14>()) profile_->Mark<15>();
+/* LL_REFERENCE_END */
+}
 
     __aicore__ inline uint32_t Begin() const { return plan_.begin; }
     __aicore__ inline uint32_t Count() const { return plan_.Count(); }
@@ -126,6 +135,13 @@ public:
     __aicore__ inline bool NeedsPartnerPrefix() const { return plan_.needsPartnerPrefix; }
     __aicore__ inline uint32_t UbBytes() const { return ubBytes_; }
 
+
+/* LL_REFERENCE_BEGIN */
+private:
+    LlReferenceProfile::DeviceProfile* profile_ = nullptr;
+
+public:
+/* LL_REFERENCE_END */
 private:
     template<HardEvent event>
     __aicore__ inline void Sync() {

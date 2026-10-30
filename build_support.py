@@ -22,7 +22,6 @@ from setuptools.command.egg_info import egg_info
 from setuptools.command.install_lib import install_lib
 
 ROOT = Path(__file__).resolve().parent
-LL_TIMER_PROFILES = ("sparse",)
 
 
 class BuildEggInfo(egg_info):
@@ -43,14 +42,6 @@ def enabled(name, environment=None):
     return value in {"ON", "1", "TRUE"}
 
 
-def ll_timer_profile(environment=None):
-    """Validate the requested diagnostic profile; OFF shares one native cache."""
-    env = os.environ if environment is None else environment
-    profile = env.get("DEEPEP_LL_TIMER_PROFILE", "sparse")
-    if profile not in LL_TIMER_PROFILES:
-        raise ValueError("DEEPEP_LL_TIMER_PROFILE must be sparse; legacy full/phase profiles "
-                         "are offline-analysis only. Unset the old value and rebuild.")
-    return "sparse"
 
 
 def ll_small_b_prefix_cores(environment=None, recv_cores=28):
@@ -169,8 +160,6 @@ def shmem_metadata(root):
 def build_cache_key(configuration):
     """Name the native product directory; it is cleaned before every build."""
     identity = {key: value for key, value in configuration.items() if key not in {"source_sha256", "source_version"}}
-    if "ll_timer_profile" in identity and not identity.get("ll_stage_timer", False):
-        identity["ll_timer_profile"] = "sparse"
     identity["source_root"] = str(ROOT.resolve())
     return hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()[:16]
 
@@ -229,8 +218,13 @@ def build_configuration(environment=None):
     result["ll_dispatch_impl"] = dispatch_implementation(env)
     dispatch_configuration(result["ll_dispatch_impl"], send, recv, result["ll_small_b_prefix_cores"])
     result["ll_dispatch_capability"] = dispatch_capability(result["ll_dispatch_impl"])
-    result["ll_stage_timer"] = enabled("DEEPEP_LL_STAGE_TIMER", env)
-    result["ll_timer_profile"] = ll_timer_profile(env)
+    if enabled("DEEPEP_LL_STAGE_TIMER", env) or env.get("DEEPEP_LL_TIMER_PROFILE"):
+        raise RuntimeError("Legacy LL instrumentation was removed; use DEEPEP_LL_REFERENCE_PROFILE=ON")
+    result["ll_reference_profile"] = enabled("DEEPEP_LL_REFERENCE_PROFILE", env)
+    result["ll_reference_profile_schema"] = 7
+    result["ll_instrumentation_source"] = "reference-mte7"
+    result["dispatch_launch_bytes"] = 144
+    result["combine_launch_bytes"] = 88
     result["build_type"] = env.get("DEEPEP_BUILD_TYPE", "RelWithDebInfo" if lineinfo else "Release")
     if result["build_type"] not in {"Release", "RelWithDebInfo", "Debug"}:
         raise RuntimeError("DEEPEP_BUILD_TYPE must be Release, RelWithDebInfo or Debug")
@@ -261,7 +255,7 @@ def build_configuration(environment=None):
         catlass = Path(env.get("CATLASS_ROOT", str(ROOT / "third-party/catlass")))
         if not (catlass / "include/catlass/gemm/tile/copy_l1_to_l0a.hpp").is_file():
             raise RuntimeError(
-                "MegaMoE requires CATLASS: run git submodule update --init --recursive, "
+                "MegaMoE requires an already-provided CATLASS checkout; automatic CATLASS download is forbidden, "
                 "or set CATLASS_ROOT; see experiments/megamoe/README.md"
             )
         revision = subprocess.check_output(["git", "-C", str(catlass), "rev-parse", "HEAD"], text=True).strip()
@@ -331,11 +325,8 @@ class VariantBuild(ConfiguredBuild):
         beta = os.environ.get("DEEPEP_BUILD_MEGAMOE", "OFF") == "ON"
         timer = os.environ.get("DEEPEP_MEGAMOE_TIMER", "OFF") == "ON"
         variant = "megamoe-timer" if beta and timer else ("megamoe" if beta else "core")
-        if enabled("DEEPEP_LL_STAGE_TIMER"):
-            variant += "-ll-timer"
-            profile = ll_timer_profile()
-            if profile != "full":
-                variant += "-" + profile
+        if enabled("DEEPEP_LL_REFERENCE_PROFILE"):
+            variant += "-ll-reference7"
         self.build_base = str(Path(self.build_base) / variant)
         super().finalize_options()
 
@@ -375,8 +366,7 @@ class CMakeBuild(build_ext):
             directory,
             f"-DCMAKE_BUILD_TYPE={configuration['build_type']}",
             f"-DDEEPEP_DEVICE_JOBS={jobs}",
-            f"-DDEEPEP_LL_STAGE_TIMER={'ON' if configuration.get('ll_stage_timer', False) else 'OFF'}",
-            f"-DDEEPEP_LL_TIMER_PROFILE={configuration.get('ll_timer_profile', 'sparse')}",
+            f"-DDEEPEP_LL_REFERENCE_PROFILE={'ON' if configuration.get('ll_reference_profile', False) else 'OFF'}",
             f"-DDEEPEP_LL_SEND_CORES={configuration.get('ll_send_cores', 28)}",
             f"-DDEEPEP_LL_RECV_CORES={configuration.get('ll_recv_cores', 28)}",
             f"-DDEEPEP_LL_SMALL_B_PREFIX_CORES={configuration.get('ll_small_b_prefix_cores', 0)}",
@@ -405,6 +395,11 @@ class CMakeBuild(build_ext):
         checked_run([cmake, "--install", directory])
         # A reused setuptools build_lib may still contain the former library.
         (destination / "libdeepep_notify.so").unlink(missing_ok=True)
+        # Source deletion alone does not prune files from a reused build_lib.
+        # Remove only the retired project modules, never SDK or user data.
+        for name in ("ll_stage_timer", "ll_stage_timer_sparse", "ll_stage_timer_legacy", "ll_expert_timer"):
+            for suffix in (".py", ".pyc", ".pyo"):
+                (destination / "utils" / (name + suffix)).unlink(missing_ok=True)
         # Elastic implementation/layout modules now live under buffers/.
         for operation in ("notify", "dispatch", "combine"):
             for suffix in (".py", "_layout.py"):

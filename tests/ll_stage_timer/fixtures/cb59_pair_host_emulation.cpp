@@ -101,10 +101,10 @@ static void run_pair_case(Arena& arena, uint32_t experts, uint32_t batch, uint32
             AscendC::MockPool pool;
             Cb59Stream::StreamCounts counts;
             counts.Init(args.get(), reinterpret_cast<uint8_t*>(expertOutput), reinterpret_cast<uint8_t*>(output),
-                        batch, topk, experts, type, epoch % 2U, &pipe, nullptr);
+                        batch, topk, experts, type, epoch % 2U, &pipe);
             counts.Prepare(pool);
             Cb59Pair::PairHandoff pair;
-            pair.Init(args.get(), reinterpret_cast<uint8_t*>(output), experts, epoch % 2U, &pipe, nullptr);
+            pair.Init(args.get(), reinterpret_cast<uint8_t*>(output), experts, epoch % 2U, &pipe);
             pair.Prepare(pool, counts);
             const uint32_t low = worker & ~1U, high = worker | 1U;
             const uint32_t quotient = experts / workers, remainder = experts % workers;

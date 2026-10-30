@@ -7,17 +7,12 @@ ROOT=Path(__file__).resolve().parents[2]
 def load(name,path):
     spec=importlib.util.spec_from_file_location(name,ROOT/path)
     module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module);return module
-timer=load('split_timer','deep_ep/utils/ll_stage_timer.py')
 
+fixture=load('split_reference_fixture','tests/ll_reference_profile/test_parse.py')
+timer=fixture.timer
 
 def raw(send):
-    result=[]
-    for core in range(56):
-        words=[0]*256
-        words[:8]=[timer.MAGIC,5,1,56,core,1|(send<<8),1,len(timer.legacy.STAGES)]
-        words[8:12]=[10,20,10,1]
-        result.append([words[n:n+8] for n in range(0,256,8)])
-    return result
+    return fixture.sample(send=send)['raw']
 
 
 @pytest.mark.parametrize('send',range(1,56))
@@ -25,8 +20,8 @@ def test_all_positive_56_splits_cover_roles_and_notify_targets(send):
     recv=56-send
     report=timer.parse_records(raw(send),'dispatch',1e9)
     assert (report['send_cores'],report['recv_cores'])==(send,recv)
-    assert sum(row['role']=='send' for row in report['records'])==send
-    assert sum(row['role']=='receive' for row in report['records'])==recv
+    assert sum(row['role']=='send' for row in report['cores'])==send
+    assert sum(row['role']=='receive' for row in report['cores'])==recv
     assert [core-send for core in range(send,56)]==list(range(recv))
     notify=min(8,recv)
     assert 56-notify>=send
@@ -48,13 +43,13 @@ def test_all_positive_56_splits_cover_roles_and_notify_targets(send):
 
 @pytest.mark.parametrize('send',[0,56,59])
 def test_invalid_recorded_split_rejected(send):
-    with pytest.raises(ValueError,match='split'):
+    with pytest.raises(ValueError):
         timer.parse_records(raw(send),'dispatch')
 
 
 def test_mixed_device_role_boundaries_rejected():
-    values=raw(20);values[1][0][5]=1|(21<<8)
-    with pytest.raises(ValueError,match='Mixed core splits'):
+    values=raw(20);fixture.setword(values,1,44,21);fixture.setword(values,1,45,35)
+    with pytest.raises(ValueError,match='Mixed'):
         timer.parse_records(values,'dispatch')
 
 
@@ -81,30 +76,8 @@ def test_split_changes_build_identity_and_wires_both_compilers():
     assert 'GetBlockIdx() - DispatchDedup::kLlSendCoreNum' in partial
 
 
-def test_compare_treats_split_as_explicit_experiment_variable():
-    parity=load('split_parity','tests/ll_stage_timer/test_parity.py')
-    left,right=parity.identity(),parity.identity()
-    left.update(active_aiv=56,send_cores=20,recv_cores=36,core_protocol=7020,stage_timer_schema=5)
-    right.update(active_aiv=56,send_cores=28,recv_cores=28,core_protocol=7028,stage_timer_schema=5)
-    parity.comparison.check_identity(left,right)
-    right['recv_cores']=27
-    with pytest.raises(ValueError,match='split'):
-        parity.comparison.check_identity(left,right)
-    right['recv_cores']=28
-    def summary(identity,duration):
-        return dict(comparison=identity,per_rank_core_stage=[dict(operation='dispatch',rank=0,core=20,
-                    stage='kernel',unit='us',mean=duration)])
-    row=parity.comparison.compare(summary(left,10),summary(right,8),'stage')[0]
-    assert row['status']=='role_changed' and row['candidate_over_baseline'] is None
 
 
-def test_expert_decoder_uses_supplied_receive_boundary():
-    fixture=load('split_expert_fixture','tests/ll_stage_timer/test_experts.py')
-    data=fixture.data()
-    # Legacy fixture records are on core 8; changing the boundary to 9 makes it a sender.
-    with pytest.raises(ValueError,match='sender core'):
-        fixture.expert.parse_records(data,rank=0,world=16,experts=16,send_cores=9)
-    assert fixture.expert.parse_records(data,rank=0,world=16,experts=16,send_cores=1)['records']
 
 
 def test_perf_entry_rejects_stale_wheel_without_requesting_timer():
