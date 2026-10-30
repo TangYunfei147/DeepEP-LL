@@ -7,9 +7,9 @@
 #ifndef DISPATCH_SERVER_DEDUP_SEND_H
 #define DISPATCH_SERVER_DEDUP_SEND_H
 #include "../common/ll_overlap_layout.h"
-#include "../common/ll_stage_timer_device.h"
 
 #include "kernel_operator.h"
+#include "../common/ll_reference_profile_device.h"
 #include "dispatch_dedup_mxfp8_quant.h"
 #include "dispatch_frequency_histogram.h"
 #include "../common/ep_memory_server_dedup_data_layout.h"
@@ -65,25 +65,28 @@ public:
     // Consume outstanding sender events only after receiving. Sources remain
     // allocated until the caller's final PIPE_ALL. Empty senders have zero lanes.
     __aicore__ inline void Retire() {
-        LL_CYCLE_MARK(RETIRE_BEGIN);
+
         if (overlap_.Async()) {
-            LL_SEG_SCOPE(SEND_RETIRE_WAIT);
+
             for (uint32_t lane=0;lane<lanes_;++lane) WaitFlag<HardEvent::MTE3_V>(lane);
         }
-        LL_CYCLE_MARK(RETIRE_END);
+
     }
     __aicore__ inline void ConfigureOverlap(LlOverlapLayout plan) { overlap_=plan; }
     // 摘要：执行本核发送主流程：准备 UB、优先发送去重首跳、再发送 DIRECT，最后写回源端元数据。
     __aicore__ inline void Process(TBufPool<TPosition::VECCALC, 16>& scratch, uint32_t reservedBytes,
-                                   LlStageTimer::DeviceTimer* timer = nullptr)
+                                   LlReferenceProfile::DeviceProfile* profile = nullptr)
     {
+        profile_ = profile;
+        if(profile_) {
+            profile_->Mark<8>();
+            const uint32_t routes=bs_*k_, core=GetBlockIdx();
+            profile_->Value<43>(enableDedup_ ? count_*k_ : routes/sendCores_+(core<routes%sendCores_));
+        }
         // 1. 无 token 分片的发送核直接返回；有任务的核复用 SendCnt 释放出的 scratch。
         // reservedBytes 对应仍可能被计数发送读取的 UB，不能当作可用空间覆盖。
-        if (enableDedup_ && count_ == 0U) return;
-        timer_ = timer;
-        LL_CYCLE_MARK(SOURCE_BEGIN);
-        LL_SEG_BEGIN(setupBegin, SEND_SETUP);
-        LL_SEG_BEGIN(segBegin1, PREPARE_INPUT);
+        if (enableDedup_ && count_ == 0U) { if(profile_) profile_->Mark<9>(); return; }
+
         scratch_ = &scratch;
         TQue<QuePosition::VECIN, 1> input;
         TBufPool<TPosition::VECIN, 1> cleanPool;
@@ -137,8 +140,11 @@ public:
         // lane 数由当前 shape 决定；输入容量校验需保证至少能容纳一个。
         const uint32_t available = (kEpServerDedupCountUbBytes - usedBytes_) / uint32_t(data_.tokenStride);
         lanes_ = overlap_.enabled ? overlap_.sendLanes : (available < 8U ? available : 8U);
-        LL_MTE3_SEND_LANES(lanes_,overlap_.enabled);
+
         Allocate(outBuf_, lanes_ * uint32_t(data_.tokenStride));
+#ifdef DEEPEP_LL_REFERENCE_PROFILE
+        if(profile_) profile_->SendLanes(lanes_);
+#endif
         routeIds_ = idsBuf_.Get<int32_t>();
         if (count_ != 0U) routeWeights_ = weightInBuf_.Get<float>();
         if (count_ != 0U) {
@@ -172,16 +178,16 @@ public:
             // Routes are 256B padded. VF masks the partial prefix vector;
             // no element from the owned slice contributes to the seed.
             Sync<HardEvent::S_V>();
-            LL_SEG_BEGIN(seedIssue,Q_SEED_SUBMIT);
+
             if (qShard_.begin<=kLlHistogramSegment)
                 asc_vf_call<CountFrequency<true>>(out,ids,qShard_.begin,0U,
                                                 localExperts_*uint32_t(args_->rankSize));
             else
                 asc_vf_call<CountFrequency<false>>(out,ids,qShard_.begin,0U,
                                                  localExperts_*uint32_t(args_->rankSize));
-            LL_SEG_END(seedIssue,Q_SEED_SUBMIT);
-            { LL_SEG_SCOPE(Q_SEED_WAIT); Sync<HardEvent::V_S>(); }
-            { LL_SEG_SCOPE(Q_LOCAL_UPDATE);
+
+            {  Sync<HardEvent::V_S>(); }
+            {
               LlFinishLocalQ(routeIds_,histogram,qTable_,k_,qShard_); }
         }
         // 每个 512B 块尾部的 32B 标记预置为 1；发送时 payload 和标记一起搬运。
@@ -195,11 +201,8 @@ public:
         }
         PipeBarrier<PIPE_V>();
 
-        LL_SEG_END(segBegin1, PREPARE_INPUT);
-        LL_SEG_END(setupBegin, SEND_SETUP);
-        LL_SPARSE_MARK(SEND_PREPARED);
-        LL_BW_BEGIN(enableDedup_ ? LlStageTimer::REMOTE_FIRST_HOP : LlStageTimer::SOURCE_DIRECT,pipe_);
-        { LL_SEG_SCOPE(SEND_TOKENS);
+        if(profile_) profile_->Mark<38>();
+        {
         BeginInputPrefetch();
         if (enableDedup_)
             SendWithDedup(input);
@@ -207,32 +210,30 @@ public:
             SendWithoutDedup(input);
         EndInputPrefetch(input);
         }
-        LL_BW_END(LlStageTimer::SOURCE_DIRECT,pipe_);
+        if(profile_) profile_->Mark<39>();
 
         // Keep metadata sources alive through receive. Only the serial fallback
         // drains here; overlap retires all lane events at final kernel completion.
         if (!overlap_.Async()) {
-        LL_SEG_BEGIN(sendDrainBegin, SEND_DRAIN);
+
         for (uint32_t lane = 0; lane < lanes_; ++lane) WaitFlag<HardEvent::MTE3_V>(lane);
-        LL_SEG_END(sendDrainBegin, SEND_DRAIN);
+
         }
-        LL_SEG_BEGIN(metaPublish,TX_METADATA_PUBLISH);
+
         Sync<HardEvent::S_MTE3>();
         if (enableDedup_) DataCopyPad(maskOut_[start_], sourceMasks_, {1U, count_ * 4U, 0U, 0U, 0U});
         if (count_ != 0U)
             DataCopyPad(weightOut_[uint64_t(start_) * k_], enableDedup_ ? sourceWeights_ : routeWeights_,
                         {1U, count_ * k_ * 4U, 0U, 0U, 0U});
-        LL_SEG_END(metaPublish,TX_METADATA_PUBLISH);
-        LL_SPARSE_MARK(SOURCE_SUBMIT_DONE);
-        LL_MTE3_DRAIN(TX_END_MTE3,4U,pipe_);
-        { LL_SEG_SCOPE(SEND_SUBMIT_END); }
-        if (!overlap_.Async()) { LL_SEG_SCOPE(SEND_COMPLETE_WAIT);
-        Sync<HardEvent::MTE3_S>();
-        LL_SPARSE_AFTER(FIRST_SEND,SEND_DONE);
-        }
-        LL_CYCLE_MARK(SOURCE_RETURN);
-    }
 
+        {  }
+        if (!overlap_.Async()) {
+        Sync<HardEvent::MTE3_S>();
+
+        }
+
+        if(profile_) { profile_->Mark<40>(); profile_->Mark<9>(); }
+    }
 
     // Original R cores; optional bounded callbacks advance counts and receive.
     // Descriptors came from the source-count pass and remain outside scratch.
@@ -241,13 +242,12 @@ public:
     __aicore__ inline void ProcessGroupLocal(TBufPool<TPosition::VECCALC,16>& scratch,
                                             uint32_t reservedBytes,LocalTensor<uint32_t> indices,
                                             LocalTensor<uint32_t> expertQ,uint32_t tasks,
-                                            LlStageTimer::DeviceTimer* timer=nullptr, Cooperate cooperate=Cooperate{})
+                                            LlReferenceProfile::DeviceProfile* profile=nullptr, Cooperate cooperate=Cooperate{})
     {
         if (!tasks) return;
-        timer_=timer;
-        LL_CYCLE_MARK(SOURCE_BEGIN);
-        LL_SEG_BEGIN(localSetupBegin, SEND_SETUP);
-        LL_SEG_BEGIN(localPrepareBegin, PREPARE_INPUT);
+        profile_=profile;
+        if(profile_) { profile_->Mark<8>(); profile_->Value<43>(tasks); }
+
         scratch_=&scratch;
         start_=0U; count_=bs_;
         TQue<QuePosition::VECIN,1> input;
@@ -277,8 +277,11 @@ public:
         }
         const uint32_t available=(kEpServerDedupCountUbBytes-usedBytes_)/uint32_t(data_.tokenStride);
         lanes_=overlap_.enabled ? overlap_.sendLanes : (available<8U ? available : 8U);
-        LL_MTE3_SEND_LANES(lanes_,overlap_.enabled);
+
         Allocate(outBuf_,lanes_*uint32_t(data_.tokenStride));
+#ifdef DEEPEP_LL_REFERENCE_PROFILE
+        if(profile_) profile_->SendLanes(lanes_);
+#endif
         uint64_t flagMask[2]={0xffU,0U};
         for (uint32_t lane=0;lane<lanes_;++lane) {
             Duplicate<float>(outBuf_.Get<float>()[lane*data_.tokenStride/4U+120U],1.0f,flagMask,
@@ -286,17 +289,16 @@ public:
             SetFlag<HardEvent::MTE3_V>(lane);
         }
         PipeBarrier<PIPE_V>();
-        LL_SEG_END(localPrepareBegin, PREPARE_INPUT);
-        LL_SEG_END(localSetupBegin, SEND_SETUP);
-        LL_SPARSE_MARK(SEND_PREPARED);
+
         // Only the cooperative overlap path yields. Serial fallback keeps one
         // continuous lookahead stream. Eight tasks amortize the callback/flush.
+        if(profile_) profile_->Mark<38>();
         cooperate();
-        LL_BW_BEGIN(LlStageTimer::GROUP_LOCAL,pipe_);
+
         const uint32_t quantum=overlap_.Cooperative() ? 8U:tasks;
         for (uint32_t begin=0;begin<tasks;) {
             const uint32_t end=tasks-begin<quantum ? tasks:begin+quantum;
-            { LL_SEG_SCOPE(SEND_TOKENS);
+            {
             BeginInputPrefetch();
             for (uint32_t task=begin;task<end;++task) {
                 const uint32_t index=indices.GetValue(task),packed=expertQ.GetValue(task);
@@ -305,26 +307,25 @@ public:
             EndInputPrefetch(input);
             }
             begin=end;
-            if (begin==tasks) { LL_SEG_SCOPE(SEND_SUBMIT_END); LL_SPARSE_MARK(SOURCE_SUBMIT_DONE); }
+            if (begin==tasks && profile_) profile_->Mark<39>();
             cooperate();
         }
-        LL_BW_END(LlStageTimer::GROUP_LOCAL,pipe_);
+
         if (!overlap_.Async()) {
-        LL_SEG_BEGIN(localDrainBegin, SEND_DRAIN);
+
         // Retire all reads of packet scratch before RecvCnt overlays that UB.
         for (uint32_t lane=0;lane<lanes_;++lane) WaitFlag<HardEvent::MTE3_V>(lane);
-        if (!overlap_.Async()) { LL_SEG_SCOPE(SEND_COMPLETE_WAIT);
+        if (!overlap_.Async()) {
         Sync<HardEvent::MTE3_S>();
         }
         if (!overlap_.enabled) scratch_->Reset();
         // Packet packing may use a different control mode; the unchanged
         // count-receive reductions require integer FP32 subnormals preserved.
         SetCtrlSpr<60,60>(0);
-        LL_SEG_END(localDrainBegin, SEND_DRAIN);
-        LL_SPARSE_AFTER(FIRST_SEND,SEND_DONE);
-        }
-        LL_CYCLE_MARK(SOURCE_RETURN);
 
+        }
+
+        if(profile_) { profile_->Mark<40>(); profile_->Mark<9>(); }
     }
 
     // 摘要：去重发送主流程：先发同 server 合并的 FIRST_HOP，再按 server 顺序发缓存的 DIRECT。
@@ -338,10 +339,10 @@ public:
         const uint32_t sendCore = GetBlockIdx();
         for (uint32_t token = 0; token < count_; ++token) {
             uint32_t directMask = 0, firstHopCount = 0, localMask = 0;
-            LL_SEG_BEGIN(classifyBegin, PREPARE_INPUT);
-            { LL_SEG_SCOPE(ROUTE_CLASSIFY);
+
+            {
               Classify(token, directMask, firstHopCount, localMask); }
-            LL_SEG_END(classifyBegin, PREPARE_INPUT);
+
             uint32_t sourceMask = directMask | localMask;
             for (uint32_t group = 0; group < firstHopCount; ++group) {
                 const uint32_t scheduled = LlFirstHopOrder(firstHopCount, rankInGroup, sendCore,
@@ -361,7 +362,7 @@ public:
             sourceMasks_.SetValue(token, sourceMask);
             // DIRECT 暂不发送，缓存 token/k/expert/q 四元组。q 在此按原始路由计算，
             // 后续按 server 重排发送顺序时仍沿用同一个槽位编号。
-            { LL_SEG_SCOPE(DIRECT_PLAN);
+            {
             for (uint32_t k = 0; k < k_; ++k)
                 if (directMask & (uint32_t(1) << k)) {
                     const uint32_t index = (start_ + token) * k_ + k;
@@ -376,7 +377,6 @@ public:
             }
         }
 
-        LL_BW_SPLIT_INPUT(input,pipe_);
         // 5. Rotate the existing DIRECT group order by source card and send core.
         // Stable scans within each group retain q, token/k ordering and ownership.
         // 首跳和 DIRECT 共用 packets_ 序号及 lane 环；阶段之间不额外等待全部包发完。
@@ -480,7 +480,7 @@ private:
     // 摘要：统计原始展平路由中 index 之前指向该专家的条数，作为槽内序号 q；首 token 按当前约定返回 0。
     __aicore__ inline uint32_t CalTokenSendExpertCnt(uint32_t expert, uint32_t index)
     {
-        LL_SEG_SCOPE(CAL_TOKEN);
+
         (void)expert; // The original route index uniquely identifies its q.
         return qTable_.GetValue(index-qShard_.begin);
     }
@@ -488,7 +488,7 @@ private:
     // 摘要：以每 32 元素为一组生成 MXFP8 scale 和量化数据，复用 q 计算的临时 UB。
     __aicore__ inline void QuantMxfp8(LocalTensor<uint8_t> output, LocalTensor<XType> input)
     {
-        LL_SEG_SCOPE(TOKEN_QUANT);
+
         const uint32_t scaleCount = uint32_t(data_.quantCount / 32U);
         auto work = qDstBuf_.Get<float>();
         auto* src = reinterpret_cast<__ubuf__ XType*>(input.GetPhyAddr());
@@ -562,7 +562,7 @@ private:
     }
     __aicore__ inline void IssueInput(TQue<QuePosition::VECIN,1>& input,uint32_t token)
     {
-        LL_SEG_BEGIN(segBegin2, TOKEN_INPUT);
+
         auto x=input.template AllocTensor<XType>();
         // Quantized modes clear both buffers once in PREPARE_INPUT. Per-packet
         // clearing here would add a V dependency ahead of current computation.
@@ -579,7 +579,7 @@ private:
             SetFlag<HardEvent::MTE2_S>(inputReady_[inputsIssued_&1U]);
         input.EnQue(x);
         ++inputsIssued_;
-        LL_SEG_END(segBegin2, TOKEN_INPUT);
+
     }
     struct PrefetchOps {
         ServerDedupSender& sender;
@@ -598,6 +598,9 @@ private:
     {
         const uint32_t token=task.token,firstK=task.firstK,expert=task.expert,q=task.q,mask=task.mask;
         const uint32_t destination=expert/localExperts_;
+#ifdef DEEPEP_LL_REFERENCE_PROFILE
+        if(profile_) profile_->SendBegin(destination/kLlRanksPerGroup==uint32_t(args_->rank)/kLlRanksPerGroup);
+#endif
         LocalTensor<uint8_t> payload;
         if constexpr (NeedQuantize) {
             payload = quantBuf_.Get<uint8_t>();
@@ -606,31 +609,26 @@ private:
             else
                 QuantMxfp8<fp8_e5m2_t>(payload, x);
             input.template FreeTensor<XType>(x);
-            LL_SEG_BEGIN(quantWaitBegin, TOKEN_QUANT_WAIT);
-            LL_MTE3_WAIT_BEGIN(txQuantWait);
+
             Sync<HardEvent::V_S>();
-            LL_MTE3_WAIT_END(txQuantWait,TX_INPUT_READY);
-            LL_SEG_END(quantWaitBegin, TOKEN_QUANT_WAIT);
+
         } else {
-            LL_SEG_BEGIN(inputWaitBegin, TOKEN_INPUT_WAIT);
+
             // This marker precedes the NEXT input's DMA. A fresh SetFlag here
             // would instead wait for both inputs and destroy the overlap.
-            LL_MTE3_WAIT_BEGIN(txInputWait);
+
             WaitFlag<HardEvent::MTE2_S>(inputReady_[pendingReady_]);
-            LL_MTE3_WAIT_END(txInputWait,TX_INPUT_READY);
-            LL_SEG_END(inputWaitBegin, TOKEN_INPUT_WAIT);
+
             payload = x.template ReinterpretCast<uint8_t>();
         }
-        LL_SEG_BEGIN(segBegin5, TOKEN_METADATA);
+
         FillTail(payload, token, firstK, mask);
-        LL_SEG_END(segBegin5, TOKEN_METADATA);
+
         Sync<HardEvent::S_V>();
         const uint32_t lane = packets_ % lanes_;
-        LL_SEG_BEGIN(segBegin6, TOKEN_BUFFER_WAIT);
-        LL_MTE3_DRAIN_WHEN(packets_>=lanes_,TX_REUSE_MTE3,4U,pipe_);
+
         WaitFlag<HardEvent::MTE3_V>(lane);
-        LL_SEG_END(segBegin6, TOKEN_BUFFER_WAIT);
-        LL_SEG_BEGIN(packBegin, TOKEN_PACK);
+
         auto out = outBuf_.Get<uint8_t>()[lane * data_.tokenStride];
         auto outWords = out.template ReinterpretCast<int32_t>();
         auto inWords = payload.template ReinterpretCast<int32_t>();
@@ -644,30 +642,26 @@ private:
                          1U, 8U);
         if constexpr (!NeedQuantize) input.template FreeTensor<XType>(x);
         SetFlag<HardEvent::V_MTE3>(lane);
-        { LL_SEG_SCOPE(TX_PACK_READY_WAIT); WaitFlag<HardEvent::V_MTE3>(lane); }
-        LL_SEG_END(packBegin, TOKEN_PACK);
+        {  WaitFlag<HardEvent::V_MTE3>(lane); }
+
         GlobalTensor<uint8_t> destinationGm;
         destinationGm.SetGlobalBuffer(args_->peerMems[destination] +
                                       DispatchServerDedupDispatchOffset(data_, args_->rank, destination,
                                                                         expert % localExperts_, q, args_->rankSize,
                                                                         localExperts_, bs_));
-        LL_SEG_FIRST(BEFORE_FIRST_SEND);
-        LL_SPARSE_MARK(FIRST_SEND);
-        LL_SEG_COUNT(TX_PACKETS,1U);
-        LL_SEG_BEGIN(segBegin7, TOKEN_SEND_ISSUE);
-        LL_BW_TRANSFER(GetBlockIdx()>=sendCores_ ? LlStageTimer::GROUP_LOCAL :
-                           (mask ? LlStageTimer::REMOTE_FIRST_HOP : LlStageTimer::SOURCE_DIRECT),
-                       destination!=uint32_t(args_->rank),data_.tokenStride,
-                       uint64_t(h_)*(NeedQuantize || Prequantized ? 1U:uint32_t(sizeof(XType)))+data_.scaleBytes);
+
         DataCopy(destinationGm, out, uint32_t(data_.tokenStride));
+#ifdef DEEPEP_LL_REFERENCE_PROFILE
+        if(profile_) profile_->GroupSubmitted();
+#endif
         SetFlag<HardEvent::MTE3_V>(lane);
-        LL_SEG_END(segBegin7, TOKEN_SEND_ISSUE);
+
         ++packets_;
     }
 
     const __gm__ DispatchDedup::CommArgs* args_ = nullptr;
     TPipe* pipe_ = nullptr;
-    LlStageTimer::DeviceTimer* timer_ = nullptr;
+    LlReferenceProfile::DeviceProfile* profile_ = nullptr;
     bool enableDedup_ = false;
     LlQShard qShard_{};
     LocalTensor<uint32_t> qTable_;

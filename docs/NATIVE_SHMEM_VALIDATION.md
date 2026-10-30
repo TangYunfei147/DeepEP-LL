@@ -1,5 +1,8 @@
 # 原生 QP 限制恢复：本地验证（2026-10-16）
 
+> 本文为历史记录，下面旧计时目录/命令已从当前分支删除。
+> 当前构建和验证入口见[LL reference指南](../tests/ll_reference_profile/README.md)。
+
 两分支删除自加扩容及自动应用、识别、复用豁免、指纹字段和专用测试。当前代码中旧补丁标识和脚本引用为零；历史事实及精确逆向迁移说明保留。锁定SDK源码证据与目标更新步骤见[NATIVE_SHMEM_MIGRATION.md](NATIVE_SHMEM_MIGRATION.md)。
 
 ## CPU结果

@@ -9,14 +9,10 @@ namespace deepep {
 struct EpServerDedupCombineKernelArgs {
     uint8_t *commArgs, *expertOut, *destinationIndex, *sendCounts, *expertScales;
     uint8_t *tokenType, *relayReadIndex, *sourceMask, *yOut, *tilingData;
-    uint8_t* stageTimer;
-    uint32_t timerMode;
     uint32_t coreNum;
 };
 static_assert(std::is_standard_layout<EpServerDedupCombineKernelArgs>::value, "combine launch ABI");
-static_assert(sizeof(EpServerDedupCombineKernelArgs) == 96, "combine launch ABI");
-static_assert(offsetof(EpServerDedupCombineKernelArgs, stageTimer) == 80, "timer address");
-static_assert(offsetof(EpServerDedupCombineKernelArgs, timerMode) == 88, "timer mode");
-static_assert(offsetof(EpServerDedupCombineKernelArgs, coreNum) == 92, "active cores");
+static_assert(sizeof(EpServerDedupCombineKernelArgs) == 88, "combine launch ABI");
+static_assert(offsetof(EpServerDedupCombineKernelArgs, coreNum) == 80, "active cores");
 }  // namespace deepep
-extern "C" void combine_server_dedup_kernel_do_sc18(void* stream, const deepep::EpServerDedupCombineKernelArgs* args);
+extern "C" void combine_server_dedup_kernel_do_ref6(void* stream, const deepep::EpServerDedupCombineKernelArgs* args);

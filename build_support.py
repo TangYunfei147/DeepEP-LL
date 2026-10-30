@@ -4,6 +4,7 @@
 """One native configure/build/install path; no network or device side effects."""
 
 import hashlib
+from copy import deepcopy
 import json
 import os
 from pathlib import Path
@@ -13,6 +14,7 @@ import subprocess
 import sys
 import sysconfig
 from scripts.shmem_sdk_identity import sdk_artifacts, validate_build_identity, validate_sdk_hashes
+from scripts.ll_package_policy import RETIRED_LL_UTILITIES, retired_utility_filename
 
 from setuptools.command.build_ext import build_ext
 from setuptools.command.build import build
@@ -68,6 +70,17 @@ class CheckedInstallLib(install_lib):
         component_enabled = enabled("DEEPEP_BUILD_EP_GMM_FUSED")
         for directory in (self.build_dir, self.install_dir):
             root = Path(directory)
+            utilities=root/'deep_ep/utils';cache=utilities/'__pycache__'
+            if utilities.is_symlink() or cache.is_symlink():
+                raise RuntimeError('Refusing linked LL utility staging: '+str(utilities))
+            stale=[]
+            if utilities.is_dir():
+                stale.extend(path for path in utilities.iterdir() if retired_utility_filename(path.name))
+            if cache.is_dir():
+                stale.extend(path for path in cache.iterdir() if retired_utility_filename(path.name,cache=True))
+            if stale:
+                raise RuntimeError('Retired LL tracing modules remain in wheel staging; run a complete build: '+
+                                   ', '.join(str(path) for path in stale))
             for component in root.glob("**/deep_ep_experimental/ep_gmm_fused"):
                 relative = component.relative_to(root).as_posix()
                 if not component_enabled or relative != "deep_ep_experimental/ep_gmm_fused":
@@ -123,6 +136,35 @@ def source_fingerprint():
 
 def checked_run(argv, **kwargs):
     subprocess.run([str(arg) for arg in argv], check=True, timeout=1800, **kwargs)
+
+
+def clean_retired_ll_staging(destination, build_lib):
+    """Remove only deleted LL modules from the selected wheel staging package.
+
+    Never recurse or follow utility/cache symlinks. Source, SDK and unrelated
+    caches are not targets even when build_lib is misconfigured.
+    """
+    root=ROOT.resolve();staging=Path(build_lib).resolve();package=Path(destination).resolve()
+    protected=(root/'deep_ep',root/'third-party')
+    if (staging==root or root.is_relative_to(staging) or
+            any(staging.is_relative_to(path) or package.is_relative_to(path) for path in protected) or
+            package!=staging/'deep_ep'):
+        raise RuntimeError('Refusing retired-module cleanup outside wheel staging')
+    utilities=package/'utils';cache=utilities/'__pycache__'
+    if utilities.resolve()!=utilities or cache.resolve()!=cache:
+        raise RuntimeError('Refusing retired-module cleanup through a symlink')
+    candidates=[utilities/(stem+suffix) for stem in RETIRED_LL_UTILITIES for suffix in ('.py','.pyc','.pyo')]
+    if cache.is_dir():
+        candidates.extend(path for path in cache.iterdir() if retired_utility_filename(path.name,cache=True))
+    selected=[]
+    for path in candidates:
+        if path.is_symlink():raise RuntimeError('Refusing a linked retired staging file: '+str(path))
+        if not path.exists():continue
+        if not path.is_file() or path.resolve()!=path:
+            raise RuntimeError('Retired staging module must be a regular file: '+str(path))
+        selected.append(path)
+    for path in selected:path.unlink()
+    return selected
 
 
 def validate_shmem_sdk(root, expected):
@@ -198,7 +240,9 @@ def build_configuration(environment=None):
     if send <= 0 or recv <= 0 or send + recv != 56:
         raise ValueError("DEEPEP_LL_SEND_CORES and DEEPEP_LL_RECV_CORES must be positive and sum to 56")
     result["ll_send_cores"], result["ll_recv_cores"] = send, recv
-    result["ll_stage_timer"] = enabled("DEEPEP_LL_STAGE_TIMER", env)
+    if enabled("DEEPEP_LL_STAGE_TIMER", env):
+        raise RuntimeError("Legacy LL tracing was removed; use DEEPEP_LL_REFERENCE_PROFILE")
+    result["ll_reference_profile"] = enabled("DEEPEP_LL_REFERENCE_PROFILE", env)
     result["build_ht"] = enabled("DEEPEP_BUILD_HT", env, default="ON")
     result["build_type"] = env.get("DEEPEP_BUILD_TYPE", "RelWithDebInfo" if lineinfo else "Release")
     if result["build_type"] not in {"Release", "RelWithDebInfo", "Debug"}:
@@ -239,6 +283,7 @@ def build_configuration(environment=None):
     # Record actual inputs so replacing an unpinned SDK invalidates the build cache.
     result["shmem"] = {
         "revision": sdk.get("revision", "unknown") if isinstance(sdk, dict) else "unknown",
+        "build": deepcopy(sdk["build"]),
         "sha256": {
             path.relative_to(manifest.parent).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
             for path in files
@@ -344,7 +389,9 @@ class VariantBuild(ConfiguredBuild):
         timer = os.environ.get("DEEPEP_MEGAMOE_TIMER", "OFF") == "ON"
         variant = "megamoe-timer" if beta and timer else ("megamoe" if beta else "core")
         if enabled("DEEPEP_LL_STAGE_TIMER"):
-            variant += "-ll-timer"
+            raise RuntimeError("Legacy LL tracing was removed; use DEEPEP_LL_REFERENCE_PROFILE")
+        if enabled("DEEPEP_LL_REFERENCE_PROFILE"):
+            variant += "-ll-reference"
         self.build_base = str(Path(self.build_base) / variant)
         super().finalize_options()
 
@@ -379,7 +426,7 @@ class CMakeBuild(build_ext):
             directory,
             f"-DCMAKE_BUILD_TYPE={configuration['build_type']}",
             f"-DDEEPEP_DEVICE_JOBS={jobs}",
-            f"-DDEEPEP_LL_STAGE_TIMER={'ON' if configuration.get('ll_stage_timer', False) else 'OFF'}",
+            f"-DDEEPEP_LL_REFERENCE_PROFILE={'ON' if configuration.get('ll_reference_profile', False) else 'OFF'}",
             f"-DDEEPEP_BUILD_HT={'ON' if configuration.get('build_ht', True) else 'OFF'}",
             f"-DDEEPEP_LL_SEND_CORES={configuration.get('ll_send_cores', 28)}",
             f"-DDEEPEP_LL_RECV_CORES={configuration.get('ll_recv_cores', 28)}",
@@ -411,6 +458,8 @@ class CMakeBuild(build_ext):
         for operation in ("notify", "dispatch", "combine"):
             for suffix in (".py", "_layout.py"):
                 (destination / f"_{operation}{suffix}").unlink(missing_ok=True)
+        if destination != (ROOT / 'deep_ep').resolve():
+            clean_retired_ll_staging(destination,self.build_lib)
         # Deployment metadata contains identities/hashes, never build-machine paths.
         info = {
             key: value

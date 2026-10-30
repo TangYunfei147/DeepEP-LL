@@ -148,6 +148,16 @@ def test_sdk_identity_is_required_for_core_builds(build, monkeypatch, tmp_path, 
         == hashlib.sha256((sdk / "lib/libshmem.so").read_bytes()).hexdigest()
     )
     assert result["shmem"]["revision"] == ("unknown" if fault in ("missing", "json", "list") else identity["revision"])
+    assert result["shmem"]["build"] == identity["build"]
+    assert json.loads(json.dumps(result))["shmem"]["build"] == identity["build"]
+    assert result["ll_reference_profile"] is False
+    reference = build.build_configuration({**env, "DEEPEP_LL_REFERENCE_PROFILE": "ON"})
+    assert reference["ll_reference_profile"] is True
+    assert reference["shmem"] == result["shmem"]
+    assert build.build_cache_key(reference) != build.build_cache_key(result)
+    changed_sdk = dict(result, shmem={**result["shmem"], "build": {**result["shmem"]["build"],
+                                                               "cann_timestamp": "new-toolkit"}})
+    assert build.build_cache_key(changed_sdk) != build.build_cache_key(result)
     assert manifest.exists() == (fault != "missing")
     assert result["build_ht"] is True
     off = build.build_configuration({**env, "DEEPEP_BUILD_HT": "OFF"})
@@ -162,7 +172,7 @@ def test_metadata_no_sdk_or_framework(tmp_path):
     # Query in a copy so egg metadata does not alter the checkout.
     import shutil
 
-    for name in ("setup.py", "build_support.py", "VERSION", "scripts/shmem_sdk_identity.py"):
+    for name in ("setup.py", "build_support.py", "VERSION", "scripts/shmem_sdk_identity.py", "scripts/ll_package_policy.py"):
         (tmp_path / name).parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(ROOT / name, tmp_path / name)
     result = subprocess.run(
@@ -352,6 +362,15 @@ def test_packaging_uses_cmake_capabilities_and_removes_old_library(build, monkey
     ]
     for name in obsolete_modules:
         (destination / name).write_text("old module\n")
+    utils=destination/'utils';cache=utils/'__pycache__';cache.mkdir(parents=True)
+    retired=[]
+    for stem in build.RETIRED_LL_UTILITIES:
+        for path in (utils/(stem+'.py'),utils/(stem+'.pyc'),cache/(stem+'.cpython-311.pyc'),
+                     cache/(stem+'.cpython-311.opt-1.pyc')):
+            path.write_bytes(b'previous build_lib artifact');retired.append(path)
+    preserved={utils/'event.py':b'current utility',utils/'ll_reference_profile.py':b'new reference',
+               cache/'event.cpython-311.pyc':b'current cache',utils/'ll_stage_timer_notes.txt':b'unrelated data'}
+    for path,data in preserved.items():path.write_bytes(data)
     calls = []
     capabilities = {"capabilities": ["test-built-target"], "communication_operations": []}
 
@@ -375,6 +394,8 @@ def test_packaging_uses_cmake_capabilities_and_removes_old_library(build, monkey
     assert calls[1][-2:] == ["--parallel", "6"]
     assert not (destination / "libdeepep_notify.so").exists()
     assert all(not (destination / name).exists() for name in obsolete_modules)
+    assert all(not path.exists() for path in retired)
+    assert all(path.read_bytes()==data for path,data in preserved.items())
     info = json.loads((destination / "_build_info.json").read_text())
     assert info["capabilities"] == capabilities["capabilities"]
     assert info["source_sha256"] == "current"
@@ -382,6 +403,40 @@ def test_packaging_uses_cmake_capabilities_and_removes_old_library(build, monkey
     assert info["megamoe"] == {"enabled": beta, "timer": timer}
     assert "CATLASS_ROOT" not in info
     assert not {"cmake_path", "compiler_path", "python_executable", "build_environment"}.intersection(info)
+
+
+@pytest.mark.parametrize('retired',[
+    *[f'deep_ep/utils/{stem}.py' for stem in (
+        'll_expert_timer','ll_stage_timer','ll_stage_timer_bandwidth','ll_stage_timer_legacy',
+        'll_stage_timer_mte3','ll_stage_timer_sparse','ll_stage_timer_systemcycle')],
+    'deep_ep/utils/ll_stage_timer.pyc',
+    'deep_ep/utils/__pycache__/ll_stage_timer.cpython-311.pyc',
+    'deep_ep/utils/__pycache__/ll_expert_timer.cpython-311.opt-1.pyc',
+])
+def test_wheel_rejects_retired_ll_source_and_bytecode(tmp_path,retired):
+    validator=load(ROOT/'scripts/validate_package.py')
+    wheel=tmp_path/'stale.whl'
+    with zipfile.ZipFile(wheel,'w') as archive:
+        archive.writestr('deep_ep/_C.fake.so',b'native')
+        archive.writestr('deep_ep/_build_info.json',json.dumps(dict(communication_operations=[])))
+        archive.writestr('deep_ep/deepseek-deepep.LICENSE','license')
+        archive.writestr(retired,b'old tracer')
+    with pytest.raises(RuntimeError,match='retired LL tracing'):
+        validator.inspect_wheel(wheel)
+
+
+@pytest.mark.parametrize('kind',('source','sdk','other-package','directory'))
+def test_retired_cleanup_rejects_non_staging_targets(build,monkeypatch,tmp_path,kind):
+    root=tmp_path/'source';root.mkdir();monkeypatch.setattr(build,'ROOT',root)
+    staging=root/'build/lib';package=staging/'deep_ep'
+    if kind=='source':staging=root;package=root/'deep_ep'
+    elif kind=='sdk':staging=root/'third-party/shmem/install';package=staging/'deep_ep'
+    elif kind=='other-package':package=staging/'other'
+    old=package/'utils/ll_stage_timer.py';old.parent.mkdir(parents=True)
+    if kind=='directory':old.mkdir()
+    else:old.write_bytes(b'preserve')
+    with pytest.raises(RuntimeError):build.clean_retired_ll_staging(package,staging)
+    assert old.exists()
 
 
 def test_compiler_symlink_keeps_invocation_name(build, monkeypatch, tmp_path):

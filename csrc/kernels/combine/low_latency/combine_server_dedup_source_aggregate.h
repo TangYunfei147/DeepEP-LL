@@ -5,7 +5,7 @@
 #define COMBINE_DEDUP_EP_SERVER_DEDUP_SOURCE_AGGREGATE_H
 
 #include "kernel_operator.h"
-#include "../../dispatch/low_latency/common/ll_stage_timer_device.h"
+
 #include "ep_memory_server_dedup_combine_config.h"
 #include "../../dispatch/low_latency/common/dispatch_dedup_types.h"
 
@@ -18,7 +18,6 @@ using namespace AscendC;
 // are handed off after MTE2/Vector completion, while M4 MTE3 may still run.
 class ServerDedupSourceAggregate {
 public:
-    __aicore__ inline void SetTimer(LlStageTimer::DeviceTimer* timer) { timer_ = timer; }
     __aicore__ inline void Init(LocalTensor<uint8_t> scratch, GM_ADDR result, GM_ADDR masks, GM_ADDR weights,
                                 GM_ADDR yOut, uint32_t bs, uint32_t h, uint32_t k, uint8_t dtype, uint32_t participant,
                                 uint32_t participants, const EpCombineM45WorkspaceLayout& layout, uint32_t partialTasks,
@@ -58,7 +57,7 @@ public:
 
     __aicore__ inline void DrainM6()
     {
-        LL_SEG_SCOPE(COMBINE_SEND_FINISH);
+
         for (uint32_t lane = 0; lane < outputLanes_; ++lane)
             WaitFlag<HardEvent::MTE3_V>(finalLayout_.outputSlots[lane]);
     }
@@ -79,7 +78,7 @@ public:
                 if (++scan == remaining) scan = 0U;
                 continue;
             }
-            LL_SEG_COUNT(COMBINE_READY_SLOTS, enableDedup_ ? uint32_t(GetBitCount<1>(uint64_t(mask))) : k_);
+
             // No further probes after this point: clear every original token's
             // complete K*N flags, including mask-inactive slots. This source is
             // independent of the final token's in-flight payload and yOut.
@@ -98,13 +97,13 @@ public:
     }
 
 private:
-    LlStageTimer::DeviceTimer* timer_ = nullptr;
+
     __aicore__ inline void InitCommon(LocalTensor<uint8_t> scratch, GM_ADDR result, GM_ADDR masks, GM_ADDR weights,
                                       GM_ADDR yOut, uint32_t bs, uint32_t h, uint32_t k, uint8_t dtype,
                                       uint32_t participant, uint32_t participants, uint32_t phaseOffset,
                                       uint32_t computeBytes, uint32_t outputOffset, bool enableDedup)
     {
-        LL_SEG_SCOPE(COMBINE_INIT_RECV);
+
         enableDedup_ = enableDedup;
         scratch_ = scratch[phaseOffset];
         h_ = h;
@@ -156,7 +155,7 @@ private:
     }
     __aicore__ inline bool Probe(uint32_t token, uint32_t mask)
     {
-        LL_SEG_SCOPE(COMBINE_RECV_POLL);
+
         // The previous probe's V_S retired its flag-buffer reader. This UB is
         // independent of payload compute/output, so do not wait for that Vector
         // work before issuing the next flag read. Inactive slot flags stay zero.
@@ -171,7 +170,7 @@ private:
     }
     __aicore__ inline void ClearFlags()
     {
-        LL_SEG_SCOPE(COMBINE_CLEAR_FLAGS);
+
         const uint32_t flags = k_ * blocks_;
         Duplicate<float>(flags_, 0.0f, flags * 8U);
         // M4 may still own an unconsumed V_MTE3(7) publication for slot 7.
@@ -186,11 +185,11 @@ private:
     }
     __aicore__ inline void Load(uint32_t token, uint32_t k, uint32_t member)
     {
-        LL_SEG_SCOPE(COMBINE_INPUT);
+
         const uint32_t lane = (inputSequence_ + member) % inputLanes_;
-        LL_SEG_BEGIN(inputWaitBegin, COMBINE_BUFFER_WAIT);
+
         WaitFlag<HardEvent::V_MTE2>(lane);
-        LL_SEG_END(inputWaitBegin, COMBINE_BUFFER_WAIT);
+
         const uint32_t retire = enableDedup_ ? finalLayout_.inputRetireMasks[lane] & ~retiredOutputs_ : 0U;
         if (retire != 0U) {
             for (uint32_t slot = 0; slot < sharedOutputLanes_; ++slot)
@@ -198,9 +197,9 @@ private:
             // MTE3_V protects Vector, not MTE2. Bridge only first-use reclamation
             // through Vector before this DMA overwrites any inherited output.
             SetFlag<HardEvent::V_MTE2>(lane);
-            LL_SEG_BEGIN(reclaimWaitBegin, COMBINE_BUFFER_WAIT);
+
             WaitFlag<HardEvent::V_MTE2>(lane);
-            LL_SEG_END(reclaimWaitBegin, COMBINE_BUFFER_WAIT);
+
             retiredOutputs_ |= retire;
         }
         DataCopy(inputs_[finalLayout_.inputOffsets[lane] / 2U], result_[(uint64_t(token) * k_ + k) * packetBytes_ / 2U],
@@ -210,7 +209,7 @@ private:
     template <class T>
     __aicore__ inline void Aggregate(uint32_t token, uint32_t mask, uint32_t completed)
     {
-        LL_SEG_SCOPE(COMBINE_PROCESS_TOKEN);
+
         uint32_t nextK = 0U, loaded = 0U;
         for (; nextK < k_ && loaded < inputLanes_; ++nextK)
             if (!enableDedup_ || ((mask >> nextK) & 1U)) Load(token, nextK, loaded++);
@@ -218,10 +217,9 @@ private:
         for (uint32_t k = 0U; k < k_; ++k)
             if (!enableDedup_ || ((mask >> k) & 1U)) {
                 const uint32_t lane = (inputSequence_ + member) % inputLanes_;
-                LL_SEG_BEGIN(consumeInputBegin, COMBINE_INPUT);
+
                 WaitFlag<HardEvent::MTE2_V>(lane);
-                LL_SEG_END(consumeInputBegin, COMBINE_INPUT);
-                LL_SEG_BEGIN(reduceBegin, COMBINE_DEQUANT_REDUCE);
+
                 Cast(cast_, inputs_[finalLayout_.inputOffsets[lane] / 2U].template ReinterpretCast<T>(),
                      RoundMode::CAST_NONE, h_);
                 SetFlag<HardEvent::V_MTE2>(lane);
@@ -237,14 +235,14 @@ private:
                     Add(sum_, sum_, product_, h_);
                 }
                 PipeBarrier<PIPE_V>();
-                LL_SEG_END(reduceBegin, COMBINE_DEQUANT_REDUCE);
+
                 ++member;
             }
         inputSequence_ += member;
         const uint32_t outputLane = finalLayout_.outputSlots[completed % outputLanes_];
-        LL_SEG_BEGIN(outputWaitBegin, COMBINE_BUFFER_WAIT);
+
         WaitFlag<HardEvent::MTE3_V>(outputLane);
-        LL_SEG_END(outputWaitBegin, COMBINE_BUFFER_WAIT);
+
         auto output = outputs_[outputLane * outputBytes_ / 2U];
         Cast(output.template ReinterpretCast<T>(), sum_, RoundMode::CAST_RINT, h_);
         SetFlag<HardEvent::V_MTE3>(outputLane);

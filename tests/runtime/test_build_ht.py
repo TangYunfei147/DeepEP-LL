@@ -59,14 +59,14 @@ def test_native_preprocessor_excludes_ht_bindings(tmp_path, ht):
         assert (item in result) == bool(ht)
 
 
-def test_flag_validation_and_cache_key_are_separate_from_timer():
+def test_flag_validation_and_cache_key_are_separate_from_reference_profile():
     spec = importlib.util.spec_from_file_location('ht_build_support', ROOT/'build_support.py')
     build = importlib.util.module_from_spec(spec); spec.loader.exec_module(build)
     assert build.enabled('DEEPEP_BUILD_HT', {}, default='ON') is True
     assert build.enabled('DEEPEP_BUILD_HT', {'DEEPEP_BUILD_HT':'OFF'}, default='ON') is False
     with pytest.raises(ValueError):
         build.enabled('DEEPEP_BUILD_HT', {'DEEPEP_BUILD_HT':'maybe'}, default='ON')
-    keys = {build.build_cache_key(dict(build_ht=ht, ll_stage_timer=timer)) for ht in (False, True) for timer in (False, True)}
+    keys = {build.build_cache_key(dict(build_ht=ht, ll_reference_profile=profile)) for ht in (False, True) for profile in (False, True)}
     assert len(keys) == 4
     wrapper = (ROOT/'cmake/Device.cmake').read_text(encoding='utf-8')
     assert '"-DDEEPEP_BUILD_HT=${DEEPEP_BUILD_HT}"' in wrapper

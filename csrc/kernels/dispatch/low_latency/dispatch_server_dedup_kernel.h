@@ -3,9 +3,8 @@
 
 #ifndef DISPATCH_SERVER_DEDUP_KERNEL_H
 #define DISPATCH_SERVER_DEDUP_KERNEL_H
+#include "common/ll_reference_profile_device.h"
 
-#include "common/ll_stage_timer_device.h"
-#include "common/ll_expert_timer_device.h"
 #include "device/dispatch_server_dedup_magic.h"
 #include "device/dispatch_server_dedup_counts.h"
 #include "device/dispatch_server_dedup_send.h"
@@ -21,10 +20,9 @@ public:
                                 GM_ADDR relayReadIndexOut, GM_ADDR sourceMaskOut, GM_ADDR expertScalesOut, uint32_t bs,
                                 uint32_t h, uint32_t topK, uint32_t experts, uint32_t expertTokenNumsType, TPipe* pipe,
                                 GM_ADDR inputScales = nullptr, bool enableDedup = true,
-                                LlStageTimer::DeviceTimer* timer = nullptr,
-                                LlExpertTimer::DeviceTimer* expertTimer = nullptr)
+                                LlReferenceProfile::DeviceProfile* profile = nullptr)
     {
-        timer_ = timer;
+        profile_ = profile;
         enableDedup_=enableDedup;
         args_ = reinterpret_cast<const __gm__ DispatchDedup::CommArgs*>(commArgs);
         core_ = GetBlockIdx();
@@ -37,17 +35,25 @@ public:
         counts_.ConfigureOverlap(overlap_);
         sender_.ConfigureOverlap(overlap_);
         receiver_.ConfigureOverlap(overlap_);
-        LL_CYCLE_MARK(LAYOUT_DONE);
+
+        if(profile_) profile_->Mark<2>();
         const uint32_t magic = RotateDispatchServerDedupMagic(args_, core_, pipe);
-        LL_CYCLE_MARK(MAGIC_DONE);
+        if(profile_) profile_->Mark<3>();
+
         counts_.Init(commArgs, expertIds, expertTokenNumsOut, sendCountsOut, bs, topK, experts, expertTokenNumsType,
-                     magic, pipe, timer, enableDedup);
-        LL_CYCLE_MARK(COUNTS_INIT_DONE);
+                     magic, pipe, profile, enableDedup);
+        if(profile_) profile_->Mark<4>();
+
         sender_.Init(args_, x, expertIds, expertScales, sourceMaskOut, expertScalesOut, bs, h, topK, experts, pipe,
                      magic, inputScales, enableDedup);
         receiver_.Init(args_, expandXOut, dynamicScalesOut, tokenTypeOut, destinationIndexOut, relayReadIndexOut,
-                       bs, h, topK, experts, pipe, magic, enableDedup, expertTimer);
+                       bs, h, topK, experts, pipe, magic, enableDedup);
+        if(profile_) profile_->Mark<5>();
     }
+
+#ifdef DEEPEP_LL_REFERENCE_PROFILE
+    __aicore__ inline void ExportPacketTrace() { receiver_.ExportPacketTrace(profile_); }
+#endif
 
     // Bisheng does not inherit __aicore__ on a plain lambda's operator().
     // Keep the callback and the body explicitly device-callable; no std::function
@@ -64,7 +70,7 @@ public:
             counts_.CalcCumsum();
             counts_.CompleteCumsum();
             receiver_.SetPrefix(counts_.Prefix());
-            receiver_.Prepare(timer_);
+            receiver_.Prepare(profile_);
             prepared=true;
         }
         receiver_.TryBatch();
@@ -74,16 +80,11 @@ public:
     // Sender可与接收核的计数前缀准备重叠，不能把提取阶段耗时直接相加当作完整时延。
     __aicore__ inline void Process()
     {
-        if (overlap_.enabled) {
-            LL_SEG_COUNT(OVERLAP_PATH,1);
-            LL_SEG_COUNT(SEND_LANES,overlap_.sendLanes);
-            LL_SEG_COUNT(RECV_LANES,overlap_.recvLanes);
-        } else { LL_SEG_COUNT(SERIAL_FALLBACK,1); }
         counts_.SendCnt();
 
         if (!enableDedup_) {
             if (core_<sendCores_) {
-                sender_.Process(counts_.ScratchPool(),counts_.ReservedBytes(),timer_);
+                sender_.Process(counts_.ScratchPool(),counts_.ReservedBytes(),profile_);
                 sender_.Retire();
                 counts_.Finish();
                 return; // S owns all source routes and never waits for receive prefix.
@@ -92,7 +93,7 @@ public:
             counts_.CalcCumsum();
             counts_.CompleteCumsum();
             if (overlap_.enabled) receiver_.SetPrefix(counts_.Prefix());
-            receiver_.Process(timer_);
+            receiver_.Process(profile_);
             counts_.Finish();
             return;
         }
@@ -102,27 +103,31 @@ public:
             LocalProgress cooperate{this,&prepared};
             const uint32_t tasks=counts_.LocalTaskCount();
             if (tasks) sender_.ProcessGroupLocal(counts_.LocalSendScratchPool(),counts_.ReservedBytes(),
-                counts_.LocalRouteIndices(),counts_.LocalExpertQ(),tasks,timer_,cooperate);
+                counts_.LocalRouteIndices(),counts_.LocalExpertQ(),tasks,profile_,cooperate);
             while (!prepared) cooperate();
             receiver_.Run();
         } else {
             if (core_<sendCores_) {
-                sender_.Process(counts_.ScratchPool(),counts_.ReservedBytes(),timer_);
+                sender_.Process(counts_.ScratchPool(),counts_.ReservedBytes(),profile_);
             } else {
                 // Stage3 publishes prefix before local TX. Stage1/2 retain
                 // the original local-send -> count/prefix order.
                 if (overlap_.Async()) { counts_.RecvCnt(); counts_.CalcCumsum(); }
                 const uint32_t tasks=counts_.LocalTaskCount();
                 if (tasks) sender_.ProcessGroupLocal(counts_.LocalSendScratchPool(),counts_.ReservedBytes(),
-                    counts_.LocalRouteIndices(),counts_.LocalExpertQ(),tasks,timer_);
+                    counts_.LocalRouteIndices(),counts_.LocalExpertQ(),tasks,profile_);
                 if (!overlap_.Async()) { counts_.RecvCnt(); counts_.CalcCumsum(); }
             }
             counts_.CompleteCumsum();
-            if (!overlap_.Async()) { LL_SEG_SCOPE(TRANSITION_DRAIN); PipeBarrier<PIPE_ALL>(); }
+            if (!overlap_.Async()) {
+                if(profile_) profile_->Mark<16>();
+                PipeBarrier<PIPE_ALL>();
+                if(profile_) profile_->Mark<17>();
+            }
             if (overlap_.enabled) receiver_.SetPrefix(counts_.Prefix());
-            receiver_.Process(timer_);
+            receiver_.Process(profile_);
         }
-        { LL_SEG_SCOPE(FINAL_DRAIN);
+        {
         sender_.Retire();
         counts_.Finish(); }
 
@@ -131,7 +136,7 @@ public:
     }
 
 private:
-    LlStageTimer::DeviceTimer* timer_ = nullptr;
+    LlReferenceProfile::DeviceProfile* profile_ = nullptr;
     ServerDedupCounts counts_;
     ServerDedupSender<XType, WireFp8, E4M3, Prequantized> sender_;
     ServerDedupReceiver<XType, WireFp8, E4M3, Prequantized> receiver_;

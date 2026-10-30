@@ -19,6 +19,10 @@ import sys
 import tarfile
 import venv
 import zipfile
+try:
+    from scripts.ll_package_policy import retired_wheel_entries
+except ModuleNotFoundError:
+    from ll_package_policy import retired_wheel_entries
 
 
 def run(command, cwd, env, timeout=1800):
@@ -63,6 +67,9 @@ def inspect_wheel(path):
             raise RuntimeError("Missing build identity")
         if any(n.startswith(("tests/", "benchmarks/", "csrc/")) for n in names):
             raise RuntimeError("Unexpected package content")
+        retired=retired_wheel_entries(names)
+        if retired:
+            raise RuntimeError('Wheel contains retired LL tracing modules: '+', '.join(retired))
         if len([n for n in names if n.endswith("deepseek-deepep.LICENSE")]) != 1:
             raise RuntimeError("Wheel must include the adopted API's third-party license")
         info = json.loads(archive.read("deep_ep/_build_info.json"))

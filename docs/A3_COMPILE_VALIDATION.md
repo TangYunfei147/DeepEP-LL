@@ -1,5 +1,9 @@
 # A3_docker compile validation environment
 
+> Historical record only. The old tracing sources and commands below were removed
+> from this branch. Current target build/run instructions are in
+> [LL reference profiling](../tests/ll_reference_profile/README.md); this task does not authorize SSH.
+
 User authorization: 2026-10-21. Compile-only validation; no NPU execution or wheel installation.
 
 - SSH alias: `A3_docker` (use the user's SSH configuration; do not copy credentials).

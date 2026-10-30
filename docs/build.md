@@ -12,7 +12,7 @@ MegaMoE 和 EpGmmFused 通过独立开关选择构建，见下文实验组件说
 ## 前置条件
 
 - Linux、Python ≥3.11、C++17 编译器、CMake ≥3.20，以及 Make 或 Ninja；构建工具须在 PATH 中。
-- CANN 9.2.0（原资格基线）或用户确认支持的9.3.0，与配套驱动/框架，目标Ascend950。9.3.0的本次timer验证范围见[LL阶段打点](../tests/ll_stage_timer/README.md)。
+- CANN 9.2.0（原资格基线）或用户确认支持的9.3.0，与配套驱动/框架，目标Ascend950。当前打点构建方式见[LL reference指南](../tests/ll_reference_profile/README.md)。
 - 由本仓子模块构建或使用外部固定提交的 SHMEM SDK（见 `dependencies.lock.json`），安装根包含 `include/`、
   `lib/libshmem.so` 以及 `src/device`、`src/device_simt` 等 Device 头文件。
 - 普通（HT）dispatch/combine 依赖 SHMEM 的 shared-jetty 支持，包括 Host 配置接口和 Device 共享队列状态；使用锁文件固定的 `cann/shmem` dev 提交，不直接跟随分支最新版本。
@@ -34,7 +34,7 @@ EpGmmFused 通过 `DEEPEP_BUILD_EP_GMM_FUSED=ON` 构建 AllToAllV → GMM 和 GM
 
 ```bash
 source /path/to/ascend-toolkit/set_env.sh
-git submodule update --init --recursive
+git submodule update --init --recursive --depth 1 -- third-party/shmem
 unset SHMEM_ROOT CATLASS_ROOT  # 使用仓内依赖；外部 SDK 用户见下文。
 python scripts/build_shmem.py
 export DEEPEP_NPU_ARCH=Ascend950

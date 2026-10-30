@@ -5,6 +5,9 @@ Modified by Joyce_An 2026
 
 # DeepEP
 
+本分支当前只维护MTE LL dispatch的reference打点与解析，完整替换旧计时体系。
+目标运行与逐核Excel导出见 [LL reference指南](tests/ll_reference_profile/README.md)。
+
 ---
 
 简体中文 | [English](readme_en.md)

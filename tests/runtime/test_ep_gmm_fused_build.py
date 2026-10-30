@@ -34,7 +34,7 @@ def test_source_metadata_location_follows_component_flag(tmp_path, monkeypatch, 
         monkeypatch.delenv("DEEPEP_BUILD_EP_GMM_FUSED", raising=False)
     else:
         monkeypatch.setenv("DEEPEP_BUILD_EP_GMM_FUSED", ep_gmm_fused)
-    for name in ("setup.py", "build_support.py", "VERSION", "scripts/shmem_sdk_identity.py"):
+    for name in ("setup.py", "build_support.py", "VERSION", "scripts/shmem_sdk_identity.py", "scripts/ll_package_policy.py"):
         (tmp_path / name).parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(ROOT / name, tmp_path / name)
     packages = ["deep_ep"]
@@ -220,7 +220,7 @@ def test_build_directories_preserve_core_defaults_and_explicit_paths(build, monk
 
 @pytest.fixture
 def packaging_source(tmp_path):
-    for name in ("setup.py", "build_support.py", "VERSION", "pyproject.toml", "scripts/shmem_sdk_identity.py"):
+    for name in ("setup.py", "build_support.py", "VERSION", "pyproject.toml", "scripts/shmem_sdk_identity.py", "scripts/ll_package_policy.py"):
         (tmp_path / name).parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(ROOT / name, tmp_path / name)
     for directory in ("deep_ep", "experiments/ep_gmm_fused/python"):
@@ -263,6 +263,36 @@ def test_old_or_explicitly_reused_staging_cannot_leak_into_core_wheel(packaging_
     assert "Stale EP_GMM_FUSED staging" in result.stderr
     assert stale.is_file()  # No implicit recursive deletion of user caches.
     assert not list((packaging_source / "dist").glob("*.whl"))
+
+
+@pytest.mark.parametrize('cleanup',[False,True])
+def test_actual_wheel_cannot_repackage_retired_ll_utilities(packaging_source,cleanup):
+    result=run_packaging(packaging_source,'OFF','OFF','build_py')
+    assert result.returncode==0,result.stderr
+    staging=next((packaging_source/'build').glob('lib*'))
+    utils=staging/'deep_ep/utils';cache=utils/'__pycache__';cache.mkdir()
+    policy=load(ROOT/'scripts/ll_package_policy.py')
+    stale=[]
+    for stem in policy.RETIRED_LL_UTILITIES:
+        for path in (utils/(stem+'.py'),cache/(stem+'.cpython-311.pyc')):
+            path.write_text('obsolete artifact');stale.append(path)
+    kept={utils/'event.py':(utils/'event.py').read_bytes(),
+          utils/'ll_reference_profile.py':(utils/'ll_reference_profile.py').read_bytes()}
+    if cleanup:
+        build=load(packaging_source/'build_support.py')
+        build.clean_retired_ll_staging(staging/'deep_ep',staging)
+    result=run_packaging(packaging_source,'OFF','OFF','bdist_wheel','--skip-build')
+    if cleanup:
+        assert result.returncode==0,result.stderr
+        with zipfile.ZipFile(next((packaging_source/'dist').glob('*.whl'))) as archive:
+            assert not policy.retired_wheel_entries(archive.namelist())
+            for path,data in kept.items():assert archive.read(path.relative_to(staging).as_posix())==data
+        assert all(not path.exists() for path in stale)
+    else:
+        assert result.returncode!=0 and 'Retired LL tracing modules remain' in result.stderr
+        assert all(path.exists() for path in stale)
+        assert not list((packaging_source/'dist').glob('*.whl'))
+    assert all(path.read_bytes()==data for path,data in kept.items())
 
 
 @pytest.fixture

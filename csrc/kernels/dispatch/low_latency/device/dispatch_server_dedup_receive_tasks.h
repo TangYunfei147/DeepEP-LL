@@ -7,7 +7,6 @@
 #include "kernel_operator.h"
 #include "../common/ep_memory_server_dedup_data_layout.h"
 #include "../common/ll_pending_batch.h"
-#include "../common/ll_stage_timer_device.h"
 
 namespace DispatchDedup {
 using namespace AscendC;
@@ -18,10 +17,8 @@ using namespace AscendC;
 class ServerDedupReceiveTasks {
 public:
     __aicore__ inline void Build(LocalTensor<int32_t> prefix, uint32_t rank, uint32_t ranks, uint32_t experts,
-                                 uint32_t bs, uint32_t receiver, TPipe* pipe, uint32_t recvCores,
-                                 LlStageTimer::DeviceTimer* timer_ = nullptr)
+                                 uint32_t bs, uint32_t receiver, TPipe* pipe, uint32_t recvCores)
     {
-        (void)timer_; // OFF macros intentionally do not evaluate their arguments.
         const uint32_t total = uint32_t(prefix.GetValue(experts - 1U));
         begin_ = uint32_t(uint64_t(receiver) * total / recvCores);
         const uint32_t end = uint32_t(uint64_t(receiver + 1U) * total / recvCores);
@@ -78,10 +75,10 @@ public:
         }
         // The next reader uses scalar GetValue; this dependency is necessary.
         const auto ready=pipe->FetchEventID(HardEvent::V_S);
-        LL_MTE3_WAIT_BEGIN(rxPrepareWait);
+
         SetFlag<HardEvent::V_S>(ready);
         WaitFlag<HardEvent::V_S>(ready);
-        LL_MTE3_WAIT_END(rxPrepareWait,RX_PREPARE_VS);
+
     }
 
     __aicore__ inline uint32_t Begin() const
