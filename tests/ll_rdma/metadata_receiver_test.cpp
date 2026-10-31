@@ -89,6 +89,7 @@ struct Fixture {
         std::vector<std::thread> workers;
         for(uint32_t c=0;c<R;++c)workers.emplace_back([&,c]{
             cores=C;core=ReceiveBegin(C)+c;
+            observeStore=observeRelay;
             if(c==owner)while(!release.load())std::this_thread::yield();
             TPipe pipe;ServerDedupReceiver<uint16_t,Fp8,false,Fp8> receiver;
             receiver.Init(&args,out.data(),scale.data(),reinterpret_cast<uint8_t*>(type.data()),reinterpret_cast<uint8_t*>(dest.data()),reinterpret_cast<uint8_t*>(relay.data()),bs,H,K,E,&pipe,0,Dedup);

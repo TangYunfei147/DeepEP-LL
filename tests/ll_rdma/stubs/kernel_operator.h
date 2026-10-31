@@ -16,7 +16,8 @@ enum class HardEvent { S_MTE3, MTE3_S, MTE2_S, V_S, S_MTE2, MTE2_V, MTE3_V, V_MT
 inline thread_local bool events[12][8]{};
 inline std::mutex memoryMutex;
 #ifdef DEEPEP_TEST_METADATA_COPY
-inline void (*observeStore)(void*,const void*,uint32_t)=nullptr;
+inline thread_local void (*observeStore)(void*,const void*,uint32_t)=nullptr;
+inline thread_local void (*observeMte3Completion)()=nullptr;
 #endif
 #ifdef DEEPEP_TEST_ROUTE_THREADS
 struct DeferredMte2Copy { void* dst;const void* src;uint32_t bytes; };
@@ -37,6 +38,10 @@ template<HardEvent E> void SetFlag(uint32_t id) {
 template<HardEvent E> void WaitFlag(uint32_t id) {
     if(id>=8 || !events[int(E)][id]) throw std::runtime_error("wait without event");
     events[int(E)][id]=false;
+#ifdef DEEPEP_TEST_METADATA_COPY
+    if constexpr(E==HardEvent::MTE3_S || E==HardEvent::MTE3_V || E==HardEvent::MTE3_MTE2)
+        if(observeMte3Completion)observeMte3Completion();
+#endif
 #ifdef DEEPEP_TEST_DEFERRED_MTE3
     if constexpr(E==HardEvent::MTE3_S || E==HardEvent::MTE3_V || E==HardEvent::MTE3_MTE2) {
         std::lock_guard<std::mutex> guard(memoryMutex);
@@ -68,7 +73,11 @@ inline thread_local uint32_t core=0, cores=16;
 inline uint32_t GetBlockIdx() { return core; }
 inline uint32_t GetBlockNum() { return cores; }
 inline void Trap() { throw std::runtime_error("device trap"); }
-template<int> inline void PipeBarrier() {}
+template<int P> inline void PipeBarrier() {
+#ifdef DEEPEP_TEST_METADATA_COPY
+    if constexpr(P==PIPE_ALL)if(observeMte3Completion)observeMte3Completion();
+#endif
+}
 template<class T> struct LocalTensor {
     T* p;
     T GetValue(uint32_t index) const { return p[index]; }

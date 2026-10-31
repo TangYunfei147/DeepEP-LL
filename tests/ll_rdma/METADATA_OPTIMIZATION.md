@@ -30,3 +30,19 @@ perf为timer OFF的dispatch+BF16 combine；FP8表示dispatch配置。
 本提交入口/身份/配置/真实直方图CPU语义检查共302项通过；CPU --plan通过。
 Windows沙箱曾阻止Zig临时文件重命名，改用工作区临时目录并在沙箱外运行相同
 本地CPU检查后通过；未使用CANN、NPU或SSH。
+
+## 第二步：任务表按64个索引合批
+
+复用原256B taskBuildBuf，不新增UB、lane或event。短count记录跨记录合批，
+用Scalar填入剩余槽；缓冲为空且当前记录剩余至少64条时仍用CreateVecIndex生成整块。
+每核T条输出的任务表DMA从逐记录的 `sum(ceil(count_i/64))` 次变为 `ceil(T/64)` 次，
+包括跨记录边界和最后不足64条的尾批；索引、顺序、GM区间和总字节数完全一致。
+Scalar或Vector复用前分别用MTE3_S/MTE3_V退休同一源缓冲，提交分别用S_MTE3/V_MTE3。
+最后一次任务表DMA仍在原前缀ready发布之前；不能提前发布未完成的表。
+
+这是减少小DMA/同步的候选：短记录新增Scalar填索引成本，长记录保留Vector主体；
+不预先宣称净收益。与第一步相同histogram值对照，M固定4。
+真实生产count/前缀/任务表、接收器及direct-count共11项CPU检查通过；
+其中M=2/4/18各运行90个count场景，覆盖零计数、热点、B=65/256、跨E复用、
+输出顺序/尾部哨兵、精确DMA批次数及在途源不被覆盖。接收ON/OFF与16/72核也检查。
+这不是CANN编译或设备验证。

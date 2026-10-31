@@ -692,26 +692,50 @@ __aicore__ inline void ServerDedupCounts::CalRecvAndSetFlag()
         // Producers own disjoint fragments of one read-only GM prefix. All
         // receivers acquire the existing ready row before reading this copy.
         DataCopyPad(workspaceGlobal[startStatusIndex_], outCountLocal, dataCopyOutParams);
-        // Dense output-row -> immutable physical slot map. Vector generation
-        // replaces per-token Scalar task construction on the R cores.
+        // Dense output-row -> immutable physical slot map. Pack short records
+        // into the existing 64-index buffer, rather than synchronizing and
+        // issuing a tiny DMA per nonempty record. Long aligned runs still use
+        // Vector generation. The source is retired before either engine reuses
+        // it; every producer writes only its original contiguous output range.
         GlobalTensor<int32_t> tasks;
         tasks.SetGlobalBuffer(reinterpret_cast<__gm__ int32_t*>(taskList_));
         auto indices = taskBuildBuf_.Get<int32_t>();
         uint32_t previous = offset;
+        uint32_t output = offset, buffered = 0U;
         for (uint32_t i = 0; i < recStatusNumPerCore_; ++i) {
             const uint32_t record = startStatusIndex_ + i;
             const uint32_t source = record % epWorldSize_, expert = record / epWorldSize_;
             const uint32_t base = ((source + epRankId_) % epWorldSize_ * moeExpertNumPerRank_ + expert) * axisBS_;
             const uint32_t end = uint32_t(outCountLocal.GetValue(i));
             for (uint32_t q = 0; q < end - previous;) {
-                const uint32_t n = end - previous - q < 64U ? end - previous - q : 64U;
-                SyncFunc<HardEvent::MTE3_V>();
-                CreateVecIndex(indices, int32_t(base + q), n);
-                SyncFunc<HardEvent::V_MTE3>();
-                DataCopyPad(tasks[previous + q], indices, {1U, n * 4U, 0U, 0U, 0U});
+                const uint32_t remaining = end - previous - q;
+                if (buffered == 0U && remaining >= 64U) {
+                    SyncFunc<HardEvent::MTE3_V>();
+                    CreateVecIndex(indices, int32_t(base + q), 64U);
+                    SyncFunc<HardEvent::V_MTE3>();
+                    DataCopyPad(tasks[output], indices, {1U, 256U, 0U, 0U, 0U});
+                    output += 64U;
+                    q += 64U;
+                    continue;
+                }
+                if (buffered == 0U) SyncFunc<HardEvent::MTE3_S>();
+                const uint32_t n = remaining < 64U - buffered ? remaining : 64U - buffered;
+                for (uint32_t j = 0U; j < n; ++j)
+                    indices.SetValue(buffered + j, int32_t(base + q + j));
+                buffered += n;
                 q += n;
+                if (buffered == 64U) {
+                    SyncFunc<HardEvent::S_MTE3>();
+                    DataCopyPad(tasks[output], indices, {1U, 256U, 0U, 0U, 0U});
+                    output += 64U;
+                    buffered = 0U;
+                }
             }
             previous = end;
+        }
+        if (buffered != 0U) {
+            SyncFunc<HardEvent::S_MTE3>();
+            DataCopyPad(tasks[output], indices, {1U, buffered * 4U, 0U, 0U, 0U});
         }
 
     }
