@@ -24,7 +24,8 @@ perf为timer OFF的dispatch+BF16 combine；FP8表示dispatch配置。
 首次升级到锁定SDK 4c671684时加 `--rebuild-shmem`；之后同工程同SDK正常复用。
 命令以子进程返回失败，不退出当前交互shell；任何失败停止该轮，不自动重试性能。
 
-完整Excel/raw留目标机；沿用one_click单个UTF-8不超过60000字节的return_report.md。
+完整Excel/raw留目标机；reference沿用one_click的return_report.md，perf多版本使用文末
+metadata_report.py合为一个UTF-8不超过60000字节的文件。
 硬件直方图仅CPU语义检查通过不代表目标CANN编译或NPU性能验证。
 
 本提交入口/身份/配置/真实直方图CPU语义检查共302项通过；CPU --plan通过。
@@ -57,3 +58,79 @@ Scalar或Vector复用前分别用MTE3_S/MTE3_V退休同一源缓冲，提交分�
 最终相关CPU回归408项通过，包含真实生产count/任务表/receiver、count帧/接收/CQ退休、
 直方图、入口/身份/reference解析，以及36组原地整数offset的尾部哨兵与延迟Vector模型。
 覆盖超过2^24仍精确的整数值、offset=0、非整块长度。未做CANN编译、NPU或SSH。
+
+## 固定版本四组对照（只在新独立clone中执行）
+
+| 组 | 固定源码 | count方法 | 目的 |
+|---|---|---|---|
+| base | 712f4d33ce6dd5f7c2bb4d314bf7177945165f91 | scalar | 与5b38bf2相同kernel，只有实验入口 |
+| hist | 712f4d33ce6dd5f7c2bb4d314bf7177945165f91 | histogram | 只开启已有跨机直方图 |
+| batch | 4aa0a108149f06fe6bcce7b2e4c161ef8a9ba229 | histogram | 在hist上增加任务表合批 |
+| prefix | cdf2d877b0646dd99888dac9788583c8a3012306 | histogram | 在batch上增加offset向量加 |
+
+每个目标节点执行以下流程；NODE_RANK分别设0、1，MASTER_ADDR均为节点0地址。
+不要在现有生产或有未提交改动的工程中执行切换。新clone中复用同一份第一次新编的SDK；
+各版本完整重建wheel，按顺序完成后再切下一版。只初始化third-party/shmem。
+
+```bash
+git clone --single-branch --branch kernel/ll-ndr-metadata-cores \
+  https://github.com/TangYunfei147/DeepEP-LL.git DeepEP-LL-meta-opt-20261031 &&
+cd DeepEP-LL-meta-opt-20261031
+```
+
+确认进入这个新目录后执行；重复实验时更换META_TAG，保留所有旧结果。
+
+```bash
+export NODE_RANK=0
+export MASTER_ADDR=192.0.2.1
+export META_SEED=0
+export META_TAG=meta-opt-s0-a1
+
+meta_case() {
+    local rev="$1" method="$2" name="$3"
+    shift 3
+    git diff --quiet && git diff --cached --quiet &&
+    git switch -C kernel/ll-ndr-metadata-cores "$rev" &&
+    python3 tests/ll_rdma/metadata_opt.py "$method" "$NODE_RANK" "$MASTER_ADDR" "$name" \
+      --num-nodes 2 --mode perf --tokens 1 8 32 256 --capacity 256 \
+      --hidden 3584 --topk 8 --experts 384 --dtype fp8 --route normal --seed "$META_SEED" "$@"
+}
+
+if meta_case 712f4d33ce6dd5f7c2bb4d314bf7177945165f91 scalar "${META_TAG}-base" --rebuild-shmem &&
+   meta_case 712f4d33ce6dd5f7c2bb4d314bf7177945165f91 histogram "${META_TAG}-hist" &&
+   meta_case 4aa0a108149f06fe6bcce7b2e4c161ef8a9ba229 histogram "${META_TAG}-batch" &&
+   meta_case cdf2d877b0646dd99888dac9788583c8a3012306 histogram "${META_TAG}-prefix"; then
+    echo "PASS: four complete OFF runs; retain raw data"
+else
+    echo "FAILED: stop here and retain this terminal, results and .logs"
+fi
+```
+
+第一轮只用于筛选，不足以宣称稳定收益。后续相同四组反序重跑、更换run名，再更换seed；
+同工程SDK已构建且无变化时不再加rebuild-shmem。不要跨失败attempt拼接或自动重试。
+均值为每rank尾50样本汇池均值，最慢rank均值单独列出；不能把两者混为一个指标。
+
+四组全部成功后，节点0恢复最新分支上的只读汇总工具，导出一个回传文件：
+
+```bash
+git switch -C kernel/ll-ndr-metadata-cores origin/kernel/ll-ndr-metadata-cores &&
+mkdir -p results/meta-opt-report &&
+python3 tests/ll_rdma/metadata_report.py \
+  "${META_TAG}-base-perf" "${META_TAG}-hist-perf" "${META_TAG}-batch-perf" "${META_TAG}-prefix-perf" \
+  --output "results/meta-opt-report/${META_TAG}-return_report.md"
+```
+
+工具只读summary与已验证的节点0安装身份，不import框架/设备；核对完成状态、M=4、
+OFF、SDK、shape、路由hash、seed、采样与实际核数一致后列出各版dispatch/combine统计。
+不自动筛除慢样本，不自动计算加速结论；原始样本及各rank细节保留目标机。
+输出使用独占创建且按实际UTF-8字节限制60000，超限失败、不静默截断。
+汇总/实验入口另外8项CPU检查通过（其中3项与前述408项重叠）。
+
+需要解释阶段差异时，在相应固定源码上单独用新run名执行：
+
+```bash
+python3 tests/ll_rdma/metadata_opt.py histogram "$NODE_RANK" "$MASTER_ADDR" "${META_TAG}-prefix-detail" \
+  --num-nodes 2 --mode reference --tokens 32 --dtype fp8 --seed "$META_SEED" --reference-iters 1
+```
+
+reference只采dispatch，完整xlsx留目标机，其内部时长不与OFF直接相减。
