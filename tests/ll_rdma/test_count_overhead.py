@@ -147,6 +147,61 @@ int main() {
     assert "PASS production count prefix: 32 partitions" in result.stdout
 
 
+def test_production_offset_add_preserves_integer_prefix_and_tail(tmp_path):
+    """Execute the production offset block with delayed Vector completion."""
+    zig = os.environ.get("DEEPEP_TEST_ZIG")
+    if not zig:
+        pytest.skip("Set DEEPEP_TEST_ZIG for CPU validation")
+    publish = _block(_source("dispatch_server_dedup_counts.h"), "void ServerDedupCounts::CalRecvAndSetFlag()")
+    branch = "if (offset != 0U) {" + _block(publish, "if (offset != 0U)") + "}"
+    source = tmp_path / "offset.cpp"
+    source.write_text(r'''
+#include <cassert>
+#include <cstdint>
+#include <vector>
+#include <algorithm>
+#include <iostream>
+enum class HardEvent { S_V, V_S };
+template<class T> struct LocalTensor {T* ptr;};
+static bool acquired=false;
+static int32_t* pendingDst=nullptr;
+static std::vector<int32_t> pending;
+static unsigned calls=0;
+static void Adds(LocalTensor<int32_t> d,LocalTensor<int32_t> s,int32_t v,uint32_t n) {
+    assert(acquired && !pendingDst && d.ptr==s.ptr); // in-place, Scalar producer acquired
+    pending.resize(n);for(unsigned i=0;i<n;++i)pending[i]=s.ptr[i]+v;
+    pendingDst=d.ptr;++calls;
+}
+template<HardEvent event> void SyncFunc() {
+    if constexpr(event==HardEvent::S_V){assert(!acquired && !pendingDst);acquired=true;}
+    else {assert(acquired && pendingDst);std::copy(pending.begin(),pending.end(),pendingDst);
+          pendingDst=nullptr;acquired=false;}
+}
+static void Run(LocalTensor<int32_t> outCountLocal,uint32_t recStatusNumPerCore_,uint32_t offset) {
+''' + branch + r'''
+}
+int main(){
+    unsigned cases=0;
+    for(unsigned n:{1U,7U,8U,13U,31U,64U,96U,128U,512U})
+    for(unsigned offset:{0U,1U,100U,16777216U}){
+        std::vector<int32_t> data(n+8,0x12345678);
+        for(unsigned i=0;i<n;++i)data[i]=(i+1)*3;
+        calls=0;Run({data.data()},n,offset);
+        assert(!pendingDst && !acquired && calls==(offset!=0));
+        for(unsigned i=0;i<n;++i)assert(data[i]==int32_t(offset+(i+1)*3));
+        for(unsigned i=n;i<data.size();++i)assert(data[i]==0x12345678);
+        ++cases;
+    }
+    std::cout<<"PASS offset "<<cases<<" exact integer/tail/dependency cases\n";
+}
+''', encoding="utf-8")
+    exe = tmp_path / "offset.exe"
+    subprocess.run([zig, "c++", "-std=c++17", "-O1", "-UNDEBUG", str(source), "-o", str(exe)],
+                   check=True, timeout=180)
+    result = subprocess.run([str(exe)], check=True, capture_output=True, text=True, timeout=30)
+    assert "PASS offset 36" in result.stdout
+
+
 def test_shared_prefix_publication_and_consumers_keep_the_ready_dependency():
     counts = _source("dispatch_server_dedup_counts.h")
     publish = _block(counts, "void ServerDedupCounts::CalRecvAndSetFlag()")

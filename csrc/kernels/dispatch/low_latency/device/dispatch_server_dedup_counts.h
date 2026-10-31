@@ -677,8 +677,13 @@ __aicore__ inline void ServerDedupCounts::CalRecvAndSetFlag()
     if (packedFrames_) WaitDispatchClearStatus();
 
     if (recStatusNumPerCore_ != 0U) {
-        for (uint32_t i = 0; i < recStatusNumPerCore_; ++i) {
-            outCountLocal.SetValue(i, uint32_t(outCountLocal.GetValue(i)) + offset);
+        if (offset != 0U) {
+            // The local integer prefix was produced by Scalar. Apply the
+            // common offset in one in-place Vector operation, then acquire it
+            // before Scalar reads it for task generation. Preserve exact ints.
+            SyncFunc<HardEvent::S_V>();
+            Adds(outCountLocal, outCountLocal, int32_t(offset), recStatusNumPerCore_);
+            SyncFunc<HardEvent::V_S>();
         }
         SyncFunc<AscendC::HardEvent::S_MTE3>();
         GlobalTensor<int32_t> sendCountsGlobal, workspaceGlobal;

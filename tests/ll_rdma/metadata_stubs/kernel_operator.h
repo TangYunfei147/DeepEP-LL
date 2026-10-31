@@ -42,6 +42,7 @@ template<class T> void ReduceSum(LocalTensor<T> d,LocalTensor<T> s,LocalTensor<T
     std::fill_n(work.p,64,T(-123));d.p[0]=sum; // Scratch is explicitly destructive.
 }
 template<class T> void Sub(LocalTensor<T> d,LocalTensor<T> a,LocalTensor<T> b,uint32_t n){for(uint32_t i=0;i<n;++i)d.p[i]=a.p[i]-b.p[i];}
+template<class T> void Adds(LocalTensor<T> d,LocalTensor<T> a,T b,uint32_t n){for(uint32_t i=0;i<n;++i)d.p[i]=a.p[i]+b;}
 template<class T> void And(LocalTensor<T> d,LocalTensor<T> a,LocalTensor<T> b,uint32_t n){for(uint32_t i=0;i<n;++i)d.p[i]=a.p[i]&b.p[i];}
 template<class T> void Mins(LocalTensor<T> d,LocalTensor<T> a,T b,uint32_t n){for(uint32_t i=0;i<n;++i)d.p[i]=std::min(a.p[i],b);}
 inline void Abs(LocalTensor<float> d,LocalTensor<float> a,uint32_t n){for(uint32_t i=0;i<n;++i){uint32_t v;std::memcpy(&v,a.p+i,4);v&=0x7fffffff;std::memcpy(d.p+i,&v,4);}}

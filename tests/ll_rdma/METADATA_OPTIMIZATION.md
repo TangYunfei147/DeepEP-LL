@@ -46,3 +46,14 @@ Scalar或Vector复用前分别用MTE3_S/MTE3_V退休同一源缓冲，提交分�
 其中M=2/4/18各运行90个count场景，覆盖零计数、热点、B=65/256、跨E复用、
 输出顺序/尾部哨兵、精确DMA批次数及在途源不被覆盖。接收ON/OFF与16/72核也检查。
 这不是CANN编译或设备验证。
+
+## 第三步：整数向量加跨核offset
+
+`CalRecvAndSetFlag` 用一次原地int32 Adds替代逐条Scalar读/加/写，offset为0时
+完全跳过该循环。S_V获取Scalar产生的局部前缀，V_S保证随后的任务表构建读取完成结果；
+沿用原S_MTE3发布依赖。局部前缀的Scalar累加不变，不引入浮点转换或额外scan缓冲。
+本候选增加一次S_V/V_S的固定成本，极短分片可能无收益，必须同M=4完整OFF对照。
+
+最终相关CPU回归408项通过，包含真实生产count/任务表/receiver、count帧/接收/CQ退休、
+直方图、入口/身份/reference解析，以及36组原地整数offset的尾部哨兵与延迟Vector模型。
+覆盖超过2^24仍精确的整数值、offset=0、非整块长度。未做CANN编译、NPU或SSH。
